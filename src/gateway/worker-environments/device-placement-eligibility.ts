@@ -1,9 +1,12 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { deviceUnavailableText, resolveDeviceWorkerAvailability } from "./device-provider.js";
 
-type DevicePlacementEligibility = { ok: true } | { ok: false; error: string };
+type DevicePlacementEligibility =
+  | { ok: true; availableSlots: number; node: NodeWorkerSupervisorNodeProof }
+  | { ok: false; error: string };
 
 export async function resolveDevicePlacementEligibility(params: {
   environmentService: object | undefined;
@@ -32,11 +35,12 @@ export async function resolveDevicePlacementEligibility(params: {
   }
   const node = availability.node;
   if (
-    params.currentNode &&
-    (params.currentNode.nodeId !== node.nodeId ||
-      (params.currentNode.connId && params.currentNode.connId !== node.connId) ||
-      (params.currentNode.pairingGeneration &&
-        params.currentNode.pairingGeneration !== node.pairingGeneration))
+    node.nodeId !== deviceId ||
+    (params.currentNode &&
+      (params.currentNode.nodeId !== node.nodeId ||
+        (params.currentNode.connId && params.currentNode.connId !== node.connId) ||
+        (params.currentNode.pairingGeneration &&
+          params.currentNode.pairingGeneration !== node.pairingGeneration)))
   ) {
     return {
       ok: false,
@@ -70,5 +74,5 @@ export async function resolveDevicePlacementEligibility(params: {
       }),
     };
   }
-  return { ok: true };
+  return { ok: true, availableSlots: node.workerHost.capacity.available, node };
 }

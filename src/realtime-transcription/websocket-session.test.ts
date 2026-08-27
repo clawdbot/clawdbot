@@ -187,6 +187,69 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
   });
 
+  it.each([
+    { scenario: "socket open", readyOnOpen: true, initialEvent: undefined },
+    {
+      scenario: "provider readiness handshake",
+      readyOnOpen: false,
+      initialEvent: { type: "session.created" },
+    },
+  ])(
+    "rejects startup when queued audio fails during $scenario",
+    async ({ readyOnOpen, initialEvent }) => {
+      const server = await createRealtimeServer({ initialEvent });
+      const onError = vi.fn();
+      const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+        providerId: "test",
+        callbacks: { onError },
+        url: server.url,
+        readyOnOpen,
+        onMessage: (event, transport) => {
+          if (event.type === "session.created") {
+            transport.markReady();
+          }
+        },
+        sendAudio: () => {
+          throw new Error("queued audio send failed");
+        },
+      });
+
+      session.sendAudio(Buffer.from("queued"));
+      await expect(session.connect()).rejects.toThrow("queued audio send failed");
+      expect(session.isConnected()).toBe(false);
+      expect(onError).toHaveBeenCalledOnce();
+      session.close();
+    },
+  );
+
+  it("does not replay successfully flushed audio after a later frame fails", async () => {
+    const server = await createRealtimeServer();
+    const sentFrames: string[] = [];
+    let shouldFailSecondFrame = true;
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: {},
+      url: server.url,
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        if (audio.toString() === "second" && shouldFailSecondFrame) {
+          shouldFailSecondFrame = false;
+          throw new Error("second frame failed");
+        }
+        sentFrames.push(audio.toString());
+        transport.sendBinary(audio);
+      },
+    });
+
+    session.sendAudio(Buffer.from("first"));
+    session.sendAudio(Buffer.from("second"));
+    await expect(session.connect()).rejects.toThrow("second frame failed");
+    await session.connect();
+
+    expect(sentFrames).toEqual(["first", "second"]);
+    session.close();
+  });
+
   it("flushes a large retained audio tail in order after reconnect", async () => {
     const connections: WebSocket[] = [];
     const frames: Buffer[] = [];

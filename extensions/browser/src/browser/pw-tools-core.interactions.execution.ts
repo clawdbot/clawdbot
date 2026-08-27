@@ -12,6 +12,7 @@ import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
+import { pageTargetInfo } from "./pw-session-connection.js";
 import {
   beginActionDownloadCaptureOnPage,
   createObservedDialogAbortSignalForPage,
@@ -264,6 +265,7 @@ export async function executeActViaPlaywright(
   blockedByDialog?: boolean;
   browserState?: unknown;
   downloads?: BrowserDownloadResult[];
+  targetId?: string;
 }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
   const page = await getPageForTargetId({
@@ -271,6 +273,10 @@ export async function executeActViaPlaywright(
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
+  const withOperationTarget = async <T extends Record<string, unknown>>(payload: T) => {
+    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
+    return { ...payload, ...(targetId ? { targetId } : {}) };
+  };
   // Any DOM action can synchronously trigger a download. Capturing all actions
   // keeps reporting and final-URL policy aligned with the actual file write.
   const downloadCapture = beginActionDownloadCaptureOnPage(page, {
@@ -310,11 +316,11 @@ export async function executeActViaPlaywright(
         signal: dialogAbort.signal,
       });
       const newDownloads = await drainDownloads();
-      return {
+      return await withOperationTarget({
         results: batch.results,
         ...(batch.aborted ? { aborted: batch.aborted } : {}),
         ...(newDownloads ? { downloads: newDownloads } : {}),
-      };
+      });
     }
     const result = await executeSingleAction(
       opts.action,
@@ -327,9 +333,12 @@ export async function executeActViaPlaywright(
     );
     const newDownloads = await drainDownloads();
     if (opts.action.kind === "evaluate") {
-      return { result, ...(newDownloads ? { downloads: newDownloads } : {}) };
+      return await withOperationTarget({
+        result,
+        ...(newDownloads ? { downloads: newDownloads } : {}),
+      });
     }
-    return newDownloads ? { downloads: newDownloads } : {};
+    return await withOperationTarget(newDownloads ? { downloads: newDownloads } : {});
   } catch (err) {
     let failure = err;
     try {
@@ -344,7 +353,10 @@ export async function executeActViaPlaywright(
       failure = downloadErr;
     }
     if (isBrowserObservedDialogBlockedError(failure)) {
-      return { blockedByDialog: true, browserState: failure.browserState };
+      return await withOperationTarget({
+        blockedByDialog: true,
+        browserState: failure.browserState,
+      });
     }
     if (
       isPolicyDenyNavigationError(failure) &&

@@ -257,7 +257,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await setThemeMode(page, "dark");
-      const commandPaletteShortcut = process.platform === "darwin" ? "⌘K" : "Ctrl K";
+      const applePlatform = process.platform === "darwin";
+      const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
+      const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       await expectHoverTooltip(
         page.locator(".sidebar-brand").getByRole("button", { name: "New session" }),
         "New session",
@@ -268,7 +270,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Collapse sidebar" }),
-        "Collapse sidebar (⌘B)",
+        `Collapse sidebar (${sidebarShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open split view" }),

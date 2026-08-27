@@ -171,10 +171,46 @@ describe("status-all format", () => {
         label: "systemd",
         installed: true,
         loadedText: "not loaded",
-        runtimeStatus: "failed",
-        runtimePid: 42,
+        runtime: { status: "failed", pid: 42 },
       }),
     ).toBe("systemd not loaded · failed (pid 42)");
+  });
+
+  it.each([
+    {
+      installed: false,
+      loadedText: "unknown",
+      expected: "LaunchAgent unknown (inspection failed: permission denied)",
+    },
+    {
+      installed: null,
+      loadedText: "unknown",
+      expected: "LaunchAgent unknown (inspection failed: permission denied)",
+    },
+    {
+      installed: true,
+      managedByOpenClaw: true,
+      loadedText: "unknown",
+      runtimeShort: "running (pid 42)",
+      expected:
+        "LaunchAgent installed · unknown (inspection failed: permission denied) · running (pid 42)",
+    },
+    {
+      installed: true,
+      managedByOpenClaw: false,
+      loadedText: "running (externally managed)",
+      runtime: { status: "running", pid: 42 },
+      expected:
+        "LaunchAgent running (externally managed) (inspection failed: permission denied) · running (pid 42)",
+    },
+  ])("keeps inspection errors visible: $expected", ({ expected, ...service }) => {
+    expect(
+      formatStatusServiceValue({
+        ...service,
+        label: "LaunchAgent",
+        loadState: { status: "unknown", detail: "permission denied" },
+      }),
+    ).toBe(expected);
   });
 
   it("builds gateway json payloads consistently", () => {

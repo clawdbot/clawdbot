@@ -16,8 +16,8 @@ import type { GatewayBindMode } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
-import { resolveGatewayService } from "../../daemon/service.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
+import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
+import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
@@ -179,7 +179,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
+    fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
   let wrapperPath: string | undefined;
@@ -238,8 +238,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
   const existingServiceCommand = await service.readCommand(process.env).catch(() => null);
+  const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
   const existingServiceEnv: Record<string, string> | undefined =
-    existingServiceCommand?.environment;
+    existingManagedCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,
@@ -267,14 +268,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (loaded) {
     if (!opts.force) {
       const autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
-        currentCommand: existingServiceCommand,
+        currentCommand: existingManagedCommand,
         env: process.env,
         installEnv,
         port,
         runtime: runtimeRaw,
         wrapperPath,
         existingEnvironment: existingServiceEnv,
-        existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
+        existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
         config: cfg,
       });
       if (autoRefreshMessage) {
@@ -330,7 +331,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       runtime: runtimeRaw,
       wrapperPath,
       existingEnvironment: existingServiceEnv,
-      existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
+      existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
       warn: (message) => {
         if (json) {
           warnings.push(message);

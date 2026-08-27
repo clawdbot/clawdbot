@@ -42,6 +42,18 @@ function createBaseShapeState(params: {
   for (const column of OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns ??
     []) {
     const [table, name] = column.split(".");
+    if (!table || !name) {
+      continue;
+    }
+    // Additive columns can belong to tables that are stripped from claw-scoped
+    // schemas entirely (e.g. node_worker_launches); base shape only drops
+    // columns whose owning table exists here.
+    const tableExists = database.db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get(table);
+    if (!tableExists) {
+      continue;
+    }
     database.db.exec(`ALTER TABLE ${table} DROP COLUMN ${name};`);
   }
   closeOpenClawStateDatabaseForTest();

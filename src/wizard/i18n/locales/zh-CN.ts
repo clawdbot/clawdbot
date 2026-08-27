@@ -450,6 +450,13 @@ export const zh_CN = {
       title: "安全免责声明",
       toolAccess: "如果启用了工具，这个 bot 可以读取文件并执行操作。",
     },
+    telemetry: {
+      accept: "是，分享功能使用统计",
+      decline: "不用，谢谢",
+      description:
+        "在每日更新检查中分享你使用的功能（频道、提供商、插件数量）。绝不包含消息或标识符。查看实际发送的内容：`openclaw telemetry show`。随时更改：`openclaw telemetry on|off`。",
+      title: "帮助 OpenClaw 变得更好？",
+    },
     skills: {
       configure: "现在配置技能？（推荐）",
       containerBrewHidden:
@@ -1076,7 +1083,9 @@ export const zh_CN = {
       dashboardWhenReady: "准备好后运行：{command}",
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
-      daemonRuntimeNodeHint: "OpenClaw 状态使用 node:sqlite，因此必须使用 Node；Bun 无法运行网关。",
+      daemonRuntimeNodeHint: "托管服务的首选和推荐运行时。",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "需要 Bun 1.4 或更高版本，并使用符合 WAL 重置安全要求的 node:sqlite。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',
@@ -1094,8 +1103,6 @@ export const zh_CN = {
       gatewayServiceRestarted: "Gateway 服务已重启。",
       gatewayServiceRestarting: "正在重启 Gateway 服务...",
       gatewayServiceRestartScheduled: "Gateway 服务重启已排队。",
-      gatewayServiceUninstalled: "Gateway 服务已卸载。",
-      gatewayServiceUninstalling: "正在卸载 Gateway 服务...",
       gatewayTokenGenerate: "生成令牌：{command}",
       gatewayTokenShared: "Gateway 令牌：Gateway 和 Control UI 的共享认证。",
       gatewayTokenStored:

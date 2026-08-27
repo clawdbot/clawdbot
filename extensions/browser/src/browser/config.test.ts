@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserConfig, BrowserProfileConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -156,6 +156,17 @@ describe("browser config", () => {
       },
     });
     expect(resolveProfile(resolved, "work")?.cdpPort).toBe(20123);
+  });
+
+  it("keeps literal $ patterns in home when expanding a tilde executable path", () => {
+    const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
+    try {
+      expect(resolveBrowserConfig({ executablePath: "~/chrome-bin" }).executablePath).toBe(
+        path.resolve("/home/$&user/chrome-bin"),
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("does not assign an implicit extension relay an explicitly pinned extension port", () => {

@@ -65,6 +65,7 @@ vi.mock("./pw-session.js", () => sessionMocks);
 vi.mock("./pw-session.page-cdp.js", () => pageCdpMocks);
 
 const interactions = await import("./pw-tools-core.interactions.js");
+const { clickCoordsViaPlaywright } = await import("./pw-tools-core.interactions.actions.js");
 const snapshots = await import("./pw-tools-core.snapshot.js");
 
 const strictNavigationOptions = () =>
@@ -219,6 +220,15 @@ describe("pw-tools-core browser SSRF guards", () => {
         }),
     },
     {
+      name: "clickCoords",
+      run: async () =>
+        await clickCoordsViaPlaywright({
+          ...proxiedNavigationOptions(),
+          x: 10,
+          y: 20,
+        }),
+    },
+    {
       name: "type",
       run: async () =>
         await interactions.typeViaPlaywright({
@@ -316,6 +326,50 @@ describe("pw-tools-core browser SSRF guards", () => {
     expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith(
       completedNavigationExpectation(true),
     );
+    expect(sessionMocks.getPageForTargetId).toHaveBeenCalledWith(
+      expect.objectContaining(proxiedNavigationOptions()),
+    );
+  });
+
+  it("does not restore role references for keyboard-only actions", async () => {
+    const press = vi.fn(async () => {});
+    installInteractionPage({ url: vi.fn(() => "https://example.com"), keyboard: { press } }, {});
+
+    await interactions.pressKeyViaPlaywright({ cdpUrl: "http://127.0.0.1:18792", key: "Enter" });
+
+    expect(press).toHaveBeenCalledWith("Enter", { delay: 0 });
+    expect(sessionMocks.ensurePageState).toHaveBeenCalledOnce();
+    expect(sessionMocks.restoreRoleRefsForTarget).not.toHaveBeenCalled();
+  });
+
+  it("preserves raw coordinate-click failures and removes the abort listener", async () => {
+    const failure = new Error("coordinate click failed");
+    const controller = new AbortController();
+    const addListener = vi.spyOn(controller.signal, "addEventListener");
+    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+    installInteractionPage(
+      {
+        url: vi.fn(() => "https://example.com"),
+        mouse: {
+          click: vi.fn(async () => {
+            throw failure;
+          }),
+        },
+      },
+      {},
+    );
+
+    await expect(
+      clickCoordsViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        x: 10,
+        y: 20,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(addListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
   it("guards executable wait predicates and preserves proxy policy", async () => {

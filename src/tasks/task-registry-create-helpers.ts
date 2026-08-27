@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { getTaskFlowById } from "./task-flow-runtime-internal.js";
 import {
   assertParentFlowLinkAllowed,
   ensureLinkedTaskFlowRegistryReady,
@@ -46,10 +47,9 @@ export function findExistingTaskForCreate(params: {
         ) {
           return false;
         }
-        if (params.runtime === "acp") {
-          // ACP one-task flow ids can be derived after creation; they must not
-          // split one logical ACP run into duplicate task rows.
-          return true;
+        if (params.runtime === "acp" && !params.parentFlowId?.trim()) {
+          const existingFlowId = task.parentFlowId?.trim();
+          return !existingFlowId || getTaskFlowById(existingFlowId)?.syncMode === "task_mirrored";
         }
         return (
           (normalizeOptionalString(task.parentFlowId) ?? "") ===

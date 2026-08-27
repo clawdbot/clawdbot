@@ -270,6 +270,37 @@ describe("voice-call doctor state migration", () => {
     );
   });
 
+  it("keeps literal $ patterns in home when resolving a tilde-configured store", async () => {
+    const dollarHome = path.join(stateDir, "home$&d");
+    const dollarStorePath = path.join(dollarHome, "dollar-store");
+    const call = makePersistedCall({
+      callId: "call-dollar-home",
+      providerCallId: "provider-dollar-home",
+    });
+    await fs.mkdir(dollarStorePath, { recursive: true });
+    writeLegacyCallsJsonl(dollarStorePath, [call]);
+    const dollarEnv = { ...process.env, HOME: dollarHome, OPENCLAW_STATE_DIR: stateDir };
+
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
+    const params = {
+      config: {
+        plugins: {
+          entries: {
+            "voice-call": { config: { store: "~/dollar-store" } },
+          },
+        },
+      },
+      env: dollarEnv,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(dollarEnv),
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining("1 record")],
+    });
+  });
+
   it("repairs the plugin-local SQLite schema without a legacy call log", async () => {
     const databasePath = path.join(storePath, "state", "openclaw.sqlite");
     await fs.mkdir(path.dirname(databasePath), { recursive: true });

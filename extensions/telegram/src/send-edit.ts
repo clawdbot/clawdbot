@@ -9,7 +9,7 @@ import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage,
 } from "./outbound-message-context.js";
-import { getTelegramRichRawApi } from "./rich-message.js";
+import { buildTelegramRichMarkdownPlan, getTelegramRichRawApi } from "./rich-message.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import {
   isTelegramMessageHasNoTextError,
@@ -167,14 +167,21 @@ async function editMessageTelegramWithContext(
   }
 
   const performTextEdit = async () => {
-    const page = planTelegramTextDeliveryPages({
-      text: textMode === "html" ? htmlText : text,
-      maxChars: Number.MAX_SAFE_INTEGER,
-      tableMode,
-      richMessages: useRichMessages,
-      skipEntityDetection: !linkPreviewEnabled,
-      ...(textMode === "html" ? { textMode: "html" as const } : {}),
-    })[0];
+    const richPlan = useRichMessages
+      ? buildTelegramRichMarkdownPlan(text, { tableMode, skipEntityDetection: !linkPreviewEnabled })
+      : undefined;
+    // An edit replaces one message. Keep the complete rich document so a
+    // structural-limit rejection recovers all its text, not just the first send page.
+    const page = richPlan?.richMessage.blocks.length
+      ? { ...richPlan, sourceText: richPlan.plainText, sourceTextMode: "markdown" as const }
+      : planTelegramTextDeliveryPages({
+          text: textMode === "html" ? htmlText : text,
+          maxChars: Number.MAX_SAFE_INTEGER,
+          tableMode,
+          richMessages: useRichMessages,
+          skipEntityDetection: !linkPreviewEnabled,
+          ...(textMode === "html" ? { textMode: "html" as const } : {}),
+        })[0];
     if (!page) {
       throw new Error("telegram editMessage failed: empty text");
     }

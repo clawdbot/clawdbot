@@ -318,9 +318,10 @@ describe("resolveUpdatedInstallCommandEnv", () => {
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.PATH).toBe("/daemon/bin");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
   });
 
-  it("clears caller selectors omitted by the managed service definition", () => {
+  it("preserves effective base-owned selectors while clearing unowned caller selectors", () => {
     const env = resolveOwnedManagedUpdateEnv({
       processEnv: {
         HOME: "/home/operator",
@@ -335,17 +336,17 @@ describe("resolveUpdatedInstallCommandEnv", () => {
         OPENCLAW_HOME: "/home/operator/openclaw-home",
         OPENCLAW_PROFILE: "personal",
         OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
-        OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
+        OPENCLAW_CONFIG_PATH: "/effective/openclaw.json",
         OPENCLAW_GATEWAY_PORT: "19111",
       },
-      serviceDefinitionEnv: {},
+      serviceDefinitionEnv: { OPENCLAW_CONFIG_PATH: "/managed/openclaw.json" },
     });
 
     expect(env.HOME).toBe("/home/operator");
     expect(env.OPENCLAW_HOME).toBeUndefined();
     expect(env.OPENCLAW_PROFILE).toBeUndefined();
     expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
-    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBe("/effective/openclaw.json");
     expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
   });
 });

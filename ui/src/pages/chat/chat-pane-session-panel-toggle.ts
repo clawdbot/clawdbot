@@ -23,6 +23,7 @@ interface SessionPanelToggleControllerOptions {
   current: () => ActivePanelOwner | null;
   pending: Map<SessionPanelToggleSlot, Event>;
   requestUpdate: () => void;
+  updateSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
 }
 
 /** Owns shell-to-pane panel intent handoff for the active chat presentation. */
@@ -38,7 +39,7 @@ export class ChatPaneSessionPanelToggleController {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (detail?.open === false) {
       this.options.pending.delete(slot);
-      owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, slot));
+      this.options.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, slot));
       return true;
     }
     if (slot === "terminal") {
@@ -54,11 +55,11 @@ export class ChatPaneSessionPanelToggleController {
           deferUntilHostChange: !embeddedTerminalMounted,
         });
       }
-      owner.state.updateSidebarLayout(openSlot(owner.state.sidebarLayout, slot));
+      this.options.updateSidebarLayout(openSlot(owner.state.sidebarLayout, slot));
       return true;
     }
     this.options.pending.set(slot, event);
-    owner.state.updateSidebarLayout(openSlot(owner.state.sidebarLayout, slot));
+    this.options.updateSidebarLayout(openSlot(owner.state.sidebarLayout, slot));
     void Promise.all([
       customElements.whenDefined("openclaw-chat-sidebar-region"),
       customElements.whenDefined(tagName),

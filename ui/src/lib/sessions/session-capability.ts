@@ -65,6 +65,7 @@ export type SessionListOptions = {
   activeMinutes?: number;
   search?: string;
   ownerId?: string;
+  ownerFirst?: boolean;
   involvingMe?: boolean;
   offset?: number;
   limit?: number;
@@ -126,6 +127,7 @@ export type SessionGateway = {
     hello: GatewayHelloOk | null;
     assistantAgentId?: string | null;
     sessionKey?: string;
+    selfUser?: { readonly id: string } | null;
   };
   subscribe: (listener: (snapshot: SessionGateway["snapshot"]) => void) => () => void;
   subscribeEvents: (listener: (event: GatewayEventFrame) => void) => () => void;
@@ -143,6 +145,7 @@ export type SessionConnectionOwner = {
 export type SessionCreateReconciliation = "blocking" | "background";
 
 export type SessionMessageSubscription = GatewaySessionMessageSubscription;
+export type SessionArchiveVisibility = "pending" | "archived";
 
 export type SessionCapability = {
   readonly state: SessionState;
@@ -177,12 +180,13 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
+  archiveVisibility: (key: string) => SessionArchiveVisibility | undefined;
+  setArchiveVisibility: (key: string, visibility: SessionArchiveVisibility | undefined) => void;
   assignOwner: (
     key: string,
     owner: SessionsAssignOwnerParams["owner"],
     options?: { agentId?: string | null },
   ) => Promise<SessionOwner | null>;
-  setModelOverride: (key: string, value: string | null | undefined) => void;
   retireModelOverride: (key: string) => void;
   /** Keep optimistic row changes in the published snapshot through later publishes. */
   patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;

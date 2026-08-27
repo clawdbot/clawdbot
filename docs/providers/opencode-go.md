@@ -74,6 +74,13 @@ interactive onboarding or pass the shared OpenCode API key directly.
 ## Catalog
 
 Run `openclaw models list --provider opencode-go` for the current model list.
+OpenClaw combines the models available to your Go account with authoritative
+metadata from `https://models.opencode.ai/api.json`, so new upstream models
+appear without an OpenClaw update. The upstream catalog is downloaded and
+cached only when OpenCode Zen or Go is configured or explicitly selected with
+OpenCode credentials; it is never fetched at startup or while using unrelated
+providers.
+
 Current active rows:
 
 | Model ref                       | Context   | Max output | Inputs      | Transport |
@@ -92,19 +99,23 @@ Current active rows:
 | `opencode-go/mimo-v2.5-pro`     | 1,048,576 | 128,000    | Text        | Chat      |
 | `opencode-go/minimax-m2.7`      | 204,800   | 131,072    | Text        | Messages  |
 | `opencode-go/minimax-m3`        | 1M        | 131,072    | Text, image | Messages  |
+| `opencode-go/ox-alpha-free`     | 1M        | 131,072    | Text, image | Chat      |
 | `opencode-go/qwen3.6-plus`      | 1M        | 65,536     | Text, image | Messages  |
 | `opencode-go/qwen3.7-max`       | 1M        | 65,536     | Text        | Messages  |
 | `opencode-go/qwen3.7-plus`      | 1M        | 65,536     | Text, image | Messages  |
 | `opencode-go/qwen3.8-max`       | 1M        | 131,072    | Text, image | Messages  |
 
-Deprecated and preview refs remain resolvable only for existing explicit
-configurations. They are not part of static or live recommendations.
+Current upstream preview models appear while available. Deprecated refs remain
+resolvable only for existing explicit configurations and are not recommended.
+
+Ox Alpha Free is free for a limited time, but accessing the Go catalog still
+requires a paid OpenCode Go subscription.
 
 ## Privacy
 
-OpenCode's current policy says model training is not used for any active Go
-route. Grok 4.5 and GPT-5.6 Luna retain data for up to 30 days; the other active
-Go routes list zero-day retention. Review the current
+OpenCode lists zero data retention and no model training for Ox Alpha Free.
+Privacy policies vary by model: some routes retain data for up to 30 days, and
+the Muse Spark 1.2 Contributor route permits model training. Review the current
 [OpenCode Go privacy table](https://opencode.ai/docs/go/#privacy) before using a
 model, because provider policy can change independently of OpenClaw.
 

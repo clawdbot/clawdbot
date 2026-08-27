@@ -86,6 +86,134 @@ describe("startup migration checkpoint", () => {
     expect(existsSync(dbPath)).toBe(false);
   });
 
+  it("initializes the canonical schema before creating the first startup checkpoint", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-fresh-"),
+    };
+
+    expect(readStartupMigrationVersion(env)).toBeNull();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(
+        database
+          .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+      expect(
+        database
+          .prepare("SELECT 1 AS present FROM sqlite_schema WHERE name = 'plugin_state_entries'")
+          .get(),
+      ).toEqual({ present: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([false, true])(
+    "adopts native version-zero state before checkpoint access (existing checkpoint: %s)",
+    (hasExistingCheckpoint) => {
+      const env = {
+        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-native-"),
+      };
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      mkdirSync(path.dirname(databasePath), { recursive: true });
+      const { DatabaseSync } = requireNodeSqlite();
+      const native = new DatabaseSync(databasePath);
+      native.exec(`
+        CREATE TABLE device_identities (
+          identity_key TEXT NOT NULL PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          public_key_pem TEXT NOT NULL,
+          private_key_pem TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_device_identities_device
+          ON device_identities(device_id, updated_at_ms DESC);
+        INSERT INTO device_identities VALUES ('node', 'native-device', 'public', 'private', 1, 1);
+        CREATE TABLE exec_approvals_config (
+          config_key TEXT NOT NULL PRIMARY KEY,
+          raw_json TEXT NOT NULL,
+          socket_path TEXT,
+          has_socket_token INTEGER NOT NULL,
+          default_security TEXT,
+          default_ask TEXT,
+          default_ask_fallback TEXT,
+          auto_allow_skills INTEGER,
+          agent_count INTEGER NOT NULL,
+          allowlist_count INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO exec_approvals_config
+          VALUES ('current', '{}', NULL, 0, NULL, NULL, NULL, NULL, 0, 0, 1);
+      `);
+      if (hasExistingCheckpoint) {
+        native.exec(`
+          CREATE TABLE schema_meta (
+            meta_key TEXT NOT NULL PRIMARY KEY,
+            role TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            agent_id TEXT,
+            app_version TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          );
+          CREATE TABLE state_leases (
+            scope TEXT NOT NULL,
+            lease_key TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            expires_at INTEGER,
+            heartbeat_at INTEGER,
+            payload_json TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (scope, lease_key)
+          );
+          CREATE INDEX idx_state_leases_expiry
+            ON state_leases(expires_at, scope, lease_key)
+            WHERE expires_at IS NOT NULL;
+          CREATE INDEX idx_state_leases_owner
+            ON state_leases(owner, updated_at DESC);
+        `);
+      }
+      native.close();
+
+      const lease = acquireStartupMigrationLease({ env, owner: "native-bootstrap" });
+      try {
+        const initialized = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          expect(initialized.prepare("PRAGMA user_version").get()).toEqual({
+            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          });
+          expect(
+            initialized
+              .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+              .get(),
+          ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+          expect(
+            initialized
+              .prepare("SELECT device_id FROM device_identities WHERE identity_key = 'node'")
+              .get(),
+          ).toEqual({ device_id: "native-device" });
+          expect(
+            initialized
+              .prepare("SELECT config_key FROM exec_approvals_config WHERE config_key = 'current'")
+              .get(),
+          ).toEqual({ config_key: "current" });
+        } finally {
+          initialized.close();
+        }
+      } finally {
+        lease.release();
+      }
+    },
+  );
+
   it("records the migrated OpenClaw version in shared state", () => {
     const env = {
       OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
@@ -560,6 +688,9 @@ describe("startup migration checkpoint", () => {
 
     expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1" })).toBe(true);
     const lease = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" });
+    const leased = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    expect(leased.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+    leased.close();
     lease.release();
   });
 

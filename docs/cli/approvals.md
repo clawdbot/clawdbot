@@ -90,6 +90,10 @@ openclaw approvals resolve <id> allow-always
 openclaw approvals resolve <id> deny --reason "Not expected during maintenance"
 ```
 
+For exec requests, `allow-always` means **always allow here**: the generated
+grant is tied to the command's exact arguments and current working directory.
+The same command from another directory requires a separate approval.
+
 The CLI reads the unified approval record to select its kind, checks the requested decision against the record's allowed decisions, and then calls the unified resolver. A first successful decision exits `0`. Repeating the recorded decision also exits `0` and reports `already resolved (same decision)`. A conflicting decision, missing approval, expired approval, or decision unavailable for that approval kind prints a clear error and exits non-zero.
 
 `--reason` adds a local note to the CLI confirmation. The current Gateway approval record has no free-text resolution-reason field, so this note is not persisted or sent to other approval surfaces.
@@ -183,6 +187,7 @@ No target flag means the local approvals row in the shared state database.
 ## Notes
 
 - The node host must advertise `system.execApprovals.get/set` (macOS app, headless node host, or Windows companion).
+- After upgrading from an argv-only generated-grant version, run `openclaw doctor --fix` if the update did not already do so. Doctor removes only inactive generated grants; manual allowlist rules stay in place. Rerun affected workflows to approve them in the intended directory.
 - Approvals are stored per host in
   `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is

@@ -463,7 +463,7 @@ struct RootSidebar: View {
             self.resolvedSelectedSessionKey.caseInsensitiveCompare(mainKey) == .orderedSame
         let mainSession = self.mainSessionEntry
         return Button {
-            self.appModel.openChat(sessionKey: mainKey, unread: mainSession?.unread == true)
+            self.appModel.openChat(sessionKey: mainKey)
             self.selectSidebarDestination(.chat)
         } label: {
             HStack(spacing: 9) {
@@ -600,7 +600,7 @@ struct RootSidebar: View {
         let session = node.session
         let isSelected = session.key == selectedSessionKey
         return Button {
-            self.appModel.openChat(sessionKey: session.key, unread: session.unread == true)
+            self.appModel.openChat(sessionKey: session.key)
             self.selectSidebarDestination(.chat)
         } label: {
             HStack(spacing: 9) {

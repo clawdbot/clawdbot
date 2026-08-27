@@ -46,6 +46,7 @@ import {
 } from "./session-binding.js";
 import {
   applyCodexSessionPermissionPolicy,
+  resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
 } from "./session-permission-policy.js";
 import {
@@ -317,6 +318,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const sessionPermissionCwd = resolveCodexSessionPermissionCwd({
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,
+    defaultRoot: effectiveWorkspace,
     requestedCwd,
     fallbackCwd: effectiveWorkspace,
   });
@@ -333,14 +335,16 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       appServer,
       permissionMode: params.permissionMode,
       sessionRoot: params.sessionRoot,
+      defaultRoot: effectiveWorkspace,
       pluginConfig,
       canUseAutoReview: canUseCodexModelBackedApprovalsReviewerForModel({
         modelProvider: selection.modelProvider,
         model: selection.model,
         config: params.config,
-        env: process.env,
+        env: { ...process.env, ...appServer.start.env, ...shellEnvironment },
         agentDir,
         homeScope: appServer.start.homeScope,
+        codexArgs: appServer.start.args,
       }),
       requirementsToml,
       policyLocked: startupBinding?.connectionScope === "supervision",
@@ -356,7 +360,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       provider: selection.modelProvider,
       model: selection.model,
       config: params.config,
-      env: process.env,
+      env: { ...process.env, ...session.start.env, ...shellEnvironment },
       agentDir,
     });
     return { session, appServer: withPreparedProcessEnv(trusted) };
@@ -427,6 +431,17 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
     appServer = resolvedAppServer.appServer;
   }
+  const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
+    appServer,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
+    defaultRoot: effectiveWorkspace,
+  });
+  if (sessionPermissionPolicy) {
+    params.permissionMode = sessionPermissionPolicy.mode;
+    params.sessionRoot = sessionPermissionPolicy.root;
+    (params.execOverrides ??= {}).mode = sessionPermissionPolicy.execMode;
+  }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
@@ -482,6 +497,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     effectiveWorkspace,
     effectiveCwd,
     appServer,
+    sessionPermissionPolicy,
     nativeHookRelayEvents,
     runAbortController,
     terminalState,

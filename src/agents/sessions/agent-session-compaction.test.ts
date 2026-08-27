@@ -7,6 +7,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
+import { agentSessionSetContextReplacementHook } from "./agent-session-compaction.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -288,6 +289,39 @@ describe("AgentSession compaction", () => {
       expect(session.getLastAssistantText()).toBe("complete retry");
     },
   );
+
+  it("invalidates context-bound state before the completed event and overflow retry", async () => {
+    const contextState = new Map([["skill", true]]);
+    const contextSizesAtCompactionEnd: number[] = [];
+    let agentRequests = 0;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
+      agentRequests += 1;
+      if (agentRequests === 2) {
+        expect(contextState.size).toBe(0);
+      }
+      return createAssistantResultStream(
+        agentRequests === 1
+          ? createOverflowAssistant(activeModel)
+          : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]),
+      );
+    });
+    const { session } = await createTestSession({
+      settingsManager: createAutoCompactionSettings(),
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session[agentSessionSetContextReplacementHook](() => contextState.clear());
+    session.subscribe((event) => {
+      if (event.type === "compaction_end" && event.outcome.status === "completed") {
+        contextSizesAtCompactionEnd.push(contextState.size);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect(agentRequests).toBe(2);
+    expect(contextState.size).toBe(0);
+    expect(contextSizesAtCompactionEnd).toEqual([0]);
+  });
 
   it("surfaces the shared overflow recovery limit after exhausting it", async () => {
     let agentRequests = 0;

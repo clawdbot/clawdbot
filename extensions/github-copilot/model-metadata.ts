@@ -1,10 +1,13 @@
 // Github Copilot plugin module implements model metadata behavior.
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type CopilotRuntimeApi = "anthropic-messages" | "openai-completions" | "openai-responses";
 type CopilotReasoningCompat = {
+  supportsReasoningEffort?: boolean;
   supportedReasoningEfforts?: readonly string[] | null;
 };
 
@@ -18,16 +21,18 @@ const COPILOT_CHAT_COMPLETIONS_COMPAT: ModelDefinitionConfig["compat"] = {
   supportsUsageInStreaming: false,
   maxTokensField: "max_tokens",
 };
-const COPILOT_XHIGH_MODEL_IDS = new Set([
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.3-codex",
-]);
+const manifestCatalog = manifest.modelCatalog.providers["github-copilot"];
+const manifestModels = buildManifestModelProviderConfig({
+  providerId: "github-copilot",
+  catalog: manifestCatalog,
+}).models;
+for (const model of manifestModels) {
+  model.api = resolveCopilotTransportApi(model.id);
+  model.compat = { ...resolveCopilotModelCompat(model.id), ...model.compat };
+}
 
 const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
+  ...manifestModels.map((model) => [model.id, model] as const),
   // These two non-catalog ids preserve metadata for legacy configured refs and
   // account discovery responses. They are intentionally not picker entries.
   [
@@ -52,44 +57,6 @@ const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
       maxTokens: 64_000,
       thinkingLevelMap: { xhigh: "xhigh", max: null },
       compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-    },
-  ],
-  [
-    "gpt-5.3-codex",
-    {
-      name: "GPT-5.3-Codex",
-      api: "openai-responses",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-      contextWindow: 400_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-    },
-  ],
-  [
-    "gpt-5.4",
-    {
-      name: "GPT-5.4",
-      api: "openai-responses",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-    },
-  ],
-  [
-    "gpt-5.5",
-    {
-      name: "GPT-5.5",
-      api: "openai-responses",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
     },
   ],
 ]);
@@ -128,44 +95,37 @@ export function resolveCopilotModelCompat(
   return undefined;
 }
 
-function compatSupportsEffort(
-  compat: CopilotReasoningCompat | null | undefined,
-  effort: "xhigh" | "max",
-): boolean {
-  return (
-    Array.isArray(compat?.supportedReasoningEfforts) &&
-    compat.supportedReasoningEfforts.some(
-      (candidate) => normalizeOptionalLowercaseString(candidate) === effort,
-    )
-  );
-}
-
-export function resolveCopilotExtendedThinkingLevels(
+export function resolveCopilotThinkingLevelMap(
   modelId: string,
   compat?: CopilotReasoningCompat | null,
-): Array<"xhigh" | "max"> {
+  api?: string | null,
+): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
   const normalizedModelId = normalizeOptionalLowercaseString(modelId) ?? "";
+  const runtimeApi = api ?? resolveCopilotTransportApi(normalizedModelId);
   const staticCompat = resolveStaticCopilotModelOverride(normalizedModelId)?.compat;
-  const isClaudeModel = normalizedModelId.includes("claude");
-  const supportsAdaptiveClaudeEffort =
-    !isClaudeModel || supportsClaudeAdaptiveThinking({ id: normalizedModelId });
-  const levels: Array<"xhigh" | "max"> = [];
-  if (
-    supportsAdaptiveClaudeEffort &&
-    (COPILOT_XHIGH_MODEL_IDS.has(normalizedModelId) ||
-      compatSupportsEffort(compat, "xhigh") ||
-      compatSupportsEffort(staticCompat, "xhigh"))
-  ) {
-    levels.push("xhigh");
+  // A declared account catalog is authoritative, including explicit opt-outs;
+  // the manifest only supplies effort metadata when discovery has none.
+  const efforts =
+    compat?.supportsReasoningEffort === false
+      ? []
+      : (compat?.supportedReasoningEfforts ?? staticCompat?.supportedReasoningEfforts);
+  if (!Array.isArray(efforts)) {
+    return undefined;
   }
-  if (
-    isClaudeModel &&
-    supportsAdaptiveClaudeEffort &&
-    (compatSupportsEffort(compat, "max") || compatSupportsEffort(staticCompat, "max"))
-  ) {
-    levels.push("max");
-  }
-  return levels;
+  const supported = new Set(efforts.map(normalizeOptionalLowercaseString));
+  const supportsEffort =
+    runtimeApi !== "anthropic-messages" ||
+    supportsClaudeAdaptiveThinking({ id: normalizedModelId });
+  return {
+    // Keep the public minimal setting usable when this route starts its native ladder at low.
+    ...(runtimeApi === "openai-responses" && !supported.has("minimal") && supported.has("low")
+      ? { minimal: "low" }
+      : {}),
+    xhigh: supportsEffort && supported.has("xhigh") ? "xhigh" : null,
+    // Chat Completions currently translates max to xhigh rather than preserving it.
+    max:
+      supportsEffort && runtimeApi !== "openai-completions" && supported.has("max") ? "max" : null,
+  };
 }
 
 export function resolveStaticCopilotModelOverride(

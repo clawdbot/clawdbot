@@ -33,6 +33,7 @@ export * from "./types.signal.js";
 export * from "./types.skills.js";
 export * from "./types.slack.js";
 export * from "./types.telegram.js";
+export * from "./types.telemetry.js";
 export * from "./types.tts.js";
 export * from "./types.tools.js";
 export * from "./types.whatsapp.js";

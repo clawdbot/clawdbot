@@ -810,7 +810,10 @@ describe("plugin state keyed store", () => {
       await expect(store.register("non-enumerable", nonEnumerable)).rejects.toThrow(
         PluginStateStoreError,
       );
-      await expectPluginStateStoreError(store.register("big", "x".repeat(65_537)), {
+      // UTF-8 bytes, including JSON quotes, determine the 1 MiB boundary.
+      const boundary = "é".repeat(524_287);
+      await expect(store.register("large", boundary)).resolves.toBeUndefined();
+      await expectPluginStateStoreError(store.register("big", `${boundary}x`), {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
 

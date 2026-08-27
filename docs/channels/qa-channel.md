@@ -40,6 +40,7 @@ Account keys:
 
 - `enabled` - master toggle for this account.
 - `name` - optional display label.
+- `responsePrefix` - automatic reply prefix; account overrides win. Accepts a literal, `"auto"` for the agent identity name, a template such as `"[{model}]"`, or `""` to disable an inherited prefix.
 - `baseUrl` - synthetic bus URL. The account counts as configured once this is set.
 - `botUserId` - synthetic bot user id used in target grammar (default: `openclaw`).
 - `botDisplayName` - display name for outbound messages (default: `OpenClaw QA`).

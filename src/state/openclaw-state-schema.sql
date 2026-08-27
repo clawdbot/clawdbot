@@ -49,31 +49,6 @@ CREATE TABLE IF NOT EXISTS skill_usage (
 CREATE INDEX IF NOT EXISTS idx_skill_usage_key
   ON skill_usage(skill_key, skill_file);
 
-CREATE TABLE IF NOT EXISTS skill_lifecycle (
-  skill_file TEXT NOT NULL PRIMARY KEY,
-  skill_key TEXT NOT NULL,
-  skill_name TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('active', 'stale', 'archived')),
-  pinned INTEGER NOT NULL DEFAULT 0,
-  state_changed_at_ms INTEGER NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  archived_reason TEXT
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_skill_lifecycle_key
-  ON skill_lifecycle(skill_key, skill_file);
-
-CREATE INDEX IF NOT EXISTS idx_skill_lifecycle_state
-  ON skill_lifecycle(state, skill_file);
-
-CREATE TABLE IF NOT EXISTS skill_curator_state (
-  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
-  last_attempt_at_ms INTEGER NOT NULL,
-  last_success_at_ms INTEGER,
-  last_error TEXT,
-  last_result_json TEXT NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   proposal_id TEXT NOT NULL PRIMARY KEY,
   record_json TEXT NOT NULL,
@@ -108,15 +83,6 @@ CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
 
 CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_workspace_time
   ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
-
-CREATE TABLE IF NOT EXISTS skill_workshop_proposal_origin_runs (
-  proposal_id TEXT NOT NULL,
-  run_id TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  mutation_count INTEGER NOT NULL CHECK (mutation_count > 0),
-  PRIMARY KEY (proposal_id, run_id),
-  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
-) STRICT;
 
 CREATE TABLE IF NOT EXISTS skill_workshop_proposal_rollbacks (
   proposal_id TEXT NOT NULL PRIMARY KEY,
@@ -304,6 +270,16 @@ CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
 CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
   ON execution_decision_facts (run_id, occurred_at, receipt_id);
 
+-- Exact admission identity stays separate from owner-native lifecycle rows so
+-- older readers retain byte-compatible cron/task/flow table definitions.
+CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (
+  owner_kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  context_id TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  PRIMARY KEY (owner_kind, owner_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   dedupe_key TEXT UNIQUE,
@@ -372,17 +348,6 @@ CREATE TABLE IF NOT EXISTS session_upstream_links (
 
 CREATE INDEX IF NOT EXISTS idx_session_upstream_links_catalog_id
   ON session_upstream_links(catalog_id);
-
-CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
-  bundle_key TEXT NOT NULL PRIMARY KEY,
-  reason TEXT NOT NULL,
-  generated_at TEXT NOT NULL,
-  bundle_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_diagnostic_stability_bundles_created
-  ON diagnostic_stability_bundles(created_at DESC, bundle_key);
 
 CREATE TABLE IF NOT EXISTS state_leases (
   scope TEXT NOT NULL,
@@ -555,6 +520,25 @@ CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
   )
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
+  grant_id TEXT NOT NULL PRIMARY KEY CHECK (length(grant_id) > 0),
+  minted_by_approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
+  cron_job_id TEXT NOT NULL CHECK (length(cron_job_id) > 0),
+  job_config_revision TEXT NOT NULL CHECK (length(job_config_revision) > 0),
+  operation_binding TEXT NOT NULL CHECK (length(operation_binding) > 0),
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= created_at_ms),
+  revoked_at_ms INTEGER,
+  revoked_by TEXT,
+  last_used_at_ms INTEGER,
+  use_count INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_operator_approval_standing_grants_binding
+  ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
   role TEXT NOT NULL,
@@ -696,15 +680,6 @@ CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
   PRIMARY KEY (gateway_scope, device_id, role)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
-  package_name TEXT NOT NULL PRIMARY KEY,
-  sort_order INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_android_notification_recent_packages_order
-  ON android_notification_recent_packages(sort_order, package_name);
-
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,
@@ -715,15 +690,6 @@ CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
 
 CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
   ON macos_port_guardian_records(port, timestamp DESC);
-
-CREATE TABLE IF NOT EXISTS onboarding_recommendations (
-  config_key TEXT NOT NULL PRIMARY KEY,
-  inventory_hash TEXT NOT NULL,
-  matches_json TEXT NOT NULL,
-  offered_at_ms INTEGER NOT NULL,
-  accepted_at_ms INTEGER,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
 
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,
@@ -777,37 +743,6 @@ CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (
 
 CREATE INDEX IF NOT EXISTS idx_native_hook_relay_bridges_expires
   ON native_hook_relay_bridges(expires_at_ms, relay_id);
-
-CREATE TABLE IF NOT EXISTS model_capability_cache (
-  provider_id TEXT NOT NULL,
-  model_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  input_text INTEGER NOT NULL,
-  input_image INTEGER NOT NULL,
-  reasoning INTEGER NOT NULL,
-  supports_tools INTEGER,
-  context_window INTEGER NOT NULL,
-  max_tokens INTEGER NOT NULL,
-  cost_input REAL NOT NULL,
-  cost_output REAL NOT NULL,
-  cost_cache_read REAL NOT NULL,
-  cost_cache_write REAL NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (provider_id, model_id)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_model_capability_cache_provider_updated
-  ON model_capability_cache(provider_id, updated_at_ms DESC, model_id);
-
-CREATE TABLE IF NOT EXISTS agent_model_catalogs (
-  catalog_key TEXT NOT NULL PRIMARY KEY,
-  agent_dir TEXT NOT NULL,
-  raw_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
-  ON agent_model_catalogs(agent_dir, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   attachment_id TEXT NOT NULL PRIMARY KEY,
@@ -886,14 +821,6 @@ CREATE TABLE IF NOT EXISTS web_push_subscriptions (
 CREATE INDEX IF NOT EXISTS idx_web_push_subscriptions_updated
   ON web_push_subscriptions(updated_at_ms DESC, subscription_id);
 
-CREATE TABLE IF NOT EXISTS web_push_vapid_keys (
-  key_id TEXT NOT NULL PRIMARY KEY,
-  public_key TEXT NOT NULL,
-  private_key TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS apns_registrations (
   node_id TEXT NOT NULL PRIMARY KEY,
   transport TEXT NOT NULL,
@@ -915,22 +842,6 @@ CREATE INDEX IF NOT EXISTS idx_apns_registrations_updated
 CREATE TABLE IF NOT EXISTS apns_registration_tombstones (
   node_id TEXT NOT NULL PRIMARY KEY,
   deleted_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS node_host_config (
-  config_key TEXT NOT NULL PRIMARY KEY,
-  version INTEGER NOT NULL,
-  node_id TEXT NOT NULL,
-  token TEXT,
-  display_name TEXT,
-  gateway_host TEXT,
-  gateway_port INTEGER,
-  gateway_tls INTEGER,
-  gateway_tls_fingerprint TEXT,
-  gateway_context_path TEXT,
-  gateway_cloudflare_access_json TEXT,
-  installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
-  updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
 -- Node-host-owned launch journal. The descriptor and its credential remain
@@ -1012,57 +923,9 @@ CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
   ON node_worker_launches(completed_at_ms, launch_id)
   WHERE completed_at_ms IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS voicewake_triggers (
-  config_key TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  trigger TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (config_key, position)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_voicewake_triggers_trigger
-  ON voicewake_triggers(config_key, trigger);
-
-CREATE TABLE IF NOT EXISTS voicewake_routing_config (
-  config_key TEXT NOT NULL PRIMARY KEY,
-  version INTEGER NOT NULL,
-  default_target_mode TEXT NOT NULL,
-  default_target_agent_id TEXT,
-  default_target_session_key TEXT,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS voicewake_routing_routes (
-  config_key TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  trigger TEXT NOT NULL,
-  target_mode TEXT NOT NULL,
-  target_agent_id TEXT,
-  target_session_key TEXT,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (config_key, position),
-  FOREIGN KEY (config_key) REFERENCES voicewake_routing_config(config_key) ON DELETE CASCADE
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_voicewake_routing_routes_trigger
-  ON voicewake_routing_routes(config_key, trigger);
-
-CREATE TABLE IF NOT EXISTS update_check_state (
-  state_key TEXT NOT NULL PRIMARY KEY,
-  last_checked_at TEXT,
-  last_notified_version TEXT,
-  last_notified_tag TEXT,
-  last_available_version TEXT,
-  last_available_tag TEXT,
-  auto_install_id TEXT,
-  auto_first_seen_version TEXT,
-  auto_first_seen_tag TEXT,
-  auto_first_seen_at TEXT,
-  auto_last_attempt_version TEXT,
-  auto_last_attempt_at TEXT,
-  auto_last_success_version TEXT,
-  auto_last_success_at TEXT,
-  updated_at_ms INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
+  launch_id TEXT PRIMARY KEY,
+  container_json TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS config_health_entries (
@@ -1070,16 +933,6 @@ CREATE TABLE IF NOT EXISTS config_health_entries (
   last_known_good_json TEXT,
   last_promoted_good_json TEXT,
   last_observed_suspicious_signature TEXT,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS clawhub_promotions_feed_state (
-  state_key TEXT NOT NULL PRIMARY KEY,
-  etag TEXT,
-  payload_json TEXT,
-  feed_sequence INTEGER,
-  last_checked_at_ms INTEGER,
-  notified_slugs_json TEXT NOT NULL DEFAULT '[]',
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
@@ -1360,20 +1213,6 @@ CREATE INDEX IF NOT EXISTS idx_plugin_blob_expiry
 CREATE INDEX IF NOT EXISTS idx_plugin_blob_listing
   ON plugin_blob_entries(plugin_id, namespace, created_at, entry_key);
 
-CREATE TABLE IF NOT EXISTS media_blobs (
-  subdir TEXT NOT NULL,
-  id TEXT NOT NULL,
-  content_type TEXT,
-  size_bytes INTEGER NOT NULL,
-  blob BLOB NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (subdir, id)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_media_blobs_created
-  ON media_blobs(created_at);
-
 CREATE TABLE IF NOT EXISTS skill_uploads (
   upload_id TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -1568,11 +1407,6 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   PRIMARY KEY (store_key, job_id)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS cron_store_epochs (
-  store_key TEXT PRIMARY KEY,
-  store_epoch INTEGER NOT NULL DEFAULT 0
-) STRICT;
-
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
   ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
 
@@ -1654,22 +1488,6 @@ CREATE TABLE IF NOT EXISTS cron_job_scratch (
 
 CREATE INDEX IF NOT EXISTS idx_cron_job_scratch_store_updated
   ON cron_job_scratch(store_key, updated_at_ms DESC, job_id);
-
-CREATE TABLE IF NOT EXISTS command_log_entries (
-  id TEXT NOT NULL PRIMARY KEY,
-  timestamp_ms INTEGER NOT NULL,
-  action TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  sender_id TEXT NOT NULL,
-  source TEXT NOT NULL,
-  entry_json TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_command_log_entries_timestamp
-  ON command_log_entries(timestamp_ms DESC, id);
-
-CREATE INDEX IF NOT EXISTS idx_command_log_entries_session
-  ON command_log_entries(session_key, timestamp_ms DESC, id);
 
 CREATE TABLE IF NOT EXISTS delivery_queue_entries (
   queue_name TEXT NOT NULL,
@@ -1864,15 +1682,6 @@ CREATE TABLE IF NOT EXISTS plugin_binding_approvals (
 
 CREATE INDEX IF NOT EXISTS idx_plugin_binding_approvals_plugin
   ON plugin_binding_approvals(plugin_id, approved_at DESC);
-
-CREATE TABLE IF NOT EXISTS tui_last_sessions (
-  scope_key TEXT NOT NULL PRIMARY KEY,
-  session_key TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_tui_last_sessions_session_key
-  ON tui_last_sessions(session_key, updated_at DESC, scope_key);
 
 CREATE TABLE IF NOT EXISTS task_delivery_state (
   task_id TEXT NOT NULL PRIMARY KEY,
@@ -2074,13 +1883,6 @@ CREATE TABLE IF NOT EXISTS session_groups (
   created_at INTEGER NOT NULL,
   cwd TEXT,
   worktree INTEGER
-) STRICT;
-
--- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
--- category:<name>; pinned sessions are ordered separately and never stored.
-CREATE TABLE IF NOT EXISTS sidebar_sections (
-  section_id TEXT NOT NULL PRIMARY KEY,
-  position INTEGER NOT NULL
 ) STRICT;
 
 -- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
@@ -2634,17 +2436,6 @@ CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   sha256 TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS model_catalog_remote (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  bundle_json TEXT NOT NULL,
-  generated_at INTEGER NOT NULL,
-  min_version TEXT,
-  source_url TEXT NOT NULL,
-  etag TEXT,
-  last_modified TEXT,
-  checked_at INTEGER NOT NULL
 ) STRICT;
 
 -- scope_id is non-null because SQLite treats NULLs as distinct in unique indexes/PKs,

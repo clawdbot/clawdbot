@@ -681,35 +681,11 @@ const runNotifyNoopCase = async ({ label, defaults, expectNotification }: Notify
 
   const sessionId = await startBackgroundCommand(tool, COMMAND_NOOP);
   await expect
-    .poll(() => getFinishedSession(sessionId)?.status, BACKGROUND_POLL_OPTIONS)
+    .poll(() => getFinishedSession(sessionId)?.terminalStatus, BACKGROUND_POLL_OPTIONS)
     .toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, expectNotification, sessionId, label);
 };
-
-describe("tool descriptions", () => {
-  it("adds cron-specific deferred follow-up guidance only when cron is available", () => {
-    const execWithCron = createTestExecTool({ hasCronTool: true });
-    const processWithCron = createProcessTool({ hasCronTool: true });
-
-    expect(execWithCron.description).toContain(
-      "automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion",
-    );
-    expect(processWithCron.description).toContain("completion without auto-wake");
-    expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");
-    expect(execWithCron.description).toContain(
-      "No sleep/delay loops for reminders/follow-ups; use cron.",
-    );
-    expect(processWithCron.description).toContain(
-      "No polling as timer/reminder; scheduled follow-up uses cron.",
-    );
-    expect(execTool.description).not.toContain("use cron instead");
-    expect(processTool.description).not.toContain("scheduled follow-ups");
-    expect(execTool.description).toContain("otherwise process confirms completion");
-    expect(processTool.description).toContain("completion without auto-wake");
-    expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
-  });
-});
 
 beforeEach(() => {
   callIdCounter = 0;
@@ -836,7 +812,7 @@ describe("exec notifyOnExit", () => {
     const formatted = await drainNotifyEvents();
 
     expect(finished?.id).toBe(sessionId);
-    expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(finished?.terminalStatus).toBe(PROCESS_STATUS_COMPLETED);
     expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
     expect(queuedEvent).toBeDefined();

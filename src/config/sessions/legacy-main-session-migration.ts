@@ -187,6 +187,7 @@ function resolvePhysicalStores(params: {
       });
       const physical: PhysicalStore = {
         databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
+        ownerStorePath: target.storePath,
         path: resolved.path,
       };
       resolvePhysicalPathIdentity(physical.path);
@@ -514,6 +515,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
     isSameOpenClawAgentDatabasePath(store.path, destinationResolved.path),
   ) ?? {
     databaseAgentId: normalizeAgentId(destinationResolved.agentId ?? ownerAgentId),
+    ownerStorePath: destinationLogical,
     path: destinationResolved.path,
   };
 

@@ -4,6 +4,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -17,6 +18,7 @@ const suite = createControlUiE2eSuite({
 
 const sessionKey = "agent:main:rail-tabs";
 const proofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+const videoDir = process.env.OPENCLAW_UI_RAIL_VIDEO_DIR?.trim();
 
 const historyMessages = Array.from({ length: 10 }, (_, index) => ({
   id: `rail-tabs-${index}`,
@@ -361,6 +363,9 @@ suite.define(() => {
         {
           colorScheme: themeMode,
           locale: "en-US",
+          ...(videoDir && themeMode === "light"
+            ? { recordVideo: { dir: videoDir, size: { height: 900, width: 1600 } } }
+            : {}),
           serviceWorkers: "block",
           viewport: { height: 900, width: 1600 },
         },
@@ -814,12 +819,51 @@ suite.define(() => {
               .getByRole("button", { name: `Close ${label}`, exact: true })
               .click();
           }
-          await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
-          await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
+          await expect.poll(() => sidePanel(page).count()).toBe(0);
+          await page.reload();
+          await page.locator(".chat-group").first().waitFor();
+          await expect.poll(() => sidePanel(page).count()).toBe(0);
           await page.locator(".chat-side-panel-toggle").click();
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
+          const emptyDividerBox = await divider.boundingBox();
+          expect(emptyDividerBox).not.toBeNull();
+          await page.mouse.move(
+            emptyDividerBox!.x + 1,
+            emptyDividerBox!.y + emptyDividerBox!.height / 2,
+          );
+          await page.mouse.down();
+          await page.mouse.move(
+            emptyDividerBox!.x - 70,
+            emptyDividerBox!.y + emptyDividerBox!.height / 2,
+          );
+          await page.mouse.up();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+            )
+            .toBeGreaterThan(resizedWidth + 50);
+          const emptyResizedWidth = await sidePanel(page).evaluate(
+            (element) => element.getBoundingClientRect().width,
+          );
+          await divider.evaluate((element) => element.blur());
+          await captureRichPanel(page, `rails-tabs-empty-resized-${themeMode}`);
+
+          await page.reload();
+          await page.locator(".chat-group").first().waitFor();
+          await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
+          expect(await divider.boundingBox()).not.toBeNull();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+            )
+            .toBeCloseTo(emptyResizedWidth, 0);
           await openFromEmpty(page, "Terminal");
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+            )
+            .toBeCloseTo(emptyResizedWidth, 0);
           const terminalLabel = sidePanel(page)
             .locator(sidePanelTabLabelSelector)
             .filter({ hasText: "Terminal" });
@@ -900,7 +944,7 @@ suite.define(() => {
       async ({ page }) => {
         await seedSettings(page, "light");
         const gateway = await installMockGateway(page, scenario());
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.locator(".chat-group").first().waitFor();
         await activateChatHeaderPanelAction(page, "Show session files");
         await openFromPlus(page, "Terminal");
@@ -932,7 +976,7 @@ suite.define(() => {
         expect(companionGeometry.railTop).toBeGreaterThanOrEqual(companionGeometry.bodyTop - 1);
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
-        const mainComposer = page.locator(".agent-chat__composer-combobox > textarea");
+        const mainComposer = page.getByRole("textbox", { name: "Message OpenClaw", exact: true });
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,

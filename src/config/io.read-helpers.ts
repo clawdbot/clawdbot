@@ -82,6 +82,26 @@ export function resolveGatewayMode(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+export function rejectConfigNonFiniteNumbers(value: unknown): void {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Value must be a finite number, got ${String(value)}`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      rejectConfigNonFiniteNumbers(entry);
+    }
+    return;
+  }
+  if (isRecord(value)) {
+    for (const entry of Object.values(value)) {
+      rejectConfigNonFiniteNumbers(entry);
+    }
+  }
+}
+
 export function collectEnvRefPaths(
   value: unknown,
   pathLocal: string,
