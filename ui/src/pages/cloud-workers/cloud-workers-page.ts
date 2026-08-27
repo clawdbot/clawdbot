@@ -7,7 +7,6 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   renderDocsLink,
-  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsPageHeader,
@@ -557,7 +556,8 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     return html`
       ${renderSettingsPageHeader({
         title: titleForRoute("cloud-workers"),
-        subtitle: html`${t("cloudWorkersPage.intro")} ${renderLearnMoreLink(CLOUD_WORKERS_DOCS_URL)}`,
+        subtitle: html`${t("cloudWorkersPage.intro")}
+        ${renderDocsLink(CLOUD_WORKERS_DOCS_URL, t("cloudWorkersPage.documentation"))}`,
       })}
       ${renderSettingsWorkspace(body)}
     `;

@@ -35,7 +35,6 @@ const introRoutes = [
 const learnMoreRoutes = [
   "appearance",
   "approvals",
-  "cloud-workers",
   "labs",
   "mcp",
   "model-providers",
