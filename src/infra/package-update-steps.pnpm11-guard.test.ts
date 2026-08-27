@@ -64,7 +64,7 @@ async function expectPathMissing(filePath: string): Promise<void> {
   throw new Error(`Expected missing path: ${filePath}`);
 }
 
-describe("pnpm 11 isolated install preflight", () => {
+describe("pnpm isolated install preflight (v11 layout)", () => {
   it("rejects grouped installs before dropping sibling packages", async () => {
     await withTestDir({ prefix: "openclaw-package-update-pnpm-group-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
@@ -417,7 +417,7 @@ describe("pnpm 11 isolated install preflight", () => {
             return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
           }
           if (command === "pnpm --version") {
-            return { stdout: "11.4.0\n", stderr: "", code: 0 };
+            return { stdout: "12.0.0\n", stderr: "", code: 0 };
           }
           throw new Error(`unexpected command: ${command}`);
         };
@@ -522,7 +522,7 @@ describe("pnpm 11 isolated install preflight", () => {
           return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
         }
         if (command === "pnpm --version") {
-          return { stdout: "11.4.0\n", stderr: "", code: 0 };
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };
@@ -632,7 +632,7 @@ describe("pnpm 11 isolated install preflight", () => {
           return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
         }
         if (command === "pnpm --version") {
-          return { stdout: "11.4.0\n", stderr: "", code: 0 };
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };

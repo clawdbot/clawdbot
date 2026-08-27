@@ -32,6 +32,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
 const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
+const PNPM_VERSION = "12.0.0";
+const PNPM_PACKAGE_MANAGER = `pnpm@${PNPM_VERSION}`;
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-" });
 
 function toCommandResult(response?: CommandResponse): CommandResult {
@@ -127,7 +129,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `${params.stableTag}\n`, stderr: "", code: 0 };
       }
       if (key === "pnpm --version") {
-        return { stdout: "8.0.0", stderr: "", code: 0 };
+        return { stdout: PNPM_VERSION, stderr: "", code: 0 };
       }
       if (key === "pnpm build") {
         await params.onBuild?.();
@@ -196,7 +198,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "classifies a prepared pnpm 11 project by its canonical package root",
+    "classifies a prepared pnpm v11-layout project by its canonical package root",
     async () => {
       const globalRoot = path.join(tempDir, "pnpm-home", "global", "v11");
       const installDir = path.join(globalRoot, "install-a");
@@ -291,12 +293,15 @@ describe("runGatewayUpdate", () => {
     return uiIndexPath;
   }
 
-  async function setupGitPackageManagerFixture(packageManager = "pnpm@8.0.0") {
+  async function setupGitPackageManagerFixture(packageManager = PNPM_PACKAGE_MANAGER) {
     await setupGitCheckout({ packageManager });
     return await setupUiIndex();
   }
 
-  async function writePreflightPackageManagerFixture(root: string, packageManager = "pnpm@8.0.0") {
+  async function writePreflightPackageManagerFixture(
+    root: string,
+    packageManager = PNPM_PACKAGE_MANAGER,
+  ) {
     await fs.mkdir(root, { recursive: true });
     await fs.writeFile(
       path.join(root, "package.json"),
@@ -307,7 +312,7 @@ describe("runGatewayUpdate", () => {
 
   async function writePreflightPackageManagerFixtureFromWorktreeAdd(
     key: string,
-    packageManager = "pnpm@8.0.0",
+    packageManager = PNPM_PACKAGE_MANAGER,
   ) {
     const match = /\sworktree add --detach (?<root>\S+) /u.exec(key);
     const root = match?.groups?.root;
@@ -323,7 +328,7 @@ describe("runGatewayUpdate", () => {
   ): Record<string, CommandResponse> {
     const tagOutput = [stableTag, ...(options?.additionalTags ?? [])].join("\n");
     return {
-      "pnpm --version": { stdout: "8.0.0" },
+      "pnpm --version": { stdout: PNPM_VERSION },
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
@@ -390,7 +395,6 @@ describe("runGatewayUpdate", () => {
     targetSha?: string;
     targetRef?: string;
     candidateShas?: string[];
-    packageManager?: string;
     onCommand?: (
       key: string,
       options: TestCommandOptions | undefined,
@@ -442,19 +446,14 @@ describe("runGatewayUpdate", () => {
         return toCommandResult({ stdout: `${targetSha}\n` });
       }
       if (key === "pnpm --version") {
-        return toCommandResult({
-          stdout: (params?.packageManager ?? "pnpm@8.0.0").slice(5).split("+")[0],
-        });
+        return toCommandResult({ stdout: PNPM_VERSION });
       }
       if (
         key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
-        await writePreflightPackageManagerFixtureFromWorktreeAdd(
-          key,
-          params?.packageManager ?? "pnpm@8.0.0",
-        );
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return toCommandResult({ stdout: `HEAD is now at ${targetSha}` });
       }
       return toCommandResult();
@@ -483,7 +482,7 @@ describe("runGatewayUpdate", () => {
     await runRealGit(sourceRoot, "config", "user.email", "openclaw@example.com");
     await fs.writeFile(
       path.join(sourceRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@10.0.0" }),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: PNPM_PACKAGE_MANAGER }),
     );
     await fs.writeFile(path.join(sourceRoot, "openclaw.mjs"), "export {};\n");
     await fs.writeFile(path.join(sourceRoot, "README.md"), "base\n");
@@ -525,7 +524,7 @@ describe("runGatewayUpdate", () => {
         });
       }
       if (argv[0] === "pnpm" && argv[1] === "--version") {
-        return toCommandResult({ stdout: "10.0.0" });
+        return toCommandResult({ stdout: PNPM_VERSION });
       }
       if (argv[0] === "pnpm" && (argv[1] === "build" || argv[1] === "ui:build")) {
         const cwd = options.cwd ?? process.cwd();
@@ -791,7 +790,7 @@ describe("runGatewayUpdate", () => {
         }),
       },
       [`git -C ${tempDir} rebase ${upstreamSha}`]: { stdout: "" },
-      "pnpm --version": { stdout: "8.0.0" },
+      "pnpm --version": { stdout: PNPM_VERSION },
       "pnpm install": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
@@ -968,7 +967,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === "pnpm --version") {
-        return { stdout: "8.0.0", stderr: "", code: 0 };
+        return { stdout: PNPM_VERSION, stderr: "", code: 0 };
       }
       if (key === "pnpm build") {
         if (preflightSha === upstreamSha) {
@@ -1048,7 +1047,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${selectedSha}`, stderr: "", code: 0 };
       }
       if (key === "pnpm --version") {
-        return { stdout: "8.0.0", stderr: "", code: 0 };
+        return { stdout: PNPM_VERSION, stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} show-ref --verify refs/heads/main`) {
         return { stdout: "", stderr: "", code: 1 };
@@ -1099,7 +1098,7 @@ describe("runGatewayUpdate", () => {
         stdout: `${targetSha}\n`,
       },
       [`git -C ${tempDir} checkout --detach ${targetSha}`]: { stdout: "" },
-      "pnpm --version": { stdout: "8.0.0" },
+      "pnpm --version": { stdout: PNPM_VERSION },
       "pnpm install": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
@@ -1168,7 +1167,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("returns error and stops early when deps install fails", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
       ...buildStableTagResponses(stableTag),
@@ -1191,7 +1190,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("rejects extended-stable Git updates before checkout mutation", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
     });
@@ -1210,7 +1209,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("uses pnpm highest resolution mode for update installs", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     await setupUiIndex();
     const stableTag = "v1.0.1-1";
     const installEnvs: NodeJS.ProcessEnv[] = [];
@@ -1321,7 +1320,7 @@ describe("runGatewayUpdate", () => {
   );
 
   it("marks git update doctor passes for configured-plugin repair deferral when requested", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     await setupUiIndex();
     const stableTag = "v1.0.1-1";
     let doctorEnv: NodeJS.ProcessEnv | undefined;
@@ -1358,7 +1357,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("uses the pre-mutation activation decision for the git update doctor pass", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     await setupUiIndex();
     const stableTag = "v1.0.1-1";
     let doctorEnv: NodeJS.ProcessEnv | undefined;
@@ -1617,7 +1616,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
-        await writePreflightPackageManagerFixtureFromWorktreeAdd(key, "pnpm@8.0.0");
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key, PNPM_PACKAGE_MANAGER);
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1696,7 +1695,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
-        await writePreflightPackageManagerFixtureFromWorktreeAdd(key, "pnpm@8.0.0");
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key, PNPM_PACKAGE_MANAGER);
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1736,7 +1735,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("cleans and rolls back when a successful build leaves the checkout dirty", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     const stableTag = "v1.0.1-1";
     const statusCommand = `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`;
     const { runner, calls } = createRunner({
@@ -1777,7 +1776,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("returns error and stops early when build fails", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
       ...buildStableTagResponses(stableTag),
@@ -1798,7 +1797,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("rolls back and reports error when the final HEAD verification probe fails", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     await setupUiIndex();
     const stableTag = "v1.0.1-1";
     const doctorNodePath = await resolveStableNodePath(process.execPath);
@@ -1835,7 +1834,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("uses stable tag when beta tag is older than release", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     await setupUiIndex();
     const stableTag = "v1.0.1-1";
     const betaTag = "v1.0.0-beta.2";
@@ -1858,7 +1857,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("uses stable tag for stable channel even when a newer alpha tag sorts first", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     await setupUiIndex();
     const stableTag = "v2026.5.22";
     const alphaTag = "v2026.5.24-alpha.1";
@@ -1894,7 +1893,7 @@ describe("runGatewayUpdate", () => {
         if (key === "pnpm --version") {
           const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
           if (envPath.includes("openclaw-update-pnpm-")) {
-            return { stdout: "8.0.0" };
+            return { stdout: PNPM_VERSION };
           }
           throw new Error("spawn pnpm ENOENT");
         }
@@ -1904,7 +1903,7 @@ describe("runGatewayUpdate", () => {
         if (key === "npm --version") {
           return { stdout: "10.0.0" };
         }
-        if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@8.0.0")) {
+        if (key.startsWith("npm install --prefix ") && key.endsWith(` ${PNPM_PACKAGE_MANAGER}`)) {
           return { stdout: "added 1 package" };
         }
         return undefined;
@@ -1938,7 +1937,7 @@ describe("runGatewayUpdate", () => {
           if (pnpmVersionChecks === 1) {
             throw new Error("spawn pnpm ENOENT");
           }
-          return { stdout: "8.0.0" };
+          return { stdout: PNPM_VERSION };
         }
         if (key === "corepack --version") {
           return { stdout: "0.30.0" };
@@ -1972,7 +1971,7 @@ describe("runGatewayUpdate", () => {
           const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
           if (envPath.includes("openclaw-update-pnpm-")) {
             pnpmEnvPaths.push(envPath);
-            return { stdout: "8.0.0" };
+            return { stdout: PNPM_VERSION };
           }
           throw new Error("spawn pnpm ENOENT");
         }
@@ -1982,7 +1981,7 @@ describe("runGatewayUpdate", () => {
         if (key === "npm --version") {
           return { stdout: "10.0.0" };
         }
-        if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@8.0.0")) {
+        if (key.startsWith("npm install --prefix ") && key.endsWith(` ${PNPM_PACKAGE_MANAGER}`)) {
           return { stdout: "added 1 package" };
         }
         if (
@@ -2374,7 +2373,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${targetSha}`, stderr: "", code: 0 };
       }
       if (key === "pnpm --version") {
-        return toCommandResult({ stdout: "8.0.0" });
+        return toCommandResult({ stdout: PNPM_VERSION });
       }
       return { stdout: "", stderr: "", code: 0 };
     };
@@ -2403,7 +2402,7 @@ describe("runGatewayUpdate", () => {
         if (key === "npm --version") {
           return { stdout: "10.0.0" };
         }
-        if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@8.0.0")) {
+        if (key.startsWith("npm install --prefix ") && key.endsWith(` ${PNPM_PACKAGE_MANAGER}`)) {
           return { stderr: "network exploded", code: 1 };
         }
         return undefined;
@@ -2426,7 +2425,7 @@ describe("runGatewayUpdate", () => {
   it("skips update when no git root", async () => {
     await fs.writeFile(
       path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", packageManager: "pnpm@8.0.0" }),
+      JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),
       "utf-8",
     );
     await fs.writeFile(path.join(tempDir, "pnpm-lock.yaml"), "", "utf-8");
@@ -3040,7 +3039,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("fails with a clear reason when openclaw.mjs is missing", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     await fs.rm(path.join(tempDir, "openclaw.mjs"), { force: true });
 
     const stableTag = "v1.0.1-1";
@@ -3063,7 +3062,7 @@ describe("runGatewayUpdate", () => {
     { bundle: "complete", missingRollbackStartupAsset: false, serviceRestartSafe: true },
     { bundle: "incomplete", missingRollbackStartupAsset: true, serviceRestartSafe: false },
   ])(
-    "allows rollback restart only with a $bundle startup bundle",
+    "rolls pnpm 12 back to 11 and allows restart only with a $bundle startup bundle",
     async ({ missingRollbackStartupAsset, serviceRestartSafe }) => {
       await setupGitCheckout({ packageManager: "pnpm@11.22.0" });
       const beforeSha = "a".repeat(40);
@@ -3245,7 +3244,7 @@ describe("runGatewayUpdate", () => {
   it.each(["missing", "incomplete"] as const)(
     "repairs %s Control UI assets left by the doctor pass",
     async (doctorBundle) => {
-      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
       const uiIndexPath = await setupUiIndex();
       const startupAsset = path.join(path.dirname(uiIndexPath), "assets", "startup.js");
 
@@ -3279,7 +3278,7 @@ describe("runGatewayUpdate", () => {
   it.each(["missing", "incomplete"] as const)(
     "repairs a %s checkout startup bundle before the doctor pass",
     async (checkoutBundle) => {
-      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
       const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
       const startupAsset = path.join(path.dirname(uiIndexPath), "assets", "startup.js");
       if (checkoutBundle === "incomplete") {
@@ -3307,7 +3306,7 @@ describe("runGatewayUpdate", () => {
   it.each(["missing", "incomplete"] as const)(
     "fails when the post-doctor repair leaves a %s startup bundle",
     async (repairedBundle) => {
-      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
       const uiIndexPath = await setupUiIndex();
 
       const stableTag = "v1.0.1-1";

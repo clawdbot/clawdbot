@@ -23,7 +23,7 @@ async function checkout(version: string) {
 
 describe("resolveUpdateBuildManager", () => {
   it.each(["11.22.0", "12.0.0"])(
-    "bootstraps the target checkout's exact pnpm %s via npm",
+    "bootstraps the target checkout's exact pnpm %s via npm instead of global pnpm 10",
     async (version) => {
       const root = await checkout(version);
       const calls: string[][] = [];

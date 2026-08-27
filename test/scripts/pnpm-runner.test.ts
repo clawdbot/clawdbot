@@ -187,7 +187,7 @@ describe("resolvePnpmRunner", () => {
     }
   });
 
-  it("falls back to pnpm.cmd on Windows when npm_execpath points to a missing JS entrypoint", () => {
+  it("falls back to pnpm.cmd on Windows for a missing legacy pnpm 10 JS entrypoint", () => {
     expect(
       resolvePnpmRunner({
         comSpec: "C:\\Windows\\System32\\cmd.exe",
