@@ -70,7 +70,7 @@ export function resolveCodexAppServerNetworkProxy(
     filesystem: {
       ...additionalFilesystem,
       ":minimal": "read",
-      ":project_roots": {
+      ":workspace_roots": {
         ".": fileSystemMode,
       },
     },

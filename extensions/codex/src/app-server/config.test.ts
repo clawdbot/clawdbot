@@ -208,7 +208,7 @@ describe("Codex app-server config", () => {
           "mock-proxy": {
             filesystem: {
               ":minimal": "read",
-              ":project_roots": {
+              ":workspace_roots": {
                 ".": "write",
               },
             },
@@ -251,12 +251,12 @@ describe("Codex app-server config", () => {
     const profileName = runtime.networkProxy?.profileName;
     const permissions = runtime.networkProxy?.configPatch.permissions as Record<
       string,
-      { filesystem: { ":project_roots": { ".": string } } }
+      { filesystem: { ":workspace_roots": { ".": string } } }
     >;
 
     expect(profileName).toMatch(/^openclaw-network-[a-f0-9]{16}$/u);
     expect(runtime.networkProxy?.configPatch.default_permissions).toBe(profileName);
-    expect(permissions[profileName ?? ""]?.filesystem[":project_roots"]["."]).toBe("read");
+    expect(permissions[profileName ?? ""]?.filesystem[":workspace_roots"]["."]).toBe("read");
   });
 
   it("adds declared filesystem rules to network proxy profiles", () => {
@@ -284,7 +284,7 @@ describe("Codex app-server config", () => {
 
     expect(permissions[profileName ?? ""]?.filesystem).toEqual({
       ":minimal": "read",
-      ":project_roots": { ".": "write" },
+      ":workspace_roots": { ".": "write" },
       ":root": "read",
       ":tmpdir": "write",
       "~/.ssh": "deny",
