@@ -36,7 +36,6 @@ describe("createAgentCommandLifecycle real event bus", () => {
           effective: { provider: "provider-1", model: "model-1", responseModel: "model-1" },
           successfulToolNames: ["read"],
           rerouted: false,
-          terminalDisposition: "visible",
         },
       },
       outcome: buildAgentRunTerminalOutcome({ status: "ok", stopReason: "end_turn" }),
