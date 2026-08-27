@@ -711,7 +711,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   html:has(.shell--chat),
   body:has(.shell--chat) {
     /* iOS Safari exposes the document canvas around its browser chrome; keep

@@ -1,4 +1,4 @@
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-main__conversation-column {
     --chat-mobile-pane-header-height: 52px;
     --chat-mobile-pane-header-fade-overhang: 8px;

@@ -1025,7 +1025,7 @@ describe("normalizeInitialApplicationLocation", () => {
     vi.stubGlobal(
       "matchMedia",
       vi.fn((query: string) => ({
-        matches: query === "(max-width: 768px)" ? mobile : false,
+        matches: query.startsWith("(max-width: 768px)") ? mobile : false,
         addEventListener: (_: string, listener: () => void) => listeners.add(listener),
         removeEventListener,
       })),

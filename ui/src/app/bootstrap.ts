@@ -149,7 +149,9 @@ function createApplicationTheme(
   };
 
   if (typeof globalThis.matchMedia === "function") {
-    const mediaQuery = globalThis.matchMedia("(max-width: 768px)");
+    const mediaQuery = globalThis.matchMedia(
+      "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+    );
     const onChange = () => syncControlUiSystemChrome();
     if (typeof mediaQuery.addEventListener === "function") {
       mediaQuery.addEventListener("change", onChange);
