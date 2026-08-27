@@ -651,4 +651,91 @@ describe("slackOutbound", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledOnce();
     expect(sendMessageSlackMock.mock.calls[0]?.[2]).toHaveProperty("blocks");
   });
+
+  it("keeps authored text visible when audioAsVoice is set with rendered blocks but no media", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Spoken summary that must still appear.",
+        audioAsVoice: true,
+        presentation: {
+          blocks: [{ type: "text", text: "Auxiliary block body" }],
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    const call = sendMessageSlackMock.mock.calls[0];
+    expect(call?.[1]).toContain("Spoken summary that must still appear.");
+    expect(call?.[2]?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "section",
+          text: expect.objectContaining({ text: "Spoken summary that must still appear." }),
+        }),
+      ]),
+    );
+  });
+
+  it("does not duplicate caption text in rendered blocks across render-then-send", async () => {
+    sendMessageSlackMock
+      .mockResolvedValueOnce({ messageId: "m-voice" })
+      .mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    const payload = {
+      text: "Spoken summary of the deploy.",
+      mediaUrl: "file:///tmp/tts/deploy.ogg",
+      audioAsVoice: true,
+      spokenText: "Spoken summary of the deploy.",
+      trustedLocalMedia: true,
+      presentation: {
+        blocks: [{ type: "text", text: "Block body that must accompany the voice note" }],
+      },
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload,
+      presentation: payload.presentation,
+      ctx: { cfg, to: "C123", text: "", payload },
+    });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: rendered ?? payload,
+      mediaLocalRoots: ["/tmp"],
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledTimes(2);
+    // The audio upload carries the spoken text as its caption.
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
+      1,
+      "C123",
+      "Spoken summary of the deploy.",
+      expect.objectContaining({ mediaUrl: "file:///tmp/tts/deploy.ogg" }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+    // The follow-up block message carries only the auxiliary content; the
+    // spoken summary is not materialized into a section block.
+    const blockCall = sendMessageSlackMock.mock.calls[1]?.[2];
+    expect(blockCall?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "section",
+          text: expect.objectContaining({ text: "Block body that must accompany the voice note" }),
+        }),
+      ]),
+    );
+    expect(blockCall?.blocks).not.toContainEqual(
+      expect.objectContaining({
+        text: expect.objectContaining({ text: "Spoken summary of the deploy." }),
+      }),
+    );
+  });
 });
