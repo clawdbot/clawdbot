@@ -1,17 +1,20 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
+  admitInitialUserMessageHandoff,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   setChatSessionProjection,
 } from "./history-merge.ts";
+import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import { handleAgentEvent, type ToolStreamEntry } from "./tool-stream.ts";
 
 type TestState = ChatState & Parameters<typeof handleAgentEvent>[0];
@@ -76,7 +79,127 @@ function activeHistory(runId: string): ChatHistoryResult {
   };
 }
 
+function failedHistory(): ChatHistoryResult {
+  return {
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Inspect the unavailable project" }],
+        timestamp: 1,
+        __openclaw: { id: "first-user", idempotencyKey: "run-first:user", seq: 1 },
+      },
+    ],
+    sessionInfo: {
+      key: "main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "failed",
+      hasActiveRun: false,
+      lastRunId: "run-first",
+      lastRunError:
+        "ProjectCloneError: Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+    },
+  };
+}
+
 describe("chat history in-flight assistant recovery", () => {
+  it.each(["chat.startup", "chat.history"] as const)(
+    "recovers a failure missed before route subscription through %s",
+    async (method) => {
+      const history = failedHistory();
+      const state = createState(history);
+      state.client = {
+        request: vi.fn().mockResolvedValue(history),
+      } as unknown as GatewayBrowserClient;
+      if (method === "chat.startup") {
+        state.initialUserMessage = createInitialUserMessageHandoff();
+        prepareInitialUserMessageHandoff(
+          state.initialUserMessage,
+          state.sessionKey,
+          { text: "Inspect the unavailable project", createdAt: 1 },
+          state.client,
+          { runId: "run-first" },
+        );
+        admitInitialUserMessageHandoff(state, state.sessionKey);
+      }
+
+      await loadChatHistory(state, { startup: method === "chat.startup" });
+
+      expect(state.chatRunError?.summary).toContain(history.sessionInfo!.lastRunError);
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatMessages).toEqual(history.messages);
+    },
+  );
+
+  it("clears a recovered failure when a retry is active and retains the live retry error", async () => {
+    const history = failedHistory();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(history)
+      .mockResolvedValueOnce(activeHistory("run-retry"));
+    const state = createState(history);
+    state.client = { request } as unknown as GatewayBrowserClient;
+    await loadChatHistory(state);
+    expect(state.chatRunError?.summary).toContain(history.sessionInfo!.lastRunError);
+
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("run-retry");
+    expect(state.chatRunError).toBeNull();
+
+    const fullError = "A more detailed live retry error. Check repository access and retry.";
+    handleChatGatewayEvent(state, {
+      runId: "run-retry",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: fullError,
+    });
+    request.mockResolvedValue({
+      ...history,
+      sessionInfo: {
+        ...history.sessionInfo,
+        lastRunId: "run-retry",
+        lastRunError: "A more detailed live retry error.",
+      },
+    });
+    await loadChatHistory(state);
+    expect(state.chatRunError?.summary).toContain(fullError);
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it.each(["running", "completed"])(
+    "does not replace a newer %s run with a delayed failed snapshot",
+    async (phase) => {
+      let resolveHistory!: (result: ChatHistoryResult) => void;
+      const request = vi.fn().mockReturnValue(
+        new Promise<ChatHistoryResult>((resolve) => {
+          resolveHistory = resolve;
+        }),
+      );
+      const state = createState(failedHistory());
+      state.client = { request } as unknown as GatewayBrowserClient;
+      const loading = loadChatHistory(state);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      handleChatGatewayEvent(state, {
+        runId: "run-newer",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Working",
+      });
+      if (phase === "completed") {
+        handleChatGatewayEvent(state, {
+          runId: "run-newer",
+          sessionKey: "main",
+          state: "final",
+          message: { role: "assistant", content: "Done" },
+        });
+      }
+      resolveHistory(failedHistory());
+      await loading;
+      expect(state.chatRunError).toBeNull();
+      expect(state.chatRunId).toBe(phase === "running" ? "run-newer" : null);
+    },
+  );
+
   it.each([
     {
       name: "restores workspace preparation before visible activity",

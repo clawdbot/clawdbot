@@ -753,7 +753,10 @@ const config = {
       "src/matrix/send.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace([
+      // The subprocess boundary tests spawn this fixture by computed URL.
+      "src/memory/fixtures/manager-search-knn-child.fixture.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
       ...bundledPluginWorkspace(),
       // LanceDB declares Arrow as a peer; the plugin provides it for runtime table values.

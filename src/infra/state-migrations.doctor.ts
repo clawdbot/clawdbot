@@ -62,6 +62,10 @@ import {
   detectLegacyChannelPairingState,
   migrateLegacyChannelPairingState,
 } from "./state-migrations.channel-pairing.js";
+import {
+  detectLegacyCommitments,
+  migrateLegacyCommitments,
+} from "./state-migrations.commitments.js";
 import { migrateLegacyConfigMachineState } from "./state-migrations.config-machine-state.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
@@ -186,7 +190,7 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
     case "audit-events-v2":
       return "audit event ledger → versioned message lifecycle schema";
     case "commitments-retirement-v7":
-      return "retired commitments storage → removed table and indexes";
+      return "retired commitments storage → discarded rows, table, and indexes";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements → execution-mode claims";
     case "agent-databases-relative-paths-v9":
@@ -534,6 +538,11 @@ export async function detectLegacyStateMigrations(params: {
   ): TDetection =>
     detect({ stateDir, doctorOnlyStateMigrations: params.doctorOnlyStateMigrations });
   const tuiLastSessions = detectDoctorOwnedState(detectLegacyTuiLastSessions);
+  const commitments = await detectLegacyCommitments({
+    stateDir,
+    env,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const auditLogs = detectDoctorOwnedState(detectLegacyAuditLogs);
   const acpReplayLedger = detectDoctorOwnedState(detectLegacyAcpReplayLedger);
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
@@ -751,6 +760,10 @@ export async function detectLegacyStateMigrations(params: {
       tuiLastSessions.hasLegacy,
       "- TUI last-session pointers: legacy JSON file → shared SQLite state",
     ],
+    [
+      commitments.hasLegacy,
+      "- Commitments: discard retired commitments/commitments.json rows without import, archive, or export",
+    ],
     ...auditLogs.sources.map((source): readonly [boolean, string] => [
       true,
       `- ${source.label}: legacy JSONL file → shared SQLite state`,
@@ -871,6 +884,7 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: hasCurrentConversationBindings,
     },
     tuiLastSessions,
+    commitments,
     auditLogs,
     acpReplayLedger,
     managedOutgoingImages,
@@ -1173,6 +1187,9 @@ function buildLegacyStateMigrationSteps(
   const doctorStateSteps: LegacyStateMigrationStep[] = isDoctor
     ? [
         ownerStep(detected.tuiLastSessions, migrateLegacyTuiLastSessions),
+        ...(detected.commitments
+          ? [ownerStep(detected.commitments, migrateLegacyCommitments)]
+          : []),
         ownerStep(detected.auditLogs, migrateLegacyAuditLogs),
         ownerStep(detected.acpReplayLedger, migrateLegacyAcpReplayLedger),
         ownerStep(detected.managedOutgoingImages, migrateLegacyManagedOutgoingImages),

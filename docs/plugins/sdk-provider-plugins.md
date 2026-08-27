@@ -959,6 +959,17 @@ catalog, API-key auth, and dynamic model resolution.
         general embedding contract for reusable vector generation, including
         memory search. The retired memory-specific registrar and manifest
         contract are no longer accepted.
+
+        Providers that accept model aliases can expose
+        `normalizeModel(options): string`. Memory uses this synchronous hook for
+        both creation options and cold index identity checks. Keep it configuration-only:
+        do not authenticate or access the network. Make normalization idempotent and
+        reuse it in `create`, which may receive an already-normalized model or be
+        called outside memory. Return an empty string only when the
+        model remains unknown until discovery; do not turn an invalid explicit
+        model into an omitted selection. For an exact pre-initialization identity,
+        `resolveIndexIdentity(options)` additionally supplies the required
+        `cacheKeyData` and any equivalent persisted aliases.
       </Tab>
       <Tab title="Image and video generation">
         Image and video capabilities use a **mode-aware** shape. Image

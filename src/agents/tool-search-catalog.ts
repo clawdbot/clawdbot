@@ -190,6 +190,30 @@ function wrapCatalogTool(tool: AnyAgentTool, hookContext?: HookContext): AnyAgen
   return wrapToolWithBeforeToolCallHook(tool, hookContext);
 }
 
+export function prepareToolSearchCatalogExecutionTool(
+  entry: ToolSearchCatalogEntry,
+  options: { prepareInput?: boolean; validateInput?: boolean },
+): CatalogTool {
+  const prepareInput =
+    options.prepareInput &&
+    entry.source === "openclaw" &&
+    "prepareBeforeToolCallParams" in entry.tool &&
+    typeof entry.tool.prepareBeforeToolCallParams === "function";
+  const validateInput = options.validateInput && entry.source === "openclaw";
+  if (!prepareInput && !validateInput) {
+    return entry.tool;
+  }
+  // SAFETY: both gates above restrict wrapper execution to OpenClaw-owned catalog tools.
+  const tool = entry.tool as AnyAgentTool;
+  const wrapperOptions = options.prepareInput ? { protectNetworkErrors: false } : undefined;
+  if (!isToolWrappedWithBeforeToolCallHook(tool)) {
+    return wrapToolWithBeforeToolCallHook(tool, undefined, wrapperOptions);
+  }
+  return wrapperOptions
+    ? rewrapToolWithBeforeToolCallHook(tool, undefined, wrapperOptions)
+    : entry.tool;
+}
+
 function toCatalogEntry(
   tool: CatalogTool,
   sourceOverride?: CatalogSource,

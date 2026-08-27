@@ -17,6 +17,7 @@ import { resolveAgentDir, resolveDefaultModelForAgent } from "./bot-handlers.age
 import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
+  sendTelegramQuestionFeedback,
   type TelegramCallbackMessageActions,
 } from "./bot-handlers.callback-actions.js";
 import {
@@ -294,12 +295,14 @@ export function createTelegramCallbackRouter({
           callback: typedQuestionCallback,
           cfg: runtimeCfg,
           senderId,
-          feedback: async (text, terminal) => {
-            if (terminal) {
-              await actions.clearCallbackButtons().catch(() => {});
-            }
-            await actions.replyToCallbackChat(text);
-          },
+          feedback: async (text, mode) =>
+            await sendTelegramQuestionFeedback({
+              actions,
+              text,
+              mode,
+              isGroup,
+              user: callback.from,
+            }),
         });
         return;
       }

@@ -118,13 +118,23 @@ describe("chat history cursor revalidation", () => {
     });
   });
 
-  it("advances the cursor when catch-up is already current", async () => {
+  it("recovers a missed terminal failure even when cursor catch-up has no new messages", async () => {
     const cached = message("user", "cached", "cached-user", 1);
     const handler = vi.fn(async (_params?: unknown) => ({
       kind: "delta",
       messages: [],
       deltaCursor: "cursor-2",
-      sessionInfo: { key: "main", kind: "direct", sessionId: "session-cursor", updatedAt: 2 },
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 2,
+        status: "failed",
+        hasActiveRun: false,
+        lastRunId: "run-first",
+        lastRunError:
+          "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+      },
     }));
     const state = createState(handler);
     const cache = seedCachedHistory(state, [cached], "cursor-1");
@@ -132,6 +142,9 @@ describe("chat history cursor revalidation", () => {
     await loadChatHistory(state);
 
     expect(state.chatMessages).toEqual([cached]);
+    expect(state.chatRunError?.summary).toContain(
+      "Check the Gateway network connection and retry.",
+    );
     expect(
       readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })?.deltaCursor,
     ).toBe("cursor-2");

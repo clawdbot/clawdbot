@@ -176,7 +176,7 @@ describe("handleBashChatCommand stop", () => {
     getFinishedSessionMock.mockReturnValue({
       id: "session-first",
       scopeKey: "chat:bash",
-      status: "failed",
+      terminalStatus: "failed",
     });
     const restarted = await handleBashChatCommand(buildParams("/bash second"));
     expect(restarted.text).toContain("session-second");

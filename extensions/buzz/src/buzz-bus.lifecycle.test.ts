@@ -330,6 +330,7 @@ describe("Buzz bus lifecycle", () => {
           message,
           signal,
           assertCurrent,
+          historyMap: new Map(),
         }),
     });
 

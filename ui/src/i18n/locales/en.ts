@@ -1769,6 +1769,7 @@ export const en: TranslationMap = {
   },
   configView: {
     adminRequired: "Configuration changes require operator.admin access.",
+    channelSettings: "Channel settings",
     categories: {
       core: "Core",
       ai: "Agent Defaults",

@@ -72,6 +72,7 @@ import {
   BEFORE_TOOL_CALL_SOURCE_TOOL,
   BEFORE_TOOL_CALL_WRAPPED,
   clearBeforeToolCallWrappedMarker,
+  getBeforeToolCallDiagnosticOptions,
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
@@ -93,10 +94,6 @@ import {
 } from "./tool-result-error.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-type BeforeToolCallWrapperOptions = {
-  approvalMode?: "request" | "report" | "deny";
-  emitDiagnostics: boolean;
-};
 type ForwardedToolExecution = (...args: unknown[]) => ReturnType<AnyAgentTool["execute"]>;
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const INTERNAL_DISPOSED_RESULT = {
@@ -297,7 +294,7 @@ export function buildBlockedToolResult(params: {
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
+  options: Partial<BeforeToolCallDiagnosticOptions> = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
@@ -305,8 +302,8 @@ export function wrapToolWithBeforeToolCallHook(
   }
   const toolName = tool.name || "tool";
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
-  const hookOptions: BeforeToolCallWrapperOptions = {
-    ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
+  const hookOptions: BeforeToolCallDiagnosticOptions = {
+    ...options,
     emitDiagnostics: options.emitDiagnostics !== false,
   };
   const toolContentPolicy = resolveDiagnosticModelContentCapturePolicy(ctx?.config);
@@ -550,7 +547,8 @@ export function wrapToolWithBeforeToolCallHook(
             ? await invoke()
             : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
         } catch (error) {
-          throw tool.resultContentSource === "network" &&
+          throw hookOptions.protectNetworkErrors !== false &&
+            tool.resultContentSource === "network" &&
             getBeforeToolCallFailureDisposition(error) === undefined
             ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
             : error;
@@ -696,7 +694,7 @@ export function wrapToolWithBeforeToolCallHook(
     enumerable: true,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
-    value: hookOptions satisfies BeforeToolCallDiagnosticOptions,
+    value: hookOptions,
     enumerable: false,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_SOURCE_TOOL, {
@@ -714,12 +712,14 @@ export function wrapToolWithBeforeToolCallHook(
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
+  options: Partial<BeforeToolCallDiagnosticOptions> = {},
 ): AnyAgentTool {
   const preservedContext = getBeforeToolCallHookContext(tool);
   const sourceTool = getBeforeToolCallSourceTool(tool) ?? tool;
+  const preservedOptions = getBeforeToolCallDiagnosticOptions(tool);
+  const wrapperOptions = { ...preservedOptions, ...options };
   if (sourceTool === tool) {
-    return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
+    return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, wrapperOptions);
   }
   // Preserve post-wrap schema/metadata while restoring the source execute function.
   const rewrapSource: AnyAgentTool = {
@@ -729,7 +729,7 @@ export function rewrapToolWithBeforeToolCallHook(
   clearBeforeToolCallWrappedMarker(rewrapSource);
   copyBeforeToolCallWrapperMetadata(tool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
-  return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
+  return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, wrapperOptions);
 }
 
 function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {

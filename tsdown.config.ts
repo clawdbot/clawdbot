@@ -596,6 +596,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
+    "extensions/memory-core/memory-search-knn.child":
+      "extensions/memory-core/src/memory/manager-search-knn.child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     ...bundledHookEntries,
