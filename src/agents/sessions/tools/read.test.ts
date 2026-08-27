@@ -785,26 +785,31 @@ describe("read tool", () => {
     expect(textContent(result)).toBe(`${path.resolve("/workspace", "legacy.txt")}:c4e3bac3`);
   });
 
-  it("waits for a queued write before reading the same new file", async () => {
+  it("waits for an aliased queued write before reading the same new file", async () => {
     const tempDir = tempDirs.make("openclaw-read-write-order-");
-    const filePath = path.join(tempDir, "race-target.txt");
+    const realDir = path.join(tempDir, "real");
+    const aliasDir = path.join(tempDir, "alias");
+    await fs.mkdir(realDir);
+    await fs.symlink(realDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+    const writePath = path.join(aliasDir, "race-target.txt");
+    const readPath = path.join(realDir, "race-target.txt");
     const blockerStarted = createDeferred();
     const releaseBlocker = createDeferred();
-    const blocker = withFileMutationQueue(filePath, async () => {
+    const blocker = withFileMutationQueue(writePath, async () => {
       blockerStarted.resolve();
       await releaseBlocker.promise;
     });
     await blockerStarted.promise;
     const writeResult = createWriteToolDefinition(tempDir).execute(
       "write",
-      { path: filePath, content: "first snapshot" },
+      { path: writePath, content: "first snapshot" },
       undefined,
       undefined,
       {} as never,
     );
     const readResult = createReadToolDefinition(tempDir).execute(
       "read",
-      { path: filePath },
+      { path: readPath },
       undefined,
       undefined,
       {} as never,

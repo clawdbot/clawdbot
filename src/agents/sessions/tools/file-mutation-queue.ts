@@ -4,7 +4,8 @@
  * Serializes edits/writes targeting the same real file while allowing independent files to mutate in parallel.
  */
 import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
+import { hasErrnoCode } from "../../../infra/errors.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 
 const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
@@ -14,10 +15,19 @@ const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
 
 function getMutationQueueKey(filePath: string): string {
   const resolvedPath = resolve(filePath);
-  try {
-    return realpathSync.native(resolvedPath);
-  } catch {
-    return resolvedPath;
+  const missingSegments: string[] = [];
+  let candidate = resolvedPath;
+  while (true) {
+    try {
+      return resolve(realpathSync.native(candidate), ...missingSegments.toReversed());
+    } catch (error) {
+      const parent = dirname(candidate);
+      if (!hasErrnoCode(error, "ENOENT") || parent === candidate) {
+        return resolvedPath;
+      }
+      missingSegments.push(basename(candidate));
+      candidate = parent;
+    }
   }
 }
 
