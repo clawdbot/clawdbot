@@ -23,7 +23,9 @@ export type ChannelJoinIntroOutcome =
     }
   | { kind: "failed"; reason: string };
 
-const CHANNEL_JOIN_INTRO_MESSAGE_LIMIT = 30;
+// Discord's message read caps at 100 per call, so this is the common ceiling across channels.
+// The snapshot character budget, not this count, is what usually bounds a busy room.
+const CHANNEL_JOIN_INTRO_MESSAGE_LIMIT = 100;
 const CHANNEL_JOIN_INTRO_TIMEOUT_SECONDS = 60;
 const CHANNEL_JOIN_INTRO_DEDUPE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
 const CHANNEL_JOIN_INTRO_DEDUPE_MAX_ENTRIES = 4_096;

@@ -670,7 +670,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
     Introductions use the channel name and topic, plus recent messages when available. Reading earlier messages also requires **Read Message History**; when that permission is missing, OpenClaw still introduces itself using channel metadata instead of failing.
 
-    Introductions are enabled by default, apply only to newly joined servers, and never run in direct messages. Set `channels.discord.joinIntro: false` to disable them, or set `channels.discord.accounts.<accountId>.joinIntro` to override one account.
+    Introductions are enabled by default, apply only to newly joined servers, and never run in direct messages. Set `channels.discord.joinIntro: false` to disable them, or set `channels.discord.accounts.<accountId>.joinIntro` to override one account. See [group join introductions](/channels#group-join-introductions) for the history limits, target-channel selection, once-per-room behavior, and untrusted-content handling.
 
   </Accordion>
 

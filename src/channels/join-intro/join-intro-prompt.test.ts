@@ -6,7 +6,9 @@ describe("buildChannelJoinIntroPrompt", () => {
     const prompt = buildChannelJoinIntroPrompt({
       context: {
         title: "#releases",
-        recentMessages: Array.from({ length: 30 }, (_, index) => ({
+        // A full fetch of the 100-message limit at realistic length overruns the character
+        // budget, so this exercises the drop-oldest path rather than fitting inside it.
+        recentMessages: Array.from({ length: 100 }, (_, index) => ({
           sender: `sender-${String(index).padStart(2, "0")}`,
           text: `message-${String(index).padStart(2, "0")} ${"details ".repeat(35)}`,
         })),
@@ -15,10 +17,10 @@ describe("buildChannelJoinIntroPrompt", () => {
     const snapshot = prompt.split("\n\nRoom context:\n")[1];
 
     expect(snapshot).toBeDefined();
-    expect(snapshot?.length).toBeLessThanOrEqual(3_200);
-    expect(snapshot).toContain("message-29");
+    expect(snapshot?.length).toBeLessThanOrEqual(12_000);
+    expect(snapshot).toContain("message-99");
     expect(snapshot).not.toContain("message-00");
-    expect(snapshot?.indexOf("message-28")).toBeLessThan(snapshot?.indexOf("message-29") ?? -1);
+    expect(snapshot?.indexOf("message-98")).toBeLessThan(snapshot?.indexOf("message-99") ?? -1);
   });
 
   it("grounds unreadable room history in visible room facts and asks what the room needs", () => {

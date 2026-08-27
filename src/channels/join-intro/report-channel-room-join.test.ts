@@ -106,7 +106,7 @@ describe("reportChannelRoomJoin", () => {
     });
 
     expect(countPluginStateLiveEntries("slack")).toBe(rowsBefore + 1);
-    expect(params.resolveRoomContext).toHaveBeenCalledExactlyOnceWith({ messageLimit: 30 });
+    expect(params.resolveRoomContext).toHaveBeenCalledExactlyOnceWith({ messageLimit: 100 });
     expect(runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
   });
 

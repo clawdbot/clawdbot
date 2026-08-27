@@ -11,8 +11,10 @@ export type ChannelJoinedRoomContext = {
   historyUnavailable?: boolean;
 };
 
-// Roughly 800 snapshot tokens leaves room for instructions below the ~1K prompt budget.
-const CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS = 3_200;
+// Roughly 3K snapshot tokens. Characterizing a room needs enough traffic to see recurring
+// topics, and this turn runs once per room lifetime rather than on every message, so the
+// budget buys grounding quality instead of recurring context cost.
+const CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS = 12_000;
 
 function formatChannelJoinRoomSnapshot(params: {
   context: ChannelJoinedRoomContext;
