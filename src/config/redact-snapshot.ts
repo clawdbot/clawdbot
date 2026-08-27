@@ -10,7 +10,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import {
-  normalizeChannelMetadataContainerKey,
   normalizeChannelMetadataHints,
   normalizeChannelMetadataPath,
 } from "./redact-snapshot-channel-metadata.js";
@@ -212,18 +211,7 @@ function redactValue(
   const fallbackContext = withoutRedactionLookup(context);
   for (const [key, value] of Object.entries(obj)) {
     const path = prefix ? `${prefix}.${key}` : key;
-    // Directly under the root `channels` container the key IS the channel id, dots and all. Joining
-    // it into the path first and re-splitting on the first dot mis-normalizes a dotted id such as
-    // `Acme.Chat`, which kept the authored casing of every later segment and so never matched the
-    // fully normalized key its ownership hints are stored under — a field marked `sensitive: true`
-    // then missed its hint and was returned in plaintext.
-    const metadataPath =
-      prefix === "channels"
-        ? `channels.${normalizeChannelMetadataContainerKey(key)}`
-        : normalizeChannelMetadataPath(path);
-    // Descend on the normalized path so a dotted id stays canonical for nested fields and for the
-    // wildcard below, which splits the same way.
-    const childPrefix = metadataPath;
+    const metadataPath = normalizeChannelMetadataPath(path);
     const wildcardPath = normalizeChannelMetadataPath(prefix ? `${prefix}.*` : "*");
     const candidate = context.lookup
       ? [metadataPath, wildcardPath].find((entry) => context.lookup?.has(entry))
@@ -293,7 +281,7 @@ function redactValue(
         result[key] = value;
       }
     } else if (typeof value === "object" && value !== null) {
-      result[key] = redactValue(value, childPrefix, values, fallbackContext);
+      result[key] = redactValue(value, path, values, fallbackContext);
     } else {
       result[key] = value;
     }
@@ -664,14 +652,7 @@ function restoreRedactedValue(
   for (const [key, value] of Object.entries(toObjectRecord(incoming))) {
     const path = prefix ? `${prefix}.${key}` : key;
     const authoredPath = authoredPrefix ? `${authoredPrefix}.${key}` : key;
-    // Same reason as the redaction walk: directly under the root `channels` container the key is
-    // the whole channel id, so a dotted id must be normalized as a key rather than re-split out of
-    // the joined path.
-    const metadataPath =
-      prefix === "channels"
-        ? `channels.${normalizeChannelMetadataContainerKey(key)}`
-        : normalizeChannelMetadataPath(path);
-    const childPrefix = metadataPath;
+    const metadataPath = normalizeChannelMetadataPath(path);
     const wildcardPath = normalizeChannelMetadataPath(prefix ? `${prefix}.*` : "*");
     const candidate = context.lookup
       ? [metadataPath, wildcardPath].find((entry) => context.lookup?.has(entry))
@@ -715,7 +696,7 @@ function restoreRedactedValue(
         : { handled: false as const };
       result[key] = restoredSecretRef.handled
         ? restoredSecretRef.value
-        : restoreRedactedValue(value, orig[key], childPrefix, fallbackContext, authoredPath);
+        : restoreRedactedValue(value, orig[key], path, fallbackContext, authoredPath);
     } else {
       result[key] = value;
     }

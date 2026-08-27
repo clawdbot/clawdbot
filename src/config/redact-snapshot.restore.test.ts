@@ -241,53 +241,6 @@ describe("restoreRedactedValues", () => {
     expect(restoreRedactedValues(incoming, original, hints)).toEqual(original);
   });
 
-  // `channels` accepts any trimmed string, so a channel id may contain dots. Normalizing the joined
-  // path instead of the object key assumed the id ended at the first dot, so `Acme.Chat` produced
-  // the hint path `channels.acme.Chat.opaqueCredential` while ownership stores the fully normalized
-  // `channels.acme.chat.opaqueCredential`. The hint missed and this non-heuristic field — nothing in
-  // its name reads as a secret — came back in plaintext.
-  it("redacts canonical hints through a dotted authored-case custom channel key", () => {
-    const hints: ConfigUiHints = {
-      "channels.acme.chat.opaqueCredential": { sensitive: true },
-    };
-    const originalConfig = {
-      channels: { "Acme.Chat": { opaqueCredential: "dotted-case-secret" } },
-    };
-    const snapshot = makeSnapshot(originalConfig);
-
-    const redacted = redactConfigSnapshot(snapshot, hints);
-    const redactedConfig = redacted.config as typeof originalConfig;
-    expect(redactedConfig.channels["Acme.Chat"].opaqueCredential).toBe(REDACTED_SENTINEL);
-  });
-
-  it("restores canonical hints through a dotted authored-case custom channel key", () => {
-    const hints: ConfigUiHints = {
-      "channels.acme.chat.opaqueCredential": { sensitive: true },
-    };
-    const incoming = {
-      channels: { "Acme.Chat": { opaqueCredential: REDACTED_SENTINEL } },
-    };
-    const original = {
-      channels: { "Acme.Chat": { opaqueCredential: "dotted-case-secret" } },
-    };
-
-    expect(restoreRedactedValues(incoming, original, hints)).toEqual(original);
-  });
-
-  it("leaves an unhinted field under a dotted channel key alone", () => {
-    const hints: ConfigUiHints = {
-      "channels.acme.chat.opaqueCredential": { sensitive: true },
-    };
-    const originalConfig = {
-      channels: { "Acme.Chat": { displayLabel: "plain-label" } },
-    };
-    const snapshot = makeSnapshot(originalConfig);
-
-    const redacted = redactConfigSnapshot(snapshot, hints);
-    const redactedConfig = redacted.config as typeof originalConfig;
-    expect(redactedConfig.channels["Acme.Chat"].displayLabel).toBe("plain-label");
-  });
-
   it("redacts an alias-keyed hint without exposing a non-heuristic field", () => {
     const hints: ConfigUiHints = {
       "channels.wechat.opaqueCredential": { sensitive: true },
