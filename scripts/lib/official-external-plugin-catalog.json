@@ -104,6 +104,7 @@
           "label": "Daytona Sandbox"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/daytona-sandbox",
           "npmSpec": "@openclaw/daytona-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.8.1"
