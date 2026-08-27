@@ -91,7 +91,6 @@ async function runTrustedProxyPrompt(params: {
   return runGatewayPrompt({
     ...params,
     selectQueue: ["loopback", "trusted-proxy", params.tailscaleMode ?? "off"],
-    textQueue: params.textQueue,
   });
 }
 
@@ -437,29 +436,20 @@ describe("promptGatewayConfig", () => {
   });
 
   it("stores gateway token as SecretRef when token source is ref", async () => {
-    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-gateway-token";
-    try {
-      const result = await runGatewayPrompt({
-        selectQueue: ["loopback", "token", "off", "ref"],
-        textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
-      });
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token");
+    const result = await runGatewayPrompt({
+      selectQueue: ["loopback", "token", "off", "ref"],
+      textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
+    });
 
-      expect(result.config.gateway?.auth).toEqual({
-        mode: "token",
-        token: {
-          source: "env",
-          provider: "default",
-          id: "OPENCLAW_GATEWAY_TOKEN",
-        },
-      });
-      expect(result.token).toBeUndefined();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
-      }
-    }
+    expect(result.config.gateway?.auth).toEqual({
+      mode: "token",
+      token: {
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      },
+    });
+    expect(result.token).toBeUndefined();
   });
 });
