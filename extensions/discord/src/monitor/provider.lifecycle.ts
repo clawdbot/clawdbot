@@ -199,7 +199,6 @@ function createGatewayStatusObserver(params: {
   let disconnectedAt: number | undefined;
   let runtimeReady = false;
   let graceCount = 0;
-  let deadlineExtended = false;
   const MAX_GRACE_PERIODS = 2;
 
   const shouldStop = () => params.abortSignal?.aborted || params.isLifecycleStopping();
@@ -234,13 +233,11 @@ function createGatewayStatusObserver(params: {
       if (shouldStop()) {
         clearDisconnectWatchdog();
         graceCount = 0;
-        deadlineExtended = false;
         return;
       }
       if (params.gateway?.isConnected) {
         clearDisconnectWatchdog();
         graceCount = 0;
-        deadlineExtended = false;
       }
     }, DISCORD_GATEWAY_READY_POLL_MS);
     disconnectWatchdogPollId.unref?.();
@@ -278,21 +275,21 @@ function createGatewayStatusObserver(params: {
   };
   const startDisconnectWatchdog = (extraDelayMs = 0) => {
     if (disconnectWatchdogId) {
-      if (extraDelayMs > 0 && !deadlineExtended) {
+      // Rearm on every observed reconnect schedule so the watchdog deadline
+      // always covers the latest pending retry. Discord's backoff can schedule
+      // 2s, 4s, 8s, 16s, then 30s; accepting only the first delay would let the
+      // watchdog fire while a legitimate later retry is still pending.
+      if (extraDelayMs > 0) {
         const preservedGraceCount = graceCount;
         const preservedDisconnectedAt = disconnectedAt;
         clearDisconnectWatchdog();
         graceCount = preservedGraceCount;
         disconnectedAt = preservedDisconnectedAt ?? Date.now();
-        deadlineExtended = true;
         armWatchdog(params.runtimeReadyTimeoutMs + extraDelayMs);
       }
       return;
     }
     disconnectedAt = Date.now();
-    if (extraDelayMs > 0) {
-      deadlineExtended = true;
-    }
     armWatchdog(params.runtimeReadyTimeoutMs + extraDelayMs);
   };
   const triggerForceStop = (err: unknown) => {
@@ -416,7 +413,6 @@ function createGatewayStatusObserver(params: {
       clearReadyWatch();
       clearDisconnectWatchdog();
       graceCount = 0;
-      deadlineExtended = false;
       forceStopHandler = undefined;
       queuedForceStopError = undefined;
     },

@@ -862,4 +862,47 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("rearms the watchdog deadline on every reconnect schedule, not just the first", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+
+        // First reconnect scheduled at 2s — watchdog arms with 30s + 2s = 32s
+        await vi.advanceTimersByTimeAsync(1_000);
+        emitter.emit("reconnect-scheduled", 2_000);
+
+        // Second reconnect scheduled at 4s — watchdog should rearm to 30s + 4s = 34s
+        await vi.advanceTimersByTimeAsync(1_000);
+        emitter.emit("reconnect-scheduled", 4_000);
+
+        // Third reconnect scheduled at 8s — watchdog should rearm to 30s + 8s = 38s
+        await vi.advanceTimersByTimeAsync(1_000);
+        emitter.emit("reconnect-scheduled", 8_000);
+
+        // Advance to 35s total — the old deadline (32s from the first 2s
+        // schedule) would have fired here. With rearming, the current deadline
+        // is 38s (from the 8s schedule), so the watchdog must NOT have fired.
+        await vi.advanceTimersByTimeAsync(33_000);
+
+        // Gateway reconnects before the 38s deadline
+        gateway.isConnected = true;
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
