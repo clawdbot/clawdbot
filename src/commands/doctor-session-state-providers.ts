@@ -58,17 +58,22 @@ function repairExample(repair: DoctorSessionRouteStateRepair): string {
   return `${repair.key} (${repair.reasons.join(", ")})`;
 }
 
-function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string | undefined {
-  return parseAgentSessionKey(sessionKey)?.agentId ?? tryResolveDefaultAgentId(cfg);
+function resolveSessionAgentId(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  storeAgentId?: string,
+): string | undefined {
+  return parseAgentSessionKey(sessionKey)?.agentId ?? storeAgentId ?? tryResolveDefaultAgentId(cfg);
 }
 
 /** Resolves the currently configured provider/model/runtime route for a session key. */
 function resolveConfiguredDoctorSessionStateRoute(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   sessionKey: string;
   env?: NodeJS.ProcessEnv;
 }): DoctorSessionRouteState | undefined {
-  const agentId = resolveSessionAgentId(params.cfg, params.sessionKey);
+  const agentId = resolveSessionAgentId(params.cfg, params.sessionKey, params.agentId);
   if (!agentId) {
     return undefined;
   }
@@ -338,6 +343,7 @@ function scanEntryForOwner(params: {
 
 /** Streams session entries into compact plugin-owned route-state findings. */
 export function createPluginSessionStateDoctorScanner(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }) {
@@ -357,13 +363,14 @@ export function createPluginSessionStateDoctorScanner(params: {
       if (owners.length === 0) {
         return;
       }
-      const agentId = resolveSessionAgentId(params.cfg, key);
+      const agentId = resolveSessionAgentId(params.cfg, key, params.agentId);
       if (!agentId) {
         return;
       }
       let route = routeByAgentId.get(agentId);
       if (!route) {
         route = resolveConfiguredDoctorSessionStateRoute({
+          agentId,
           cfg: params.cfg,
           sessionKey: key,
           env: params.env,

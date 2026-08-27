@@ -46,6 +46,7 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
 });
 
 async function runDoctor(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   confirm?: boolean;
@@ -59,6 +60,7 @@ async function runDoctor(params: {
   const confirmRuntimeRepair = vi.fn(async () => params.confirm ?? true);
   try {
     const scanner = createPluginSessionStateDoctorScanner({
+      agentId: params.agentId,
       cfg: params.cfg,
       env: params.env ?? {},
     });
@@ -149,6 +151,39 @@ describe("doctor session state provider routes", () => {
     } satisfies OpenClawConfig;
 
     const result = await runDoctor({ cfg, store });
+
+    expect(result.store).toEqual(store);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
+
+  it("uses the inspected agent route for a store-local global session", async () => {
+    const store = {
+      global: entry({
+        model: "gpt-5.4",
+        modelProvider: "openai-codex",
+        providerOverride: "openai-codex",
+      }),
+    };
+    const cfg = {
+      agents: {
+        entries: {
+          main: { model: "github-copilot/gpt-5.4-mini" },
+          ops: { model: "openai/gpt-5.4" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            agentRuntime: { id: "codex-cli" },
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+      session: { scope: "global" },
+    } satisfies OpenClawConfig;
+
+    const result = await runDoctor({ agentId: "ops", cfg, store });
 
     expect(result.store).toEqual(store);
     expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();

@@ -1348,8 +1348,8 @@ export async function noteStateIntegrity(
     });
     const mainRecoveryWedged: MainSessionRecoveryIntegrityCandidate[] = [];
     const wedgedSubagentSessions: Array<{ key: string; reason: string }> = [];
-    const sqlitePluginStateScanner = createPluginSessionStateDoctorScanner({ cfg, env });
-    const legacyPluginStateScanner = createPluginSessionStateDoctorScanner({ cfg, env });
+    const sqlitePluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
+    const legacyPluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
     let mainEntry: SessionEntry | undefined;
     let sqliteNewKeyIndex = 0;
     const recent: Array<{ entry: SessionEntry; order: number; sessionKey: string }> = [];
