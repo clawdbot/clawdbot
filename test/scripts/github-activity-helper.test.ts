@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -20,6 +21,12 @@ type Fixture = {
   fail?: string[];
 };
 type Request = { route: string; args: string[]; output: string };
+
+function requiredAt<T>(items: T[], index: number): T {
+  const item = items[index];
+  assert(item !== undefined, `Missing fixture item at index ${index}`);
+  return item;
+}
 
 function runHelper(args: string[], fixture: Fixture = {}) {
   const dir = createTempDir("github-activity-helper-");
@@ -127,8 +134,8 @@ fi
 describe("openclaw-pr-maintainer github activity helper", () => {
   it("prints canonical identity before the first activity request, even when a scan blocks", () => {
     const { requests } = runHelper(["alias"], { blockActivity: true });
-    expect(requests[0].args[1]).toBe("users/alias");
-    expect(requests[1].output).toContain(
+    expect(requiredAt(requests, 0).args[1]).toBe("users/alias");
+    expect(requiredAt(requests, 1).output).toContain(
       "Example Author (@Canonical, User, account created 2010-09-21",
     );
   });
@@ -144,7 +151,7 @@ describe("openclaw-pr-maintainer github activity helper", () => {
       expect(args).not.toContain("--paginate");
       expect(args).not.toContain("-f");
       expect(args).not.toContain("-F");
-      const url = new URL(args[1], "https://api.github.test/");
+      const url = new URL(requiredAt(args, 1), "https://api.github.test/");
       expect(url.searchParams.get("per_page")).toBe("1");
       expect(url.searchParams.get("q")).toContain("repo:openclaw/openclaw author:Canonical");
       return url;
@@ -154,9 +161,9 @@ describe("openclaw-pr-maintainer github activity helper", () => {
       "/search/issues",
       "/search/commits",
     ]);
-    expect(searches[0].searchParams.get("q")).toContain("is:pr");
-    expect(searches[1].searchParams.get("q")).toContain("is:issue");
-    expect(searches[2].searchParams.get("q")).toContain("committer-date:");
+    expect(requiredAt(searches, 0).searchParams.get("q")).toContain("is:pr");
+    expect(requiredAt(searches, 1).searchParams.get("q")).toContain("is:issue");
+    expect(requiredAt(searches, 2).searchParams.get("q")).toContain("committer-date:");
     expect(stdout).toContain("index/cache may lag");
   });
 
@@ -191,11 +198,12 @@ describe("openclaw-pr-maintainer github activity helper", () => {
     expect(requests.map(({ args }) => args[args.indexOf("--cache") + 1])).toEqual(
       Array(5).fill("1h"),
     );
+    const repoArgs = requiredAt(requests, 1).args;
     const repoQuery =
-      new URL(requests[1].args[1], "https://api.github.test").searchParams.get("q") ?? "";
+      new URL(requiredAt(repoArgs, 1), "https://api.github.test").searchParams.get("q") ?? "";
     const repoRange = /created:([^ ]+)\.\.([^ ]+)/.exec(repoQuery);
     expect(repoRange).not.toBeNull();
-    const graphql = requests[4].args;
+    const graphql = requiredAt(requests, 4).args;
     const from = graphql.find((arg) => arg.startsWith("from="))?.slice(5) ?? "";
     const to = graphql.find((arg) => arg.startsWith("to="))?.slice(3) ?? "";
     expect(repoRange?.slice(1)).toEqual(["2024-08-26T00:00:00Z", "2026-08-25T23:59:59Z"]);
@@ -240,7 +248,7 @@ describe("openclaw-pr-maintainer github activity helper", () => {
     expect(stdout).toContain("@missing (profile unavailable; account age unknown)");
     expect(stdout).toContain("Example Author (@Canonical");
     expect(requests).toHaveLength(5);
-    expect(requests[1].args[1]).toBe("users/alias");
+    expect(requiredAt(requests, 1).args[1]).toBe("users/alias");
   });
   it("continues later logins after a failed global request without falling back to scans", () => {
     const { result, stdout, requests } = runHelper(["--global", "first", "second"], {
@@ -249,7 +257,7 @@ describe("openclaw-pr-maintainer github activity helper", () => {
     expect(result.status).toBe(1);
     expect(requests).toHaveLength(10);
     expect(stdout.match(/unavailable \(request failed\)/g)).toHaveLength(2);
-    expect(requests[5].args[1]).toBe("users/second");
+    expect(requiredAt(requests, 5).args[1]).toBe("users/second");
   });
 
   it("keeps valid contribution zeroes without inferring inactivity or scanning other endpoints", () => {
@@ -295,10 +303,12 @@ describe("openclaw-pr-maintainer github activity helper", () => {
   ])("bounds calendar subtraction at month ends: %s", (now, months, from) => {
     const { result, requests } = runHelper(["--months", months, "--global", "alias"], { now });
     expect(result.status).toBe(0);
-    const query = new URL(requests[1].args[1], "https://api.github.test").searchParams.get("q");
+    const repoArgs = requiredAt(requests, 1).args;
+    const query = new URL(requiredAt(repoArgs, 1), "https://api.github.test").searchParams.get("q");
     expect(query).toContain(`created:${from}..`);
-    expect(requests[4].args).toContain(`from=${from}`);
-    const to = requests[4].args.find((arg) => arg.startsWith("to="))?.slice(3) ?? "";
+    const graphql = requiredAt(requests, 4).args;
+    expect(graphql).toContain(`from=${from}`);
+    const to = graphql.find((arg) => arg.startsWith("to="))?.slice(3) ?? "";
     expect(Date.parse(to) - Date.parse(from)).toBeLessThanOrEqual(366 * 86400000);
   });
 });
