@@ -19,7 +19,7 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { isLoopbackAddress } from "../gateway/net.js";
+import { isLoopbackAddress, isTrustedProxyAddress } from "../gateway/net.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
@@ -319,11 +319,15 @@ export async function promptGatewayConfig(
     const existingProxy =
       cfg.gateway?.auth?.mode === "trusted-proxy" ? cfg.gateway.auth.trustedProxy : undefined;
     let allowLoopback = existingProxy?.allowLoopback;
-    // Parse CIDR bases before classification so runtime-accepted aliases still require consent.
+    // The base covers subnets within loopback; representative peers cover ranges containing it.
+    // Use runtime matching too, including its mapped IPv4 and exact IPv6 zone semantics.
     if (
-      trustedProxies.some((address) =>
-        isLoopbackAddress(parseIpAddressOrCidr(address)?.[0].toString()),
-      )
+      trustedProxies.some((address) => {
+        const base = parseIpAddressOrCidr(address)?.[0].toString();
+        return [base, "127.0.0.1", "::1"].some(
+          (peer) => isLoopbackAddress(peer) && isTrustedProxyAddress(peer, [address]),
+        );
+      })
     ) {
       const title = t("wizard.gateway.trustedProxyLoopbackTitle");
       note(t("wizard.gateway.trustedProxyLoopbackWarning"), title);

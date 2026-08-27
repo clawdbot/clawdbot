@@ -4,9 +4,11 @@ import type { AddressInfo, Socket } from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { waitForGatewayReachable } from "../commands/onboard-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createSuiteTempRootTracker, withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -169,6 +171,20 @@ describe("Gateway probe TLS trust", () => {
 
   it.each([
     { name: "saved pin", savedPin: fingerprint, ok: true },
+    { name: "probe URL whitespace", savedPin: fingerprint, urlVariant: "whitespace", ok: true },
+    {
+      name: "identical uppercase scheme",
+      savedPin: fingerprint,
+      urlVariant: "same-case",
+      ok: true,
+    },
+    {
+      name: "case-changed endpoint",
+      savedPin: fingerprint,
+      urlVariant: "different-case",
+      ok: false,
+      error: "certificate",
+    },
     { name: "saved pin in local mode", savedPin: fingerprint, local: true, ok: true },
     { name: "saved pin with whitespace", savedPin: ` sha256:${fingerprint} `, ok: true },
     {
@@ -201,19 +217,27 @@ describe("Gateway probe TLS trust", () => {
     },
   ])(
     "enforces $name before sending Gateway credentials",
-    async ({ savedPin, explicitPin, local, changed, ok, error }) => {
+    async ({ savedPin, explicitPin, local, changed, urlVariant, ok, error }) => {
       const before = {
         receivedBytes: gateway.observed.receivedBytes,
         edgeAuthHeaders: gateway.observed.edgeAuthHeaders.length,
         connectFrames: gateway.observed.connectFrames,
       };
+      const probeUrl =
+        urlVariant === "whitespace"
+          ? ` ${url} `
+          : urlVariant?.endsWith("case")
+            ? url.replace("wss:", "WSS:")
+            : url;
+      const savedUrl =
+        urlVariant === "same-case" ? probeUrl : changed ? `${url}/other` : ` ${url} `;
       const result = await probeGateway({
-        url,
+        url: probeUrl,
         config: {
           gateway: {
             mode: local ? "local" : "remote",
             remote: {
-              url: changed ? `${url}/other` : ` ${url} `,
+              url: savedUrl,
               tlsFingerprint: savedPin,
               edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
             },
@@ -244,4 +268,22 @@ describe("Gateway probe TLS trust", () => {
       }
     },
   );
+
+  it("retains saved TLS trust through the health readiness polling path", async () => {
+    const before = gateway.observed.connectFrames;
+    const result = await withEnvAsync(
+      { OPENCLAW_STATE_DIR: await tempDirs.make("polling-state") },
+      () =>
+        waitForGatewayReachable({
+          url,
+          config: { gateway: { mode: "remote", remote: { url, tlsFingerprint: fingerprint } } },
+          token: "test-probe-token",
+          deadlineMs: 2_000,
+          probeTimeoutMs: 2_000,
+        }),
+    );
+    expect(result).toEqual({ ok: true });
+    await gateway.drain();
+    expect(gateway.observed.connectFrames - before).toBe(1);
+  });
 });

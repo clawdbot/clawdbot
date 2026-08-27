@@ -233,6 +233,7 @@ describe("runConfigureWizard", () => {
           url: "wss://gateway.example.test",
           token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
           password: remotePassword,
+          tlsFingerprint: "ab".repeat(32),
         },
       },
       secrets: { providers: { default: { source: "env" } } },
@@ -243,6 +244,9 @@ describe("runConfigureWizard", () => {
 
     await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
 
+    expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: remoteConfig.gateway?.remote?.url, config: remoteConfig }),
+    );
     expect(mocks.healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         config: remoteConfig,

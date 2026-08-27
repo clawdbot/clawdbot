@@ -161,6 +161,7 @@ async function runGatewayHealthCheck(params: {
   try {
     const gatewayProbe = await waitForGatewayReachable({
       url: wsUrl,
+      ...(probeMode === "remote" ? { config: params.cfg } : {}),
       token,
       password,
       ...(params.daemonSetupOutcome === "succeeded"
