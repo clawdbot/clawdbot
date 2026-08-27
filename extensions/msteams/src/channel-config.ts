@@ -163,7 +163,7 @@ export const msteamsConfigAdapter = {
       cfg: params.cfg,
       accountId: params.accountId,
       update: (account) => ({ ...account, enabled: params.enabled }),
-    }) ?? msteamsBaseConfigAdapter.setAccountEnabled(params),
+    }) ?? msteamsBaseConfigAdapter.setAccountEnabled!(params),
   deleteAccount: (params: { cfg: OpenClawConfig; accountId: string }) =>
     normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID
       ? deleteMSTeamsDefaultAccountIdentity(params.cfg)
