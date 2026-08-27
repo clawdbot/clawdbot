@@ -2666,7 +2666,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
     expect(duplicateRespond).toHaveBeenCalledWith(
       true,
-      { runId, status: "in_flight", agentId: "main" },
+      { runId, status: "in_flight", admitted: true, agentId: "main" },
       undefined,
       {
         cached: true,

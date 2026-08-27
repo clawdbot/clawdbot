@@ -122,7 +122,6 @@ export async function waitForGatewayDispatchDeadline<T>(
   }
 }
 
-/** Applies the same non-cancelling deadline used by in-process Gateway dispatch. */
 /** Dispatches one request through the ordinary Gateway router without opening a transport. */
 export async function dispatchGatewayRequestInProcessRaw(
   method: string,

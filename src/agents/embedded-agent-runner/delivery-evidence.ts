@@ -398,6 +398,7 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
     "messagingToolSentMediaUrls" in value ||
     "messagingToolSentTargets" in value ||
     "acceptedSessionSpawns" in value ||
+    "runtimeContinuationStarted" in value ||
     "successfulCronAdds" in value ||
     "meta" in value
   );

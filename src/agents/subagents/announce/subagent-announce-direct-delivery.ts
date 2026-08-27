@@ -491,6 +491,17 @@ export async function sendSubagentAnnounceDirectly(params: {
           : {}),
       };
     }
+    const hasYieldedContinuation = Boolean(
+      directAnnounceResult &&
+      directAnnounceResult.meta?.yielded === true &&
+      (directAnnounceResult.runtimeContinuationStarted === true ||
+        hasAcceptedSessionSpawnEvidence(directAnnounceResult.acceptedSessionSpawns)),
+    );
+    if (hasYieldedContinuation) {
+      // The runtime owns the accepted next wave. This wake is complete even
+      // though the resumed requester correctly withheld its terminal reply.
+      return { delivered: true, path: "direct" };
+    }
     const completionPayloadVisibility = {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
@@ -513,12 +524,6 @@ export async function sendSubagentAnnounceDirectly(params: {
     );
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
-    );
-    const hasYieldedContinuation = Boolean(
-      directAnnounceResult &&
-      directAnnounceResult.meta?.yielded === true &&
-      (directAnnounceResult.runtimeContinuationStarted === true ||
-        hasAcceptedSessionSpawnEvidence(directAnnounceResult.acceptedSessionSpawns)),
     );
     const hasVisibleRequiredCompletionReply =
       hasMessagingToolDelivery ||
@@ -617,7 +622,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
       !hasVisibleCompletionReply &&
-      ((params.requireVisibleReply && !hasYieldedContinuation) ||
+      (params.requireVisibleReply ||
         (params.expectsCompletionMessage &&
           !shouldDeliverAgentFinal &&
           !requiresMessageToolDelivery &&

@@ -4100,6 +4100,102 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
+  it.each([
+    {
+      label: "native runtime",
+      continuationEvidence: { runtimeContinuationStarted: true },
+    },
+    {
+      label: "accepted sessions_spawn",
+      continuationEvidence: committedSessionSpawnEvidence,
+    },
+  ])(
+    "does not fallback-send a direct requester completion after $label continuation owns the next wave",
+    async ({ continuationEvidence }) => {
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [],
+          meta: { yielded: true },
+          ...continuationEvidence,
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const childSessionKey = "agent:worker:subagent:yielded-next-wave";
+
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        sourceTool: "subagent_announce",
+        sourceSessionKey: childSessionKey,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: "child-session-id",
+          result: "Wave one completed.",
+        }),
+      });
+
+      expectRecordFields(result, { delivered: true, path: "direct" });
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts a yielded continuation before enforcing message-tool-only final delivery", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        meta: { yielded: true },
+        runtimeContinuationStarted: true,
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-subagent-message-tool-yield",
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("accepts a yielded continuation before classifying no-output as a permanent failure", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        meta: { yielded: true },
+        ...committedSessionSpawnEvidence,
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const childSessionKey = "agent:worker:subagent:yielded-no-output";
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-subagent-yielded-no-output",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: childSessionKey,
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "(no output)",
+      }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("fails configured channel subagent completions when parent skips required message tool", async () => {
     const callGateway = createPayloadGatewayMock({ text: "The subagent is done." });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
