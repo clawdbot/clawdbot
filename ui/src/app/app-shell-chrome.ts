@@ -147,7 +147,7 @@ export class ShellChromeOwner {
       capture: true,
       signal: this.listeners.signal,
     });
-    document.addEventListener("keydown", this.handleDocumentKeydown, options);
+    document.addEventListener("keydown", this.handleDocumentKeydownBubble, options);
     window.addEventListener("resize", this.handleWindowResize, options);
     window.addEventListener("dragover", this.handleUnhandledFileDrag, options);
     window.addEventListener("drop", this.handleUnhandledFileDrag, options);
@@ -385,29 +385,25 @@ export class ShellChromeOwner {
 
   dismissSidebarTransientMenus = (): boolean => dismissNavigationTransientSurfaces(this.host);
 
-  readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
+  private readonly handleDocumentKeydownBubble = (event: KeyboardEvent): void => {
     const host = this.host;
-    if (event.eventPhase === Event.BUBBLING_PHASE) {
-      if (
-        host.navDrawerOpen &&
-        isMobileNavLayout() &&
-        !event.defaultPrevented &&
-        !document.openClawModalLayers?.size &&
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)
-      ) {
-        event.preventDefault();
-        host.closeNavDrawer({ restoreFocus: true });
-      } else if (
-        !event.defaultPrevented &&
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) &&
-        isSettingsTakeover(host.routeState.routeId) &&
-        !this.shouldIgnoreSettingsEscape(event)
-      ) {
-        event.preventDefault();
-        host.exitSettings();
-      }
+    if (event.defaultPrevented || !matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
       return;
     }
+    if (host.navDrawerOpen && isMobileNavLayout() && !document.openClawModalLayers?.size) {
+      event.preventDefault();
+      host.closeNavDrawer({ restoreFocus: true });
+    } else if (
+      isSettingsTakeover(host.routeState.routeId) &&
+      !this.shouldIgnoreSettingsEscape(event)
+    ) {
+      event.preventDefault();
+      host.exitSettings();
+    }
+  };
+
+  readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
+    const host = this.host;
     if (document.openClawModalLayers?.size) {
       return;
     }
@@ -458,10 +454,7 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      if (event.eventPhase === Event.CAPTURING_PHASE) {
-        return;
-      }
-      if (this.shouldIgnoreSettingsEscape(event)) {
+      if (event.eventPhase === Event.CAPTURING_PHASE || this.shouldIgnoreSettingsEscape(event)) {
         return;
       }
       event.preventDefault();

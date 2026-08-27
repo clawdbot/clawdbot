@@ -12,7 +12,9 @@ export type ShellNavDrawerToggleDetail = {
 };
 
 export function shellNavDrawerTriggerFromEvent(event: Event): HTMLElement | undefined {
-  const trigger = (event as CustomEvent<ShellNavDrawerToggleDetail>).detail?.trigger;
+  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  const trigger =
+    detail && typeof detail === "object" && "trigger" in detail ? detail.trigger : null;
   return trigger instanceof HTMLElement ? trigger : undefined;
 }
 
@@ -25,12 +27,23 @@ export type CommandPaletteTargetDetail = {
   onSlashCommand: ((command: string) => void) | null;
 };
 
-export function commandPaletteTargetFromEvent(
+function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTargetDetail {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "owner" in value &&
+    value.owner instanceof Element &&
+    "onSlashCommand" in value &&
+    (value.onSlashCommand === null || typeof value.onSlashCommand === "function")
+  );
+}
+
+function commandPaletteTargetFromEvent(
   current: CommandPaletteTargetDetail | undefined,
   event: Event,
 ): CommandPaletteTargetDetail | null | undefined {
-  const detail = (event as CustomEvent<CommandPaletteTargetDetail>).detail;
-  if (!detail || !(detail.owner instanceof Element)) {
+  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  if (!isCommandPaletteTargetDetail(detail)) {
     return null;
   }
   return detail.onSlashCommand ? detail : current?.owner === detail.owner ? undefined : current;

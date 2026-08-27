@@ -27,7 +27,7 @@ export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
   return dismissedMenu === true || dismissedPanel;
 }
 
-export function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
+function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
   const drawer = host.querySelector<HTMLElement>(".shell-nav");
   if (!drawer) {
     return;
