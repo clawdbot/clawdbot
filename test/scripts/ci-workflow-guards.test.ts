@@ -107,6 +107,7 @@ function evaluateWorkflowExpression(
     headRepository?: string;
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
+    releaseGate?: boolean;
     repository: string;
     runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
@@ -145,6 +146,9 @@ function evaluateWorkflowExpression(
               },
             }
           : {},
+    },
+    inputs: {
+      release_gate: context.releaseGate ?? false,
     },
     matrix: context.matrix ?? {},
     needs: {
@@ -3627,6 +3631,42 @@ NODE
         },
       ),
     ).toBe(96);
+  });
+
+  it("honors trusted dispatch runner selection for check shards", () => {
+    const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
+    const lintMatrix = {
+      runner: "blacksmith-32vcpu-ubuntu-2404",
+      task: "lint",
+    };
+    const evaluateDispatch = (
+      runnerBackend: "blacksmith" | "github" | "hybrid",
+      releaseGate = false,
+    ) =>
+      evaluateWorkflowExpression(runsOn, {
+        eventName: "workflow_dispatch",
+        matrix: lintMatrix,
+        releaseGate,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend,
+      });
+
+    expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
+    expect(evaluateDispatch("blacksmith", true)).toBe("ubuntu-24.04");
+    expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
+    expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
+    expect(
+      evaluateWorkflowExpression(runsOn, {
+        authorAssociation: "NONE",
+        eventName: "pull_request",
+        headRepository: "openclaw/openclaw",
+        matrix: lintMatrix,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+      }),
+    ).toBe("ubuntu-24.04");
   });
 
   it("encodes GitHub, Blacksmith, and hybrid runner-backend shapes", () => {

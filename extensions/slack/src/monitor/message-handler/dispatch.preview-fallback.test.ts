@@ -1,7 +1,13 @@
-import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 // Slack tests cover dispatch.preview fallback plugin behavior.
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { slackSetupPlugin } from "../../channel.setup.js";
 
 const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "thread-1";
@@ -1131,6 +1137,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackSetupPlugin }]),
+    );
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
@@ -1183,6 +1192,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     stopSlackStreamMock.mockResolvedValue({});
     emitSlackMessageSentHooksMock.mockClear();
   });
+
+  afterEach(() => resetPluginRuntimeStateForTest());
 
   it("forwards durable ingress ownership into reply options", async () => {
     const turnAdoptionLifecycle = {
@@ -1635,6 +1646,41 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["code", "```\n| Name | Value |\n| ---- | ----- |\n| Beta | 2     |\n```"],
+    ["bullets", "*Beta*\n• Value: 2"],
+    ["off", "| Name | Value |\n| --- | --- |\n| Beta | 2 |"],
+  ] as const)(
+    "preserves %s table mode when finalizing authored preview text",
+    async (tables, expected) => {
+      const { normalizeSlackOutboundText } =
+        await vi.importActual<typeof import("../../format.js")>("../../format.js");
+      normalizeSlackOutboundTextMock.mockImplementation(normalizeSlackOutboundText);
+      try {
+        finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+        mockedDispatchSequence = [
+          { kind: "final", payload: { text: "| Name | Value |\n| --- | --- |\n| Beta | 2 |" } },
+        ];
+
+        await dispatchPreparedSlackMessage(
+          createPreparedSlackMessage({
+            cfg: { channels: { slack: { markdown: { tables } } } },
+          }),
+        );
+
+        expect(finalizeSlackPreviewEditMock).toHaveBeenCalledOnce();
+        expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "table preview edit", {
+          channelId: "C123",
+          messageId: "171234.567",
+          text: expected,
+        });
+        expect(deliverRepliesMock).not.toHaveBeenCalled();
+      } finally {
+        normalizeSlackOutboundTextMock.mockImplementation((value: string) => value.trim());
+      }
+    },
+  );
+
   it("finalizes native chart blocks without re-escaping accessible preview text", async () => {
     const draftStream = createDraftStreamStub();
     const accessibleText =
@@ -1732,7 +1778,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expect(normalizeSlackOutboundTextMock).toHaveBeenCalledTimes(1);
-    expect(normalizeSlackOutboundTextMock).toHaveBeenCalledWith("**Summary**");
+    expect(normalizeSlackOutboundTextMock).toHaveBeenCalledWith("**Summary**", {
+      tableMode: "code",
+    });
     expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "block preview edit params", {
       text: "**Summary**",
     });
