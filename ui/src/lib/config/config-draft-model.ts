@@ -583,19 +583,24 @@ export function updateConfigRawValue(state: RuntimeConfigState, value: string) {
   resetStaleAutoSaveStatus(state);
 }
 
-export function resetConfigPendingChanges(state: RuntimeConfigState) {
+export function rebaseConfigDraft(state: RuntimeConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   // A retained draft can predate a reconnect snapshot. Adopt its document and
   // revision together; pairing old originals with the new hash bypasses CAS.
-  state.configForm = cloneConfigObject(editableConfig ?? {});
   state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
-  state.configRaw =
+  const raw =
     state.configSnapshot?.raw ??
     (editableConfig ? serializeConfigForm(editableConfig) : state.configRawOriginal);
-  setConfigRawOriginal(state, state.configRaw);
+  setConfigRawOriginal(state, raw);
+  state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
+}
+
+export function resetConfigPendingChanges(state: RuntimeConfigState) {
+  rebaseConfigDraft(state);
+  state.configForm = cloneConfigObject(state.configFormOriginal ?? {});
+  state.configRaw = state.configRawOriginal;
   state.configFormDirty = false;
   state.configFormMode = "form";
-  state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
   autoAllowlistedPluginIdsByState.delete(state);
 }
 
