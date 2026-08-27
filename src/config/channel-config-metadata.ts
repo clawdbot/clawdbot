@@ -7,7 +7,6 @@ import {
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -663,25 +662,17 @@ export function collectChannelSchemaMetadataWithOwnership(
       // validation only warns about the opposite gap (a claim without a descriptor), so the drop
       // is reported here where it is decided.
       if (!claimantsByChannel.get(channelId)?.includes(record)) {
-        const message = `plugin ships channelConfigs metadata for ${sanitizeForLog(channelId)} (in its manifest or merged from the official plugin catalog) without declaring the channel in openclaw.plugin.json#channels; ignoring the descriptor. Only a claimant may supply a channel's config schema — add the channel to channels if this plugin should own it.`;
-        const pluginId = sanitizeForLog(record.id);
-        // The collector runs many times against one registry (validation, schema responses,
-        // reloads), so an already-reported drop must not accumulate duplicates.
-        if (
-          !registry.diagnostics.some(
-            (diagnostic) =>
-              diagnostic.level === "warn" &&
-              diagnostic.pluginId === pluginId &&
-              diagnostic.message === message,
-          )
-        ) {
-          registry.diagnostics.push({
-            level: "warn",
-            pluginId,
-            source: sanitizeForLog(record.manifestPath),
-            message,
-          });
-        }
+        // Only a claimant may supply a channel's config schema, so the descriptor is ignored.
+        //
+        // This deliberately does NOT record a diagnostic on `registry`. Validation hands this
+        // collector the manifest registry straight off the plugin metadata snapshot
+        // (`validation.ts` -> `rememberRegistry(snapshot.manifestRegistry)`), and that snapshot is
+        // recursively frozen in `plugin-metadata-snapshot.ts`, so appending here threw
+        // `TypeError: Cannot add property 0, object is not extensible` and took config validation
+        // and every schema request down with it. Tests missed it by building a mutable
+        // `diagnostics: []`. The warning could not reach an operator even on a mutable registry,
+        // because `ensureRegistry()` marks registry diagnostics as already pushed before this runs.
+        // Warning about this case belongs where the registry is built, before it is frozen.
         continue;
       }
       // Collect before any ownership decision: a claimant that loses the schema still contributes

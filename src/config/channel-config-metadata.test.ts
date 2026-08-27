@@ -791,13 +791,13 @@ describe("descriptors from records that do not claim the channel", () => {
     },
   });
 
-  it("drops the non-claimant's descriptor and reports it once", () => {
+  it("drops the non-claimant's descriptor and leaves the registry untouched", () => {
     const registry = {
       plugins: [claimantRecord(), ghostRecord()],
       diagnostics: [],
     } as unknown as PluginManifestRegistry;
 
-    // The collector runs repeatedly against one registry; the drop must not accumulate.
+    // The collector runs repeatedly against one registry (validation, schema responses, reloads).
     collectChannelSchemaMetadataWithOwnership(registry);
     const entry = collectChannelSchemaMetadataWithOwnership(registry).find(
       (candidate) => candidate.id === "zzalpha",
@@ -805,10 +805,9 @@ describe("descriptors from records that do not claim the channel", () => {
 
     expect(entry?.schemaPluginId).toBe("zz-claimant");
     expect(schemaPropertyKeys(entry)).toContain("realKey");
-    const dropped = registry.diagnostics.filter((diagnostic) => diagnostic.pluginId === "zz-ghost");
-    expect(dropped).toHaveLength(1);
-    expect(dropped[0]?.level).toBe("warn");
-    expect(dropped[0]?.message).toContain("zzalpha");
+    // The registry belongs to the plugin metadata snapshot and is frozen in production, so the
+    // collector must record nothing on it — see the frozen-registry case below.
+    expect(registry.diagnostics).toHaveLength(0);
     // The claimed channel's own descriptor still lands.
     const other = collectChannelSchemaMetadataWithOwnership(registry).find(
       (candidate) => candidate.id === "zzother",
@@ -846,5 +845,32 @@ describe("descriptors from records that do not claim the channel", () => {
     expect(offeredKeys).toContain("realKey");
     expect(offeredKeys).not.toContain("ghostKey");
     expect(savedKeys).toEqual(expect.arrayContaining(offeredKeys));
+  });
+
+  // Production never hands this collector a mutable registry: validation passes the manifest
+  // registry off the plugin metadata snapshot, which `plugin-metadata-snapshot.ts` freezes
+  // recursively. Every other fixture here builds `diagnostics: []`, so a version that recorded the
+  // dropped descriptor by pushing onto `registry.diagnostics` passed the suite while throwing
+  // `TypeError: Cannot add property 0, object is not extensible` on any real config validation or
+  // schema request. Freeze the registry the way the snapshot does.
+  it("ignores a non-claimant descriptor without mutating a frozen registry", () => {
+    const plugins = [
+      {
+        id: "zzfrozen-plugin",
+        origin: "config",
+        manifestPath: "/tmp/zzfrozen/openclaw.plugin.json",
+        channels: [],
+        channelConfigs: { zzfrozenchat: { schema: { type: "object" } } },
+      },
+    ];
+    const frozenRegistry = Object.freeze({
+      plugins: Object.freeze(plugins),
+      diagnostics: Object.freeze([]),
+    }) as unknown as PluginManifestRegistry;
+
+    expect(() => collectChannelSchemaMetadataWithOwnership(frozenRegistry)).not.toThrow();
+    // The descriptor is still ignored: a non-claimant may not supply the channel's schema.
+    const entries = collectChannelSchemaMetadataWithOwnership(frozenRegistry);
+    expect(entries.find((entry) => entry.id === "zzfrozenchat")).toBeUndefined();
   });
 });
