@@ -95,7 +95,7 @@ function createNetworkProxyThreadLifecycleAppServerOptions() {
       "openclaw-network": {
         filesystem: {
           ":minimal": "read",
-          ":project_roots": {
+          ":workspace_roots": {
             ".": "write",
           },
         },

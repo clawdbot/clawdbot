@@ -719,7 +719,7 @@ function createNetworkProxyAppServerOptions() {
       "mock-proxy": {
         filesystem: {
           ":minimal": "read",
-          ":project_roots": {
+          ":workspace_roots": {
             ".": "write",
           },
         },

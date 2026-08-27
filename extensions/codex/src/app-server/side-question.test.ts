@@ -2033,7 +2033,7 @@ describe("runCodexAppServerSideQuestion", () => {
         "side-proxy": {
           filesystem: {
             ":minimal": "read",
-            ":project_roots": { ".": "write" },
+            ":workspace_roots": { ".": "write" },
           },
           network: {
             enabled: true,
