@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -20,7 +21,7 @@ describe("reply dedupe uses the plugin's delivery destination", () => {
             threading: {
               resolveReplyTransport: ({ replyDelivery }) =>
                 replyDelivery?.replyToMode === "off" ? { threadId: null, replyToId: null } : null,
-            },
+            } satisfies ChannelThreadingAdapter,
           },
         },
       ]),
