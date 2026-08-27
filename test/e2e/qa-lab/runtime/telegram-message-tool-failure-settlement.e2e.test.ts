@@ -115,6 +115,7 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
                         botToken: BOT_TOKEN,
                         apiRoot,
                         groupPolicy: "open",
+                        silentErrorReplies: true,
                         groups: {
                           [String(CHAT_ID)]: {
                             groupPolicy: "open",
@@ -155,6 +156,7 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
                 providerRequests,
                 sends: telegramSends.map((send) => ({
                   chatId: send.chat_id,
+                  silent: send.disable_notification,
                   text: send.text,
                 })),
               }),
@@ -162,7 +164,7 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
             )
             .toEqual({
               providerRequests: expect.any(Number),
-              sends: [{ chatId: String(CHAT_ID), text: FAILURE_TEXT }],
+              sends: [{ chatId: String(CHAT_ID), silent: true, text: FAILURE_TEXT }],
             });
           expect(providerRequests).toBeGreaterThan(0);
         } finally {

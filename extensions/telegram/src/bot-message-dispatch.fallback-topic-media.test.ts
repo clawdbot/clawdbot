@@ -246,11 +246,13 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
       retryDispatchErrors: true,
       streamMode: "off",
       suppressFailureFallback: true,
+      telegramCfg: { silentErrorReplies: true },
     });
 
     expect(deliverReplies).toHaveBeenCalledOnce();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
+        silent: true,
         replies: [
           {
             text: "Something went wrong while processing your request. Please try again.",

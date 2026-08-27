@@ -9,13 +9,16 @@ scenario:
       - channels.streaming-final-reply
   objective: Verify Telegram sends one fallback when the provider fails before producing visible output.
   successCriteria:
-    - A provider failure before visible output produces exactly one non-empty Telegram fallback.
+    - With silent error replies enabled, a provider failure before visible output produces exactly one non-empty Telegram fallback.
   codeRefs:
     - src/auto-reply/reply/dispatch-from-config.execute.ts
     - extensions/telegram/src/bot-message-dispatch.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   gatewayConfigPatch:
+    channels:
+      telegram:
+        silentErrorReplies: true
     agents:
       defaults:
         model:

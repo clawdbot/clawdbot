@@ -442,7 +442,7 @@ export const dispatchTelegramMessage = async (
       turn,
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
-        (turn.dispatchError != null || turn.hadErrorReplyFailureOrSkip),
+        Boolean(terminalFailure || turn.hadErrorReplyFailureOrSkip),
     );
     sentFallback = result.delivered;
   }
