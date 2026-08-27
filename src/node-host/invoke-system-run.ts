@@ -306,9 +306,31 @@ async function sendSystemRunDenied(
     // A missing companion reply can follow execution; it is not a policy denial.
     error: {
       code: params.reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
-      message: params.message,
+      message: deniedMessageWithEscalationHint(params),
     },
   });
+}
+
+/**
+ * Appended to model-facing denials so the sanctioned path is taught at the decision
+ * point; without it the agent's next move is unguided and retries burn turns.
+ */
+const SYSTEM_RUN_DENIED_ESCALATION_HINT =
+  "to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again";
+
+function deniedMessageWithEscalationHint(params: {
+  reason: SystemRunDeniedReason;
+  message: string;
+}): string {
+  // Transient persistence failure: an identical retry may legitimately succeed.
+  if (params.reason === "approval-state-write-failed") {
+    return params.message;
+  }
+  // Already carries its own next-step guidance; a generic hint would contradict it.
+  if (params.message.endsWith("request approval again")) {
+    return params.message;
+  }
+  return `${params.message} — ${SYSTEM_RUN_DENIED_ESCALATION_HINT}`;
 }
 
 async function sendSystemRunCompleted(
