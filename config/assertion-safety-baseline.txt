@@ -3458,7 +3458,7 @@ src/plugin-sdk/facade-runtime.ts	6
 src/plugin-sdk/file-lock.ts	10
 src/plugin-sdk/inbound-reply-dispatch.ts	1
 src/plugin-sdk/lazy-value.ts	1
-src/plugin-sdk/memory-core-bundled-runtime.ts	13
+src/plugin-sdk/memory-core-bundled-runtime.ts	11
 src/plugin-sdk/memory-host-core.ts	26
 src/plugin-sdk/migration-runtime.ts	4
 src/plugin-sdk/migration.ts	8
