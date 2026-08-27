@@ -23,6 +23,7 @@ import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { isGenericResponseContentType, resolveResponseContentType } from "./fetch-content-type.js";
+import { findMediaSizeLimitError } from "./store-ingest.js";
 import { saveMediaStream, type MediaMaxBytesForMime, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
@@ -563,10 +564,12 @@ async function saveOkMediaResponse(params: {
     if (err instanceof MediaFetchError) {
       throw err;
     }
-    if (isMediaLimitError(err)) {
+    const sizeLimitError = findMediaSizeLimitError(err);
+    if (sizeLimitError || isMediaLimitError(err)) {
+      const effectiveMaxBytes = sizeLimitError?.maxBytes ?? params.maxBytes;
       throw new MediaFetchError(
         "max_bytes",
-        `Failed to fetch media from ${params.sourceUrl}: payload exceeds maxBytes ${params.maxBytes}`,
+        `Failed to fetch media from ${params.sourceUrl}: payload exceeds maxBytes ${effectiveMaxBytes}`,
         { cause: err },
       );
     }

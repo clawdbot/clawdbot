@@ -2001,6 +2001,46 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
+  it("reports the detected image cap for oversized remote media", async () => {
+    const imageBuffer = Buffer.from(TINY_PNG_BASE64, "base64");
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/octet-stream");
+      res.end(imageBuffer);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    setMediaStoreNetworkDepsForTest({
+      resolvePinnedHostname: async (hostname) => ({
+        hostname,
+        addresses: ["127.0.0.1"],
+        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
+      }),
+    });
+
+    try {
+      await expect(
+        withEnvAsync(
+          { OPENCLAW_STATE_DIR: stateDir },
+          async () =>
+            await createManagedOutgoingImageBlocks({
+              sessionKey: "agent:main:main",
+              mediaUrls: [`http://127.0.0.1:${address.port}/download`],
+              stateDir,
+              limits: { maxBytes: 32 },
+            }),
+        ),
+      ).rejects.toThrow(/Managed image attachment .* exceeds the 32 bytes byte limit/u);
+    } finally {
+      setMediaStoreNetworkDepsForTest();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("rejects local image paths outside allowed roots", async () => {
     const outsideDir = tempDirs.make("managed-image-outside-");
     const outsidePath = path.join(outsideDir, "outside.png");
@@ -2035,6 +2075,23 @@ describe("createManagedOutgoingImageBlocks", () => {
 
     expect(blocks).toHaveLength(1);
     expect(requireBlock(blocks).type).toBe("image");
+  });
+
+  it("reports the detected image cap for oversized local media", async () => {
+    const allowedDir = path.join(stateDir, "workspace", "uploads");
+    const allowedPath = path.join(allowedDir, "inside.png");
+    await fs.mkdir(allowedDir, { recursive: true });
+    await fs.writeFile(allowedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [allowedPath],
+        stateDir,
+        localRoots: [path.join(stateDir, "workspace")],
+        limits: { maxBytes: 32 },
+      }),
+    ).rejects.toThrow(/Managed image attachment .* exceeds the 32 bytes byte limit/u);
   });
 
   it.each(["application/octet-stream", "binary/octet-stream"])(

@@ -39,6 +39,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
   attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
+  isManagedMediaKind,
 } from "./managed-image-attachments.js";
 import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
@@ -352,12 +353,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 localRoots: [getMediaDir()],
                 allowLocalNonImage: true,
               });
-              if (
-                !blocks.some(
-                  (block) =>
-                    block.type === "image" || block.type === "audio" || block.type === "video",
-                )
-              ) {
+              if (!blocks.some((block) => isManagedMediaKind(block.type))) {
                 throw new Error("queued internal generated media could not be prepared");
               }
               blocks = await mergeSessionDeliveryPreparedMediaBlocks(

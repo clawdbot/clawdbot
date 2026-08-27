@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -960,6 +961,31 @@ describe("readRemoteMediaBuffer", () => {
     expect(saved.path).toMatch(/[a-f0-9-]{36}\.png$/);
     expect(saved.path).not.toMatch(/photo---/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it("preserves the detected MIME byte limit in streamed save errors", async () => {
+    const png = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 });
+    const response = new Response(makeStream([png]), {
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+    });
+
+    const error = await saveResponseMedia(response, {
+      sourceUrl: "https://example.com/download",
+      maxBytes: 1024,
+      maxBytesForMime: (mime) => (mime === "image/png" ? 32 : 1024),
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({
+      name: "MediaFetchError",
+      code: "max_bytes",
+      message: expect.stringContaining("maxBytes 32"),
+      cause: {
+        name: "MediaSizeLimitError",
+        maxBytes: 32,
+        mime: "image/png",
+      },
+    });
   });
 
   it("preserves content-disposition CSV detection for streamed downloads", async () => {

@@ -186,7 +186,10 @@ const mocks = vi.hoisted(() => {
     ),
     createManagedOutgoingMediaBlocks: vi.fn<CreateManagedOutgoingMediaBlocksMock>(async (params) =>
       (params.mediaUrls ?? []).map((mediaUrl) => ({
-        type: params.attachments?.[0]?.type ?? "image",
+        type:
+          params.attachments?.[0]?.type === "file"
+            ? "document"
+            : (params.attachments?.[0]?.type ?? "image"),
         artifactId: `artifact:${mediaUrl}`,
         url: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(mediaUrl)}/full`,
         openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(mediaUrl)}/full`,
@@ -1586,6 +1589,32 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expect(mocks.attachManagedOutgoingMediaToMessage).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: "generated-media-transcript" }),
+    );
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("persists internal generated documents as managed transcript content", async () => {
+    const mediaUrl = "/tmp/proof.csv";
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: { payloads: [{ text: "ready", mediaUrls: [mediaUrl] }] },
+    });
+
+    await deliverGeneratedMedia({
+      id: "session-delivery-media-internal-document",
+      messageId: "document:task-internal:agent-loop",
+      route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+      expectedMediaUrls: [mediaUrl],
+      expectedMediaAttachments: {
+        [mediaUrl]: { type: "file", path: mediaUrl, mimeType: "text/csv" },
+      },
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: [expect.objectContaining({ type: "document" })],
+        idempotencyKey: "document:task-internal:agent-loop:generated-media-transcript",
+      }),
     );
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });

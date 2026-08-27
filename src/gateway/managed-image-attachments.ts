@@ -40,6 +40,7 @@ import {
   resolvePlaybackModeForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
+import { findMediaSizeLimitError } from "../media/store-ingest.js";
 import { getMediaDir, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -111,7 +112,11 @@ type ManagedImageAttachmentLimitsConfig = Partial<
   Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
 >;
 
-type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
+export type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
+
+export function isManagedMediaKind(kind: unknown): kind is ManagedMediaKind {
+  return kind === "image" || kind === "audio" || kind === "video" || kind === "document";
+}
 
 type ParsedMediaDataUrl =
   | { kind: "not-data-url" }
@@ -296,6 +301,15 @@ function getSanitizedManagedImageAttachmentError(
   if (isManagedImageAttachmentSafeError(error)) {
     return error;
   }
+  const sizeLimitError = findMediaSizeLimitError(error);
+  if (sizeLimitError) {
+    const detectedKind = mediaKindFromMime(sizeLimitError.mime);
+    return createManagedMediaByteLimitError({
+      kind: isManagedMediaKind(detectedKind) ? detectedKind : kind,
+      label,
+      maxBytes: sizeLimitError.maxBytes,
+    });
+  }
   return createManagedImageAttachmentError(
     `Managed ${kind} attachment ${JSON.stringify(label)} could not be prepared`,
   );
@@ -325,13 +339,13 @@ function maxBytesForManagedMime(
   imageLimits: ManagedImageAttachmentLimits,
 ): number {
   const kind = mediaKindFromMime(mime);
-  return kind === "image" || kind === "audio" || kind === "video" || kind === "document"
+  return isManagedMediaKind(kind)
     ? maxBytesForManagedMediaKind(kind, imageLimits)
     : Math.max(imageLimits.maxBytes, maxBytesForKind("unknown"));
 }
 
 function createManagedMediaByteLimitError(params: {
-  kind: ManagedMediaKind;
+  kind: ManagedMediaKind | "media";
   label: string;
   maxBytes: number;
 }): Error {
@@ -834,9 +848,7 @@ function resolveManagedSessionOwnerAgentId(
 
 function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind | null {
   const kind = mediaKindFromMime(record.original.contentType);
-  return kind === "image" || kind === "audio" || kind === "video" || kind === "document"
-    ? kind
-    : null;
+  return isManagedMediaKind(kind) ? kind : null;
 }
 
 function buildManagedMediaBlock(
@@ -926,12 +938,7 @@ function collectManagedOutgoingAttachmentRefs(
 ) {
   const refs = new Map<string, { attachmentId: string; sessionKey: string }>();
   for (const block of blocks ?? []) {
-    if (
-      block?.type !== "image" &&
-      block?.type !== "audio" &&
-      block?.type !== "video" &&
-      block?.type !== "document"
-    ) {
+    if (!isManagedMediaKind(block?.type)) {
       continue;
     }
     for (const candidate of [block.url, block.openUrl]) {
@@ -1485,12 +1492,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         continue;
       }
       const mediaKind = mediaKindFromMime(savedOriginalContentType);
-      if (
-        mediaKind !== "image" &&
-        mediaKind !== "audio" &&
-        mediaKind !== "video" &&
-        mediaKind !== "document"
-      ) {
+      if (!isManagedMediaKind(mediaKind)) {
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginalPath = null;
         continue;

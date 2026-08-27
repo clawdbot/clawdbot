@@ -22,6 +22,30 @@ export type SaveMediaOptions = {
   fileNameHint?: string;
 };
 
+/** Structured byte-limit failure retaining the MIME classification that selected the cap. */
+export class MediaSizeLimitError extends Error {
+  readonly maxBytes: number;
+  readonly mime?: string;
+
+  constructor(maxBytes: number, mime?: string, options?: ErrorOptions) {
+    super(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`, options);
+    this.maxBytes = maxBytes;
+    this.mime = mime;
+    this.name = "MediaSizeLimitError";
+  }
+}
+
+export function findMediaSizeLimitError(error: unknown): MediaSizeLimitError | null {
+  let current = error;
+  for (let depth = 0; depth < 8 && current instanceof Error; depth += 1) {
+    if (current instanceof MediaSizeLimitError) {
+      return current;
+    }
+    current = current.cause;
+  }
+  return null;
+}
+
 export async function writeMediaStreamToFile(params: {
   stream: AsyncIterable<unknown>;
   tempPath: string;
@@ -35,17 +59,18 @@ export async function writeMediaStreamToFile(params: {
   let sniffLen = 0;
   let total = 0;
   let effectiveMaxBytes = params.maxBytes;
+  let detectedMime: string | undefined;
   let detectedLimit = params.maxBytesForMime === undefined;
   const resolveDetectedLimit = async () => {
     if (detectedLimit || !params.maxBytesForMime) {
       return;
     }
-    const mime = await detectMime({
+    detectedMime = await detectMime({
       buffer: Buffer.concat(sniffChunks, sniffLen),
       headerMime: params.contentType,
       filePath: params.detectionFilePathHint,
     });
-    effectiveMaxBytes = Math.min(effectiveMaxBytes, params.maxBytesForMime(mime));
+    effectiveMaxBytes = Math.min(effectiveMaxBytes, params.maxBytesForMime(detectedMime));
     detectedLimit = true;
   };
   try {
@@ -67,7 +92,7 @@ export async function writeMediaStreamToFile(params: {
       }
       total += buffer.byteLength;
       if (total > effectiveMaxBytes) {
-        throw new Error(`Media exceeds ${formatMediaLimitMb(effectiveMaxBytes)} limit`);
+        throw new MediaSizeLimitError(effectiveMaxBytes, detectedMime);
       }
       if (sniffLen < MEDIA_STREAM_SNIFF_BYTES) {
         const remaining = MEDIA_STREAM_SNIFF_BYTES - sniffLen;
@@ -77,14 +102,14 @@ export async function writeMediaStreamToFile(params: {
       if (sniffLen === MEDIA_STREAM_SNIFF_BYTES) {
         await resolveDetectedLimit();
         if (total > effectiveMaxBytes) {
-          throw new Error(`Media exceeds ${formatMediaLimitMb(effectiveMaxBytes)} limit`);
+          throw new MediaSizeLimitError(effectiveMaxBytes, detectedMime);
         }
       }
       await handle.writeFile(buffer);
     }
     await resolveDetectedLimit();
     if (total > effectiveMaxBytes) {
-      throw new Error(`Media exceeds ${formatMediaLimitMb(effectiveMaxBytes)} limit`);
+      throw new MediaSizeLimitError(effectiveMaxBytes, detectedMime);
     }
     return { sniffBuffer: Buffer.concat(sniffChunks, sniffLen), size: total };
   } finally {
@@ -176,8 +201,9 @@ export async function readMediaSourceSafely(params: {
   fileNameHint?: string;
 }) {
   let effectiveMaxBytes = params.maxBytes;
+  let detectedMime: string | undefined;
   try {
-    const detectedMime = params.maxBytesForMime
+    detectedMime = params.maxBytesForMime
       ? await detectLocalMediaSourceMime(params.source)
       : undefined;
     effectiveMaxBytes = params.maxBytesForMime
@@ -196,14 +222,14 @@ export async function readMediaSourceSafely(params: {
       ? Math.min(effectiveMaxBytes, params.maxBytesForMime(mime))
       : effectiveMaxBytes;
     if (buffer.byteLength > finalMaxBytes) {
-      throw new SaveMediaSourceError(
-        "too-large",
-        `Media exceeds ${formatMediaLimitMb(finalMaxBytes)} limit`,
-      );
+      throw new MediaSizeLimitError(finalMaxBytes, mime);
     }
     return { buffer, stat, mime };
   } catch (err) {
     if (isFsSafeError(err)) {
+      if (err.code === "too-large") {
+        throw new MediaSizeLimitError(effectiveMaxBytes, detectedMime, { cause: err });
+      }
       throw toSaveMediaSourceError(err, effectiveMaxBytes);
     }
     throw err;

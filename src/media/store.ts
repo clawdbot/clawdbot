@@ -26,6 +26,7 @@ import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
 import { isGenericResponseContentType } from "./fetch-content-type.js";
 import {
+  MediaSizeLimitError,
   readMediaSourceSafely,
   type SaveMediaOptions,
   writeMediaStreamToFile,
@@ -607,7 +608,7 @@ export async function saveMediaStream(
         ? Math.min(maxBytes, options.maxBytesForMime(mime))
         : maxBytes;
       if (size > finalMaxBytes) {
-        throw new Error(`Media exceeds ${formatMediaLimitMb(finalMaxBytes)} limit`);
+        throw new MediaSizeLimitError(finalMaxBytes, mime);
       }
       const ext = resolveSavedMediaExtension({
         detectedMime: mime,
