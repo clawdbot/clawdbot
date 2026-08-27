@@ -42,6 +42,7 @@ function extractCase(params: {
   archivePath: string;
   destination: string;
   timeoutMs?: number;
+  maxEntries?: number;
   maxExtractedBytes?: number;
   regularFileAliases?: ReadonlyArray<readonly [string, readonly string[]]>;
 }) {
@@ -51,7 +52,10 @@ function extractCase(params: {
     kind: "tar",
     tarGzip: true,
     timeoutMs: params.timeoutMs ?? 15_000,
-    limits: { maxEntries: 20, maxExtractedBytes: params.maxExtractedBytes ?? 64 },
+    limits: {
+      maxEntries: params.maxEntries ?? 20,
+      maxExtractedBytes: params.maxExtractedBytes ?? 64,
+    },
     entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
     onFiltered: "skip-entry",
     regularFileAliasRoot: "package",
@@ -84,6 +88,26 @@ describe("extractArchiveInPrivateDestinationWithRegularFileAliases", () => {
     await expect(
       fs.lstat(path.join(fixture.destination, "package", "libexample.so")),
     ).rejects.toThrow();
+  });
+
+  it("reserves regular-file aliases from the parser entry budget", async () => {
+    const fixture = await createArchiveCase();
+
+    await expect(extractCase({ ...fixture, maxEntries: 5 })).rejects.toThrow(
+      /archive entry count exceeds limit/u,
+    );
+    await expect(
+      fs.lstat(path.join(fixture.destination, "package", "libexample.so")),
+    ).rejects.toThrow();
+  });
+
+  it("normalizes invalid alias-side limits like fs-safe", async () => {
+    const fixture = await createArchiveCase();
+
+    await expect(extractCase({ ...fixture, maxEntries: Number.NaN })).resolves.toBeUndefined();
+    await expect(
+      fs.readFile(path.join(fixture.destination, "package", "libexample.so"), "utf8"),
+    ).resolves.toBe("12345678");
   });
 
   it("validates required regular files without an alias manifest", async () => {

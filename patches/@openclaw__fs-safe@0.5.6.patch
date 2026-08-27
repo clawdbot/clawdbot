@@ -1,45 +1,28 @@
 diff --git a/dist/archive-deadline.js b/dist/archive-deadline.js
-index a467a07..4b3ea6c 100644
+index a467a07..1a7f816 100644
 --- a/dist/archive-deadline.js
 +++ b/dist/archive-deadline.js
-@@ -18,17 +18,26 @@ export async function waitForDeadline(promise, deadline) {
-     if (deadline.signal.aborted) {
-         throw deadlineReason(deadline);
-     }
--    return await Promise.race([
--        promise,
--        new Promise((_, reject) => {
--            const abort = () => reject(deadlineReason(deadline));
--            deadline.signal.addEventListener("abort", abort, { once: true });
--            const cleanup = () => {
--                deadline.signal.removeEventListener("abort", abort);
--            };
--            promise.then(cleanup, cleanup);
--        }),
--    ]);
-+    try {
-+        return await Promise.race([
-+            promise,
-+            new Promise((_, reject) => {
-+                const abort = () => reject(deadlineReason(deadline));
-+                deadline.signal.addEventListener("abort", abort, { once: true });
-+                const cleanup = () => {
-+                    deadline.signal.removeEventListener("abort", abort);
-+                };
-+                promise.then(cleanup, cleanup);
-+            }),
-+        ]);
-+    }
-+    catch (error) {
-+        if (!deadline.signal.aborted) {
-+            throw error;
+@@ -59,7 +59,19 @@ export async function withExtractionDeadline(timeoutMs, label, run) {
+     const deadline = createExtractionDeadline(timeoutMs, label);
+     try {
+         deadline.check();
+-        return await waitForDeadline(run(deadline), deadline);
++        const operation = run(deadline);
++        try {
++            return await waitForDeadline(operation, deadline);
 +        }
-+        await promise.catch(() => undefined);
-+        throw deadlineReason(deadline);
-+    }
- }
- function createExtractionDeadline(timeoutMs, label) {
-     const controller = new AbortController();
++        catch (error) {
++            if (!deadline.signal.aborted) {
++                throw error;
++            }
++            // Extraction may be unwinding cancellable streams or final-tree mutations.
++            // Join it before callers clean up their destination transaction.
++            await operation.catch(() => undefined);
++            throw deadlineReason(deadline);
++        }
+     }
+     finally {
+         deadline.dispose();
 diff --git a/dist/archive-native.js b/dist/archive-native.js
 index b7e1573..34be530 100644
 --- a/dist/archive-native.js

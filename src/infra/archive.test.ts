@@ -391,6 +391,35 @@ describe("archive utils", () => {
     });
   });
 
+  it("keeps stalled read-only ZIP parsing bounded by the extraction timeout", async () => {
+    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+      const zip = new JSZip();
+      zip.file("package/file.txt", "content");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      let reportParseStarted: () => void = () => undefined;
+      const parseStarted = new Promise<void>((resolve) => {
+        reportParseStarted = resolve;
+      });
+      const loadSpy = vi.spyOn(JSZip, "loadAsync").mockImplementation(async () => {
+        reportParseStarted();
+        return await new Promise<never>(() => {});
+      });
+
+      try {
+        const extraction = extractArchive({
+          archivePath,
+          destDir: extractDir,
+          kind: "zip",
+          timeoutMs: 100,
+        });
+        await parseStarted;
+        await expect(extraction).rejects.toThrow(/timed out after 100ms/u);
+      } finally {
+        loadSpy.mockRestore();
+      }
+    });
+  });
+
   it("rejects tar entries with absolute extraction paths", async () => {
     await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
       const inputDir = path.join(workDir, "input");

@@ -39,6 +39,32 @@ type PlannedAlias = {
   size: number;
 };
 
+type ResolvedAliasLimits = {
+  maxEntries: number;
+  maxExtractedBytes: number;
+  maxEntryBytes: number;
+};
+
+function resolveLimit(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const normalized = Math.floor(value);
+  return normalized >= 0 ? normalized : fallback;
+}
+
+function resolveAliasLimits(limits: ExtractArchiveOptions["limits"]): ResolvedAliasLimits {
+  return {
+    maxEntries: resolveLimit(limits?.maxEntries, DEFAULT_MAX_ENTRIES),
+    maxExtractedBytes: resolveLimit(limits?.maxExtractedBytes, DEFAULT_MAX_EXTRACTED_BYTES),
+    maxEntryBytes: resolveLimit(limits?.maxEntryBytes, DEFAULT_MAX_ENTRY_BYTES),
+  };
+}
+
+function countAliasEntries(aliases: ArchiveRegularFileAliases): number {
+  return aliases.reduce((count, [, destinations]) => count + destinations.length, 0);
+}
+
 function createOperationDeadline(timeoutMs: number): OperationDeadline {
   const controller = new AbortController();
   const enabled = Number.isFinite(timeoutMs) && timeoutMs > 0;
@@ -241,19 +267,16 @@ function assertCombinedLimits(params: {
   existingEntries: number;
   existingBytes: number;
   aliases: readonly PlannedAlias[];
-  limits: ExtractArchiveOptions["limits"];
+  limits: ResolvedAliasLimits;
 }): void {
-  const maxEntries = params.limits?.maxEntries ?? DEFAULT_MAX_ENTRIES;
-  if (params.existingEntries + params.aliases.length > maxEntries) {
+  if (params.existingEntries + params.aliases.length > params.limits.maxEntries) {
     throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT);
   }
-  const maxEntryBytes = params.limits?.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES;
-  if (params.aliases.some((alias) => alias.size > maxEntryBytes)) {
+  if (params.aliases.some((alias) => alias.size > params.limits.maxEntryBytes)) {
     throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT);
   }
   const aliasBytes = params.aliases.reduce((total, alias) => total + alias.size, 0);
-  const maxExtractedBytes = params.limits?.maxExtractedBytes ?? DEFAULT_MAX_EXTRACTED_BYTES;
-  if (params.existingBytes + aliasBytes > maxExtractedBytes) {
+  if (params.existingBytes + aliasBytes > params.limits.maxExtractedBytes) {
     throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT);
   }
 }
@@ -302,6 +325,12 @@ export async function extractArchiveInPrivateDestinationWithRegularFileAliases(
     requiredRegularFiles = [],
     ...extractOptions
   } = params;
+  const aliasesManifest = regularFileAliases ?? [];
+  const limits = resolveAliasLimits(params.limits);
+  const aliasEntryCount = countAliasEntries(aliasesManifest);
+  if (aliasEntryCount > limits.maxEntries) {
+    throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT);
+  }
   const deadline = createOperationDeadline(params.timeoutMs);
   try {
     const destinationRealDir = await deadline.wait(() =>
@@ -315,6 +344,10 @@ export async function extractArchiveInPrivateDestinationWithRegularFileAliases(
     await extractArchive({
       ...extractOptions,
       timeoutMs: deadline.remainingMs(),
+      limits: {
+        ...extractOptions.limits,
+        maxEntries: limits.maxEntries - aliasEntryCount,
+      },
     });
     deadline.check();
     const manifestRoot = resolveManifestRoot(destinationRealDir, regularFileAliasRoot);
@@ -330,7 +363,7 @@ export async function extractArchiveInPrivateDestinationWithRegularFileAliases(
     const existing = await inspectExtractedTree({ rootDir: destinationRealDir, deadline });
     const aliases = await planAliases({
       rootDir: manifestRootReal,
-      aliases: regularFileAliases ?? [],
+      aliases: aliasesManifest,
       requiredRegularFiles,
       deadline,
     });
@@ -338,7 +371,7 @@ export async function extractArchiveInPrivateDestinationWithRegularFileAliases(
       existingEntries: existing.entries,
       existingBytes: existing.bytes,
       aliases,
-      limits: params.limits,
+      limits,
     });
     for (const alias of aliases) {
       await copyPlannedAlias(alias, deadline);
