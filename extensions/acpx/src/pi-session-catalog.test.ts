@@ -86,6 +86,37 @@ const createPiStore = (
   );
 const installFakePi = () => installFakePiFixture(temporaryDirectories, originalPath);
 
+async function readLegacyPiSessionById(
+  file: string,
+  threadId: string,
+): Promise<{ entries: Record<string, unknown>[]; bytes: number }> {
+  const stats = await fs.stat(file);
+  if (!stats.isFile()) {
+    throw new Error("Pi session is not a file");
+  }
+  if (stats.size > PI_SESSION_READ_LIMIT_BYTES) {
+    throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
+  }
+  const text = await fs.readFile(file, "utf8");
+  const entries = text.split(/\r?\n/u).flatMap((line) => {
+    if (!line.trim()) {
+      return [];
+    }
+    try {
+      const value = JSON.parse(line) as unknown;
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? [value as Record<string, unknown>]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  if (entries[0]?.type !== "session" || entries[0].id !== threadId) {
+    throw new Error("Pi session changed during read");
+  }
+  return { entries, bytes: Buffer.byteLength(text) };
+}
+
 function usePiCandidateCacheClock(): () => void {
   let now = Date.now();
   vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -663,20 +694,21 @@ describe("Pi session catalog", () => {
       Object.assign(stats, { size: content.length });
       return stats;
     });
-    const legacyStats = await fs.stat(file);
-    const legacyText = await fs.readFile(file, "utf8");
-    expect(legacyStats.size).toBe(content.length);
-    const legacyBytes = Buffer.byteLength(legacyText);
-    expect(legacyBytes).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
-    console.log(
-      `[acpx-runtime-proof] legacy-race ${JSON.stringify({
-        snapshotBytes: legacyStats.size,
-        readBytes: legacyBytes,
-        capBytes: PI_SESSION_READ_LIMIT_BYTES,
-      })}`,
-    );
-    legacyStatSpy.mockRestore();
-    await fs.writeFile(file, content);
+    try {
+      const legacy = await readLegacyPiSessionById(file, "pi-session");
+      expect(legacy.entries.find((entry) => entry.type === "message")).toBeDefined();
+      expect(legacy.bytes).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
+      console.log(
+        `[acpx-runtime-proof] legacy-reader ${JSON.stringify({
+          snapshotBytes: content.length,
+          readBytes: legacy.bytes,
+          capBytes: PI_SESSION_READ_LIMIT_BYTES,
+        })}`,
+      );
+    } finally {
+      legacyStatSpy.mockRestore();
+      await fs.writeFile(file, content);
+    }
 
     const buffers: Buffer[] = [];
     const actualOpen = fs.open.bind(fs);
