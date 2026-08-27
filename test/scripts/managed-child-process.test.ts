@@ -388,7 +388,7 @@ describe("managed-child-process", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("shares process signal listeners across parallel managed commands", async () => {
+  it("shares signal listeners across parallel commands even when another spawn throws", async () => {
     const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
     const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
     const children: Array<Parameters<typeof terminateManagedChild>[0]> = [];
@@ -408,6 +408,9 @@ describe("managed-child-process", () => {
 
     try {
       await waitFor(() => readyCount === commands.length);
+      await expect(runManagedCommand({ bin: "invalid\0command" })).rejects.toMatchObject({
+        code: "ERR_INVALID_ARG_VALUE",
+      });
       for (const signal of signals) {
         expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
       }
@@ -421,6 +424,16 @@ describe("managed-child-process", () => {
     for (const signal of signals) {
       expect(process.listenerCount(signal)).toBe(baseline.get(signal) ?? 0);
     }
+  });
+
+  it.each([
+    { bin: "invalid\0command", code: "ERR_INVALID_ARG_VALUE" },
+    { bin: "/missing/openclaw-test-command", code: "ENOENT" },
+  ])("restores signal listeners after a $code spawn failure", async ({ bin, code }) => {
+    const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+    const baseline = signals.map((signal) => process.listenerCount(signal));
+    await expect(runManagedCommand({ bin, shell: false })).rejects.toMatchObject({ code });
+    expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baseline);
   });
 
   it("times out and kills managed command descendants", async () => {
