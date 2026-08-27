@@ -279,6 +279,43 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
+  it("keeps the shared client when ownership expires after an overload rejection", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const releaseGuard = vi.fn();
+    harness.client.setThreadSessionRequestGuard(async () => releaseGuard);
+    let current = true;
+    const ownershipError = new Error("request owner expired");
+    const request = harness.client.request(
+      "thread/resume",
+      { threadId: "thread-1" },
+      {
+        timeoutMs: 5_000,
+        assertCurrent: () => {
+          if (!current) {
+            throw ownershipError;
+          }
+        },
+      },
+    );
+    const rejection = expect(request).rejects.toBe(ownershipError);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: first.id,
+      error: { code: -32_001, message: "Server overloaded; retry later." },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    current = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await rejection;
+    expect(harness.writes).toHaveLength(1);
+    expect(releaseGuard).toHaveBeenCalledOnce();
+    expect(harness.client.getCloseError()).toBeUndefined();
+  });
+
   it("surfaces relogin details from Codex app-server RPC errors", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
