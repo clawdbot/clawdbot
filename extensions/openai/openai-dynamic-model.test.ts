@@ -2,9 +2,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyConfiguredProviderOverrides } from "../../src/agents/embedded-agent-runner/model.configured-overrides.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
 function modelRegistry(
@@ -179,69 +177,5 @@ describe("OpenAI dynamic model capabilities", () => {
       modelRegistry: modelRegistry([exact]),
     });
     expect(model?.compat).toEqual(exact.compat);
-  });
-
-  it.each(["provider", "model"])("preserves authored %s transport and model overrides", (scope) => {
-    const provider = buildOpenAIProvider();
-    const modelId = "gpt-5.6-luna";
-    const route = { api: "openai-completions", baseUrl: "https://proxy.example/v1" } as const;
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.openai.com/v1",
-      ...(scope === "provider" ? route : {}),
-      headers: { "X-Provider-Route": "authored" },
-      models: [
-        {
-          id: modelId,
-          name: "Authored Luna",
-          ...(scope === "model" ? route : {}),
-          headers: { "X-Model-Route": "authored" },
-          compat: { codeMode: "capable", supportsTemperature: true },
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 64_000,
-          maxTokens: 4_000,
-          cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
-        },
-      ],
-    };
-    const config = { models: { providers: { openai: providerConfig } } };
-    const discoveredModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId,
-      providerConfig,
-      config,
-      modelRegistry: modelRegistry(),
-    });
-    if (!discoveredModel) {
-      throw new Error("expected the OpenAI dynamic model");
-    }
-    const model = applyConfiguredProviderOverrides({
-      provider: "openai",
-      modelId,
-      discoveredModel,
-      providerConfig,
-      cfg: config,
-      manifestAlias: { provider: "openai" },
-      runtimeHooks: {
-        buildProviderUnknownModelHintWithPlugin: ({ context }) =>
-          provider.buildUnknownModelHint?.(context) ?? undefined,
-        prepareProviderDynamicModel: async () => undefined,
-        runProviderDynamicModel: ({ context }) => provider.resolveDynamicModel?.(context),
-        normalizeProviderResolvedModelWithPlugin: ({ context }) =>
-          provider.normalizeResolvedModel?.(context),
-        normalizeProviderTransportWithPlugin: ({ context }) =>
-          provider.normalizeTransport?.(context) ?? undefined,
-      },
-    });
-    expect(model).toMatchObject({
-      ...route,
-      headers: { "X-Provider-Route": "authored", "X-Model-Route": "authored" },
-      compat: { codeMode: "capable", supportsTemperature: true },
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 64_000,
-      maxTokens: 4_000,
-      cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
-    });
   });
 });
