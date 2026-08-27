@@ -46,12 +46,15 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
 
   const recoverAllowFromForAccount = async (params: {
     channelName: string;
+    // Resolved once per channel by the caller: the lookup can materialize a bundled
+    // channel plugin, so recomputing it per account turns repair into plugin loading.
+    mode: AllowFromMode;
     account: Record<string, unknown>;
     parent?: Record<string, unknown>;
     accountId?: string;
     prefix: string;
   }) => {
-    const mode = resolveAllowFromMode(params.channelName);
+    const { mode } = params;
     const { dmPolicy, allowFrom } = resolveChannelDmAccess({
       account: params.account,
       parent: params.parent,
@@ -94,8 +97,10 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     if (channelConfig.enabled === false) {
       continue;
     }
+    const mode = resolveAllowFromMode(channelName);
     await recoverAllowFromForAccount({
       channelName,
+      mode,
       account: channelConfig,
       prefix: `channels.${channelName}`,
     });
@@ -113,6 +118,7 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
       }
       await recoverAllowFromForAccount({
         channelName,
+        mode,
         account: accountConfig as Record<string, unknown>,
         parent: channelConfig,
         accountId,
