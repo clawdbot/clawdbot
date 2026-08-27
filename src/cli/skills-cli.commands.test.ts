@@ -1626,29 +1626,65 @@ describe("skills cli commands", () => {
   const explicitGatewaySkillFailures = [
     {
       label: "configured remote missing URL",
+      outcome: "command" as const,
       config: { gateway: { mode: "remote" as const } },
       message: "gateway remote mode misconfigured: gateway.remote.url missing",
     },
     {
       label: "configured remote transport failure",
+      outcome: "root" as const,
       config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
-      message: "Gateway not reachable: ws://127.0.0.1:9",
+      // Fallback-eligible by error type: only the remote configuration itself
+      // may block the implicit-local substitution.
+      error: new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        message: "gateway closed (1006): abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:9",
+          urlSource: "remote url",
+          message: "",
+        },
+      }),
+      message: "gateway closed (1006): abnormal closure",
     },
     {
       label: "configured remote auth failure",
+      outcome: "command" as const,
       config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
+      // Credentials errors are fallback-eligible too; remote stays fail-closed.
+      error: Object.assign(new Error("gateway authentication failed"), {
+        name: "GatewayCredentialsRequiredError",
+      }),
       message: "gateway authentication failed",
     },
     {
       label: "environment-selected transport failure",
+      outcome: "root" as const,
       config: {},
       url: "ws://127.0.0.1:9",
-      message: "Gateway not reachable: ws://127.0.0.1:9",
+      error: new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        message: "gateway closed (1006): abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:9",
+          urlSource: "remote url",
+          message: "",
+        },
+      }),
+      message: "gateway closed (1006): abnormal closure",
     },
     {
       label: "environment-selected auth failure",
+      outcome: "command" as const,
       config: {},
       url: "ws://127.0.0.1:9",
+      error: Object.assign(new Error("gateway authentication failed"), {
+        name: "GatewayCredentialsRequiredError",
+      }),
       message: "gateway authentication failed",
     },
   ];
@@ -1672,16 +1708,24 @@ describe("skills cli commands", () => {
     ),
   )("does not substitute local skills after $label", async ({ target, command, json }) => {
     loadConfigMock.mockReturnValue(target.config);
+    // Browse commands resolve through the best-effort reader; the fixtures
+    // must reach that mock too or the remote configuration never exists.
+    readBestEffortConfigMock.mockResolvedValue(target.config);
     if (target.url) {
       vi.stubEnv("OPENCLAW_GATEWAY_URL", target.url);
     }
-    callGatewayMock.mockRejectedValue(new Error(target.message));
+    const failure = target.error ?? new Error(target.message);
+    callGatewayMock.mockRejectedValue(failure);
 
-    await expect(runCommand([...command.argv, ...(json ? ["--json"] : [])])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(runtimeErrors).toEqual([target.message]);
+    // Root-owned credential/transport errors propagate; ordinary command errors log and exit.
+    const run = runCommand([...command.argv, ...(json ? ["--json"] : [])]);
+    if (target.outcome === "root") {
+      await expect(run).rejects.toBe(failure);
+      expect(runtimeErrors).toEqual([]);
+    } else {
+      await expect(run).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors).toEqual([target.message]);
+    }
     expect(runtimeStdout).toEqual([]);
     expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
   });
