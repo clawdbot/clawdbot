@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import { isTrustedToolExecutionPreflightError } from "./tool-result-error.js";
+import {
+  consumeTrustedToolNoStartError,
+  isTrustedToolExecutionPreflightError,
+} from "./tool-result-error.js";
 import { ToolAuthorizationError } from "./tools/common.js";
 
 function expectExecTarget(
@@ -98,7 +101,7 @@ describe("resolveExecTarget", () => {
     );
   });
 
-  it("raises host denials as trusted authorization failures so no-start facts settle", () => {
+  it("raises host denials as trusted no-start authorization failures", () => {
     try {
       resolveExecTarget({
         configuredTarget: "auto",
@@ -108,8 +111,11 @@ describe("resolveExecTarget", () => {
       });
       expect.unreachable("resolveExecTarget should have thrown");
     } catch (error) {
+      // Denials are minted before any dispatch work, so the thrower itself
+      // certifies the no-start fact that bridge settlement consumes.
       expect(error).toBeInstanceOf(ToolAuthorizationError);
       expect(isTrustedToolExecutionPreflightError(error)).toBe(true);
+      expect(consumeTrustedToolNoStartError(error)).toBe(true);
     }
   });
 

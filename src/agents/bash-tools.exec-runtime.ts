@@ -58,6 +58,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import { ToolAuthorizationError } from "./tools/common.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
@@ -246,6 +247,16 @@ export function isRequestedExecTargetAllowed(params: {
 }
 
 /** Resolves configured/requested/elevated exec target into an effective host. */
+/**
+ * Host policy denials are minted here, immediately before any dispatch work,
+ * so the caller marks them as trusted no-start facts for lifecycle accounting.
+ */
+function deniedBeforeStart(message: string): Error {
+  const error = new ToolAuthorizationError(message);
+  registerTrustedToolNoStartError(error);
+  return error;
+}
+
 export function resolveExecTarget(params: {
   configuredTarget?: ExecTarget;
   requestedTarget?: ExecTarget | null;
@@ -264,7 +275,7 @@ export function resolveExecTarget(params: {
   const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
   const requestedTarget = params.requestedTarget ?? null;
   if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw new ToolAuthorizationError(
+    throw deniedBeforeStart(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
     );
   }
@@ -287,7 +298,7 @@ export function resolveExecTarget(params: {
             : [renderExecTargetLabel(requestedTarget), "auto"],
       ),
     ).join(" or ");
-    throw new ToolAuthorizationError(
+    throw deniedBeforeStart(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
         `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
         `set tools.exec.host=${allowedConfig} to allow this override).`,
