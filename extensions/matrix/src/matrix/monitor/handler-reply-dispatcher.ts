@@ -63,7 +63,7 @@ function resolveMatrixReasoningLevel(params: {
     })?.reasoningLevel;
     return level === "on" || level === "stream" || level === "off" ? level : configDefault;
   } catch {
-    return configDefault;
+    return "off";
   }
 }
 
@@ -118,12 +118,9 @@ export function createMatrixReplyDispatcher(config: {
   let finalReplyDeliveryFailed = false;
   let nonFinalReplyDeliveryFailed = false;
   let latestReasoningStreamText = "";
-  let pendingReasoningNoticeDelivery: Promise<boolean> | undefined;
+  let reasoningNoticeDeliveryQueue: Promise<void> = Promise.resolve();
   const drainPendingReasoningNoticeDelivery = async () => {
-    const pending = pendingReasoningNoticeDelivery;
-    if (pending) {
-      await pending;
-    }
+    await reasoningNoticeDeliveryQueue;
   };
   const beginNextBlockDraft = () => {
     // Each block owns a new draft generation; prior retained/consumed state must not
@@ -548,34 +545,37 @@ export function createMatrixReplyDispatcher(config: {
           if (!text) {
             return false;
           }
-          const delivery = deliverMatrixReplies({
-            cfg,
-            replies: [{ text, isReasoning: true }],
-            roomId,
-            client,
-            runtime,
-            textLimit,
-            replyToMode,
-            hasRepliedRef,
-            threadId: threadTarget,
-            replyToId: threadTarget ?? replyToEventId ?? undefined,
-            accountId,
-            mediaLocalRoots,
-            tableMode,
-          })
-            .then((result) => result.visibleReplySent)
+          const delivery = reasoningNoticeDeliveryQueue
+            .then(
+              async () =>
+                (
+                  await deliverMatrixReplies({
+                    cfg,
+                    replies: [{ text, isReasoning: true }],
+                    roomId,
+                    client,
+                    runtime,
+                    textLimit,
+                    replyToMode,
+                    hasRepliedRef,
+                    threadId: threadTarget,
+                    replyToId: threadTarget ?? replyToEventId ?? undefined,
+                    accountId,
+                    mediaLocalRoots,
+                    tableMode,
+                  })
+                ).visibleReplySent,
+            )
             .catch((error: unknown) => {
               nonFinalReplyDeliveryFailed = true;
               runtime.error?.(`matrix reasoning reply failed: ${String(error)}`);
               return false;
             });
-          const trackedDelivery = delivery.finally(() => {
-            if (pendingReasoningNoticeDelivery === trackedDelivery) {
-              pendingReasoningNoticeDelivery = undefined;
-            }
-          });
-          pendingReasoningNoticeDelivery = trackedDelivery;
-          return await trackedDelivery;
+          reasoningNoticeDeliveryQueue = delivery.then(
+            () => undefined,
+            () => undefined,
+          );
+          return await delivery;
         }
       : undefined,
     onReplyStart: typingCallbacks.onReplyStart,

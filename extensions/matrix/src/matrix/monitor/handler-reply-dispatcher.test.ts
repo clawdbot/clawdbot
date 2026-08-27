@@ -4,6 +4,14 @@ import type { MatrixClient } from "../sdk.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => ({ visibleReplySent: true })));
+const getSessionEntryMock = vi.hoisted(() => vi.fn());
+const resolveStorePathMock = vi.hoisted(() => vi.fn(() => "/tmp/matrix-proof.sqlite"));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  getSessionEntry: getSessionEntryMock,
+  resolveStorePath: resolveStorePathMock,
+}));
 
 vi.mock("./replies.js", async () => {
   const actual = await vi.importActual<typeof import("./replies.js")>("./replies.js");
@@ -13,9 +21,13 @@ vi.mock("./replies.js", async () => {
   };
 });
 
-function createDispatcher(reasoningDefault: "off" | "on" | "stream" = "stream") {
+function createDispatcher(
+  reasoningDefault: "off" | "on" | "stream" = "stream",
+  sessionKey?: string,
+) {
   return createMatrixReplyDispatcher({
     cfg: { agents: { defaults: { reasoningDefault } } },
+    ...(sessionKey ? { sessionKey } : {}),
     prefixOptions: { responsePrefixContextProvider: () => ({ identityName: undefined }) },
     humanDelay: { mode: "off" },
     typingCallbacks: {
@@ -49,7 +61,9 @@ function createDispatcher(reasoningDefault: "off" | "on" | "stream" = "stream") 
 
 describe("createMatrixReplyDispatcher", () => {
   beforeEach(() => {
-    deliverMatrixRepliesMock.mockClear();
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue({ visibleReplySent: true });
+    getSessionEntryMock.mockReset().mockReturnValue(undefined);
+    resolveStorePathMock.mockReset().mockReturnValue("/tmp/matrix-proof.sqlite");
   });
 
   it("disables both reasoning lanes when visibility is off", () => {
@@ -60,6 +74,17 @@ describe("createMatrixReplyDispatcher", () => {
     expect(dispatcher.turnDispatcherOptions.onReasoningEnd).toBeUndefined();
   });
 
+  it("fails closed when the session reasoning preference cannot be read", () => {
+    getSessionEntryMock.mockImplementation(() => {
+      throw new Error("session store unavailable");
+    });
+
+    const dispatcher = createDispatcher("on", "agent:main:main");
+
+    expect(dispatcher.reasoningPayloadsEnabled).toBe(false);
+    expect(dispatcher.turnDispatcherOptions.onReasoningStream).toBeUndefined();
+    expect(dispatcher.turnDispatcherOptions.onReasoningEnd).toBeUndefined();
+  });
   it("enables only durable reasoning when visibility is on", () => {
     const dispatcher = createDispatcher("on");
 
@@ -85,6 +110,43 @@ describe("createMatrixReplyDispatcher", () => {
         roomId: "!room:example.org",
         replies: [{ text: "Checking tools", isReasoning: true }],
       }),
+    );
+  });
+
+  it("drains every reasoning window before the final reply", async () => {
+    let resolveFirst!: (value: { visibleReplySent: boolean }) => void;
+    const firstDelivery = new Promise<{ visibleReplySent: boolean }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    deliverMatrixRepliesMock
+      .mockImplementationOnce(async () => await firstDelivery)
+      .mockResolvedValue({ visibleReplySent: true });
+    const dispatcher = createDispatcher();
+
+    dispatcher.turnDispatcherOptions.onReasoningStream?.({ text: "First window" });
+    const firstEnd = dispatcher.turnDispatcherOptions.onReasoningEnd?.();
+    dispatcher.turnDispatcherOptions.onReasoningStream?.({ text: "Second window" });
+    const secondEnd = dispatcher.turnDispatcherOptions.onReasoningEnd?.();
+    const finalDelivery = dispatcher.deliverReply({ text: "Final answer" }, { kind: "final" });
+    await Promise.resolve();
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    resolveFirst({ visibleReplySent: true });
+    await expect(firstEnd).resolves.toBe(true);
+    await expect(secondEnd).resolves.toBe(true);
+    await expect(finalDelivery).resolves.toEqual({ visibleReplySent: true });
+
+    expect(deliverMatrixRepliesMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ replies: [{ text: "First window", isReasoning: true }] }),
+    );
+    expect(deliverMatrixRepliesMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ replies: [{ text: "Second window", isReasoning: true }] }),
+    );
+    expect(deliverMatrixRepliesMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ replies: [{ text: "Final answer" }] }),
     );
   });
 
