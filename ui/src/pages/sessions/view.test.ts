@@ -104,6 +104,54 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("renders local calendar date headings with their session rows", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 2, 9, 12).getTime());
+    const container = document.createElement("div");
+    try {
+      render(
+        renderSessions({
+          ...buildProps(
+            buildMultiResult([
+              { key: "today", kind: "direct", updatedAt: new Date(2026, 2, 9).getTime() },
+              { key: "yesterday", kind: "direct", updatedAt: new Date(2026, 2, 8).getTime() },
+              {
+                key: "two-days-ago",
+                kind: "direct",
+                updatedAt: new Date(2026, 2, 7, 23, 59).getTime(),
+              },
+              { key: "six-days-ago", kind: "direct", updatedAt: new Date(2026, 2, 3).getTime() },
+              { key: "older", kind: "direct", updatedAt: new Date(2026, 2, 2, 23, 59).getTime() },
+            ]),
+          ),
+          groupBy: "date",
+        }),
+        container,
+      );
+      await Promise.resolve();
+
+      expect(
+        [...container.querySelectorAll("tbody > tr")].map((row) =>
+          (
+            row.querySelector(".session-group-row__label") ?? row.querySelector(".session-link")
+          )?.textContent?.trim(),
+        ),
+      ).toEqual([
+        "Today",
+        "today",
+        "Yesterday",
+        "yesterday",
+        "This week",
+        "two-days-ago",
+        "six-days-ago",
+        "Older",
+        "older",
+      ]);
+    } finally {
+      clock.mockRestore();
+      render(null, container);
+    }
+  });
+
   it("makes every session sort header a keyboard-accessible button", async () => {
     const container = document.createElement("div");
     const onSortChange = vi.fn();

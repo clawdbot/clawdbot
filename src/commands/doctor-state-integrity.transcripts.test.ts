@@ -8,7 +8,11 @@ import {
   resolveSessionStorePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntryKeysReadOnly,
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -46,6 +50,18 @@ vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
   hasBundledChannelPersistedAuthState: () => false,
 }));
 
+const routeStateOwnerState = vi.hoisted(() => ({ owners: [] as Array<Record<string, unknown>> }));
+
+vi.mock("../plugins/doctor-contract-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/doctor-contract-registry.js")>(
+    "../plugins/doctor-contract-registry.js",
+  );
+  return {
+    ...actual,
+    listPluginDoctorSessionRouteStateOwners: vi.fn(() => routeStateOwnerState.owners),
+  };
+});
+
 describe("doctor transcript and heartbeat session repairs", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
@@ -66,6 +82,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
     deleteTestEnvValue("OPENCLAW_OAUTH_DIR");
     deleteTestEnvValue("OPENCLAW_AGENT_DIR");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    routeStateOwnerState.owners = [];
     noteMock.mockClear();
   });
 
@@ -77,10 +94,17 @@ describe("doctor transcript and heartbeat session repairs", () => {
   });
 
   it("detects orphan transcripts and offers archival remediation", async () => {
-    const cfg: OpenClawConfig = {};
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    const cfg: OpenClawConfig = { agents: { entries: { alpha: {}, beta: {} } } };
+    const sessionsDirs = ["alpha", "beta"].map((agentId) => {
+      setupSessionState(cfg, process.env, process.env.HOME ?? "", agentId);
+      const sessionsDir = resolveSessionTranscriptsDirForAgent(
+        agentId,
+        process.env,
+        () => tempHome,
+      );
+      fs.writeFileSync(path.join(sessionsDir, `orphan-${agentId}.jsonl`), '{"type":"session"}\n');
+      return sessionsDir;
+    });
     const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
       params.message.includes("This only renames them to *.deleted.<timestamp>."),
     );
@@ -88,16 +112,21 @@ describe("doctor transcript and heartbeat session repairs", () => {
     expect(stateIntegrityText()).toContain(
       "These .jsonl files are no longer referenced by sessions.json",
     );
-    expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
-    const archivePrompt = repairPromptCalls(confirmRuntimeRepair).find((prompt) =>
+    expect(stateIntegrityText()).toContain("Examples: orphan-alpha.jsonl");
+    expect(stateIntegrityText()).toContain("Examples: orphan-beta.jsonl");
+    const archivePrompts = repairPromptCalls(confirmRuntimeRepair).filter((prompt) =>
       prompt.message?.includes("This only renames them to *.deleted.<timestamp>."),
     );
-    expect(archivePrompt?.requiresInteractiveConfirmation).toBe(true);
-    const files = fs.readdirSync(sessionsDir);
-    const archivedOrphanTranscripts = files.filter((name) =>
-      name.startsWith("orphan-session.jsonl.deleted."),
-    );
-    expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
+    expect(archivePrompts).toHaveLength(2);
+    expect(archivePrompts.every((prompt) => prompt.requiresInteractiveConfirmation)).toBe(true);
+    for (const [index, sessionsDir] of sessionsDirs.entries()) {
+      const agentId = index === 0 ? "alpha" : "beta";
+      expect(
+        fs
+          .readdirSync(sessionsDir)
+          .some((name) => name.startsWith(`orphan-${agentId}.jsonl.deleted.`)),
+      ).toBe(true);
+    }
   });
 
   it("uses SQLite session rows for transcript integrity without orphan false positives", async () => {
@@ -220,16 +249,28 @@ describe("doctor transcript and heartbeat session repairs", () => {
   );
 
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
-    const cfg: OpenClawConfig = {};
-    writeSessionStore(cfg, {
-      "agent:main:main": {
-        sessionId: "missing-transcript",
-        updatedAt: Date.now(),
-      },
-    });
+    const cfg: OpenClawConfig = { agents: { entries: { alpha: {}, beta: {} } } };
+    for (const agentId of ["alpha", "beta"]) {
+      writeSessionStore(
+        cfg,
+        {
+          [`agent:${agentId}:missing`]: {
+            sessionId: `missing-${agentId}`,
+            updatedAt: Date.now(),
+          },
+        },
+        agentId,
+      );
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+      await upsertSessionEntryCore(
+        { agentId, sessionKey: `agent:${agentId}:sqlite`, storePath },
+        { sessionId: `sqlite-${agentId}`, updatedAt: Date.now() },
+      );
+    }
     const text = await runStateIntegrityText(cfg);
-    expect(text).toContain("recent sessions are missing transcripts");
-    expect(text).toMatch(/openclaw sessions --store ".*openclaw-agent\.sqlite"/);
+    expect(text.match(/recent sessions are missing transcripts/g)).toHaveLength(2);
+    expect(text).toContain(path.join("agents", "alpha", "agent", "openclaw-agent.sqlite"));
+    expect(text).toContain(path.join("agents", "beta", "agent", "openclaw-agent.sqlite"));
     expect(text).toMatch(
       /openclaw sessions cleanup --store ".*openclaw-agent\.sqlite" --dry-run --fix-missing/,
     );
@@ -241,6 +282,162 @@ describe("doctor transcript and heartbeat session repairs", () => {
     );
     expect(text).not.toContain("--active");
     expect(text).not.toContain(" ls ");
+  });
+
+  it("preserves a non-main compatibility owner for a fixed legacy store", async () => {
+    const storePath = path.join(tempHome, "fixed-store", "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+      session: { store: storePath },
+    };
+    writeSessionStore(
+      cfg,
+      {
+        "agent:ops:missing": {
+          sessionId: "missing-ops",
+          updatedAt: Date.now(),
+        },
+      },
+      "ops",
+    );
+    const text = await runStateIntegrityText(cfg);
+    const sqliteStorePath = path.join(path.dirname(storePath), "openclaw-agent.sqlite");
+    expect(text).toContain("1/1 recent sessions are missing transcripts");
+    expect(text).toContain(sqliteStorePath);
+    expect(text).not.toContain(path.join(path.dirname(storePath), "openclaw-agent.ops.sqlite"));
+  });
+
+  it("moves a non-default SQLite heartbeat main session without recreating sessions.json", async () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, ops: {} } } };
+    setupSessionState(cfg, process.env, tempHome, "ops");
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
+    const mainKey = "agent:ops:main";
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: mainKey, storePath },
+      {
+        heartbeatIsolatedBaseSessionKey: mainKey,
+        sessionId: "sqlite-heartbeat-ops",
+        updatedAt: Date.now(),
+      },
+    );
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
+      params.message.startsWith("Move heartbeat-owned main session"),
+    );
+
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const keys = listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
+    const recoveredKey = keys.find((key) => key.startsWith("agent:ops:heartbeat-recovered-"));
+    expect(keys).not.toContain(mainKey);
+    if (!recoveredKey) {
+      throw new Error("expected recovered SQLite heartbeat session key");
+    }
+    expect(
+      loadSessionEntryReadOnly({ agentId: "ops", sessionKey: recoveredKey, storePath })?.sessionId,
+    ).toBe("sqlite-heartbeat-ops");
+    expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it("does not create a recovery row when the SQLite main entry changes during confirmation", async () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, ops: {} } } };
+    setupSessionState(cfg, process.env, tempHome, "ops");
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
+    const mainKey = "agent:ops:main";
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: mainKey, storePath },
+      {
+        heartbeatIsolatedBaseSessionKey: mainKey,
+        sessionId: "sqlite-heartbeat-race-ops",
+        updatedAt: 1,
+      },
+    );
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) => {
+      if (!params.message.startsWith("Move heartbeat-owned main session")) {
+        return false;
+      }
+      await upsertSessionEntryCore(
+        { agentId: "ops", sessionKey: mainKey, storePath },
+        { lastInteractionAt: 2, updatedAt: 2 },
+      );
+      return true;
+    });
+
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const keys = listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
+    expect(keys).toEqual([mainKey]);
+    expect(keys.filter((key) => key.startsWith("agent:ops:heartbeat-recovered-"))).toStrictEqual(
+      [],
+    );
+    expect(
+      loadSessionEntryReadOnly({ agentId: "ops", sessionKey: mainKey, storePath })
+        ?.lastInteractionAt,
+    ).toBe(2);
+    expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it("moves a plugin-repaired SQLite heartbeat row without restoring stale state", async () => {
+    routeStateOwnerState.owners = [
+      {
+        authProfilePrefixes: ["openai-codex:"],
+        cliSessionKeys: ["codex-cli"],
+        id: "codex",
+        label: "Codex",
+        providerIds: ["openai-codex"],
+        runtimeIds: ["codex-cli"],
+      },
+    ];
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "github-copilot/gpt-5.4-mini" } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+    setupSessionState(cfg, process.env, tempHome, "ops");
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
+    const mainKey = "agent:ops:main";
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: mainKey, storePath },
+      {
+        heartbeatIsolatedBaseSessionKey: mainKey,
+        model: "gpt-5.4",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "auto",
+        modelProvider: "openai-codex",
+        providerOverride: "openai-codex",
+        sessionId: "sqlite-combined-ops",
+        updatedAt: Date.now(),
+      },
+    );
+    const confirmRuntimeRepair = vi.fn(
+      async (params: { message: string }) =>
+        params.message.startsWith("Clear stale Codex") ||
+        params.message.startsWith("Move heartbeat-owned main session"),
+    );
+
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const keys = listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
+    const recoveredKeys = keys.filter((key) => key.startsWith("agent:ops:heartbeat-recovered-"));
+    expect(keys).not.toContain(mainKey);
+    expect(recoveredKeys).toHaveLength(1);
+    const recoveredKey = recoveredKeys[0];
+    if (!recoveredKey) {
+      throw new Error("expected one recovered combined-repair session key");
+    }
+    const recovered = loadSessionEntryReadOnly({
+      agentId: "ops",
+      sessionKey: recoveredKey,
+      storePath,
+    });
+    expect(recovered?.sessionId).toBe("sqlite-combined-ops");
+    expect(recovered?.providerOverride).toBeUndefined();
+    expect(recovered?.modelOverride).toBeUndefined();
+    expect(recovered?.modelProvider).toBeUndefined();
+    expect(fs.existsSync(storePath)).toBe(false);
   });
 
   it("moves a heartbeat-poisoned main session and clears stale TUI restore pointers", async () => {

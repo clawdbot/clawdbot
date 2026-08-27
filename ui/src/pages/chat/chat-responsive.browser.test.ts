@@ -1270,19 +1270,23 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <div class="chat-split-view__cell" style="width: 640px;">
             <div class="chat-pane__header">
               <div class="chat-pane__crumbs">
-                <wa-dropdown class="chat-pane__workspace-menu">
-                  <button class="chat-pane__workspace-chip" type="button">
-                    ${iconSvg()}<span>openclaw</span>
+                <div class="chat-pane__project-row">
+                  <wa-dropdown class="chat-pane__workspace-menu">
+                    <button class="chat-pane__workspace-chip" type="button">
+                      ${iconSvg()}<span>openclaw</span>
+                    </button>
+                  </wa-dropdown>
+                </div>
+                <div class="chat-pane__session-trail">
+                  <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                  <button class="chat-pane__parent-session" type="button">
+                    <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
                   </button>
-                </wa-dropdown>
-                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
-                <button class="chat-pane__parent-session" type="button">
-                  <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
-                </button>
-                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
-                <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
-                  <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
-                </button>
+                  <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                  <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
+                    <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
+                  </button>
+                </div>
               </div>
               <div class="chat-pane__actions">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
@@ -3446,7 +3450,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const focused = await readPosition();
 
       expect(focused).toBe(unfocused);
-      expect(focused).toBe("0px");
+      expect(focused).toBe("14px");
     } finally {
       await closeBrowserPage(page);
     }
@@ -3997,7 +4001,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <span class="agent-chat__goal-objective">Ship the aligned stack</span>
                 </span>
                 <span class="agent-chat__goal-elapsed">14m</span>
-                <span class="agent-chat__goal-actions"></span>
+                <span class="agent-chat__goal-actions">
+                  <button class="agent-chat__goal-action agent-chat__goal-expand">${iconSvg()}</button>
+                </span>
               </div>
             </div>
           </div>
@@ -4090,6 +4096,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             left(".chat-queue__copy"),
             left(".agent-chat__goal-label"),
           ],
+          trailingCenterDelta:
+            centerX(".session-progress-card__summary-chevron svg") -
+            centerX(".agent-chat__goal-expand svg"),
         };
       });
       expect(
@@ -4098,6 +4107,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(
         Math.max(...openStackAxes.contentLefts) - Math.min(...openStackAxes.contentLefts),
       ).toBeLessThan(0.5);
+      expect(Math.abs(openStackAxes.trailingCenterDelta)).toBeLessThan(0.5);
       expect(
         await page
           .locator(".session-progress-card__body")
@@ -4182,6 +4192,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             iconCenter(".chat-queue__leading svg"),
             iconCenter(".agent-chat__goal-icon svg"),
           ],
+          trailingCenterDelta:
+            iconCenter(".session-progress-card__summary-chevron svg") -
+            iconCenter(".agent-chat__goal-expand svg"),
         };
       });
       expect(collapsed.countLeft).toBeGreaterThan(collapsed.currentRight);
@@ -4189,6 +4202,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(Math.max(...collapsed.iconCenters) - Math.min(...collapsed.iconCenters)).toBeLessThan(
         0.5,
       );
+      expect(Math.abs(collapsed.trailingCenterDelta)).toBeLessThan(0.5);
       const closedRowCenters = await page.evaluate(() => {
         const centerY = (selector: string) => {
           const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();

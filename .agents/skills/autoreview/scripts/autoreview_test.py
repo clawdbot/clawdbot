@@ -984,6 +984,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             AUTOREVIEW,
             "resolve_command",
             return_value="/usr/bin/codex",
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "ensure_codex_isolation_supported",
+            return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
             AUTOREVIEW,
             "prepare_codex_runtime_auth",
@@ -1037,6 +1041,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             ), mock.patch.object(
                 AUTOREVIEW,
                 "resolve_command",
+                return_value="/usr/bin/codex",
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "ensure_codex_isolation_supported",
                 return_value="/usr/bin/codex",
             ), mock.patch.object(
                 AUTOREVIEW,
@@ -1102,6 +1110,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             AUTOREVIEW,
             "resolve_command",
             return_value="/usr/bin/codex",
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "ensure_codex_isolation_supported",
+            return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
             AUTOREVIEW,
             "prepare_codex_runtime_auth",
@@ -1142,6 +1154,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
             AUTOREVIEW,
             "resolve_command",
+            return_value="/usr/bin/codex",
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "ensure_codex_isolation_supported",
             return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
             AUTOREVIEW,

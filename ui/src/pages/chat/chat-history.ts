@@ -356,6 +356,7 @@ export type ChatHistoryResult = {
     runId: string;
     text?: string;
     startedAt?: number;
+    sessionAbortable?: boolean;
     events?: Array<{
       runId: string;
       seq: number;
@@ -365,6 +366,7 @@ export type ChatHistoryResult = {
       agentId?: string;
       data: Record<string, unknown>;
     }>;
+    plan?: { steps: Array<{ step: string; status: string }>; explanation?: string };
   };
 };
 
@@ -542,6 +544,7 @@ function applyHistoryRunSnapshot(params: {
     // history is pending; deltas from this same live run must still merge.
     state.chatRunId = inFlightRunId;
     state.chatRunError = null;
+    state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
     return;

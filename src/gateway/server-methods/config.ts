@@ -93,6 +93,7 @@ import {
   didSharedGatewayAuthChange,
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
+  shouldAwaitGatewayConfigApplication,
 } from "./config-write-flow.js";
 import {
   execOpenPath,
@@ -864,6 +865,18 @@ async function respondWithConfigRestartWrite(params: {
   respond: RespondFn;
   preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
 }): Promise<void> {
+  if (params.writeResult.application) {
+    const outcome = await params.writeResult.application;
+    if (outcome !== "applied") {
+      const message =
+        outcome === "applied-restart-required"
+          ? `${params.mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
+          : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
+      params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      params.writeResult.queueFollowUp();
+      return;
+    }
+  }
   clearConfigSchemaResponseCache();
   // Redact under the owner the committed config selects. Hints captured before the write describe
   // the previous owner, so a write that activates a replacement could return a field that owner
@@ -1504,6 +1517,10 @@ export const configHandlers: GatewayRequestHandlers = {
       nextConfig: writeConfig,
       context,
       disconnectSharedAuthClients,
+      awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
+        changedPaths,
+        nextConfig: writeConfig,
+      }),
       respond,
     });
     if (!writeResult) {
@@ -1583,6 +1600,10 @@ export const configHandlers: GatewayRequestHandlers = {
       nextConfig: parsed.writeConfig,
       context,
       disconnectSharedAuthClients,
+      awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
+        changedPaths,
+        nextConfig: parsed.writeConfig,
+      }),
       respond,
     });
     if (!writeResult) {

@@ -36,12 +36,12 @@ const twitchUserIdentity = defineStableChannelIngressIdentity({
 const twitchRoleIdentity = defineStableChannelIngressIdentity({
   key: "role-moderator",
   kind: "role",
-  normalizeEntry: normalizeTwitchRole,
+  normalizeEntry: normalizeTwitchModeratorRole,
   normalizeSubject: normalizeTwitchRole,
   aliases: ["owner", "vip", "subscriber"].map((role) => ({
     key: `role-${role}`,
     kind: "role",
-    normalizeEntry: () => null,
+    normalizeEntry: (value: string) => normalizeSpecificTwitchRole(value, role),
     normalizeSubject: normalizeTwitchRole,
   })),
   isWildcardEntry: (entry) => normalizeTwitchRole(entry) === "all",
@@ -182,6 +182,15 @@ function normalizeTwitchRole(value: string): string | null {
     role === "all"
     ? role
     : null;
+}
+
+function normalizeTwitchModeratorRole(value: string): string | null {
+  return normalizeSpecificTwitchRole(value, "moderator");
+}
+
+function normalizeSpecificTwitchRole(value: string, expected: string): string | null {
+  const role = normalizeTwitchRole(value);
+  return role === expected ? role : null;
 }
 
 function reasonForTwitchIngressDecision(decision: { reasonCode: IngressReasonCode }): string {

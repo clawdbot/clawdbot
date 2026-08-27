@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ensureRepoNodeModulesLink } from "./local-check-runtime.mts";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
@@ -40,7 +41,13 @@ function resolveTsxImport(checkoutRoot) {
   ].filter(Boolean)) {
     try {
       const require = createRequire(path.join(candidateRoot, "package.json"));
-      return pathToFileURL(require.resolve("tsx")).href;
+      const importUrl = pathToFileURL(require.resolve("tsx")).href;
+      const selectedModulesDir =
+        candidateRoot === hydratedTsxRoot
+          ? path.dirname(candidateRoot)
+          : path.join(candidateRoot, "node_modules");
+      ensureRepoNodeModulesLink(selectedModulesDir, { cwd: checkoutRoot });
+      return importUrl;
     } catch (error) {
       resolutionError = error;
     }

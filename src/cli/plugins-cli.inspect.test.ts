@@ -188,6 +188,7 @@ describe("plugins cli inspect", () => {
       expect(buildPluginDiagnosticsReportMock).toHaveBeenLastCalledWith({
         config: {},
         onlyPluginIds: ["openclaw-mem0"],
+        runtimeInspection: true,
       });
       expect(pluginsCliRuntimeLogs.at(-1)).toContain("Gateway discovery:\nmem0-runtime-discovery");
     }

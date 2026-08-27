@@ -14,6 +14,7 @@ on:
       - scripts/control-ui-i18n.ts
       - scripts/control-ui-i18n-verify.ts
       - scripts/lib/control-ui-i18n-catalog.ts
+      - scripts/lib/control-ui-i18n-config.json
       - scripts/lib/control-ui-i18n-config.ts
       - scripts/lib/control-ui-i18n-raw-copy.ts
       - scripts/lib/control-ui-i18n-sync-plan.ts
@@ -52,6 +53,7 @@ jobs:
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:
+      locales: ${{ steps.base.outputs.locales }}
       sha: ${{ steps.base.outputs.sha }}
     steps:
       - name: Resolve source commit
@@ -76,6 +78,14 @@ jobs:
             echo "Unable to resolve the locale refresh source to an exact commit." >&2
             exit 1
           fi
+          locale_config="$(
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh api --method GET \
+                -H "Accept: application/vnd.github.raw+json" \
+                "repos/${REPOSITORY}/contents/scripts/lib/control-ui-i18n-config.json?ref=${sha}"
+          )"
+          locales="$(jq -ce '[.[].locale] | select(length > 0 and all(.[]; type == "string" and length > 0))' <<< "${locale_config}")"
+          echo "locales=${locales}" >> "${GITHUB_OUTPUT}"
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
   publisher-preflight:
@@ -130,29 +140,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        locale:
-          [
-            zh-CN,
-            zh-TW,
-            pt-BR,
-            de,
-            es,
-            ja-JP,
-            ko,
-            fr,
-            hi,
-            ar,
-            it,
-            tr,
-            uk,
-            id,
-            pl,
-            th,
-            vi,
-            nl,
-            fa,
-            ru,
-          ]
+        locale: ${{ fromJSON(needs.resolve-base.outputs.locales) }}
     runs-on: ubuntu-latest
     name: Refresh ${{ matrix.locale }}
     steps:
@@ -341,6 +329,7 @@ jobs:
             scripts/control-ui-i18n.ts
             scripts/control-ui-i18n-verify.ts
             scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-config.json
             scripts/lib/control-ui-i18n-config.ts
             scripts/lib/control-ui-i18n-raw-copy.ts
             scripts/lib/control-ui-i18n-sync-plan.ts

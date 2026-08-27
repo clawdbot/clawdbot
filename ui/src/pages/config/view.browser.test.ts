@@ -223,6 +223,36 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
+  it("describes the custom accent source and selected state through the native input", () => {
+    const inherited = renderConfigView({
+      accent: undefined,
+      accentProvenance: "default",
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+    });
+    const inheritedInput =
+      inherited.container.querySelector<HTMLInputElement>("[data-accent-custom]");
+    expect(inherited.container.querySelector("#settings-accent-status")?.textContent).toContain(
+      "Using inherited accent",
+    );
+    expect(inheritedInput?.getAttribute("aria-describedby")).toBe("settings-accent-status");
+
+    const custom = renderConfigView({
+      accent: "#c3cfdb",
+      accentProvenance: "device-local",
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+    });
+    expect(custom.container.querySelector("#settings-accent-status")?.textContent).toContain(
+      "Using Custom color",
+    );
+    expect(
+      custom.container
+        .querySelector<HTMLElement>(".settings-accent-swatch--custom")
+        ?.style.getPropertyValue("--settings-accent-swatch-ink"),
+    ).toBe("#000000");
+  });
+
   it("places a Control UI Browser preference in the same settings group before schema rows", () => {
     const { container } = renderConfigView({
       schema: {

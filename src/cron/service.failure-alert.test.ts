@@ -817,6 +817,7 @@ describe("CronService failure alerts", () => {
 
         const alert = alertCallArg(sendCronFailureAlert);
         expect(alert.text).toContain("Cause: auth_permanent");
+        expect(alert.text).toContain("/login codex");
         expect(alert.presentation).toEqual({
           blocks: [
             {

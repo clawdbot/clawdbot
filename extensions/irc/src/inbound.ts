@@ -46,6 +46,8 @@ type IrcGroupPolicy = "open" | "allowlist" | "disabled";
 
 const ircIngressIdentity = defineStableChannelIngressIdentity({
   key: "irc-id",
+  // The IRC server vouches for the connection prefix, but does not bind it to an account owner.
+  authentication: "asserted",
   normalizeEntry: normalizeIrcStableEntry,
   normalizeSubject: normalizeLowercaseStringOrEmpty,
   sensitivity: "pii",
@@ -55,13 +57,14 @@ const ircIngressIdentity = defineStableChannelIngressIdentity({
       kind: "stable-id" as const,
       normalizeEntry: normalizeIrcNickUserEntry,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
-      dangerous: true,
+      authentication: "mutable",
       sensitivity: "pii" as const,
     },
     {
       key: "irc-id-nick-host",
       kind: "stable-id" as const,
-      normalizeEntry: () => null,
+      authentication: "asserted",
+      normalizeEntry: normalizeIrcNickHostEntry,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
       sensitivity: "pii" as const,
     },
@@ -70,7 +73,7 @@ const ircIngressIdentity = defineStableChannelIngressIdentity({
       kind: IRC_NICK_KIND,
       normalizeEntry: normalizeIrcNickEntry,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
-      dangerous: true,
+      authentication: "mutable",
       sensitivity: "pii",
     },
   ],
@@ -116,10 +119,15 @@ function isHostlessNickUser(value: string): boolean {
 
 function normalizeIrcStableEntry(value: string): string | null {
   const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !hasVerifiedHost(normalized)) {
+  if (!normalized.includes("!") || !hasVerifiedHost(normalized)) {
     return null;
   }
   return normalized;
+}
+
+function normalizeIrcNickHostEntry(value: string): string | null {
+  const normalized = normalizeIrcAllowEntry(value);
+  return !normalized.includes("!") && hasVerifiedHost(normalized) ? normalized : null;
 }
 
 function normalizeIrcNickUserEntry(value: string): string | null {

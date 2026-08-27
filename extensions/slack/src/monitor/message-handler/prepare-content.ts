@@ -5,6 +5,7 @@ import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import { resolveSlackMessageText } from "../block-text.js";
@@ -19,6 +20,7 @@ type SlackResolvedMessageContent = {
 const SLACK_MENTION_RESOLUTION_CONCURRENCY = 4;
 const SLACK_MENTION_RESOLUTION_MAX_LOOKUPS_PER_MESSAGE = 20;
 const SLACK_USER_MENTION_RE = /<@([A-Z0-9]+)(?:\|[^>]+)?>/gi;
+const MAX_SLACK_UNAVAILABLE_FILE_TEXT_CHARS = 2000;
 
 const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
 
@@ -118,7 +120,13 @@ export async function resolveSlackMessageContent(params: {
   const effectiveDirectMedia = attachmentContent?.media.length ? attachmentContent.media : null;
   const mediaPlaceholder = effectiveDirectMedia?.map((item) => item.placeholder).join(" ");
 
-  const fileOnlyFallback = attachmentContent?.files?.map(formatSlackFileReference).join(", ");
+  let fileOnlyFallback = attachmentContent?.files
+    ?.map((file) => `${formatSlackFileReference(file)} unavailable (${file.reason})`)
+    .join(", ");
+  // Excess files remain accounted for without adding an unbounded prompt block.
+  if (fileOnlyFallback && fileOnlyFallback.length > MAX_SLACK_UNAVAILABLE_FILE_TEXT_CHARS) {
+    fileOnlyFallback = `${truncateUtf16Safe(fileOnlyFallback, MAX_SLACK_UNAVAILABLE_FILE_TEXT_CHARS)}; … (file references truncated)`;
+  }
 
   let botAttachmentText: string | undefined;
   if (params.isBotMessage && !attachmentContent?.text) {
@@ -177,12 +185,12 @@ export async function resolveSlackMessageContent(params: {
     ]
       .filter(Boolean)
       .join("\n") || "";
-  const unavailableImageCount = attachmentContent?.unavailableImageCount ?? 0;
-  if (unavailableImageCount > 0) {
+  const unavailableMediaCount = attachmentContent?.unavailableMediaCount ?? 0;
+  if (unavailableMediaCount > 0) {
     rawBody = formatInboundMediaUnavailableText({
       body: rawBody,
       notice: `[slack ${
-        unavailableImageCount > 1 ? `${unavailableImageCount} forwarded images` : "forwarded image"
+        unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"
       } unavailable]`,
     });
   }

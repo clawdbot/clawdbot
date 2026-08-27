@@ -1,3 +1,176 @@
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-main__conversation-column {
+    --chat-mobile-pane-header-height: 52px;
+    --chat-mobile-pane-header-fade-overhang: 8px;
+    --chat-mobile-pane-header-paint-height: calc(
+      var(--chat-mobile-pane-header-height) + var(--chat-mobile-pane-header-fade-overhang)
+    );
+  }
+
+  .chat-main__conversation > .chat-thread {
+    padding-top: calc(var(--chat-mobile-pane-header-height, 48px) + clamp(20px, 3vh, 28px));
+  }
+
+  .chat-main__conversation-column > .chat-pane__header {
+    position: absolute;
+    z-index: 3;
+    inset-block-start: 0;
+    inset-inline: 0;
+    isolation: isolate;
+    min-height: var(--chat-mobile-pane-header-height);
+    padding-inline: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px))
+      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px));
+    overflow: visible;
+    background: transparent;
+  }
+
+  .chat-main__conversation-column > .agent-chat__search-bar {
+    margin-top: var(--chat-mobile-pane-header-height);
+  }
+
+  .chat-main__conversation-column > .chat-pane__header::before,
+  .chat-main__conversation-column > .chat-pane__header::after {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline: 0;
+    content: "";
+    pointer-events: none;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header::before {
+    z-index: -2;
+    block-size: 38px;
+    background: transparent;
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+
+  .chat-main__conversation-column > .chat-pane__header::after {
+    z-index: -1;
+    block-size: var(--chat-mobile-pane-header-paint-height);
+    background: linear-gradient(
+      to bottom,
+      var(--chat-surface) 0%,
+      var(--chat-surface) 43%,
+      transparent 100%
+    );
+    background: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--chat-surface) 88%, transparent) 0,
+      color-mix(in srgb, var(--chat-surface) 88%, transparent) 26px,
+      color-mix(in srgb, var(--chat-surface) 80%, transparent) 38px,
+      transparent 100%
+    );
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__nav-toggle {
+    position: relative;
+    display: inline-flex;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    flex: 0 0 40px;
+    align-items: center;
+    align-self: center;
+    justify-content: center;
+    padding: 0;
+    margin-inline-end: 3px;
+    border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--panel) 90%, transparent);
+    box-shadow: 0 1px 3px color-mix(in srgb, black 8%, transparent);
+    corner-shape: round;
+    line-height: 1;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__nav-toggle::after {
+    position: absolute;
+    inset: -4px;
+    content: "";
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__nav-toggle > svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__crumbs {
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-self: center;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 0;
+    transform: none;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__project-row,
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__session-trail {
+    display: flex;
+    min-width: 0;
+    max-width: 100%;
+    align-items: center;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__session-trail {
+    gap: 6px;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip,
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__session-title,
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__parent-session {
+    line-height: 18px;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip > svg {
+    transform: translateY(1px);
+  }
+
+  .chat-main__conversation-column
+    > .chat-pane__header
+    .chat-pane__workspace-chip--fallback-icon
+    > svg,
+  .chat-main__conversation-column
+    > .chat-pane__header
+    .chat-pane__workspace-chip
+    .workspace-icon-fallback {
+    display: none;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip,
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip:hover,
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip:focus-visible {
+    color: var(--muted);
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__session-title {
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip,
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__session-title-button,
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__parent-session {
+    padding-block: 0;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__crumb-sep {
+    display: none;
+  }
+
+  .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip span {
+    display: block;
+  }
+}
+
+@media (display-mode: standalone) and (max-width: 768px),
+  (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-main__conversation-column > .chat-pane__header {
+    padding-inline: var(--chat-mobile-edge-inset, 4px);
+  }
+}
+
 .session-progress-card--composer {
   --session-progress-marker-size: var(--chat-stack-icon-size, 14px);
 
@@ -151,8 +324,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--chat-stack-trailing-control-size);
+  height: var(--chat-stack-trailing-control-size);
   padding: 0;
   color: var(--muted);
   background: none;
@@ -298,9 +471,7 @@
   width: 100%;
   min-width: 0;
   min-height: 42px;
-  /* The chevron is 18px while queue/goal actions occupy 24px. The 3px
-     compensation keeps all trailing centers on one vertical stack column. */
-  padding: 8px calc(var(--chat-stack-trailing-inset) + 3px) 8px var(--chat-stack-leading-inset);
+  padding: 8px var(--chat-stack-trailing-inset) 8px var(--chat-stack-leading-inset);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -370,8 +541,8 @@
 
 .session-progress-card__summary-chevron {
   display: grid;
-  width: 18px;
-  height: 18px;
+  width: var(--chat-stack-trailing-control-size);
+  height: var(--chat-stack-trailing-control-size);
   place-items: center;
   color: var(--muted);
   transition:

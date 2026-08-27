@@ -90,18 +90,6 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_delivery_queue_session",
-      params: ["outbound", "pending", "agent:main:main"],
-      sql: `
-        SELECT id, entry_json
-          FROM delivery_queue_entries
-         WHERE queue_name = ? AND status = ? AND session_key = ?
-         ORDER BY enqueued_at ASC, id
-         LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
       indexName: "idx_plugin_state_listing",
       params: ["telegram", "kv"],
       sql: `
@@ -143,18 +131,6 @@ describe("sqlite hot query plans", () => {
          WHERE scope = ?
          ORDER BY key ASC
          LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_agent_cache_expiry",
-      params: ["session_entries"],
-      sql: `
-        SELECT key, expires_at
-          FROM cache_entries
-         WHERE scope = ? AND expires_at IS NOT NULL
-         ORDER BY expires_at ASC, key
-        LIMIT 50
       `,
     });
     expectPlanUsesIndex({

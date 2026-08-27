@@ -30,7 +30,7 @@ async function spawnOpenClaw(
   options: { cwd: string; env: NodeJS.ProcessEnv },
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "src/entry.ts", ...args], {
+    const child = spawn(process.execPath, ["openclaw.mjs", ...args], {
       cwd: options.cwd,
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -246,7 +246,12 @@ describe("openclaw plugins install ClawHub E2E", () => {
     try {
       const env = buildEnv(stateDir, testServer.registry);
       const first = await spawnOpenClaw(
-        ["plugins", "install", `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`],
+        [
+          "plugins",
+          "install",
+          `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`,
+          "--accept-capabilities",
+        ],
         { cwd: process.cwd(), env },
       );
       expect(first.status, first.stderr || first.stdout).toBe(0);
@@ -270,7 +275,13 @@ describe("openclaw plugins install ClawHub E2E", () => {
       expect(testServer.requestLog).toContain(`GET ${PACKAGE_API_PATH}/download`);
 
       const repeat = await spawnOpenClaw(
-        ["plugins", "install", `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`, "--force"],
+        [
+          "plugins",
+          "install",
+          `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`,
+          "--force",
+          "--accept-capabilities",
+        ],
         { cwd: process.cwd(), env },
       );
       expect(repeat.status, repeat.stderr || repeat.stdout).toBe(0);
@@ -345,7 +356,12 @@ describe("openclaw plugins install ClawHub E2E", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-telemetry-down-"));
     try {
       const result = await spawnOpenClaw(
-        ["plugins", "install", `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`],
+        [
+          "plugins",
+          "install",
+          `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`,
+          "--accept-capabilities",
+        ],
         { cwd: process.cwd(), env: buildEnv(stateDir, testServer.registry) },
       );
 

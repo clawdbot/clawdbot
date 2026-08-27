@@ -2147,6 +2147,8 @@ When a single Slack message contains multiple file attachments:
 - Downloaded media references are aggregated into the message context.
 - Processing order follows Slack's file order in the event payload.
 - A failure in one attachment's download does not block others.
+- Failed or blocked files remain in the agent context with a bounded reason, and each failed file produces one warning after any URL refresh retry.
+- Files beyond the eight-file limit are not downloaded. Their references carry an `omitted: 8-file limit` reason. Long unavailable-file lists are visibly truncated, while the notice retains the total unavailable attachment count.
 
 ### Size, download, and model limits
 

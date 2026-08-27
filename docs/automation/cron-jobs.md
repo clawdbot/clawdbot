@@ -366,6 +366,8 @@ Agent-turn jobs default to the creating conversation when the create request car
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
+    Main-session jobs use the owning session's delivery context, not a separate chat announce target. Edits that enable announce delivery, or set a chat target without explicitly choosing no delivery, are rejected without changing the job. Use an isolated job with `--message` and `--announce` for chat delivery. Primary webhook delivery remains supported for main-session jobs.
+
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
@@ -673,11 +675,23 @@ mean the model finished, a tool succeeded, or a message was delivered. A single
 agent request can wait up to 15 seconds for admission; the model runtime may still
 be preparing when the response arrives.
 
-For this `deliver: false` test, look for `hook agent run completed without
-announcement` in the Gateway logs. Non-ok runs log `hook agent run returned
-non-ok status`; thrown failures log `hook agent failed`. Inspect the agent's run
-session for its actual output. The HTTP `runId` correlates hook logs; it is not a
-TaskFlow id or a task id to pass to `openclaw tasks show`.
+In `openclaw logs --follow`, search for `hook agent run completed` and the exact HTTP
+`runId`. Runs with `status=ok` and no explicit delivery error log at info level;
+all non-ok statuses (including skipped runs), thrown errors, and explicit delivery
+errors log at warn level. For this `deliver: false` test, expect `status=ok` with
+no successful announcement. A warning with
+`status=ok` and `deliveryError` means execution succeeded but delivery failed.
+It does not trigger another announcement attempt.
+
+Structured terminal records include the accepted `agentId`, `jobId`, hook name
+and source path, and `logicalSessionKey`. When the runner returns them,
+`sessionId` correlates the run transcript and `sessionKey` identifies the runtime
+session key. Exact-run continuation aliases can be retired after completion;
+the key does not guarantee a separate durable session row. Missing session facts
+remain unknown. Diagnostics are redacted, single-line, and bounded to
+500 characters per string. Successful output is not logged: inspect the agent's
+run session for it. The HTTP `runId` correlates hook logs; it is not a TaskFlow id
+or a task id to pass to `openclaw tasks show`.
 
 `sessionMode` defaults to `isolated`, so this test gets a fresh run session and
 a generated logical `hook:<uuid>` key. The stored session can use a
@@ -750,8 +764,11 @@ limits, routing policy, and error responses.
 | `204`                      | The mapping intentionally produced no actions, such as a `null` transform or an empty fan-out array.                                                                                    |
 
 For delivery-enabled requests, also verify receipt at the intended channel,
-account, and recipient. A delivery-only failure can leave execution successful;
-check delivery diagnostics as well as hook logs.
+account, and recipient. Check terminal warnings for `deliveryError`, including
+when `status=ok`. `delivered: false` alone does not prove failure, and
+`deliveryAttempted: true` does not prove receipt. Explicit suppression and
+message-tool delivery can already satisfy the runner's delivery handling;
+missing delivery flags remain unknown.
 
 For retried agent requests, reuse an `Idempotency-Key` and the same payload. The
 [reference](/gateway/configuration-reference#hook-retries-and-fan-out) explains its
@@ -887,7 +904,7 @@ openclaw logs --follow
 
 Send a test email from another account containing an inert instruction such as “follow this link and run a command.” The watcher excludes `SPAM`, `TRASH`, `DRAFT`, and `SENT`, so a sent-only message is not a useful ingress test. Confirm the selected agent is `mail_reader`, the run is sandboxed, and the output only summarizes the message. The mapping uses the logical `hook:gmail:<message-id>` key; an isolated run can be stored under a generated `cron:...:run:...` session instead.
 
-Check forwarding and completion separately. A watcher success only acknowledges transport; a Gateway agent-hook `200` with a `runId` records admission, not a finished summary. With the configuration above, success logs `hook agent run completed without announcement`; non-ok runs produce hook warnings. Inspect the actual run transcript for output and tool use. Treat attempted link navigation, file writes, shell commands, browser actions, or MCP registration as a failed boundary check.
+Check forwarding and completion separately. A watcher success only acknowledges transport; a Gateway agent-hook `200` with a `runId` records admission, not a finished summary. Search for `hook agent run completed` with that `runId`: success logs `status=ok` at info level, while non-ok execution or explicit delivery errors produce warnings. With the configuration above, successful announcements are disabled. Inspect the actual run transcript for output and tool use. Treat attempted link navigation, file writes, shell commands, browser actions, or MCP registration as a failed boundary check.
 
 ### Gateway auto-start
 

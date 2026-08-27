@@ -8,7 +8,6 @@ import { resolveChannelExposure } from "./exposure.js";
 import type { ChannelMeta } from "./types.core.js";
 
 type ArrayFieldMode = "defined" | "non-empty";
-type OptionalStringMode = "defined" | "truthy";
 
 /**
  * Builds normalized channel metadata from a plugin manifest channel declaration.
@@ -24,14 +23,9 @@ export function buildManifestChannelMeta(params: {
   detailLabel?: string;
   systemImage?: string;
   arrayFieldMode: ArrayFieldMode;
-  selectionDocsPrefixMode: OptionalStringMode;
 }): ChannelMeta {
   const hasArrayField = (value: readonly string[] | undefined) =>
     params.arrayFieldMode === "defined" ? value !== undefined : Boolean(value?.length);
-  const hasSelectionDocsPrefix =
-    params.selectionDocsPrefixMode === "defined"
-      ? params.channel.selectionDocsPrefix !== undefined
-      : Boolean(params.channel.selectionDocsPrefix);
 
   return {
     id: params.id,
@@ -42,7 +36,9 @@ export function buildManifestChannelMeta(params: {
     blurb: params.blurb,
     ...(hasArrayField(params.channel.aliases) ? { aliases: params.channel.aliases } : {}),
     ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
-    ...(hasSelectionDocsPrefix ? { selectionDocsPrefix: params.channel.selectionDocsPrefix } : {}),
+    ...(typeof params.channel.selectionDocsPrefix === "string"
+      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
+      : {}),
     ...(params.channel.selectionDocsOmitLabel !== undefined
       ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
       : {}),

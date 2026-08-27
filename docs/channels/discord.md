@@ -340,6 +340,8 @@ Forum parents do not accept Discord components. If you need components, send to 
 
 OpenClaw supports Discord components v2 containers for agent messages. Use the message tool with a `components` payload. Interaction results route back to the agent as normal inbound messages and follow the existing Discord `replyToMode` settings.
 
+`components` is a Discord-specific extension to the shared message tool. OpenClaw exposes it whenever Discord is configured, including when another channel is current. Use `presentation` when the same rich message must work across channels; OpenClaw adapts portable presentation actions to each target.
+
 Supported blocks:
 
 - `text`, `section`, `separator`, `actions`, `media-gallery`, `file`

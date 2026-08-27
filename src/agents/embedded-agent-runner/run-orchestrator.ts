@@ -299,13 +299,14 @@ async function runEmbeddedAgentInternal(
         noteLaneTaskProgress,
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
-            ? acquireReadOnlyPreparedModelRuntime(preparedInput)
+            ? acquireReadOnlyPreparedModelRuntime(preparedInput, params.abortSignal)
             : acquireAgentRunPreparedModelRuntime(preparedInput, {
                 retainIdleRunOwner,
                 // Turns need only configured admission facts. Full live model inventory remains
                 // available through the snapshot's lazy control-plane loader.
                 catalogMode: "static",
                 ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
+                abortSignal: params.abortSignal,
               }),
       );
       startupStages.mark("prepared-runtime");

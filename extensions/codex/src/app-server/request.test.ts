@@ -429,6 +429,67 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(secondRequest).not.toHaveBeenCalled();
   });
 
+  it("does not resume or publish a control attachment after its passive preflight times out", async () => {
+    const { codexControlRequest } = await import("../command-rpc.js");
+    vi.useFakeTimers();
+    let releasePreflight!: () => void;
+    const preflight = new Promise<void>((resolve) => {
+      releasePreflight = resolve;
+    });
+    const request = vi.fn(async (_method: string) => ({ thread: { id: "thread-1" } }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const onResponse = vi.fn();
+
+    const result = codexControlRequest(
+      {},
+      "thread/resume",
+      { threadId: "thread-1" },
+      {
+        authProfileId: null,
+        timeoutMs: 50,
+        beforeRequest: async (send) => {
+          await send({
+            method: "thread/read",
+            requestParams: { threadId: "thread-1", includeTurns: false },
+          });
+          await preflight;
+        },
+        onResponse,
+      },
+    );
+    const settled = result.then(
+      (value) => ({ status: "fulfilled", value }),
+      (error: unknown) => ({ status: "rejected", error }),
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await settled).toMatchObject({
+      status: "rejected",
+      error: expect.objectContaining({ message: expect.stringContaining("timed out") }),
+    });
+    releasePreflight();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
+    expect(onResponse).not.toHaveBeenCalled();
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+  });
+
+  it("revokes scoped requests and mutation authority when their client lease ends", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const retained = await withCodexAppServerJsonClient({}, async (send, _client, scope) => {
+      await send({ method: "thread/read", requestParams: { threadId: "thread-1" } });
+      return { send, assertCurrent: scope.assertCurrent };
+    });
+
+    expect(retained.assertCurrent).toThrow();
+    await expect(
+      retained.send({ method: "thread/resume", requestParams: { threadId: "thread-1" } }),
+    ).rejects.toThrow();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("blocks thread starts with sandbox environments when exec host=node is active", async () => {
     const params = {
       cwd: "/workspace",

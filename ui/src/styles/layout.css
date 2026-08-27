@@ -935,6 +935,10 @@ openclaw-settings-save-indicator:empty {
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+.shell-nav-backdrop {
+  display: none;
+}
+
 /* The shell owns the resting boundary. The wider resize target takes over
    that same edge during interaction, avoiding a doubled divider. */
 .sidebar-resizer {
@@ -2177,7 +2181,15 @@ openclaw-settings-save-indicator:empty {
   overflow: hidden;
 }
 
+.sidebar-online__row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-md);
+}
+
 .sidebar-online__person {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2218,25 +2230,61 @@ openclaw-settings-save-indicator:empty {
   white-space: nowrap;
 }
 
-.sidebar-online__person-action {
+.sidebar-online__details {
   display: inline-flex;
-  margin-left: auto;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
   opacity: 0;
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-online__person:hover .sidebar-online__person-action,
-.sidebar-online__person:focus-visible .sidebar-online__person-action {
+.sidebar-online__row:hover .sidebar-online__details,
+.sidebar-online__row:focus-within .sidebar-online__details,
+.sidebar-online__details[aria-expanded="true"] {
   opacity: 1;
 }
 
-.sidebar-online__person-action svg {
+.sidebar-online__details:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-online__details:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-online__details svg {
+  display: block;
   width: 13px;
   height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6px;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-online__details {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+  }
+
+  .sidebar-online__person {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-online__person,
+  .sidebar-online__details {
+    transition: none;
+  }
 }
 
 .sidebar-zone-entry {

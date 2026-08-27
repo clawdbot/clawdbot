@@ -801,19 +801,17 @@ suite.define(() => {
           await page.keyboard.press("Meta+Shift+B");
           await expect.poll(async () => (await tabLabels(page)).at(-1)).toBe("Files");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
+          await expect
+            .poll(() =>
+              sidePanel(page)
+                .locator(":scope > .side-panel__header wa-tab[active] .tabstrip-tab__label")
+                .textContent(),
+            )
+            .toContain("Terminal");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).at(-1)).toBe("Terminal");
+          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
 
-          for (const label of [
-            "Review",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-            "Files",
-            "Terminal",
-          ]) {
+          for (const label of ["Review", "Tasks", "Browser", "Side chat", "Desktop", "Files"]) {
             await sidePanel(page)
               .locator(":scope > .side-panel__header")
               .getByRole("button", { name: `Close ${label}`, exact: true })

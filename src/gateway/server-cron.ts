@@ -120,6 +120,10 @@ import {
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { loadGatewaySessionRow } from "./session-utils.js";
 
+export type GatewayHeartbeatReconciliationResult = "converged" | "retry-scheduled" | "superseded";
+
+class GatewayHeartbeatReconciliationSupersededError extends Error {}
+
 export type GatewayCronState = {
   cron: GatewayCronServiceContract;
   storePath: string;
@@ -132,7 +136,7 @@ export type GatewayCronState = {
   reconcileExitWatchers: () => Promise<void>;
   reconcileStreamWatchers: () => Promise<void>;
   stopStreamWatchers: () => Promise<void>;
-  reconcileHeartbeatJobs: (cfg?: OpenClawConfig) => Promise<void>;
+  reconcileHeartbeatJobs: (cfg?: OpenClawConfig) => Promise<GatewayHeartbeatReconciliationResult>;
 };
 
 export type GatewayCronExitWatcherHandoff = {
@@ -1528,7 +1532,8 @@ export function buildGatewayCronService(params: {
   // executes, so an older reload's convergence can never clobber a newer one.
   // A failed pass schedules one bounded retry; a newer request supersedes it.
   let heartbeatReconcileEpoch = 0;
-  let heartbeatReconcileTail: Promise<void> = Promise.resolve();
+  let heartbeatReconcileTail: Promise<GatewayHeartbeatReconciliationResult> =
+    Promise.resolve("converged");
   let heartbeatRetryTimer: NodeJS.Timeout | undefined;
   const stopHeartbeatReconcileRetry = () => {
     // Also invalidate any in-flight pass so a post-stop retry cannot fire.
@@ -1538,35 +1543,56 @@ export function buildGatewayCronService(params: {
       heartbeatRetryTimer = undefined;
     }
   };
-  const reconcileHeartbeatJobs = (cfgOverride?: OpenClawConfig): Promise<void> => {
+  const reconcileHeartbeatJobs = (
+    cfgOverride?: OpenClawConfig,
+  ): Promise<GatewayHeartbeatReconciliationResult> => {
     const epoch = ++heartbeatReconcileEpoch;
     if (heartbeatRetryTimer) {
       clearTimeout(heartbeatRetryTimer);
       heartbeatRetryTimer = undefined;
     }
-    const pass = async () => {
+    const pass = async (): Promise<GatewayHeartbeatReconciliationResult> => {
+      const assertCurrent = () => {
+        if (epoch !== heartbeatReconcileEpoch) {
+          throw new GatewayHeartbeatReconciliationSupersededError();
+        }
+      };
       if (epoch !== heartbeatReconcileEpoch) {
-        return;
+        return "superseded";
       }
       const { ok: heartbeatOk } = await reconcileHeartbeatMonitorJobs({
         cron,
         cfg: cfgOverride ?? getRuntimeConfig(),
         logger: cronLogger,
+        commitGuard: assertCurrent,
       });
+      if (epoch !== heartbeatReconcileEpoch) {
+        return "superseded";
+      }
       const { ok: skillReviewOk } = await reconcileSkillCollectionReviewJobs({
         cron,
         cfg: cfgOverride ?? getRuntimeConfig(),
         logger: cronLogger,
+        commitGuard: assertCurrent,
       });
-      if ((!heartbeatOk || !skillReviewOk) && epoch === heartbeatReconcileEpoch) {
+      if (epoch !== heartbeatReconcileEpoch) {
+        return "superseded";
+      }
+      if (!heartbeatOk || !skillReviewOk) {
         heartbeatRetryTimer = setTimeout(() => {
           heartbeatRetryTimer = undefined;
           void reconcileHeartbeatJobs(cfgOverride);
         }, 30_000);
         heartbeatRetryTimer.unref?.();
       }
+      return heartbeatOk && skillReviewOk ? "converged" : "retry-scheduled";
     };
-    heartbeatReconcileTail = heartbeatReconcileTail.then(pass, pass);
+    heartbeatReconcileTail = heartbeatReconcileTail.then(pass, pass).catch((error: unknown) => {
+      if (error instanceof GatewayHeartbeatReconciliationSupersededError) {
+        return "superseded";
+      }
+      throw error;
+    });
     return heartbeatReconcileTail;
   };
   const startCron = cron.start.bind(cron);

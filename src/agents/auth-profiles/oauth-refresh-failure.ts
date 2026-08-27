@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 /**
@@ -153,7 +154,11 @@ export function classifyOAuthRefreshFailureReason(
   if (lower.includes("token_invalidated")) {
     return "token_invalidated";
   }
-  if (lower.includes("signing in again") || lower.includes("sign in again")) {
+  if (
+    lower.includes("signing in again") ||
+    lower.includes("sign in again") ||
+    lower.includes("log in again")
+  ) {
     return "sign_in_again";
   }
   if (lower.includes("invalid refresh token")) {
@@ -202,6 +207,18 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
         ...(profileId ? { profileId } : {}),
         reason: candidate.reason,
       };
+    }
+    const record = asOptionalRecord(candidate);
+    const rawError = record?.rawError;
+    if (typeof rawError === "string") {
+      const classified = classifyOAuthRefreshFailure(rawError);
+      if (classified) {
+        const rawProfileId = record?.profileId;
+        const profileId = sanitizeOAuthRefreshFailureProfileId(
+          typeof rawProfileId === "string" ? rawProfileId : undefined,
+        );
+        return { ...classified, ...(profileId ? { profileId } : {}) };
+      }
     }
     if (seen.has(candidate)) {
       return null;

@@ -125,16 +125,24 @@ export async function rollbackCodexAppServerBindingSubscription(
 /** Releases only the physical client and native thread recorded by the displaced binding owner. */
 export async function releaseCodexAppServerBindingSubscription(
   binding: Pick<CodexAppServerThreadBinding, "threadId" | "clientId">,
-  options: { allowUntracked?: boolean } = {},
+  options: { allowUntracked?: boolean; assertCurrent?: () => void } = {},
 ): Promise<void> {
+  options.assertCurrent?.();
   const clientLease = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
   if (!clientLease) {
     return;
   }
   try {
-    if (await releaseCodexAppServerLiveThread(clientLease.client, binding.threadId)) {
+    if (
+      await releaseCodexAppServerLiveThread(
+        clientLease.client,
+        binding.threadId,
+        options.assertCurrent,
+      )
+    ) {
       return;
     }
+    options.assertCurrent?.();
     // Evicted idle owners also disappear from the registry. Only an explicit
     // claimed generation proves an active turn still owns its subscription.
     if (isCodexAppServerLiveThreadClaimed(clientLease.client, binding.threadId)) {
@@ -148,6 +156,7 @@ export async function releaseCodexAppServerBindingSubscription(
     const unsubscribed = await unsubscribeCodexThreadBestEffort(clientLease.client, {
       threadId: binding.threadId,
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      assertCurrent: options.assertCurrent,
     });
     if (!unsubscribed) {
       await closeCodexStartupClientBestEffort(clientLease.client);

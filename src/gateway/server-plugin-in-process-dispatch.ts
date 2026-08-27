@@ -84,6 +84,7 @@ type DispatchGatewayMethodInProcessOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
   resolveGatewayContext?: GatewayContextResolver;
+  sessionMutationCommitGuard?: () => void;
 };
 
 type ResolvedInProcessGatewayDispatch = {
@@ -275,23 +276,37 @@ export async function dispatchGatewayMethodInProcessRaw(
   params: unknown,
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<GatewayMethodDispatchResponse> {
-  return await withInProcessGatewayDispatch(
-    method,
-    options,
-    async (resolved) =>
-      await dispatchGatewayRequestInProcessRaw(method, params, {
-        client: resolved.client,
-        context: resolved.context,
-        expectFinal: options?.expectFinal,
-        isWebchatConnect: resolved.isWebchatConnect,
-        methodRegistry: resolved.context.getGatewayMethodRegistry?.(),
-        onAccepted: options?.onAccepted,
-        onSignalAbort: options?.onSignalAbort,
-        requestIdPrefix: "plugin-subagent",
-        timeoutMs: options?.timeoutMs,
-        ...(options?.signal ? { signal: options.signal } : {}),
-      }),
-  );
+  return await withInProcessGatewayDispatch(method, options, async (resolved) => {
+    const assertGatewayContextCurrent = options?.resolveGatewayContext
+      ? () => {
+          if (options.resolveGatewayContext?.() !== resolved.context) {
+            throw new Error(
+              `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+            );
+          }
+        }
+      : undefined;
+    const sessionMutationCommitGuard =
+      assertGatewayContextCurrent || options?.sessionMutationCommitGuard
+        ? () => {
+            assertGatewayContextCurrent?.();
+            options?.sessionMutationCommitGuard?.();
+          }
+        : undefined;
+    return await dispatchGatewayRequestInProcessRaw(method, params, {
+      client: resolved.client,
+      context: resolved.context,
+      expectFinal: options?.expectFinal,
+      isWebchatConnect: resolved.isWebchatConnect,
+      methodRegistry: resolved.context.getGatewayMethodRegistry?.(),
+      onAccepted: options?.onAccepted,
+      onSignalAbort: options?.onSignalAbort,
+      requestIdPrefix: "plugin-subagent",
+      ...(sessionMutationCommitGuard ? { sessionMutationCommitGuard } : {}),
+      timeoutMs: options?.timeoutMs,
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+  });
 }
 
 /** Live request context for trusted built-in tools that need direct runtime state. */
