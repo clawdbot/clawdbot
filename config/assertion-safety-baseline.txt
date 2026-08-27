@@ -2661,7 +2661,7 @@ src/config/io.snapshot.ts	1
 src/config/io.warnings.ts	2
 src/config/io.write-prepare.ts	16
 src/config/io.write-safety.ts	4
-src/config/io.write.ts	10
+src/config/io.write.ts	7
 src/config/issue-location.ts	2
 src/config/legacy-private-network-migration.ts	1
 src/config/legacy.default-agent-roles.ts	1
