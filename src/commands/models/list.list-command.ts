@@ -123,6 +123,7 @@ export async function modelsListCommand(
     : loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const authIndex = createModelListAuthIndex({
     cfg,
+    agentId,
     authStore,
     agentDir,
     workspaceDir,

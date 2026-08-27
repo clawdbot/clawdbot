@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 
@@ -10,10 +11,19 @@ type ExternalCliProfilesResolver =
 const externalCliMocks = vi.hoisted(() => ({
   resolveExternalCliAuthProfiles: vi.fn<ExternalCliProfilesResolver>(() => []),
 }));
+const providerRuntimeMocks = vi.hoisted(() => ({
+  resolveProviderSyntheticAuthWithPlugin: vi.fn(),
+}));
 
 vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({
   listExternalCliSyncProviderIds: () => ["openai"],
   resolveExternalCliAuthProfiles: externalCliMocks.resolveExternalCliAuthProfiles,
+}));
+
+vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-runtime.js")>()),
+  resolveProviderSyntheticAuthWithPlugin:
+    providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin,
 }));
 
 const emptyStore: AuthProfileStore = { version: 1, profiles: {} };
@@ -25,11 +35,13 @@ const emptyMetadataSnapshot = {
 } as unknown as PluginMetadataSnapshot;
 
 function createTestModelListAuthIndex(
-  params: Omit<Parameters<typeof createModelListAuthIndex>[0], "metadataSnapshot"> & {
+  params: Omit<Parameters<typeof createModelListAuthIndex>[0], "agentId" | "metadataSnapshot"> & {
+    agentId?: string;
     metadataSnapshot?: PluginMetadataSnapshot;
   },
 ) {
   return createModelListAuthIndex({
+    agentId: "main",
     metadataSnapshot: emptyMetadataSnapshot,
     ...params,
   });
@@ -60,6 +72,7 @@ describe("createModelListAuthIndex", () => {
   beforeEach(() => {
     externalCliMocks.resolveExternalCliAuthProfiles.mockReset();
     externalCliMocks.resolveExternalCliAuthProfiles.mockReturnValue([]);
+    providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin.mockReset();
   });
 
   it("keeps a fresh auth scope empty", () => {
@@ -172,6 +185,108 @@ describe("createModelListAuthIndex", () => {
       selectedRoute: { authRequirement: "api-key" },
     });
     expect(index.providerDiscoveryProviderIds).toEqual(["openai"]);
+  });
+
+  it("projects verified Claude CLI auth onto its configured Anthropic model", () => {
+    providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+      apiKey: "claude-cli-native-auth",
+      source: "Claude CLI native auth",
+      mode: "oauth",
+    });
+    const index = createTestModelListAuthIndex({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              models: {
+                "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          ],
+        },
+      },
+      authStore: emptyStore,
+      env: {},
+      syntheticAuthProviderRefs: ["claude-cli"],
+    });
+
+    expect(index.evaluateModelAuth("anthropic", { modelId: "claude-opus-5" })).toMatchObject({
+      availability: true,
+      routeResolution: null,
+    });
+    expect(providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "claude-cli" }),
+    );
+  });
+
+  it("does not project Claude CLI auth onto another agent or OpenClaw runtime", () => {
+    providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+      apiKey: "claude-cli-native-auth",
+      source: "Claude CLI native auth",
+      mode: "oauth",
+    });
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            models: {
+              "anthropic/claude-opus-5": { agentRuntime: { id: "openclaw" } },
+              "anthropic/claude-sonnet-5": {},
+            },
+          },
+          {
+            id: "worker",
+            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+          },
+        ],
+      },
+    };
+    const index = createTestModelListAuthIndex({
+      cfg,
+      agentId: "main",
+      authStore: emptyStore,
+      env: {},
+      syntheticAuthProviderRefs: ["claude-cli"],
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(
+      index.evaluateModelAuth("anthropic", { modelId: "claude-opus-5" }).availability,
+    ).not.toBe(true);
+    expect(
+      index.evaluateModelAuth("anthropic", { modelId: "claude-sonnet-5" }).availability,
+    ).not.toBe(true);
+    expect(providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+  });
+  it("does not use an Anthropic API key as proof of Claude CLI login", () => {
+    providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue(undefined);
+    const index = createTestModelListAuthIndex({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              models: {
+                "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          ],
+        },
+      },
+      authStore: emptyStore,
+      env: { ANTHROPIC_API_KEY: "anthropic-platform-key" },
+      syntheticAuthProviderRefs: ["claude-cli"],
+    });
+
+    expect(index.evaluateModelAuth("anthropic", { modelId: "claude-opus-5" })).toMatchObject({
+      availability: false,
+      routeResolution: null,
+    });
   });
 
   it("uses enabled synthetic refs from prepared persisted metadata", () => {
