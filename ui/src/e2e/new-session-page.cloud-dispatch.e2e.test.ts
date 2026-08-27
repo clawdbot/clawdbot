@@ -392,6 +392,7 @@ suite.define(() => {
       const publishPlacement = async (
         state: "requested" | "provisioning" | "syncing" | "starting",
         generation: number,
+        label: string,
         includeNeutral = false,
       ) => {
         await gateway.setMethodResponse("sessions.list", {
@@ -427,16 +428,16 @@ suite.define(() => {
           ts: Date.now(),
         });
         await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-        await pollLocatorText(startupStatus).toContain(`Placement: ${state}`);
+        await pollLocatorText(startupStatus).toContain(label);
       };
 
-      for (const [state, generation] of [
-        ["requested", 1],
-        ["provisioning", 2],
-        ["syncing", 3],
-        ["starting", 4],
+      for (const [state, generation, label] of [
+        ["requested", 1, "Provisioning environment…"],
+        ["provisioning", 2, "Provisioning environment…"],
+        ["syncing", 3, "Preparing workspace…"],
+        ["starting", 4, "Starting…"],
       ] as const) {
-        await publishPlacement(state, generation, state === "starting");
+        await publishPlacement(state, generation, label, state === "starting");
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
       expect(await gateway.getRequests("sessions.describe")).toHaveLength(
@@ -457,7 +458,7 @@ suite.define(() => {
         app.runtime?.context.navigate("chat", { pathname });
       }, controlUiSessionPath(sessionKey));
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
-      await pollLocatorText(startupStatus).toContain("Placement: starting");
+      await pollLocatorText(startupStatus).toContain("Starting…");
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);

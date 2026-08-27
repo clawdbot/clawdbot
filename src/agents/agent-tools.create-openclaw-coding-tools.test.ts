@@ -50,6 +50,7 @@ import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import {
+  createContainerWorkspaceSandboxFsBridge,
   createHostSandboxFsBridge,
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -2774,7 +2775,7 @@ describe("createOpenClawCodingTools read behavior", () => {
     await fs.writeFile(filePath, "# Demo\ncomplete instructions", "utf8");
     const sandbox = createAgentToolsSandboxContext({
       workspaceDir: root,
-      fsBridge: createHostSandboxFsBridge(root),
+      fsBridge: createContainerWorkspaceSandboxFsBridge(root),
     });
     const tools = createOpenClawCodingTools({
       sandbox,
@@ -2792,9 +2793,13 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(extractToolText(await read.execute("sandbox-skill", { path: relativePath }))).toBe(
       "# Demo\ncomplete instructions",
     );
-    await expect(
-      read.execute("sandbox-skill-window", { path: `/workspace/${relativePath}`, cursor: 0 }),
-    ).rejects.toThrow(/whole|partial|window/i);
+    for (const window of [{ offset: 2 }, { limit: 1 }, { cursor: 0 }]) {
+      const windowed = await read.execute("sandbox-skill-window", {
+        path: `/workspace/${relativePath}`,
+        ...window,
+      });
+      expect(extractToolText(windowed)).toBe("# Demo\ncomplete instructions");
+    }
   });
 
   it("reads exact node skill locators without sending them to the filesystem backend", async () => {
@@ -2816,12 +2821,130 @@ describe("createOpenClawCodingTools read behavior", () => {
     const result = await tool.execute("node-skill-read", { path: locator });
 
     expect(extractToolText(result)).toContain("remote-marker");
-    for (const window of [{ offset: 1 }, { limit: 1 }, { cursor: 0 }]) {
-      await expect(
-        tool.execute("whole-skill-window", { path: locator, ...window }),
-      ).rejects.toThrow(/whole|partial|window/i);
+    for (const window of [{ offset: 2 }, { limit: 1 }, { cursor: 0 }]) {
+      const windowed = await tool.execute("whole-skill-window", { path: locator, ...window });
+      expect(extractToolText(windowed)).toContain("# Pond\nremote-marker");
     }
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates sequential and concurrent successful skill reads within one attempt", async () => {
+    const locator = "/skills/pond/SKILL.md";
+    const instructionDeliveryCache = new Map<string, Promise<boolean>>();
+    const instructionDeliveryOptions = { instructionDeliveryCache };
+    const fullResult = {
+      content: [{ type: "text", text: "# Pond\ncomplete instructions" }],
+      details: { kind: "text", content: "# Pond\ncomplete instructions" },
+    } as AgentToolResult<unknown>;
+    let releaseRead = (): void => undefined;
+    const pendingRead = new Promise<AgentToolResult<unknown>>((resolve) => {
+      releaseRead = () => resolve(fullResult);
+    });
+    const execute = vi.fn(() => pendingRead);
+    const tool = wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: {},
+        execute,
+      } as never,
+      [{ filePath: locator }],
+      instructionDeliveryOptions,
+    );
+
+    const first = tool.execute("first-skill-read", { path: locator });
+    const concurrent = tool.execute("concurrent-skill-read", { path: locator });
+    expect(execute).toHaveBeenCalledTimes(1);
+    releaseRead();
+
+    expect(extractToolText(await first)).toBe("# Pond\ncomplete instructions");
+    expect(extractToolText(await concurrent)).toContain("already served whole");
+    expect(
+      extractToolText(await tool.execute("sequential-skill-read", { path: locator })),
+    ).toContain("already served whole");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries skill reads after failures, whole-read refusals, and optional misses", async () => {
+    const locator = "/skills/pond/SKILL.md";
+    const instructionDeliveryCache = new Map<string, Promise<boolean>>();
+    const instructionDeliveryOptions = { instructionDeliveryCache };
+    const fullResult = {
+      content: [{ type: "text", text: "# Pond\ncomplete instructions" }],
+      details: { kind: "text", content: "# Pond\ncomplete instructions" },
+    } as AgentToolResult<unknown>;
+    const truncatedResult = {
+      content: [{ type: "text", text: "partial" }],
+      details: { kind: "truncated" },
+    } as AgentToolResult<unknown>;
+    const notFoundResult = {
+      content: [{ type: "text", text: `Optional file not found: ${locator}.` }],
+      details: { kind: "not_found", status: "not_found", path: locator, optional: true },
+    } as AgentToolResult<unknown>;
+    const execute = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient read failure"))
+      .mockResolvedValueOnce(truncatedResult)
+      .mockResolvedValueOnce(notFoundResult)
+      .mockResolvedValueOnce(fullResult);
+    const tool = wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: {},
+        execute,
+      } as never,
+      [{ filePath: locator }],
+      instructionDeliveryOptions,
+    );
+
+    await expect(tool.execute("failed-skill-read", { path: locator })).rejects.toThrow(
+      "transient read failure",
+    );
+    expect(
+      extractToolText(await tool.execute("oversized-skill-read", { path: locator })),
+    ).toContain("cannot be partially served");
+    expect(
+      extractToolText(
+        await tool.execute("optional-missing-skill-read", { path: locator, optional: true }),
+      ),
+    ).toContain("Optional file not found");
+    expect(extractToolText(await tool.execute("retried-skill-read", { path: locator }))).toBe(
+      "# Pond\ncomplete instructions",
+    );
+    expect(execute).toHaveBeenCalledTimes(4);
+  });
+
+  it("serves skill instructions again after model-context compaction invalidates the cache", async () => {
+    const locator = "node://node-1/skills/pond/SKILL.md";
+    const instructionDeliveryCache = new Map<string, Promise<boolean>>();
+    const instructionDeliveryOptions = { instructionDeliveryCache };
+    const tool = wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: {},
+        execute: vi.fn(),
+      } as never,
+      [{ filePath: locator, readContent: "# Pond\ncomplete instructions" }],
+      instructionDeliveryOptions,
+    );
+
+    expect(extractToolText(await tool.execute("first-skill-read", { path: locator }))).toBe(
+      "# Pond\ncomplete instructions",
+    );
+    expect(extractToolText(await tool.execute("deduped-skill-read", { path: locator }))).toContain(
+      "already served whole",
+    );
+
+    instructionDeliveryCache.clear();
+
+    expect(
+      extractToolText(await tool.execute("post-compaction-skill-read", { path: locator })),
+    ).toBe("# Pond\ncomplete instructions");
   });
 
   it("uses host decoding only for host-backed sandbox paths", async () => {

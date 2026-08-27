@@ -507,10 +507,6 @@ openclaw-chat-page {
   margin-bottom: 8px;
 }
 
-.chat-cloud-startup__spinner svg {
-  animation: compaction-spin 1s linear infinite;
-}
-
 @media (max-width: 640px) {
   .chat-composer-neighbor-card.chat-workspace-conflict-notice {
     width: calc(100% - 8px);

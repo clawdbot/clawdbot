@@ -6,10 +6,12 @@ import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-
 // Buzz tests cover inbound room admission, mention gating, and reply delivery.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuzzBus } from "./buzz-bus.js";
 import { BuzzDirectoryState } from "./directory-state.js";
-import { handleBuzzInbound } from "./inbound.js";
+import { handleBuzzInbound as handleBuzzInboundWithHistory } from "./inbound.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   BUZZ_NORMAL_MESSAGE_KIND,
@@ -38,6 +40,14 @@ const ROOM_ID = "b25b8e40-eb1a-43a4-b56b-30a4e16df586";
 const BOT_PUBLIC_KEY = "a".repeat(64);
 const SENDER_PUBLIC_KEY = "b".repeat(64);
 const OTHER_PUBLIC_KEY = "c".repeat(64);
+
+function handleBuzzInbound(
+  params: Omit<Parameters<typeof handleBuzzInboundWithHistory>[0], "historyMap"> & {
+    historyMap?: Map<string, HistoryEntry[]>;
+  },
+) {
+  return handleBuzzInboundWithHistory({ ...params, historyMap: params.historyMap ?? new Map() });
+}
 
 function createAccount(
   configOverrides: Partial<ResolvedBuzzAccount["config"]> = {},
@@ -106,9 +116,257 @@ function firstDispatch(
   return call[0];
 }
 
+function createPreparedInboundRuntime() {
+  const runtime = createPluginRuntimeMock();
+  const runDispatch = vi.fn(async () => ({
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 1 },
+  }));
+  const recordInboundSession = vi.fn(async () => undefined);
+  vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) =>
+    runPreparedInboundReply({
+      ...params,
+      routeSessionKey: params.route.sessionKey,
+      storePath: "/unused/buzz-bot-loop",
+      recordInboundSession,
+      runDispatch,
+    }),
+  );
+  return { runtime, runDispatch, recordInboundSession };
+}
+
+function createHistoryParams(historyLimit = 2, roles = new Map<string, string>()) {
+  const bus = createBus();
+  bus.directory.replaceMemberships(
+    new Map([
+      [
+        ROOM_ID,
+        {
+          roomId: ROOM_ID,
+          createdAt: 1_777_000_000,
+          eventId: "membership-history",
+          publisherPublicKey: OTHER_PUBLIC_KEY,
+          members: new Set([BOT_PUBLIC_KEY, SENDER_PUBLIC_KEY, OTHER_PUBLIC_KEY]),
+          roles,
+        },
+      ],
+    ]),
+  );
+  return {
+    account: createAccount({ historyLimit }),
+    cfg: {} satisfies OpenClawConfig,
+    bus,
+    ...createLifecycle(),
+    historyMap: new Map<string, HistoryEntry[]>(),
+  };
+}
+
 describe("handleBuzzInbound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("retains opt-in unmentioned room context without inference until a mention", async () => {
+    const runtime = createPluginRuntimeMock();
+    setBuzzRuntime(runtime);
+    const params = createHistoryParams();
+    await handleBuzzInbound({
+      ...params,
+      message: createMessage({ text: "The release is blue." }),
+    });
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.channel.session.recordInboundSession).not.toHaveBeenCalled();
+    expect(params.bus.sendTyping).not.toHaveBeenCalled();
+    expect(params.bus.sendText).not.toHaveBeenCalled();
+    await handleBuzzInbound({
+      ...params,
+      message: createMessage({
+        id: "trigger",
+        text: "Which color?",
+        mentionedPubkeys: [BOT_PUBLIC_KEY],
+      }),
+    });
+    expect(firstDispatch(runtime).ctxPayload.BodyForAgent).toContain("The release is blue.");
+    expect(firstDispatch(runtime).ctxPayload.BodyForAgent).toContain("Which color?");
+    expect(params.historyMap.size).toBe(0);
+  });
+
+  it.each(["default-off", "denied", "revoked", "other-thread"])(
+    "excludes passive context for %s",
+    async (scenario) => {
+      const runtime = createPluginRuntimeMock();
+      setBuzzRuntime(runtime);
+      const params = createHistoryParams();
+      if (scenario === "default-off") {
+        delete params.account.config.historyLimit;
+      }
+      if (scenario === "denied") {
+        params.account.config.groupPolicy = "allowlist";
+        params.account.config.groupAllowFrom = [OTHER_PUBLIC_KEY];
+      }
+      await handleBuzzInbound({ ...params, message: createMessage({ text: "Private context" }) });
+      expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      if (scenario === "revoked") {
+        params.bus.directory.replaceMemberships(
+          new Map([
+            [
+              ROOM_ID,
+              {
+                roomId: ROOM_ID,
+                createdAt: 1_777_000_001,
+                eventId: "membership-revoked",
+                publisherPublicKey: OTHER_PUBLIC_KEY,
+                members: new Set([BOT_PUBLIC_KEY, OTHER_PUBLIC_KEY]),
+                roles: new Map(),
+              },
+            ],
+          ]),
+        );
+      }
+      await handleBuzzInbound({
+        ...params,
+        message: createMessage({
+          id: "trigger",
+          senderPubkey: OTHER_PUBLIC_KEY,
+          text: "Current question",
+          threadId: scenario === "other-thread" ? "separate-thread" : undefined,
+          mentionedPubkeys: [BOT_PUBLIC_KEY],
+        }),
+      });
+      expect(firstDispatch(runtime).ctxPayload.BodyForAgent).toBe("Current question");
+    },
+  );
+
+  it("bounds stored UTF-8 entries and rendered context independently", async () => {
+    const runtime = createPluginRuntimeMock();
+    setBuzzRuntime(runtime);
+    const params = createHistoryParams(20);
+    for (let index = 0; index < 25; index++) {
+      await handleBuzzInbound({
+        ...params,
+        message: createMessage({
+          id: `passive-${index}`,
+          text: `message-${index} ${"界🦞".repeat(150)}`,
+        }),
+      });
+    }
+    const stored = [...params.historyMap.values()].flat();
+    expect(stored).toHaveLength(20);
+    expect(stored.every((entry) => Buffer.byteLength(entry.body) <= 512)).toBe(true);
+    expect(stored.every((entry) => !entry.body.includes("�"))).toBe(true);
+    await handleBuzzInbound({
+      ...params,
+      message: createMessage({
+        id: "trigger",
+        text: "current",
+        mentionedPubkeys: [BOT_PUBLIC_KEY],
+      }),
+    });
+    const body = firstDispatch(runtime).ctxPayload.BodyForAgent ?? "";
+    expect(body).toContain("message-24");
+    expect(body).not.toContain("message-5");
+    expect(Buffer.byteLength(body) - Buffer.byteLength("current")).toBeLessThanOrEqual(1_024);
+    expect(firstDispatch(runtime).ctxPayload.InboundHistory).toBeUndefined();
+  });
+
+  it("preserves passive arrivals while an earlier reply is in flight", async () => {
+    const runtime = createPluginRuntimeMock();
+    setBuzzRuntime(runtime);
+    const params = createHistoryParams();
+    const finished = createDeferred<void>();
+    const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+    const original = dispatch.getMockImplementation();
+    if (!original) {
+      throw new Error("expected shared inbound dispatch implementation");
+    }
+    dispatch.mockImplementationOnce(async (plan) => {
+      await finished.promise;
+      return original(plan);
+    });
+    await handleBuzzInbound({ ...params, message: createMessage({ text: "earlier context" }) });
+    const reply = handleBuzzInbound({
+      ...params,
+      message: createMessage({ id: "trigger", text: "first", mentionedPubkeys: [BOT_PUBLIC_KEY] }),
+    });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    await handleBuzzInbound({
+      ...params,
+      message: createMessage({ id: "later", text: "arrived during reply" }),
+    });
+    finished.resolve();
+    await reply;
+    await handleBuzzInbound({
+      ...params,
+      message: createMessage({
+        id: "next-trigger",
+        text: "next",
+        mentionedPubkeys: [BOT_PUBLIC_KEY],
+      }),
+    });
+    const nextBody = dispatch.mock.calls[1]?.[0].ctxPayload.BodyForAgent;
+    expect(nextBody).toContain("arrived during reply");
+    expect(nextBody).not.toContain("earlier context");
+  });
+
+  it("retains human context across a loop-suppressed bot turn until a human dispatch", async () => {
+    const { runtime, runDispatch, recordInboundSession } = createPreparedInboundRuntime();
+    setBuzzRuntime(runtime);
+    const params = createHistoryParams(2, new Map([[SENDER_PUBLIC_KEY, "bot"]]));
+    params.account.relayUrl = "wss://passive-bot-loop.example.test/";
+    const cfg = {
+      channels: {
+        defaults: {
+          botLoopProtection: {
+            enabled: true,
+            maxEventsPerWindow: 1,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    await handleBuzzInbound({
+      ...params,
+      cfg,
+      message: createMessage({ id: "bot-seed", mentionedPubkeys: [BOT_PUBLIC_KEY] }),
+    });
+    await handleBuzzInbound({
+      ...params,
+      cfg,
+      message: createMessage({
+        id: "human-context",
+        senderPubkey: OTHER_PUBLIC_KEY,
+        text: "Keep this human context.",
+      }),
+    });
+    await handleBuzzInbound({
+      ...params,
+      cfg,
+      message: createMessage({ id: "bot-suppressed", mentionedPubkeys: [BOT_PUBLIC_KEY] }),
+    });
+    expect(runDispatch).toHaveBeenCalledTimes(1);
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+    await expect(dispatch.mock.results[1]?.value).resolves.toMatchObject({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+    });
+    await handleBuzzInbound({
+      ...params,
+      cfg,
+      message: createMessage({
+        id: "human-accepted",
+        senderPubkey: OTHER_PUBLIC_KEY,
+        text: "Which context?",
+        mentionedPubkeys: [BOT_PUBLIC_KEY],
+      }),
+    });
+    expect(runDispatch).toHaveBeenCalledTimes(2);
+    expect(recordInboundSession).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls[2]?.[0].ctxPayload.BodyForAgent).toContain(
+      "Keep this human context.",
+    );
+    expect(params.historyMap.size).toBe(0);
   });
 
   it("accepts a native Nostr public-key mention", async () => {
@@ -318,21 +576,7 @@ describe("handleBuzzInbound", () => {
   ])(
     "bounds current roster role $role with protection enabled=$enabled",
     async ({ role, enabled, dispatches }) => {
-      const runtime = createPluginRuntimeMock();
-      const runDispatch = vi.fn(async () => ({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 1 },
-      }));
-      const recordInboundSession = vi.fn(async () => undefined);
-      vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) =>
-        runPreparedInboundReply({
-          ...params,
-          routeSessionKey: params.route.sessionKey,
-          storePath: "/unused/buzz-bot-loop",
-          recordInboundSession,
-          runDispatch,
-        }),
-      );
+      const { runtime, runDispatch, recordInboundSession } = createPreparedInboundRuntime();
       setBuzzRuntime(runtime);
       const bus = createBus();
       bus.directory.replaceMemberships(

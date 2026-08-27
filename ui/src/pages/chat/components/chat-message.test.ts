@@ -7,6 +7,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
+import { chatStartupStatusLabel } from "../chat-run-startup.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
@@ -1695,6 +1696,7 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
+    ["preparing_workspace", "Preparing workspace…"],
     ["provisioning_environment", "Provisioning environment…"],
     ["preparing_context", "Preparing this turn…"],
     ["starting_model", "Waiting for a response…"],
@@ -1703,7 +1705,10 @@ describe("grouped chat rendering", () => {
 
     render(
       renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-        startupPhase,
+        startupLabel: chatStartupStatusLabel(
+          { state: "status", runId: "startup-run", phase: startupPhase },
+          null,
+        ),
       }),
       container,
     );
@@ -1763,7 +1768,7 @@ describe("grouped chat rendering", () => {
 
     render(
       renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-        startupPhase: "starting_model",
+        startupLabel: "Waiting for a response…",
         waitingApproval: true,
         runOutputTokens: 5_500,
       }),

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import YAML from "yaml";
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -336,7 +335,7 @@ describe("managed npm root", () => {
       npmRoot,
       packageName: "@openclaw/feishu",
       dependencySpec: "2026.5.4",
-      overrideOmissions: { npmAliases: true },
+      omitNpmAliasOverrides: true,
       managedOverrides: {
         axios: "1.18.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",
@@ -597,19 +596,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("reads workspace pnpm overrides for managed plugin installs", async () => {
-    const workspace = YAML.parse(
-      await fs.readFile(path.resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8"),
-    ) as { overrides?: Record<string, unknown> };
-    const expectedOverrides = workspace.overrides ?? {};
-
-    expect(expectedOverrides).toMatchObject({
-      axios: "1.19.0",
-      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-    });
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);
-  });
-
   it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
     const packageRoot = await makeTempRoot();
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
@@ -638,7 +624,7 @@ describe("managed npm root", () => {
     });
   });
 
-  it("resolves npm override dependency references from the host package manifest", async () => {
+  it("normalizes workspace overrides before managed npm use", async () => {
     const packageRoot = await makeTempRoot();
     await fs.writeFile(
       path.join(packageRoot, "package.json"),
@@ -661,8 +647,15 @@ describe("managed npm root", () => {
       path.join(packageRoot, "pnpm-workspace.yaml"),
       [
         "overrides:",
+        '  "parent@1>child": 2.0.0',
+        '  "parent>@scope/child": 2.0.0',
+        '  "@scope/parent@1>@scope/child": 2.0.0',
+        '  "range-target@>1": 2.0.0',
         '  managed-runtime: "$managed-runtime"',
         "  nested:",
+        '    "parent>child": 2.0.0',
+        '    "range-target@>=1": 2.0.0',
+        '    ".": 1.0.0',
         '    optional-runtime: "$optional-runtime"',
         '    alias: "$node-domexception"',
         "  axios: 1.18.0",
@@ -672,8 +665,11 @@ describe("managed npm root", () => {
     );
 
     await expect(readOpenClawManagedNpmRootOverrides({ packageRoot })).resolves.toEqual({
+      "range-target@>1": "2.0.0",
       "managed-runtime": "3.1024.0",
       nested: {
+        "range-target@>=1": "2.0.0",
+        ".": "1.0.0",
         "optional-runtime": "2.0.0",
         alias: "npm:@nolyfill/domexception@1.0.28",
       },

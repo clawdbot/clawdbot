@@ -996,6 +996,22 @@ disable <name>` update its persisted policy. Mutations require an owner or
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
 
+When `/codex resume` attaches a thread without an existing verified harness
+binding, its next turn checks the native thread's stored tool catalog and
+applies the current harness configuration before continuing. This first
+attachment requires the local stdio app-server and its per-agent Codex home.
+It also needs exclusive use of that app-server while applying configuration;
+if another turn or native child is active, wait for it to finish and retry.
+Use [Codex supervision](/plugins/codex-supervision) or native Codex to continue
+threads in a shared user home or on another app-server.
+
+Codex cannot replace a thread's dynamic tool catalog during resume. If that
+catalog differs from the current harness tools, its metadata cannot be read,
+or Codex cannot confirm that it applied the configuration, OpenClaw reports
+the problem and keeps the selected native thread intact. It does not silently
+start another thread. Use `/new` to start with the current harness tools, or
+continue the preserved thread in native Codex.
+
 ### Shared Fast mode and Codex fast mode
 
 `/fast` controls the shared OpenClaw policy. A directive-only `/fast off`
@@ -1584,6 +1600,14 @@ allocation. An OS hard limit can terminate Codex rather than backpressure it.
 **Model discovery is slow:** lower
 `plugins.entries.codex.config.discovery.timeoutMs` or disable discovery.
 See [Codex harness reference](/plugins/codex-harness-reference#model-discovery).
+
+**Codex plugin state has reached its row limit:** run `openclaw doctor` to
+check for bindings left behind by deleted or expired OpenClaw sessions. Stop
+the Gateway, then run `openclaw doctor --fix` to remove proven orphaned session
+bindings after session repair. Doctor preserves supervised bindings, active
+leases, ambiguous ownership, and bindings whose session store cannot be read.
+This cleanup does not delete native Codex thread history or managed-thread
+advisory records.
 
 **WebSocket transport fails immediately:** check `appServer.url`,
 `authToken`, headers, and that the remote app-server speaks the same Codex

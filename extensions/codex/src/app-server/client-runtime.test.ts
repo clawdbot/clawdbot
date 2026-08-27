@@ -489,6 +489,26 @@ describe("Codex app-server client runtime", () => {
     );
   });
 
+  it("rechecks deletion authority before sending the physical unsubscribe", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+    await retainCodexAppServerLiveThread(harness.client, "thread-deleted");
+    const request = vi.spyOn(harness.client, "request");
+    let current = true;
+    const release = releaseCodexAppServerLiveThread(harness.client, "thread-deleted", () => {
+      if (!current) {
+        throw new Error("deletion owner closed");
+      }
+    });
+    current = false;
+    await expect(release).rejects.toThrow("deletion owner closed");
+    expect(request).not.toHaveBeenCalled();
+    await expect(
+      consumeCodexAppServerLiveThread(harness.client, "thread-deleted"),
+    ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+  });
+
   it("transfers ownership only for the exact immutable thread fingerprint", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

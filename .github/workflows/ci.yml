@@ -2478,6 +2478,9 @@ jobs:
           else
             workers=3
           fi
+          if [ "$workers" -gt "$cores" ]; then
+            workers="$cores"
+          fi
           echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} predicted_test_seconds=${PREDICTED_TEST_SECONDS:-unknown} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 

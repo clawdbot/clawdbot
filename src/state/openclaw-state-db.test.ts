@@ -68,6 +68,19 @@ import {
   replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
 
+const stateDbLogInfo = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "state/db" ? { ...logger, info: stateDbLogInfo } : logger;
+    },
+  };
+});
+
 type StateDbTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "diagnostic_events" | "schema_meta" | "skill_usage"
@@ -81,9 +94,9 @@ const V2026_7_1_2_STATE_FIXTURE_URL = new URL(
   import.meta.url,
 );
 const V2026_7_1_2_STATE_FIXTURE_GZIP_SHA256 =
-  "62c2e22acc5b0d9d7a2d4c8afeb17735c5ef526593c937499614d9aba2ffd2f4";
+  "c775499d9a46462ae2368090a0c4ec75877784c40694046dd3af63df77b8737c";
 const V2026_7_1_2_STATE_FIXTURE_RAW_SHA256 =
-  "17807b83d33115fb9e523ae40a829d9177c8cab2ae3cb2ac872318a573fc0269";
+  "8511bb91f02d104f818c70b08397a678045d04741c931b0ee7ce6650b5519e85";
 const V2026_7_1_2_STATE_FIXTURE_SCHEMA_SHA256 =
   "f2fd6488e283470718547fb45886f04cc940b1de798e52fbf34a3a3408ae25e4";
 
@@ -257,7 +270,7 @@ function replaceManagedImageRecordsWithLegacyTable(
 const LEGACY_SESSION_WATCH_SCHEMA_VERSION = 3;
 const LEGACY_AMBIENT_WATCH_PREFIX = "ambient-group-watch:";
 
-function markStateDatabaseVersion(database: DatabaseSync, version: 5 | 6): void {
+function markStateDatabaseVersion(database: DatabaseSync, version: 5 | 6 | 7): void {
   database.exec(`
     PRAGMA user_version = ${version};
     UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
@@ -1497,6 +1510,7 @@ afterAll(() => {
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  stateDbLogInfo.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -2076,7 +2090,7 @@ describe("openclaw state database", () => {
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [
-            "Retired shared state commitments table and indexes",
+            "Discarded retired shared-state commitments rows, table, and indexes",
             "Migrated cloud worker placements to execution modes",
           ],
           warnings: [],
@@ -2096,6 +2110,11 @@ describe("openclaw state database", () => {
         }
       }
       const migrated = openOpenClawStateDatabase(options);
+      if (migrationPath === "runtime open") {
+        expect(stateDbLogInfo).toHaveBeenCalledWith(
+          "Discarded retired shared-state commitments rows, table, and indexes",
+        );
+      }
 
       expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
@@ -2136,6 +2155,36 @@ describe("openclaw state database", () => {
     },
   );
 
+  it("logs a destructive retirement only after the schema transaction commits", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    seedV6CommitmentSchema(legacy);
+    legacy.exec(`
+      CREATE TRIGGER fail_schema_meta_update
+      BEFORE UPDATE ON schema_meta
+      BEGIN
+        SELECT RAISE(ABORT, 'forced migration rollback');
+      END;
+    `);
+    legacy.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/forced migration rollback/);
+    expect(stateDbLogInfo).not.toHaveBeenCalledWith(
+      "Discarded retired shared-state commitments rows, table, and indexes",
+    );
+    const rolledBack = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        rolledBack.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+      ).toEqual({ name: "commitments" });
+    } finally {
+      rolledBack.close();
+    }
+  });
+
   // The canonical v6 case above proves both runtime and Doctor orchestration,
   // reporting, and markers; these variants isolate historical layout recognition.
   it.each([
@@ -2173,6 +2222,22 @@ describe("openclaw state database", () => {
     ).toBeUndefined();
   });
 
+  it("does not advertise the schema-7 retirement after its execution boundary", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    seedV6CommitmentSchema(database);
+    markStateDatabaseVersion(database, 7);
+    database.close();
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).not.toContainEqual({
+      kind: "commitments-retirement-v7",
+      path: databasePath,
+    });
+  });
+
   it.each(["runtime open", "doctor repair"] as const)(
     "retires the supported early commitments layout through %s",
     (migrationPath) => {
@@ -2188,7 +2253,9 @@ describe("openclaw state database", () => {
       if (migrationPath === "doctor repair") {
         const result = repairOpenClawStateDatabaseSchema(options);
         expect(result.warnings).toEqual([]);
-        expect(result.changes).toContain("Retired shared state commitments table and indexes");
+        expect(result.changes).toContain(
+          "Discarded retired shared-state commitments rows, table, and indexes",
+        );
       }
       const migrated = openOpenClawStateDatabase(options);
       expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
@@ -2233,6 +2300,48 @@ describe("openclaw state database", () => {
           .get(),
       ).toEqual({ tables: 73, indexes: 103, strict_tables: 0 });
       expect(hashSqliteSchema(released)).toBe(V2026_7_1_2_STATE_FIXTURE_SCHEMA_SHA256);
+      expect(
+        released
+          .prepare(
+            `SELECT id, agent_id, session_key, channel, status, reason, suggested_text,
+                    dedupe_key, due_earliest_ms, due_latest_ms, record_json
+               FROM commitments`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          id: "fixture-commitment",
+          agent_id: "fixture-agent",
+          session_key: "agent:fixture-agent:main",
+          channel: "telegram",
+          status: "pending",
+          reason: "fixture retirement proof",
+          suggested_text: "follow up",
+          dedupe_key: "fixture-dedupe",
+          due_earliest_ms: 2000,
+          due_latest_ms: 3000,
+          record_json: '{"fixture":true}',
+        },
+      ]);
+      expect(
+        released
+          .prepare(
+            `SELECT name
+               FROM sqlite_schema
+              WHERE type = 'index'
+                AND name IN (
+                  'idx_commitments_scope_due',
+                  'idx_commitments_status_due',
+                  'idx_commitments_scope_dedupe'
+                )
+              ORDER BY name`,
+          )
+          .all(),
+      ).toEqual([
+        { name: "idx_commitments_scope_dedupe" },
+        { name: "idx_commitments_scope_due" },
+        { name: "idx_commitments_status_due" },
+      ]);
       expect(
         released
           .prepare(
@@ -2286,7 +2395,7 @@ describe("openclaw state database", () => {
 
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
-        "Retired shared state commitments table and indexes",
+        "Discarded retired shared-state commitments rows, table, and indexes",
         "Retired six dead shared-state tables (v10)",
         "Retired legacy skill curator lifecycle and proposal origin-run tables",
         "Folded singleton state tables into config_machine_state (v12)",
@@ -2416,6 +2525,16 @@ describe("openclaw state database", () => {
     expect(
       migrated.db
         .prepare(
+          `SELECT type, name
+             FROM sqlite_schema
+            WHERE lower(name) LIKE '%commitment%'
+            ORDER BY type, name`,
+        )
+        .all(),
+    ).toEqual([]);
+    expect(
+      migrated.db
+        .prepare(
           "SELECT name FROM sqlite_schema WHERE name = 'idx_diagnostic_events_scope_sequence'",
         )
         .get(),
@@ -2432,7 +2551,7 @@ describe("openclaw state database", () => {
   });
 
   it.each(["runtime open", "doctor repair"] as const)(
-    "preserves a foreign commitments table and colliding index through %s",
+    "refuses retirement and leaves a foreign commitments table and colliding index unchanged through %s",
     (migrationPath) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -2516,34 +2635,37 @@ describe("openclaw state database", () => {
               ON commitments(agent_id, status, session_key);`,
       type: "index",
     },
-  ])("preserves an $label on the final v6 commitments layout", ({ name, sql, type }) => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const customized = new DatabaseSync(databasePath);
-    seedV6CommitmentSchema(customized);
-    customized.exec(sql);
-    customized.close();
+  ])(
+    "refuses retirement and leaves an $label unchanged on the final v6 commitments layout",
+    ({ name, sql, type }) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const customized = new DatabaseSync(databasePath);
+      seedV6CommitmentSchema(customized);
+      customized.exec(sql);
+      customized.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(/commitments/u);
+      expect(() => openOpenClawStateDatabase(options)).toThrow(/commitments/u);
 
-    const preserved = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
-      expect(
-        preserved.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
-      ).toEqual({ name: "commitments" });
-      expect(
-        preserved.prepare("SELECT type, tbl_name FROM sqlite_schema WHERE name = ?").get(name),
-      ).toEqual({ type, tbl_name: "commitments" });
-    } finally {
-      preserved.close();
-    }
-  });
+      const preserved = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
+        expect(
+          preserved.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+        ).toEqual({ name: "commitments" });
+        expect(
+          preserved.prepare("SELECT type, tbl_name FROM sqlite_schema WHERE name = ?").get(name),
+        ).toEqual({ type, tbl_name: "commitments" });
+      } finally {
+        preserved.close();
+      }
+    },
+  );
 
   it.each(["runtime open", "doctor repair"] as const)(
-    "preserves an inbound foreign-key dependency through %s",
+    "refuses retirement and leaves an inbound foreign-key dependency unchanged through %s",
     (migrationPath) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -2614,35 +2736,40 @@ describe("openclaw state database", () => {
               BEGIN DELETE FROM commitments WHERE id = 'retired-commitment'; END;`,
       type: "trigger",
     },
-  ])("preserves a cross-object $type dependency on commitments", ({ name, sql, type }) => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const dependent = new DatabaseSync(databasePath);
-    seedV6CommitmentSchema(dependent);
-    dependent.exec(sql);
-    dependent.close();
+  ])(
+    "refuses retirement and leaves a cross-object $type dependency on commitments unchanged",
+    ({ name, sql, type }) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const dependent = new DatabaseSync(databasePath);
+      seedV6CommitmentSchema(dependent);
+      dependent.exec(sql);
+      dependent.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(
-      new RegExp(`referenced by ${type} ${name}`, "iu"),
-    );
+      expect(() => openOpenClawStateDatabase(options)).toThrow(
+        new RegExp(`referenced by ${type} ${name}`, "iu"),
+      );
 
-    const preserved = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
-      expect(preserved.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name)).toEqual({
-        name,
-      });
-      expect(preserved.prepare("SELECT id FROM commitments").all()).toEqual([
-        { id: "retired-commitment" },
-      ]);
-    } finally {
-      preserved.close();
-    }
-  });
+      const preserved = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
+        expect(
+          preserved.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
+        ).toEqual({
+          name,
+        });
+        expect(preserved.prepare("SELECT id FROM commitments").all()).toEqual([
+          { id: "retired-commitment" },
+        ]);
+      } finally {
+        preserved.close();
+      }
+    },
+  );
 
-  it("preserves an external-content virtual table dependency on commitments", () => {
+  it("refuses retirement and leaves an external-content virtual table dependency unchanged", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);

@@ -427,7 +427,7 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        startupPhase: props.startupStatus?.phase,
+        startupLabel: props.startupLabel,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
       });
@@ -458,7 +458,7 @@ export function projectChatTranscript(
         streamOptions: {
           ...streamGroupOptions,
           questionPrompts,
-          startupPhase: props.startupStatus?.phase,
+          startupLabel: props.startupLabel,
           waitingApproval: props.waitingApproval,
           runOutputTokens: props.runOutputTokens,
         },
@@ -528,7 +528,7 @@ export function projectChatTranscript(
       parts: activeStatusParts,
       options: {
         ...streamGroupOptions,
-        startupPhase: props.startupStatus?.phase,
+        startupLabel: props.startupLabel,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
       },
@@ -646,7 +646,7 @@ export function projectChatTranscript(
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
-    props.startupStatus?.phase,
+    props.startupLabel,
     Boolean(props.waitingApproval),
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),

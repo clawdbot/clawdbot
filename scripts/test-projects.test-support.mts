@@ -593,6 +593,8 @@ const GITHUB_YAML_PINNING_GUARD_TEST_TARGETS = ["test/scripts/ci-workflow-guards
 const GROUP_VISIBLE_REPLY_TEST_TARGETS = [
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
   "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -777,10 +779,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   [
     "src/auto-reply/reply/effective-reply-route.ts",
-    [
-      "src/auto-reply/reply/effective-reply-route.test.ts",
-      "src/auto-reply/reply/dispatch-from-config.test.ts",
-    ],
+    ["src/auto-reply/reply/effective-reply-route.test.ts", ...GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ],
   ["src/auto-reply/reply/get-reply-run.ts", ["src/auto-reply/reply/followup-runner.test.ts"]],
   ["src/auto-reply/reply/groups.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],

@@ -38,8 +38,12 @@ describe("slackOutbound", () => {
           type: "buttons" as const,
           buttons: [
             {
-              label: "Continue",
-              action: { type: "question" as const, questionId, optionValue: "Continue" },
+              label: "Production",
+              action: { type: "question" as const, questionId, optionValue: "Production" },
+            },
+            {
+              label: "Staging",
+              action: { type: "question" as const, questionId, optionValue: "Staging" },
             },
           ],
         },
@@ -47,7 +51,7 @@ describe("slackOutbound", () => {
     };
     const payload = {
       channelData: {
-        askUser: { questionId },
+        askUser: { questionId, optionValues: ["Staging", "Production"] },
         slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" as const })) },
       },
       presentation,
@@ -64,7 +68,10 @@ describe("slackOutbound", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledOnce();
     expect(sendMessageSlackMock.mock.calls[0]?.[2]?.blocks).toHaveLength(50);
     expect(sendMessageSlackMock.mock.calls[0]?.[2]?.blocks.at(-1)).toMatchObject({
-      elements: [{ action_id: "openclaw:question_button:1:1" }],
+      elements: [
+        { action_id: "openclaw:question_button:1:1", value: `slq1:${questionId}:1` },
+        { action_id: "openclaw:question_button:1:2", value: `slq1:${questionId}:0` },
+      ],
     });
   });
 

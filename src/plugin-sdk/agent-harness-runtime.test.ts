@@ -307,6 +307,42 @@ describe("agent harness user input helpers", () => {
     });
   });
 
+  it("normalizes every selected option in a multi-select answer", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "checks",
+            header: "Checks",
+            question: "Which checks should run?",
+            multiSelect: true,
+            isOther: true,
+            options: [{ label: "Unit" }, { label: "Lint" }, { label: "Deploy preview" }],
+          },
+        ],
+        "1, Deploy preview",
+      ),
+    ).toEqual({ answers: { checks: { answers: ["Unit", "Deploy preview"] } } });
+  });
+
+  it("keeps a comma-containing option label as one multi-select answer", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "region",
+            header: "Region",
+            question: "Which region should deploy?",
+            multiSelect: true,
+            isOther: true,
+            options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
+          },
+        ],
+        "Frankfurt, Germany",
+      ),
+    ).toEqual({ answers: { region: { answers: ["Frankfurt, Germany"] } } });
+  });
+
   it("supports runtime-specific text formatting", () => {
     expect(
       formatAgentHarnessUserInputPrompt(

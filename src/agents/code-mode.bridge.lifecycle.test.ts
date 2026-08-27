@@ -233,7 +233,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           ),
         );
         expect(suspended.status).toBe("waiting");
-        expect(target.execute).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(target.execute).toHaveBeenCalledOnce());
         expect(countActiveToolExecutions(harness.runId)).toBe(1);
 
         const parked = testing.activeRuns.get(suspended.runId as string);

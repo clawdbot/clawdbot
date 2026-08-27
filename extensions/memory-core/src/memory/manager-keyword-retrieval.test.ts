@@ -466,4 +466,52 @@ describe("memory index", () => {
       fixture.restoreStateDir();
     }
   });
+
+  it("ranks substring-only recall without reporting perfect confidence", async () => {
+    providerFixture.forceNoProvider = true;
+    const manager = await getPersistentManager(
+      createCfg({
+        provider: "none",
+        ftsTokenizer: "trigram",
+        minScore: 0,
+        hybrid: { enabled: true },
+      }),
+    );
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await fs.writeFile(path.join(fixture.paths.memory, "a-weak.md"), "记忆 alpha beta gamma");
+    await fs.writeFile(path.join(fixture.paths.memory, "z-strong.md"), "记忆");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("记忆", { maxResults: 2, minScore: 0 });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/z-strong.md", "memory/a-weak.md"]);
+    expect(results.every((entry) => entry.score > 0 && entry.score < 1)).toBe(true);
+    expect(results.every((entry) => !("hasBodyMatch" in entry))).toBe(true);
+  });
+
+  it("keeps substring-only body ranking within an exact hybrid tier", async () => {
+    const manager = await getPersistentManager(
+      createCfg({
+        ftsTokenizer: "trigram",
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+      }),
+    );
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    const weakDir = path.join(fixture.paths.memory, "a");
+    const strongDir = path.join(fixture.paths.memory, "z");
+    await fs.mkdir(weakDir, { recursive: true });
+    await fs.mkdir(strongDir, { recursive: true });
+    await fs.writeFile(path.join(weakDir, "记忆.md"), "记忆 alpha beta gamma");
+    await fs.writeFile(path.join(strongDir, "记忆.md"), "记忆");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("记忆", { maxResults: 2, minScore: 0 });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/z/记忆.md", "memory/a/记忆.md"]);
+  });
 });

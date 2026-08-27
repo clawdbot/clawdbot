@@ -278,6 +278,15 @@ final class AppState {
     /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
     var seamColorHex: String?
 
+    /// Caller's per-profile accent (users.prefs.get). Kept separate from
+    /// seamColorHex so settings-pane config refreshes cannot clobber it.
+    var profileAccentHex: String?
+
+    /// Accent the UI renders: the profile accent wins over the gateway seam color.
+    var effectiveAccentHex: String? {
+        self.profileAccentHex ?? self.seamColorHex
+    }
+
     var iconOverride: IconOverrideSelection {
         didSet { self.ifNotPreview { AppDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) } }
     }
@@ -528,6 +537,7 @@ final class AppState {
             AppDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
         }
         self.seamColorHex = nil
+        self.profileAccentHex = nil
         if let storedHeartbeats = AppDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
             self.heartbeatsEnabled = storedHeartbeats
         } else {

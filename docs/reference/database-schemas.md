@@ -506,7 +506,7 @@ Do not lower the version while relative registry rows remain. A schema 8 build i
 
 ### Example: state schema 7 to 6
 
-Schema 7 removed the retired shared commitments table. A schema 6 build still requires that canonical table, so a manual downgrade must recreate its exact empty schema before lowering the version.
+Schema 7 irreversibly discarded every row in the retired shared commitments table, then removed the table and its indexes. A schema 6 build still requires that canonical table, so a manual downgrade can recreate only its exact empty schema before lowering the version. Restore a verified pre-upgrade backup if the discarded rows are required.
 
 Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
 
@@ -570,7 +570,7 @@ WHERE meta_key = 'primary';
 COMMIT;
 ```
 
-The recreated table starts empty because schema 7 discarded the retired rows. A botched downgrade means restore from the verified backup.
+The recreated table starts empty. The downgrade cannot recover discarded commitment rows.
 
 ### Example: agent schema 17 to 16
 

@@ -143,7 +143,7 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
     case "audit-events-v2":
       return "audit event ledger -> versioned message lifecycle schema";
     case "commitments-retirement-v7":
-      return "retired commitments storage -> removed table and indexes";
+      return "retired commitments storage -> discarded rows, table, and indexes";
     case "state-table-retirement-v10":
       return "retired shared-state tables -> removed tables and indexes";
     case "state-table-retirement-v11":

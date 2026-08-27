@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
@@ -29,7 +30,7 @@ const mocks = vi.hoisted(() => {
   const modelRegistry = {
     fork: vi.fn((nextAuthStorage: unknown) => ({ authStorage: nextAuthStorage })),
     getAll: vi.fn(() => []),
-    find: vi.fn(() => null),
+    find: vi.fn<ModelRegistry["find"]>(() => undefined),
   };
   const resolveSyntheticAuth = vi.fn(() => ({
     apiKey: "synthetic-openai-key",
@@ -227,6 +228,7 @@ beforeEach(() => {
     .mockReset()
     .mockReturnValue(createEmptyPluginRegistry());
   vi.clearAllMocks();
+  mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
 });
 
@@ -524,6 +526,22 @@ describe("prepared model runtime Gateway catalog mode", () => {
       source: "test",
     });
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+    mocks.modelRegistry.find.mockImplementation((registryProvider, registryModelId) =>
+      registryProvider === "registry-only" && registryModelId === "MIXED"
+        ? {
+            provider: registryProvider,
+            id: registryModelId,
+            name: "Exact-case registry model",
+            api: "openai-responses",
+            baseUrl: "https://registry.invalid/v1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32_000,
+            maxTokens: 4096,
+          }
+        : undefined,
+    );
     const providerConfig = {
       api: "openai-responses" as const,
       baseUrl: "https://configured.fixture.invalid/v1",
@@ -535,7 +553,14 @@ describe("prepared model runtime Gateway catalog mode", () => {
         defaults: {
           model: {
             primary: `${provider}/${modelId}`,
-            fallbacks: ["openai/gpt-5.5", `${provider}/${modelId}`],
+            fallbacks: [
+              "openai/gpt-5.5",
+              `${provider}/${modelId}`,
+              "registry-only/mixed",
+              "REGISTRY-ONLY/MIXED",
+              "bare-alias",
+              "provider-only/",
+            ],
           },
         },
       },
@@ -578,24 +603,24 @@ describe("prepared model runtime Gateway catalog mode", () => {
       api: "openai-responses",
       baseUrl: "https://fixture.invalid/v1",
     });
-    for (const entries of [
-      snapshot?.modelCatalog.entries,
-      snapshot?.modelCatalog.routeVariants,
-      snapshot?.modelCatalog.staticEntries,
-    ]) {
+    for (const entries of [snapshot?.modelCatalog.entries, snapshot?.modelCatalog.routeVariants]) {
       expect(entries?.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
         `${provider}/${modelId}`,
         "openai/gpt-5.5",
+        "registry-only/MIXED",
       ]);
     }
+    expect(
+      snapshot?.modelCatalog.staticEntries?.map((entry) => `${entry.provider}/${entry.id}`),
+    ).toEqual([`${provider}/${modelId}`, "openai/gpt-5.5"]);
     expect(
       snapshot?.modelCatalog.staticEntries?.find((entry) => entry.provider === "openai")
         ?.thinkingLevelMap,
     ).toEqual({ off: null, max: "max" });
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerDiscoveryProviderIds: [provider, "openai"],
-        staticCatalogProviderIds: [provider, "openai"],
+        providerDiscoveryProviderIds: [provider, "openai", "provider-only", "registry-only"],
+        staticCatalogProviderIds: [provider, "openai", "registry-only"],
       }),
     );
     expect(mocks.discoverModels).toHaveBeenCalledOnce();

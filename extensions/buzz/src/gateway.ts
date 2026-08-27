@@ -3,6 +3,7 @@ import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
@@ -82,6 +83,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
 
   let reconnectAttempt = 0;
   while (!ctx.abortSignal.aborted) {
+    const historyMap = new Map<string, HistoryEntry[]>();
     let bus: BuzzBus | undefined;
     let cycleError: Error | undefined;
     let connectedAt: number | undefined;
@@ -118,6 +120,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
             message,
             signal,
             assertCurrent,
+            historyMap,
             buildContext,
           });
         },
@@ -185,6 +188,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         activeBuses.delete(account.accountId);
       }
       await bus?.close();
+      historyMap.clear();
       ctx.setStatus({
         accountId: account.accountId,
         running: false,
