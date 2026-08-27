@@ -48,6 +48,23 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
+  it("keeps generated media separate from an earlier tool-error warning", () => {
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "Bash failed", isError: true }],
+        toolMediaUrls: ["/tmp/generated.png"],
+      }),
+    ).toEqual([
+      { text: "Bash failed", isError: true },
+      {
+        mediaUrls: ["/tmp/generated.png"],
+        mediaUrl: "/tmp/generated.png",
+        audioAsVoice: undefined,
+        trustedLocalMedia: undefined,
+      },
+    ]);
+  });
+
   it("marks harness-owned media when source replies require the message tool", () => {
     const [mediaReply] =
       mergeAttemptToolMediaPayloads({
