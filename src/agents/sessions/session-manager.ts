@@ -125,13 +125,17 @@ export class SessionManager extends SessionManagerBranching {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: Pick<AppendPersistenceOptions, "config">,
   ): string {
-    const result = appendTranscriptMessageSync(target, {
+    const outcome = appendTranscriptMessageSync(target, {
       cwd: process.cwd(),
       message,
       ...(options?.config ? { config: options.config } : {}),
     });
+    if (!outcome.ok) {
+      throw new Error("Session transcript message was not persisted", { cause: outcome.error });
+    }
+    const result = outcome.value;
     if (!result) {
-      throw new Error(`Session transcript message was not persisted: ${target.sessionId}`);
+      throw new Error("Session transcript message was not persisted");
     }
     return result.messageId;
   }

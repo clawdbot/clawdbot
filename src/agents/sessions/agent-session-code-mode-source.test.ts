@@ -483,7 +483,7 @@ describe("AgentSession runtime and transcript projections", () => {
     };
     const { tools, catalogRef } = createCodeModeHarness();
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
-    let reentrant: ReturnType<typeof appendTranscriptMessageSync<AgentMessage>>;
+    let reentrant: AgentMessage | undefined;
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -492,10 +492,11 @@ describe("AgentSession runtime and transcript projections", () => {
             const { message } = event as { message: AgentMessage };
             if (message.role === "assistant" && message.stopReason === "toolUse" && !reentrant) {
               // Even the exact live object cannot borrow its outer append's private options.
-              reentrant = appendTranscriptMessageSync(scope, {
+              const outcome = appendTranscriptMessageSync(scope, {
                 message,
                 eventId: "reentrant_source",
               });
+              reentrant = outcome.ok ? outcome.value?.message : undefined;
             }
           },
         },
@@ -551,12 +552,10 @@ describe("AgentSession runtime and transcript projections", () => {
         { toolCallId: "mixed_other", details: { receivedOriginal: true } },
       ]);
       expect(reentrant).toMatchObject({
-        message: {
-          content: [
-            { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
-            { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
-          ],
-        },
+        content: [
+          { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
+          { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
+        ],
       });
       const stored = manager
         .getEntries()

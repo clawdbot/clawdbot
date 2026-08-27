@@ -488,7 +488,7 @@ export function ensureSessionEntrySync(
     emitCommittedSessionIdentityDiff(previous, current);
   }
   if (fencedScope.expectedWriterRunId !== undefined && !owned) {
-    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
+    throw new SessionTranscriptWriterClaimReboundError();
   }
   return owned;
 }

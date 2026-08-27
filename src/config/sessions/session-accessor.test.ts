@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
@@ -181,7 +183,7 @@ describe("session accessor seam", () => {
     });
   });
 
-  it("returns typed sync event append outcomes for missing, rebound, and duplicate rows", async () => {
+  it("returns typed sync append outcomes for missing, rebound, and duplicate rows", async () => {
     const scope = {
       agentId: "main",
       sessionId: "expected-session",
@@ -189,13 +191,17 @@ describe("session accessor seam", () => {
       storePath,
     };
     const event = { type: "custom", id: "typed-event", timestamp: 1 };
+    const identity = {
+      agentIdHash: redactIdentifier(scope.agentId),
+      expectedSessionIdHash: redactIdentifier(scope.sessionId),
+      sessionKeyHash: redactIdentifier(scope.sessionKey),
+    };
 
     expect(appendTranscriptEventSync(scope, event)).toEqual({
       ok: false,
       error: {
+        ...identity,
         code: "session-entry-missing",
-        expectedSessionId: scope.sessionId,
-        sessionKey: scope.sessionKey,
       },
     });
 
@@ -203,10 +209,22 @@ describe("session accessor seam", () => {
     expect(appendTranscriptEventSync(scope, event)).toEqual({
       ok: false,
       error: {
-        actualSessionId: "replacement-session",
+        ...identity,
+        actualSessionIdHash: redactIdentifier("replacement-session"),
         code: "session-rebound",
-        expectedSessionId: scope.sessionId,
-        sessionKey: scope.sessionKey,
+      },
+    });
+    expect(
+      appendTranscriptMessageSync(scope, {
+        eventId: "typed-message",
+        message: { role: "user", content: "late" },
+      }),
+    ).toEqual({
+      ok: false,
+      error: {
+        ...identity,
+        actualSessionIdHash: redactIdentifier("replacement-session"),
+        code: "session-rebound",
       },
     });
 
@@ -4391,10 +4409,11 @@ describe("session accessor seam", () => {
   });
 
   it("fences matching sync transcript mutations with the admitted writer claim", async () => {
+    const sensitivePeer = "+15551234567";
     const scope = {
       agentId: "main",
       sessionId: "session-owned-fence",
-      sessionKey: "agent:main:owned-fence",
+      sessionKey: `agent:main:owned-fence:${sensitivePeer}\n\x1b[31mspoof`,
       storePath,
     };
     replaceSessionEntrySync(scope, {
@@ -4417,9 +4436,42 @@ describe("session accessor seam", () => {
         expect(ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2 })).toBe(
           true,
         );
-        expect(() => replaceTranscriptEventsSync(scope, [])).toThrow(
-          SessionTranscriptWriterClaimReboundError,
+        const captureClaimError = (run: () => unknown): unknown => {
+          try {
+            run();
+          } catch (error) {
+            return error;
+          }
+          throw new Error("expected the writer claim to reject transcript persistence");
+        };
+        const replacementError = captureClaimError(() => replaceTranscriptEventsSync(scope, []));
+        const eventError = captureClaimError(() =>
+          appendTranscriptEventSync(scope, { type: "custom", id: "stale-event" }),
         );
+        const messageError = captureClaimError(() =>
+          appendTranscriptMessageSync(scope, {
+            eventId: "stale-message",
+            message: { role: "user", content: "late" },
+          }),
+        );
+        const expectedCause = {
+          actualSessionIdHash: redactIdentifier(scope.sessionId),
+          agentIdHash: redactIdentifier(scope.agentId),
+          code: "session-rebound",
+          expectedSessionIdHash: redactIdentifier(scope.sessionId),
+          sessionKeyHash: redactIdentifier(scope.sessionKey),
+        };
+        expect(eventError).toMatchObject({ cause: expectedCause });
+        expect(messageError).toMatchObject({ cause: expectedCause });
+        for (const error of [replacementError, eventError, messageError]) {
+          expect(error).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+          const formatted = formatErrorMessage(error);
+          expect(formatted).not.toContain(scope.sessionKey);
+          expect(formatted).not.toContain(sensitivePeer);
+          expect(formatted).not.toContain("spoof");
+          expect(formatted).not.toContain("\n");
+          expect(formatted).not.toContain("\x1b");
+        }
       },
     );
 

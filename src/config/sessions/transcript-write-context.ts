@@ -2,6 +2,7 @@
 // through nested session-manager callbacks.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import type { TranscriptAppendRefusal } from "./session-accessor.sqlite-contract.js";
 
 type SessionTranscriptWriteTarget = {
   agentId?: string;
@@ -134,8 +135,8 @@ export function withOwnedSessionTranscriptWriterFence<T extends SessionTranscrip
 }
 
 export class SessionTranscriptWriterClaimReboundError extends Error {
-  constructor(sessionKey: string | undefined) {
-    super(`session writer claim changed before transcript persistence: ${sessionKey ?? "unknown"}`);
+  constructor(cause?: TranscriptAppendRefusal) {
+    super("session writer claim changed before transcript persistence", { cause });
     this.name = "SessionTranscriptWriterClaimReboundError";
   }
 }
