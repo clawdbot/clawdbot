@@ -52,9 +52,9 @@ import {
 } from "./native-web-chrome.ts";
 import type { NavDrawerSwipeOwner } from "./nav-drawer-swipe.ts";
 import {
+  handleNavDrawerKeydown,
   moveToastToNavDrawer,
   restoreToastFromNavDrawer,
-  trapNavDrawerFocus,
   visibleNavDrawerToggle,
 } from "./navigation-surface.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
@@ -272,13 +272,9 @@ export class ShellChromeOwner {
     context.navigation.update({ navWidth });
   }
 
-  readonly handleNativeToggleSidebar = (): void => {
-    this.toggleNavigationSurface();
-  };
+  readonly handleNativeToggleSidebar = (): void => this.toggleNavigationSurface();
 
-  readonly handleNativeOpenSearch = (): void => {
-    this.openPalette();
-  };
+  readonly handleNativeOpenSearch = (): void => this.openPalette();
 
   readonly handleNativeToggleSearch = (event: Event): void => {
     // Native menu dispatch falls back to open-only search unless the toggle acknowledges it.
@@ -414,24 +410,7 @@ export class ShellChromeOwner {
       return;
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
-      if (event.defaultPrevented) {
-        return;
-      }
-      if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
-        return;
-      } else if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)) {
-        event.preventDefault();
-        host.closeNavDrawer({ restoreFocus: true });
-      } else if (event.key === "Tab") {
-        trapNavDrawerFocus(host, event);
-      } else if (
-        isCommandPaletteShortcut(event) ||
-        isTerminalPanelShortcut(event) ||
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
-      ) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
+      handleNavDrawerKeydown(host, event);
       return;
     }
     if (!host.commandPalette && isCommandPaletteShortcut(event)) {

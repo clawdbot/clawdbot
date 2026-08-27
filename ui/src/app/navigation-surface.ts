@@ -1,5 +1,11 @@
 import { html, nothing } from "lit";
 import type { NavigationRouteId } from "../app-navigation.ts";
+import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
+import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../lib/keyboard-shortcut-contract.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
@@ -23,6 +29,31 @@ export function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): voi
   ) {
     event.preventDefault();
     (target ?? drawer).focus({ preventScroll: true });
+  }
+}
+
+export function handleNavDrawerKeydown(
+  host: HTMLElement & { closeNavDrawer(options?: { restoreFocus?: boolean }): void },
+  event: KeyboardEvent,
+): void {
+  if (event.defaultPrevented) {
+    return;
+  }
+  if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
+    return;
+  }
+  if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)) {
+    event.preventDefault();
+    host.closeNavDrawer({ restoreFocus: true });
+  } else if (event.key === "Tab") {
+    trapNavDrawerFocus(host, event);
+  } else if (
+    isCommandPaletteShortcut(event) ||
+    isTerminalPanelShortcut(event) ||
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
+  ) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
   }
 }
 
