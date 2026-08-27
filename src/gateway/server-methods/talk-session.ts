@@ -1,7 +1,4 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -13,15 +10,9 @@ import {
   validateTalkSessionSubmitToolResultParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope.js";
-import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
-import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -29,12 +20,17 @@ import { resolveTalkAgentConsultAuthority } from "../talk-client-gateway-control
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../talk-handoff.js";
 import {
   cancelTalkRealtimeRelayTurn,
-  createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
 } from "../talk-realtime-relay.js";
+import {
+  createGatewayRealtimeTalkSession,
+  getPluginTalkSessionDispatchContext,
+  TalkRealtimeSessionAuthorizationError,
+  TalkRealtimeSessionRequestError,
+} from "../talk-realtime-session-create.js";
 import {
   forgetUnifiedTalkSession,
   getUnifiedTalkSession,
@@ -50,17 +46,12 @@ import { formatForLog } from "../ws-log.js";
 import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
 import {
   broadcastTalkRoomEvents,
-  buildRealtimeInstructions,
-  buildRealtimeVoiceLaunchOptions,
-  buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
   canUseTalkDirectTools,
   normalizeTalkSessionBrain,
   normalizeTalkSessionMode,
   normalizeTalkSessionTransport,
   resolveConfiguredRealtimeTranscriptionProvider,
-  resolveTalkRealtimeProviderInstructions,
-  resolveTalkRealtimeGatewayRelayLaunch,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -241,11 +232,6 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
         }
         const runtimeConfig = context.getRuntimeConfig();
-        const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
-        const launchOptions = buildRealtimeVoiceLaunchOptions({
-          requested: params,
-          defaults: realtimeConfig,
-        });
         const requestedSessionKey = normalizeOptionalString(params.sessionKey);
         const bareTalkAgentId =
           requestedSessionKey && !parseAgentSessionKey(requestedSessionKey)
@@ -262,77 +248,35 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requestedOwner?.agentId ??
           bareTalkAgentId ??
           resolveTalkSessionAgentId(runtimeConfig, requestedSessionKey);
-        assertSecretOwnerAvailable("capability", "talk:realtime");
-        const resolution = resolveConfiguredRealtimeVoiceProvider({
-          configuredProviderId: realtimeConfig.provider,
-          providerConfigs: realtimeConfig.providers,
-          providerConfigOverrides: launchOptions.model ? { model: launchOptions.model } : {},
-          cfg: runtimeConfig,
-          agentId,
-          defaultModel: realtimeConfig.model,
-          surface: "gateway-relay",
-        });
-        const relayLaunch = resolveTalkRealtimeGatewayRelayLaunch({
-          ...resolution,
-          cfg: runtimeConfig,
-          launchOptions,
-          consultRouting: realtimeConfig.consultRouting,
-        });
-        if (relayLaunch.error) {
-          // GPT-Live delegates natively; forced transcript consults are a GA-model mode.
-          return respondInvalidRequest(respond, relayLaunch.error);
+        const pluginDispatch = getPluginTalkSessionDispatchContext(connId);
+        try {
+          const session = await createGatewayRealtimeTalkSession({
+            context,
+            client,
+            ownerId: pluginDispatch?.ownerId ?? connId,
+            agentId,
+            consultAuthority: resolveTalkAgentConsultAuthority(client?.connect?.scopes),
+            ...(pluginDispatch
+              ? {
+                  quotaOwnerId: pluginDispatch.quotaOwnerId,
+                  eventSink: pluginDispatch.eventSink,
+                  signal: pluginDispatch.signal,
+                }
+              : {}),
+            request: params,
+          });
+          return respondOk(respond, session);
+        } catch (error) {
+          if (error instanceof TalkRealtimeSessionAuthorizationError) {
+            respond(false, undefined, error.errorShape);
+            return;
+          }
+          if (error instanceof TalkRealtimeSessionRequestError) {
+            respondInvalidRequest(respond, error.message);
+            return;
+          }
+          throw error;
         }
-        const realtimeContext = await resolveTalkRealtimeProviderInstructions({
-          config: runtimeConfig,
-          agentId,
-          configuredInstructions: realtimeConfig.instructions,
-          sessionKey: params.sessionKey,
-          requireSessionKeyForProfile: true,
-          warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
-        });
-        const sessionKey =
-          realtimeContext.requestedSessionKey ??
-          buildAgentMainSessionKey({ agentId: realtimeContext.agentId });
-        const creationError = authorizeGatewaySessionCreation({
-          cfg: runtimeConfig,
-          client,
-          agentId: realtimeContext.agentId,
-        });
-        if (creationError) {
-          respond(false, undefined, creationError);
-          return;
-        }
-        await ensureClientVoiceAgentSessionEntry({
-          agentId: realtimeContext.agentId,
-          sessionKey,
-        });
-        const session = createTalkRealtimeRelaySession({
-          context,
-          connId,
-          cfg: runtimeConfig,
-          consultAuthority: resolveTalkAgentConsultAuthority(client?.connect?.scopes),
-          provider: resolution.provider,
-          providerConfig: relayLaunch.providerConfig,
-          instructions: buildRealtimeInstructions(realtimeContext.instructions),
-          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
-          model: launchOptions.model,
-          sessionKey,
-          voice: launchOptions.voice,
-          language: normalizeOptionalLowercaseString(params.language),
-          forceAgentConsultOnFinalTranscript: relayLaunch.forceAgentConsultOnFinalTranscript,
-        });
-        rememberUnifiedTalkSession(session.relaySessionId, {
-          kind: "realtime-relay",
-          connId,
-          relaySessionId: session.relaySessionId,
-        });
-        return respondOk(respond, {
-          ...session,
-          sessionId: session.relaySessionId,
-          voiceSessionId: session.relaySessionId,
-          mode,
-          brain,
-        });
       }
 
       if (mode === "transcription") {

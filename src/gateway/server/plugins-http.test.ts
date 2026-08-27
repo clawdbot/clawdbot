@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 // Plugin HTTP routing tests cover route matching, gateway auth decisions, and upgrade dispatch.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -47,6 +48,7 @@ function createRoute(params: {
 }
 
 function createMockUpgradeSocket() {
+  const events = new EventEmitter();
   const socket = {
     chunks: [] as string[],
     destroyed: false,
@@ -55,7 +57,11 @@ function createMockUpgradeSocket() {
     },
     destroy() {
       socket.destroyed = true;
+      events.emit("close");
     },
+    once: events.once.bind(events),
+    off: events.off.bind(events),
+    emit: events.emit.bind(events),
   } as unknown as Duplex & { chunks: string[]; destroyed: boolean };
   return socket;
 }
@@ -204,6 +210,40 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(observedScopes).toEqual(["operator.read"]);
+  });
+
+  it("revokes an HTTP route lifetime without revoking a same-IP successor", async () => {
+    const routeSignals: AbortSignal[] = [];
+    const handler = createGatewayPluginRequestHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/secure-talk",
+            auth: "gateway",
+            handler: async () => {
+              routeSignals.push(getPluginRuntimeGatewayRequestScope()!.routeSignal!);
+              return true;
+            },
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const first = makeMockHttpResponse();
+    const second = makeMockHttpResponse();
+    const context = {
+      gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.talk"],
+      gatewayRequestClientIp: "127.0.0.1",
+    };
+
+    await handler({ url: "/secure-talk" } as IncomingMessage, first.res, undefined, context);
+    await handler({ url: "/secure-talk" } as IncomingMessage, second.res, undefined, context);
+    first.res.emit("close");
+
+    expect(routeSignals).toHaveLength(2);
+    expect(routeSignals[0]?.aborted).toBe(true);
+    expect(routeSignals[1]?.aborted).toBe(false);
   });
 
   it("returns false when no routes are registered", async () => {
@@ -555,6 +595,35 @@ describe("createGatewayPluginUpgradeHandler", () => {
     expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
     expect(socket.destroyed).toBe(false);
     expect(socket.chunks).toStrictEqual([]);
+  });
+
+  it("revokes an upgrade route lifetime when its socket closes", async () => {
+    let routeSignal: AbortSignal | undefined;
+    const handler = createGatewayPluginUpgradeHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: CANVAS_WS_PATH,
+            auth: "gateway",
+            handleUpgrade: async () => {
+              routeSignal = getPluginRuntimeGatewayRequestScope()?.routeSignal;
+              return true;
+            },
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const socket = createMockUpgradeSocket();
+
+    await handler({ url: CANVAS_WS_PATH } as IncomingMessage, socket, Buffer.alloc(0), undefined, {
+      gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.talk"],
+    });
+    expect(routeSignal?.aborted).toBe(false);
+
+    socket.emit("close");
+    expect(routeSignal?.aborted).toBe(true);
   });
 });
 

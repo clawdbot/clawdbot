@@ -1,7 +1,7 @@
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
 import type { RealtimeVoiceToolResultOptions } from "../talk/provider-types.js";
 import {
-  broadcastToOwner,
+  publishTalkRealtimeRelayEvent,
   relaySessions,
   resolveRelayProviderToolCallId,
   type RelaySession,
@@ -27,7 +27,7 @@ export function broadcastToolResultToOwner(
 ): void {
   const payload =
     params.forced === true ? { result: params.result, forced: true } : { result: params.result };
-  broadcastToOwner(session.context, session.connId, {
+  publishTalkRealtimeRelayEvent(session, {
     relaySessionId: session.id,
     type: "toolResult",
     callId: params.callId,

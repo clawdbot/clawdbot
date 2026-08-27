@@ -46,11 +46,11 @@ export const REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ: RealtimeVoiceAudioForma
   channels: 1,
 };
 
-export const REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ: RealtimeVoiceAudioFormat = {
+export const REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ = {
   encoding: "pcm16",
   sampleRateHz: 24000,
   channels: 1,
-};
+} as const satisfies RealtimeVoiceAudioFormat;
 
 export type RealtimeVoiceTool = {
   type: "function";

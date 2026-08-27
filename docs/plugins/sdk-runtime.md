@@ -413,6 +413,51 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     before choosing this path from tools that can also run in standalone agent processes.
 
   </Accordion>
+  <Accordion title="api.runtime.talk">
+    Open a realtime voice conversation using the Gateway's configured Talk provider and agent.
+    OpenClaw handles turn timing, interruptions, and agent tool use; the plugin sends microphone
+    PCM and renders the returned events.
+
+    ```typescript
+    const connection = new AbortController();
+    const session = await api.runtime.talk.openSession({
+      sessionKey: "agent:main:avatar",
+      signal: connection.signal,
+      onEvent: (event) => renderVoiceEvent(event),
+    });
+
+    session.sendAudio(pcm16le24kMono);
+    session.cancelOutput("barge-in");
+    session.close();
+    ```
+
+    Bind `signal` to the browser or socket displaying the session. Aborting it releases the Talk
+    session if that connection disappears.
+
+    `sessionKey` selects the agent conversation and workspace. `provider`, `model`, `voice`, and
+    `language` optionally override its configured Talk defaults. Input and output use signed
+    PCM16 little-endian audio at 24 kHz, mono (`session.audio.encoding` is `"pcm16"`).
+
+    `sendAudio()` accepts an optional `timestamp`: the current output playback position in
+    milliseconds, used to trim interrupted speech. The callback receives:
+
+    - `state` (`idle`, `listening`, `thinking`, `speaking`, or `error`); `ptsMs` is the current
+      output position in milliseconds
+    - ordered `audio` chunks; `sequence` starts at zero and `ptsMs` is the chunk's presentation
+      time in milliseconds
+    - `clear`, with `barge-in` when the user interrupts or `cancel` for another cancellation;
+      discard buffered audio from older generations
+    - one terminal `closed`, with `completed` for a normal close or `error` after a failure
+
+    After `closed`, `sendAudio()` throws while `cancelOutput()` and `close()` do nothing. A thrown or
+    rejected callback closes the relay; if it fails during setup, `openSession()` rejects. Reopen a
+    session only after installing a working callback.
+
+    This method is available to Gateway-authenticated plugin routes with Talk access that declare
+    the `gatewayMethodDispatch` contract. Unauthorized calls reject before opening a provider
+    session; configure the route with `auth: "gateway"` and grant Talk access before retrying.
+
+  </Accordion>
   <Accordion title="api.runtime.hooks">
     Dispatch isolated agent turns for untrusted external-content triggers, such
     as an email watcher. Unlike `api.runtime.subagent.run(...)`, hook dispatch

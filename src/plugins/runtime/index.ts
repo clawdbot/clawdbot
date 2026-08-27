@@ -46,6 +46,9 @@ const loadModelAuthRuntime = createLazyRuntimeModule(
 const loadGatewayPluginRuntime = createLazyRuntimeModule(
   () => import("../../gateway/server-plugins.js"),
 );
+const loadTalkPluginRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/talk-plugin-session.js"),
+);
 
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
@@ -56,6 +59,15 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
     request: async (method, params, options) => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
+    },
+  };
+}
+
+function createRuntimeTalk(): PluginRuntime["talk"] {
+  return {
+    openSession: async (params) => {
+      const runtime = await loadTalkPluginRuntime();
+      return await runtime.openPluginTalkSession(params);
     },
   };
 }
@@ -268,6 +280,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     gateway: _options.gateway ?? createRuntimeGateway(),
+    talk: createRuntimeTalk(),
     config: createRuntimeConfig(),
     agent,
     hooks: _options.hooks ?? {

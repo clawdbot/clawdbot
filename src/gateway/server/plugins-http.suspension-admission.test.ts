@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 // Proves plugin HTTP and upgrade handlers participate in Gateway suspension admission.
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -81,6 +82,7 @@ function prepareWithRootOnly(requestId: string) {
 }
 
 function createMockUpgradeSocket() {
+  const events = new EventEmitter();
   const socket = {
     chunks: [] as string[],
     destroyed: false,
@@ -89,7 +91,10 @@ function createMockUpgradeSocket() {
     },
     destroy() {
       socket.destroyed = true;
+      events.emit("close");
     },
+    once: events.once.bind(events),
+    off: events.off.bind(events),
   } as unknown as Duplex & { chunks: string[]; destroyed: boolean };
   return socket;
 }

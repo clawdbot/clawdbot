@@ -131,6 +131,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       options?: RuntimeGatewayRequestOptions,
     ) => Promise<T>;
   };
+  talk: {
+    openSession: (
+      params: import("../../talk/plugin-session.js").OpenPluginTalkSessionParams,
+    ) => Promise<import("../../talk/plugin-session.js").PluginTalkSession>;
+  };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;

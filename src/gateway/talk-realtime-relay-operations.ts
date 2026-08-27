@@ -30,10 +30,10 @@ import {
   MAX_AUDIO_BASE64_BYTES,
   MAX_RELAY_SESSIONS_GLOBAL,
   MAX_RELAY_SESSIONS_PER_CONN,
-  broadcastToOwner,
   drainingRelaySessions,
   ensureRelayTurn,
   noFallbackRelayOutputFlush,
+  publishTalkRealtimeRelayEvent,
   relaySessions,
   resolveRelayProviderToolCallId,
   type RelaySession,
@@ -113,6 +113,8 @@ export function closeRelaySession(
   session.harness.close();
   session.outputOwnership.drain?.resolve();
   relaySessions.delete(session.id);
+  session.unregisterConnectionCleanup?.();
+  session.unregisterConnectionCleanup = undefined;
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
   if (disposition === "detach") {
@@ -126,7 +128,7 @@ export function closeRelaySession(
     // Provider teardown may throw, but the relay must still reach its durable
     // voice and owner-visible terminal state before that error is surfaced.
     void closeRelayVoiceSession(session);
-    broadcastToOwner(session.context, session.connId, {
+    publishTalkRealtimeRelayEvent(session, {
       relaySessionId: session.id,
       type: "close",
       reason,
@@ -161,27 +163,27 @@ function pruneExpiredRelaySessions(nowMs = Date.now()): void {
   });
 }
 
-function countRelaySessionsForConn(connId: string): number {
+function countRelaySessionsForQuotaOwner(quotaOwnerId: string): number {
   let count = 0;
   for (const session of relaySessions.values()) {
-    if (session.connId === connId) {
+    if (session.quotaOwnerId === quotaOwnerId) {
       count += 1;
     }
   }
   for (const session of drainingRelaySessions.values()) {
-    if (session.connId === connId) {
+    if (session.quotaOwnerId === quotaOwnerId) {
       count += 1;
     }
   }
   return count;
 }
 
-export function enforceRelaySessionLimits(connId: string): void {
+export function enforceRelaySessionLimits(quotaOwnerId: string): void {
   pruneExpiredRelaySessions();
   if (relaySessions.size + drainingRelaySessions.size >= MAX_RELAY_SESSIONS_GLOBAL) {
     throw new Error("Too many active realtime relay sessions");
   }
-  if (countRelaySessionsForConn(connId) >= MAX_RELAY_SESSIONS_PER_CONN) {
+  if (countRelaySessionsForQuotaOwner(quotaOwnerId) >= MAX_RELAY_SESSIONS_PER_CONN) {
     throw new Error("Too many active realtime relay sessions for this connection");
   }
 }
@@ -213,7 +215,7 @@ export function sendTalkRealtimeRelayAudio(params: {
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Realtime relay");
   const turnId = ensureRelayTurn(session);
   session.bridge.sendAudio(audio);
-  broadcastToOwner(session.context, session.connId, {
+  publishTalkRealtimeRelayEvent(session, {
     relaySessionId: session.id,
     type: "inputAudio",
     byteLength: audio.byteLength,
@@ -507,7 +509,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   if (relaySessions.get(session.id) !== session) {
     return finalResult;
   }
-  broadcastToOwner(session.context, session.connId, {
+  publishTalkRealtimeRelayEvent(session, {
     relaySessionId: session.id,
     type: "toolProgress",
     result: finalResult,
@@ -583,7 +585,7 @@ export async function cancelTalkRealtimeRelayTurn(params: {
     turnId,
     payload: { reason },
   });
-  broadcastToOwner(session.context, session.connId, {
+  publishTalkRealtimeRelayEvent(session, {
     relaySessionId: session.id,
     type: "clear",
     talkEvent: cancelled.ok ? cancelled.event : undefined,
@@ -669,7 +671,12 @@ export function resetTalkRealtimeRelayContinuity(
 export function stopTalkRealtimeRelaySession(params: {
   relaySessionId: string;
   connId: string;
+  disposition?: RealtimeVoiceCloseOptions["disposition"];
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  closeRelaySession(session, "completed");
+  closeRelaySession(
+    session,
+    "completed",
+    params.disposition ? { disposition: params.disposition } : undefined,
+  );
 }

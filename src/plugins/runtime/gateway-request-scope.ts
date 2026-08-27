@@ -19,6 +19,8 @@ type PluginRuntimeGatewayRequestScope = {
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
+  // Host-minted route lifetime; privileged retained handles must close with it.
+  routeSignal?: AbortSignal;
   pluginRegistry?: PluginRegistry;
 };
 

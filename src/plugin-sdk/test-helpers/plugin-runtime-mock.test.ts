@@ -5,6 +5,12 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { describe, expect, it, vi } from "vitest";
 
 describe("createPluginRuntimeMock", () => {
+  it("includes the interactive Talk session runtime", () => {
+    const runtime = createPluginRuntimeMock();
+
+    expect(vi.isMockFunction(runtime.talk.openSession)).toBe(true);
+  });
+
   it("clones the initializer callback input and applies its final extension patch", async () => {
     const runtime = createPluginRuntimeMock();
     const pluginExtensions = { codex: { marker: "original" } };

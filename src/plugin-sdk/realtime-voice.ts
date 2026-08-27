@@ -1,5 +1,11 @@
 /** Production-private runtime seam for bundled and separately published official plugins. */
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+export {
+  PLUGIN_TALK_AUDIO_FORMAT,
+  type OpenPluginTalkSessionParams,
+  type PluginTalkSession,
+  type PluginTalkSessionEvent,
+} from "../talk/plugin-session.js";
 export type {
   OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,

@@ -124,6 +124,7 @@ function createPluginRouteRuntimeScope(params: {
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
   gatewayRequestClientIp?: string;
+  routeSignal: AbortSignal;
 }): PluginRouteRuntimeScope {
   const runtimeScopes =
     params.route.auth !== "gateway"
@@ -146,6 +147,7 @@ function createPluginRouteRuntimeScope(params: {
     pluginRegistry: params.registry,
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
+    routeSignal: params.routeSignal,
     isWebchatConnect: () => false,
     ...(params.route.pluginId ? { pluginId: params.route.pluginId } : {}),
     ...(params.route.source ? { pluginSource: params.route.source } : {}),
@@ -264,6 +266,9 @@ export function createGatewayPluginRequestHandler(params: {
         continue;
       }
       try {
+        const routeLifetime = new AbortController();
+        const closeRoute = () => routeLifetime.abort(new Error("Plugin HTTP route closed"));
+        res.once("close", closeRoute);
         const runRoute = async () =>
           (await withPluginRuntimeGatewayRequestScope(
             createPluginRouteRuntimeScope({
@@ -274,6 +279,7 @@ export function createGatewayPluginRequestHandler(params: {
               gatewayRequestAuth,
               gatewayRequestOperatorScopes,
               gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
+              routeSignal: routeLifetime.signal,
             }),
             async () => route.handler(req, res),
           )) !== false;
@@ -285,6 +291,8 @@ export function createGatewayPluginRequestHandler(params: {
         if (handled) {
           return true;
         }
+        res.off("close", closeRoute);
+        closeRoute();
       } catch (err) {
         log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
         finishFailedGatewayHttpResponse(res);
@@ -342,6 +350,9 @@ export function createGatewayPluginUpgradeHandler(params: {
 
     for (const route of matchedRoutes) {
       try {
+        const routeLifetime = new AbortController();
+        const closeRoute = () => routeLifetime.abort(new Error("Plugin upgrade route closed"));
+        socket.once("close", closeRoute);
         const handled = await runWithGatewayUpgradeWorkAdmission(
           socket,
           async () =>
@@ -354,6 +365,7 @@ export function createGatewayPluginUpgradeHandler(params: {
                 gatewayRequestAuth,
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
+                routeSignal: routeLifetime.signal,
               }),
               async () => route.handleUpgrade?.(req, socket, head),
             )) !== false,
@@ -361,6 +373,8 @@ export function createGatewayPluginUpgradeHandler(params: {
         if (handled) {
           return true;
         }
+        socket.off("close", closeRoute);
+        closeRoute();
       } catch (err) {
         log.warn(`plugin http upgrade failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
         socket.destroy();

@@ -18,7 +18,7 @@ import {
   trackPendingWorkingToolResult,
 } from "./talk-realtime-relay-provider-results.js";
 import {
-  broadcastToOwner,
+  publishTalkRealtimeRelayEvent,
   ensureRelayTurn,
   noFallbackRelayOutputFlush,
   relaySessions,
@@ -175,7 +175,7 @@ export function scheduleForcedAgentConsult(
       { audioPlaybackActive: true, force: true },
       noFallbackRelayOutputFlush,
     );
-    broadcastToOwner(session.context, session.connId, {
+    publishTalkRealtimeRelayEvent(session, {
       relaySessionId: session.id,
       type: "toolCall",
       itemId,
@@ -298,7 +298,7 @@ export function submitRealtimeAgentConsultWorkingResponse(
     if (session.toolResultEpoch !== epoch) {
       return;
     }
-    broadcastToOwner(session.context, session.connId, {
+    publishTalkRealtimeRelayEvent(session, {
       relaySessionId: session.id,
       type: "toolResult",
       callId,

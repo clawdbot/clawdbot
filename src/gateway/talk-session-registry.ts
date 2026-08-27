@@ -29,24 +29,51 @@ const unifiedTalkSessions = resolveGlobalMap<string, UnifiedTalkSessionRecord>(
   Symbol.for("openclaw.unifiedTalkSessions"),
   "close-and-restart",
 );
-const talkConnectionCleanups = resolveGlobalMap<string, Map<TalkConnectionCleanupKind, () => void>>(
-  Symbol.for("openclaw.talkConnectionCleanups"),
-  "close-and-restart",
-);
+type TalkConnectionCleanupRegistration = {
+  cleanup: () => void;
+  owners: Set<symbol>;
+};
+
+const talkConnectionCleanups = resolveGlobalMap<
+  string,
+  Map<TalkConnectionCleanupKind, TalkConnectionCleanupRegistration>
+>(Symbol.for("openclaw.talkConnectionCleanups"), "close-and-restart");
 
 /**
- * Keeps one owner cleanup per relay kind until the connection closes.
- * Replacing by kind stays bounded while the owner cleanup scans all live sessions.
+ * Keeps one cleanup per relay kind and returns a release for this registration.
+ * The cleanup remains available until the connection closes or its final owner releases it.
  */
 export function registerTalkConnectionCleanup(
   connId: string,
   kind: TalkConnectionCleanupKind,
   cleanup: () => void,
-): void {
+): () => void {
   const cleanups =
-    talkConnectionCleanups.get(connId) ?? new Map<TalkConnectionCleanupKind, () => void>();
-  cleanups.set(kind, cleanup);
+    talkConnectionCleanups.get(connId) ??
+    new Map<TalkConnectionCleanupKind, TalkConnectionCleanupRegistration>();
+  const registration = cleanups.get(kind) ?? { cleanup, owners: new Set<symbol>() };
+  const owner = Symbol(kind);
+  registration.cleanup = cleanup;
+  registration.owners.add(owner);
+  cleanups.set(kind, registration);
   talkConnectionCleanups.set(connId, cleanups);
+  return () => {
+    const currentCleanups = talkConnectionCleanups.get(connId);
+    if (!currentCleanups) {
+      return;
+    }
+    const currentRegistration = currentCleanups.get(kind);
+    if (currentRegistration !== registration || !registration.owners.delete(owner)) {
+      return;
+    }
+    if (registration.owners.size > 0) {
+      return;
+    }
+    currentCleanups.delete(kind);
+    if (currentCleanups.size === 0) {
+      talkConnectionCleanups.delete(connId);
+    }
+  };
 }
 
 /** Runs and forgets every Talk cleanup owned by a disconnected gateway connection. */
@@ -60,9 +87,9 @@ export function cleanupTalkConnection(
   }
   // Delete first so cleanup failures or re-entrancy cannot retain stale connection owners.
   talkConnectionCleanups.delete(connId);
-  for (const [kind, cleanup] of cleanups) {
+  for (const [kind, registration] of cleanups) {
     try {
-      cleanup();
+      registration.cleanup();
     } catch (error) {
       log.warn(
         `failed to run ${kind} Talk cleanup after connection disconnect: ${formatError(error)}`,

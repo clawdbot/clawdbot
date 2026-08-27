@@ -24,7 +24,12 @@ import type {
 } from "../talk/provider-types.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createChatRunState } from "./server-chat-state.js";
-import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import {
+  RELAY_SESSION_TTL_MS,
+  drainingRelaySessions,
+  relaySessions,
+} from "./talk-realtime-relay-state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
@@ -38,7 +43,7 @@ import {
   stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
-import { cleanupTalkConnection } from "./talk-session-registry.js";
+import { cleanupTalkConnection, registerTalkConnectionCleanup } from "./talk-session-registry.js";
 
 const activeRelaySessions = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -225,6 +230,82 @@ describe("talk realtime gateway relay", () => {
       createBridge: () => makeRelayTransport(),
     };
   }
+
+  it("delivers owner events to the local sink and Gateway connection", () => {
+    const eventSink = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds,
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as never,
+      connId: "conn-local-sink",
+      eventSink,
+      provider: createIdleRelayProvider(),
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    void sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-local-sink",
+      audioBase64: Buffer.from([1, 2]).toString("base64"),
+    });
+
+    expect(eventSink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relaySessionId: session.relaySessionId,
+        type: "inputAudio",
+        byteLength: 2,
+      }),
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({ relaySessionId: session.relaySessionId, type: "inputAudio" }),
+      new Set(["conn-local-sink"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  it("keeps Gateway and provider delivery alive when the local sink throws", () => {
+    const sendAudio = vi.fn();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () => makeRelayTransport({ sendAudio });
+    const broadcastToConnIds = vi.fn();
+    const warn = vi.fn();
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds,
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn },
+      } as never,
+      connId: "conn-throwing-sink",
+      eventSink: () => {
+        throw new Error("renderer gone");
+      },
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    void sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-throwing-sink",
+      audioBase64: Buffer.from([1, 2]).toString("base64"),
+    });
+
+    expect(warn).toHaveBeenCalledWith("talk realtime event sink failed: renderer gone");
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({ relaySessionId: session.relaySessionId, type: "inputAudio" }),
+      new Set(["conn-throwing-sink"]),
+      { dropIfSlow: true },
+    );
+    expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
+  });
 
   it("closes only realtime relays owned by the disconnected connection", async () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -4816,6 +4897,99 @@ describe("talk realtime gateway relay", () => {
       inputEncoding: "pcm16",
       outputEncoding: "pcm16",
     });
+  });
+
+  it("fences every plugin relay when its authenticated route closes", () => {
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: () => makeRelayTransport(),
+    };
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      logGateway: { warn: vi.fn() },
+    } as unknown as GatewayRequestContext;
+    const createSession = (connId: string) =>
+      createTalkRealtimeRelaySession({
+        context,
+        connId,
+        quotaOwnerId: "plugin:avatar:plugin-http:127.0.0.1",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      });
+
+    const routeConnId = "plugin-http:127.0.0.1";
+    const first = createSession(routeConnId);
+    const second = createSession(routeConnId);
+    expect(() => createSession(routeConnId)).toThrow(
+      "Too many active realtime relay sessions for this connection",
+    );
+
+    cleanupTalkConnection(routeConnId, context.logGateway);
+    expect(relaySessions.has(first.relaySessionId)).toBe(false);
+    expect(relaySessions.has(second.relaySessionId)).toBe(false);
+    expect(() =>
+      sendTalkRealtimeRelayAudio({
+        relaySessionId: first.relaySessionId,
+        connId: routeConnId,
+        audioBase64: "AA==",
+      }),
+    ).toThrow("Unknown realtime relay session");
+    expect(() => createSession(routeConnId)).not.toThrow();
+  });
+
+  it("releases plugin cleanup owners on stop, provider close, and expiry", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return makeRelayTransport();
+      },
+    };
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn: vi.fn() },
+    } as unknown as GatewayRequestContext;
+    const createSession = (connId: string) =>
+      createTalkRealtimeRelaySession({
+        context,
+        connId,
+        quotaOwnerId: "plugin:avatar:plugin-http:127.0.0.1",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      });
+    const expectCleanupOwnerReleased = (connId: string) => {
+      const staleCleanup = vi.fn();
+      const releaseProbe = registerTalkConnectionCleanup(connId, "realtime-relay", staleCleanup);
+      releaseProbe();
+      cleanupTalkConnection(connId, context.logGateway);
+      expect(staleCleanup).not.toHaveBeenCalled();
+    };
+
+    const stopped = createSession("plugin:avatar:stopped");
+    stopTalkRealtimeRelaySession({
+      relaySessionId: stopped.relaySessionId,
+      connId: "plugin:avatar:stopped",
+    });
+    expectCleanupOwnerReleased("plugin:avatar:stopped");
+
+    createSession("plugin:avatar:provider-closed");
+    bridgeRequest?.onClose?.("completed");
+    expectCleanupOwnerReleased("plugin:avatar:provider-closed");
+
+    vi.useFakeTimers();
+    createSession("plugin:avatar:expired");
+    vi.advanceTimersByTime(RELAY_SESSION_TTL_MS);
+    expectCleanupOwnerReleased("plugin:avatar:expired");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

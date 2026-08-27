@@ -166,6 +166,12 @@ describe("plugin runtime command execution", () => {
       readValue: (runtime: ReturnType<typeof createPluginRuntime>) => runtime.version,
       expected: VERSION,
     },
+    {
+      name: "exposes runtime.talk.openSession",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
+        typeof runtime.talk.openSession,
+      expected: "function",
+    },
   ] as const)("$name", ({ readValue, expected }) => {
     expectRuntimeValue(readValue, expected);
   });
