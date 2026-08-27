@@ -44,7 +44,6 @@ vi.mock("./provider-auth-aliases.js", () => ({
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 
 let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
-let MINIMAX_OAUTH_MARKER: typeof import("./model-auth-markers.js").MINIMAX_OAUTH_MARKER;
 let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
 let resolveApiKeyFromCredential: typeof import("./models-config.providers.secret-helpers.js").resolveApiKeyFromCredential;
 let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
@@ -72,7 +71,6 @@ async function loadProviderAuthModules() {
   );
   CUSTOM_LOCAL_AUTH_MARKER = markersModule.CUSTOM_LOCAL_AUTH_MARKER;
   NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
-  MINIMAX_OAUTH_MARKER = markersModule.MINIMAX_OAUTH_MARKER;
   resolveApiKeyFromCredential = helperModule.resolveApiKeyFromCredential;
   createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
@@ -85,15 +83,6 @@ beforeEach(() => {
 });
 
 beforeAll(loadProviderAuthModules);
-
-function buildPairedApiKeyProviders(apiKey: string) {
-  // Several generated provider pairs should carry the same persisted key
-  // marker; this helper keeps those expectations identical.
-  return {
-    provider: { apiKey },
-    paired: { apiKey },
-  };
-}
 
 describe("models-config provider auth provenance", () => {
   it("persists env keyRef and tokenRef auth profiles as env var markers", () => {
@@ -111,10 +100,7 @@ describe("models-config provider auth provenance", () => {
         provider: "together",
         tokenRef: { source: "env", provider: "default", id: "TOGETHER_API_KEY" },
       })?.apiKey;
-      const volcengineProviders = buildPairedApiKeyProviders(volcengineApiKey ?? "");
-
-      expect(volcengineProviders.provider.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
-      expect(volcengineProviders.paired.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
+      expect(volcengineApiKey).toBe("VOLCANO_ENGINE_API_KEY");
       expect(togetherApiKey).toBe("TOGETHER_API_KEY");
     } finally {
       envSnapshot.restore();
@@ -136,20 +122,8 @@ describe("models-config provider auth provenance", () => {
       token: "tok-runtime-resolved-together",
       tokenRef: { source: "exec", provider: "vault", id: "providers/together/token" },
     })?.apiKey;
-    const byteplusProviders = buildPairedApiKeyProviders(byteplusApiKey ?? "");
-
-    expect(byteplusProviders.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
-    expect(byteplusProviders.paired.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(byteplusApiKey).toBe(NON_ENV_SECRETREF_MARKER);
     expect(togetherApiKey).toBe(NON_ENV_SECRETREF_MARKER);
-  });
-
-  it("keeps oauth compatibility markers for minimax-portal", () => {
-    const providers = {
-      "minimax-portal": {
-        apiKey: MINIMAX_OAUTH_MARKER,
-      },
-    };
-    expect(providers["minimax-portal"]?.apiKey).toBe(MINIMAX_OAUTH_MARKER);
   });
 
   it("prefers profile auth over env auth in provider summaries to match runtime resolution", () => {

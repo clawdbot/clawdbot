@@ -72,7 +72,7 @@ describe("model suppression", () => {
     });
   });
 
-  it("does not run deprecated runtime suppression hooks", () => {
+  it("returns false when no manifest suppression applies", () => {
     const resolver = vi.fn().mockReturnValueOnce(undefined);
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
 
