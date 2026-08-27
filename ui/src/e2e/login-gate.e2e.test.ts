@@ -273,7 +273,10 @@ suite.define(() => {
           ?.getBoundingClientRect();
         const navRect = document.querySelector(".shell-nav")?.getBoundingClientRect();
         const mainRect = document.querySelector("#control-ui-main")?.getBoundingClientRect();
+        const headerRect = document.querySelector(".content-header")?.getBoundingClientRect();
         return {
+          headerTop: headerRect?.top,
+          noticeBottom: noticeRect?.bottom,
           noticeTop: noticeRect?.top,
           noticeLeft: noticeRect?.left,
           noticeRight: noticeRect?.right,
@@ -283,6 +286,7 @@ suite.define(() => {
         };
       });
       expect(bounds.noticeTop).toBe(bounds.mainTop);
+      expect((bounds.headerTop ?? 0) - (bounds.noticeBottom ?? 0)).toBe(44);
       expect(bounds.noticeLeft).toBe(bounds.navRight);
       expect(bounds.noticeRight).toBe(bounds.mainRight);
       await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });

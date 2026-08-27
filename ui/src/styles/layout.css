@@ -283,6 +283,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .shell--settings:not(.shell--mobile-nav) {
+  --settings-content-block-start-padding: 44px;
   --settings-content-inline-padding: clamp(28px, 5vw, 72px);
   grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
   grid-template-rows: 0 1fr;
@@ -290,10 +291,11 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .shell--settings:not(.shell--mobile-nav) .content {
-  padding: 44px var(--settings-content-inline-padding) 72px;
+  padding: var(--settings-content-block-start-padding) var(--settings-content-inline-padding) 72px;
 }
 
 .shell--settings.shell--mobile-nav {
+  --settings-content-block-start-padding: 4px;
   --settings-content-inline-padding: 4px;
 }
 
@@ -4066,6 +4068,12 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .shell--settings .content:has(> .connection-action-block) {
   padding-top: 0;
+}
+
+.shell--settings .content:has(> .connection-action-block) > openclaw-router-outlet {
+  display: block;
+  margin-top: 0;
+  padding-top: var(--settings-content-block-start-padding);
 }
 
 .connection-action-block {
