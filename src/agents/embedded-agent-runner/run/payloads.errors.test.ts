@@ -77,6 +77,37 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
+  it("turns returned OpenAI refresh failures into Codex login recovery", () => {
+    const payloads = buildPayloads({
+      provider: "openai",
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "OAuth token refresh failed for openai: refresh_token_invalidated",
+        content: [],
+      }),
+    });
+
+    expect(payloads).toEqual([
+      {
+        text: expect.stringContaining("/login codex"),
+        isError: true,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Log in to Codex",
+                  action: { type: "command", command: "/login codex" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],

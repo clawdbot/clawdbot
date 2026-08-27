@@ -12,10 +12,11 @@ import { readChunkWithIdleTimeout, withResponseBodyTimeout } from "./http-respon
 
 export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
 
-/** Cancels a response body only when no consumer has started reading it. */
+/** Requests cancellation only when no consumer has started reading the body. */
 export async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
   if (response && !response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
+    // A capture tee must not delay errors or the caller's bounded dispatcher release.
+    void response.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -225,9 +226,8 @@ async function readResponsePrefixFromReader(
         }
         size = nextTotal;
         truncated = true;
-        try {
-          await reader.cancel();
-        } catch {}
+        // A capture tee can retain cancellation until the caller releases its request.
+        void reader.cancel().catch(() => undefined);
         break;
       }
       chunks.push(value);
@@ -260,7 +260,7 @@ async function readResponsePrefix(
   try {
     timeoutMs = typeof options?.timeoutMs === "function" ? options.timeoutMs() : options?.timeoutMs;
   } catch (error) {
-    await response.body?.cancel(error).catch(() => undefined);
+    void response.body?.cancel(error).catch(() => undefined);
     throw error;
   }
   const body = response.body;

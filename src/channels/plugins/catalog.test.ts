@@ -53,6 +53,36 @@ function writeChannelCatalog(
 }
 
 describe("channel plugin catalog", () => {
+  it.each([
+    ["omitted", undefined, undefined],
+    ["empty", "", ""],
+    ["spaced", "  See docs:  ", "  See docs:  "],
+  ] as const)("preserves %s selection docs prefixes", (_label, prefix, expected) => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "workspace-chat",
+        origin: "workspace",
+        rootDir: "/tmp/workspace-chat",
+        packageName: "@workspace/chat",
+        channel: {
+          id: "custom-chat",
+          label: "Custom Chat",
+          selectionLabel: "Custom Chat",
+          docsPath: "/channels/custom-chat",
+          blurb: "workspace",
+          ...(prefix !== undefined ? { selectionDocsPrefix: prefix } : {}),
+        },
+        install: { localPath: "/tmp/workspace-chat" },
+      },
+    ] satisfies PluginChannelCatalogEntry[]);
+
+    const entry = getChannelPluginCatalogEntry("custom-chat", {
+      workspaceDir: "/tmp",
+    });
+
+    expect(entry?.meta.selectionDocsPrefix).toBe(expected);
+  });
+
   it("keeps third-party channel ids mapped with catalog install trust", () => {
     const options = {
       workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",

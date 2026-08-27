@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const configMocks = vi.hoisted(() => ({
@@ -62,6 +63,48 @@ describe("commitGatewayConfigWrite", () => {
         nextConfig: {},
       }),
     );
+  });
+
+  it("returns the managed runtime application claimed during the write", async () => {
+    configMocks.replaceConfigFile.mockImplementationOnce(async (params) => {
+      const application = getRuntimeConfigWriteApplication(params.writeOptions);
+      const claim = application?.claim();
+      claim?.settle("applied");
+      return {
+        nextConfig: { hooks: { enabled: true } },
+        persistedHash: "persisted-hash",
+      };
+    });
+
+    const result = await commitGatewayConfigWrite({
+      snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        hash: "base-hash",
+      } as never,
+      writeOptions: {},
+      nextConfig: { hooks: { enabled: true } },
+      awaitRuntimeApplication: true,
+    });
+
+    await expect(result.application).resolves.toBe("applied");
+  });
+
+  it("returns an unclaimed required application when no managed reloader is installed", async () => {
+    const result = await commitGatewayConfigWrite({
+      snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        hash: "base-hash",
+      } as never,
+      writeOptions: {},
+      nextConfig: { hooks: { enabled: true } },
+      awaitRuntimeApplication: true,
+    });
+
+    await expect(result.application).resolves.toBe("unclaimed");
   });
 });
 

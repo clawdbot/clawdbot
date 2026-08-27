@@ -28,8 +28,12 @@ export async function noteStateIntegrity(
   return noteStateIntegrityRaw(withMainAgentRoster(cfg), prompter, configPath);
 }
 
-export function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir: string) {
-  const agentId = "main";
+export function setupSessionState(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  homeDir: string,
+  agentId = "main",
+) {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, () => homeDir);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   fs.mkdirSync(sessionsDir, { recursive: true });
@@ -72,9 +76,10 @@ export function hasRepairPromptMessage(
 export function writeSessionStore(
   cfg: OpenClawConfig,
   sessions: Record<string, { sessionId: string; updatedAt: number } & Record<string, unknown>>,
+  agentId = "main",
 ) {
-  setupSessionState(cfg, process.env, process.env.HOME ?? "");
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+  setupSessionState(cfg, process.env, process.env.HOME ?? "", agentId);
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
 }
 

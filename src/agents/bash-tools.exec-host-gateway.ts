@@ -1514,10 +1514,6 @@ export async function processGatewayAllowlist(
               message: bindingDenied,
             };
           }
-          if (params.signal?.aborted) {
-            return { status: "run-aborted" as const };
-          }
-
           let run: Awaited<ReturnType<typeof runExecProcess>>;
           let finalBindingDenied: string | undefined;
           const finalBindingDeniedError = new Error("gateway approval changed before spawn");
@@ -1540,6 +1536,7 @@ export async function processGatewayAllowlist(
               scopeKey: params.scopeKey,
               sessionKey: params.notifySessionKey ?? params.sessionKey,
               timeoutSec: effectiveTimeout,
+              startupSignal: params.signal,
               beforeSpawn: async () => {
                 finalBindingDenied = await resolveGatewayExecApprovalDrift({
                   binding: approvalMutableFileBinding,
@@ -1553,6 +1550,9 @@ export async function processGatewayAllowlist(
               },
             });
           } catch (error) {
+            if (params.signal?.aborted) {
+              return { status: "run-aborted" as const };
+            }
             if (error === finalBindingDeniedError && finalBindingDenied) {
               return { status: "operand-drift" as const, message: finalBindingDenied };
             }

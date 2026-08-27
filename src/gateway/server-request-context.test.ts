@@ -1,12 +1,13 @@
 /**
  * Gateway request context construction tests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { listSystemPresence } from "../infra/system-presence.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -17,6 +18,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
 type TestCronState = GatewayServerLiveState["cronState"];
@@ -29,7 +31,7 @@ function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
@@ -149,7 +151,7 @@ function makeGatewayClient(params: {
       scopes: params.scopes ?? [],
       caps: params.caps ?? [],
     },
-    socket: { close: vi.fn() },
+    socket: { close: vi.fn(), readyState: 1 },
     ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
     ...(params.invalidated ? { invalidated: true } : {}),
   };
@@ -414,6 +416,18 @@ describe("createGatewayRequestContext", () => {
           updatedAt: source.updatedAt,
         },
         presenceKey: "profile-refresh-merge-source",
+        personPresence: { onlineSince: 1_000, lastActivityAt: 2_000 },
+      };
+      const targetClient = {
+        ...sourceClient,
+        connId: "merge-target",
+        authenticatedUserId: "merge-target@example.test",
+        authenticatedUserProfile: {
+          ...sourceClient.authenticatedUserProfile,
+          profileId: target.id,
+        },
+        presenceKey: "profile-refresh-merge-target",
+        personPresence: { onlineSince: 1_500, lastActivityAt: 3_000 },
       };
       const unrelatedClient = {
         ...makeGatewayClient({
@@ -432,7 +446,7 @@ describe("createGatewayRequestContext", () => {
       };
       const capturedProfile = sourceClient.authenticatedUserProfile;
       const params = makeContextParams({
-        clients: new Set([sourceClient, unrelatedClient]) as never,
+        clients: new Set([sourceClient, targetClient, unrelatedClient]) as never,
       });
       const context = createGatewayRequestContext(params);
 
@@ -453,6 +467,13 @@ describe("createGatewayRequestContext", () => {
         updatedAt: linked.updatedAt,
       });
       expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedProfile.id);
+      for (const email of ["merge-source@example.test", "merge-target@example.test"]) {
+        expect(listSystemPresence().find((entry) => entry.user?.email === email)).toMatchObject({
+          user: { id: target.id },
+          onlineSince: 1_000,
+          lastActivityAt: 3_000,
+        });
+      }
       const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
         presence?: Array<{ user?: { id?: string; email?: string; avatarUrl?: string } }>;
       };
@@ -469,6 +490,79 @@ describe("createGatewayRequestContext", () => {
       );
     });
   });
+
+  it("publishes only server-stamped activity from the exact live client", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    onTestFinished(() => now.mockRestore());
+    const client: GatewayWsClient = {
+      ...makeGatewayClient({ connId: "activity-live", clientId: GATEWAY_CLIENT_IDS.CONTROL_UI }),
+      socket: { readyState: 1 } as GatewayWsClient["socket"],
+      usesSharedGatewayAuth: false,
+      presenceKey: "activity-live",
+      authenticatedUserId: "live@activity.test",
+      personPresence: { onlineSince: 9_000 },
+    };
+    const clients = new Set([client]);
+    const params = makeContextParams({ clients });
+    const context = createGatewayRequestContext(params);
+    context.recordClientActivity?.({ ...client });
+    expect(params.broadcast).not.toHaveBeenCalled();
+    context.recordClientActivity?.(client);
+    expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "presence",
+      {
+        presence: expect.arrayContaining([
+          expect.objectContaining({
+            user: { id: "live@activity.test", email: "live@activity.test" },
+            onlineSince: 9_000,
+            lastActivityAt: 10_000,
+          }),
+        ]),
+      },
+      { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
+    );
+    now.mockReturnValue(11_000);
+    clients.delete(client);
+    context.recordClientActivity?.(client);
+    expect(params.broadcast).toHaveBeenCalledOnce();
+  });
+
+  it.each(["removed", "invalidated", "closing"] as const)(
+    "does not refresh a %s profile connection or resurrect its presence",
+    (state) => {
+      const client: GatewayWsClient = {
+        ...makeGatewayClient({
+          connId: `profile-${state}`,
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        socket: { readyState: state === "closing" ? 2 : 1 } as GatewayWsClient["socket"],
+        usesSharedGatewayAuth: false,
+        authenticatedUserId: `${state}@profile.test`,
+        authenticatedUserProfile: {
+          profileId: `inactive-${state}`,
+          displayName: "Before",
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        presenceKey: `profile-${state}`,
+        invalidated: state === "invalidated",
+      };
+      const params = makeContextParams({ clients: new Set(state === "removed" ? [] : [client]) });
+      createGatewayRequestContext(params).refreshConnectedUserProfile?.({
+        id: `inactive-${state}`,
+        displayName: "After",
+        avatarRevision: "2",
+        hasAvatar: false,
+        updatedAt: 2,
+      });
+      expect(client.authenticatedUserProfile?.displayName).toBe("Before");
+      expect(params.broadcast).not.toHaveBeenCalled();
+      expect(
+        listSystemPresence().some((entry) => entry.user?.email === `${state}@profile.test`),
+      ).toBe(false);
+    },
+  );
 
   it("preserves the Gravatar-backed route when a changed profile has no upload", () => {
     const client = {

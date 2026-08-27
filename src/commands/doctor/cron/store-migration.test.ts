@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
@@ -452,10 +453,46 @@ describe("normalizeStoredCronJobs", () => {
     expect((job.payload as Record<string, unknown>).model).toBe("openai/gpt-5.6-sol");
   });
 
-  it("writes the configured default agent policy to its canonical keyed entry", () => {
+  it.each<{
+    name: string;
+    agents: NonNullable<OpenClawConfig["agents"]>;
+    agentId?: string;
+    expectedAgentId: string;
+  }>([
+    {
+      name: "configured default agent",
+      agents: { entries: { main: { default: true } } },
+      expectedAgentId: "main",
+    },
+    {
+      name: "sole configured agent",
+      agents: { entries: { ops: {} } },
+      expectedAgentId: "ops",
+    },
+    {
+      name: "configured system agent under explicit ownership",
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+      expectedAgentId: "ops",
+    },
+    {
+      name: "explicit job owner before the configured system agent",
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+      agentId: "main",
+      expectedAgentId: "main",
+    },
+  ])("writes policy only to the $name", ({ agents, agentId, expectedAgentId }) => {
     const jobs = [
       makeLegacyJob({
         id: "implicit-default-codex-model",
+        agentId,
         schedule: { kind: "every", everyMs: 60_000 },
         payload: {
           kind: "agentTurn",
@@ -465,14 +502,22 @@ describe("normalizeStoredCronJobs", () => {
       }),
     ];
     const policyRepair = repairCronCodexRuntimePolicies({
-      cfg: { agents: { entries: { main: { default: true } } } },
+      cfg: { agents },
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
     });
 
-    expect(policyRepair.config.agents?.entries?.main?.models).toMatchObject({
+    expect(jobs[0]?.agentId).toBe(agentId);
+    expect(policyRepair.config.agents?.entries?.[expectedAgentId]?.models).toEqual({
       "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
     });
+    for (const [entryId, entry] of Object.entries(policyRepair.config.agents?.entries ?? {})) {
+      if (entryId !== expectedAgentId) {
+        expect(entry.models).toBeUndefined();
+      }
+    }
     expect(policyRepair.config.agents?.defaults?.models).toBeUndefined();
+    expect(policyRepair.warnings).toEqual([]);
+    expect(policyRepair.blockedTargets).toEqual([]);
   });
 
   it("retains a post-snapshot Codex ref until its runtime policy is persisted", () => {

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   handleAbortChat,
@@ -92,6 +93,23 @@ describe("handleAbortChat", () => {
       key: "agent:main",
       clearQueued: true,
     });
+  });
+
+  it("routes recovered embedded Stop through sessions.abort with its run id", async () => {
+    const request = vi.fn(async () => ({ status: "aborted" }));
+    const host = makeAbortHost({
+      client: createTestGatewayClient(request),
+      chatRunId: "run-embedded-recovered",
+      chatRunSessionAbortable: true,
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "agent:main",
+      runId: "run-embedded-recovered",
+    });
+    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
   });
 
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {

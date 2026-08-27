@@ -37,7 +37,7 @@ read_when:
     Proxy adds a header with the authenticated user identity (e.g., `x-forwarded-user: nick@example.com`).
   </Step>
   <Step title="Gateway verifies trusted source">
-    OpenClaw checks that the request came from a **trusted proxy IP** (`gateway.trustedProxies`) and is not the Gateway's own loopback or local interface address.
+    OpenClaw checks that the request came from a **trusted proxy IP** (`gateway.trustedProxies`). Loopback sources require explicit `allowLoopback` consent; other Gateway-local interface addresses are rejected.
   </Step>
   <Step title="Gateway extracts identity">
     OpenClaw reads the required headers, then the user identity from the configured header.
@@ -135,8 +135,14 @@ Internal Gateway clients that do not travel through the reverse proxy should use
 </ParamField>
 
 <Warning>
-Only enable `allowLoopback` when the local reverse proxy is the intended trust boundary. Any local process that can connect to the Gateway can try to send proxy identity headers, so keep direct Gateway access private to the host and require proxy-owned headers such as `x-forwarded-proto`, or a signed assertion header where your proxy supports one.
+Any local process that can connect to the Gateway can impersonate a loopback reverse proxy by sending identity headers. Only enable `allowLoopback` when the reverse proxy is the sole local listener for incoming user traffic, direct Gateway access is locked down, and you trust local processes. The proxy must authenticate users and strip or overwrite client-supplied identity headers; required headers alone do not distinguish the proxy from another local process.
 </Warning>
+
+### Configure with the wizard
+
+Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering a loopback proxy address (including a CIDR with a loopback base address) shows the security warning above and asks whether to allow loopback authentication. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
+
+When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered proxy address is loopback, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
 
 ## Per-identity scope grants
 

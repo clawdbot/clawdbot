@@ -4,6 +4,7 @@ import {
   fanInChannelIngressLifecycles,
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
+  type IdentifierAuthentication,
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
 
@@ -26,6 +27,16 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
+  it("exports only the generic identifier-authentication inputs", () => {
+    const strengths: IdentifierAuthentication[] = ["verified", "asserted", "unverified", "mutable"];
+    const subject: NonNullable<ResolveChannelMessageIngressParams["subject"]["authentication"]> = {
+      email: "verified",
+      displayName: "mutable",
+    };
+
+    expect(strengths).toContain(subject.email);
+  });
+
   it("fans one logical turn lifecycle across every durable claim", async () => {
     const createLifecycle = () => ({
       abortSignal: new AbortController().signal,

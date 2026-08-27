@@ -1,7 +1,7 @@
 ---
 summary: "Secrets management: SecretRef contract, shared secret store, runtime snapshots, and safe one-way scrubbing"
 read_when:
-  - Configuring SecretRefs for provider credentials and `auth-profiles.json` refs
+  - Configuring SecretRefs for provider credentials and SQLite auth-profile refs
   - Storing team-wide secrets and environment values in the shared SQLite store
   - Operating secrets reload, audit, configure, and apply safely in production
   - Understanding startup fail-fast, inactive-surface filtering, and last-known-good behavior

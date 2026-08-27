@@ -239,13 +239,13 @@ describe("run-oxlint", () => {
     };
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
 
-    expect(packageJson.scripts.check).toBe("node --import tsx scripts/check.mts");
-    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
+    expect(packageJson.scripts.check).toBe("node --import ./scripts/tsx.mjs scripts/check.mts");
+    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
     expect(packageJson.scripts["lint:core"]).toBe(
-      "node --import tsx scripts/run-oxlint-shards.mts --only=core",
+      "node --import ./scripts/tsx.mjs scripts/run-oxlint-shards.mts --only=core",
     );
     expect(packageJson.scripts.check).not.toContain(
-      "node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts",
+      "node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts",
     );
     expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mts");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
@@ -257,7 +257,7 @@ describe("run-oxlint", () => {
     };
     const lintRunner = readFileSync("scripts/run-lint.mts", "utf8");
 
-    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
+    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
     expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
     expect(
       lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),

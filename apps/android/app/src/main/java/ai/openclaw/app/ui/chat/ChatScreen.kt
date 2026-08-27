@@ -19,6 +19,7 @@ import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatProgressCard
+import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
@@ -745,6 +746,7 @@ fun ChatScreen(
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onResolveQuestion = viewModel::resolveChatQuestion,
+      onQuestionDraftChanged = viewModel::updateChatQuestionDraft,
       onSkipQuestion = viewModel::skipChatQuestion,
       onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
       onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
@@ -1322,8 +1324,9 @@ private fun ChatMessageList(
   recoveryOutboxItems: List<ChatOutboxItem>,
   onRetryOutbox: (String) -> Unit,
   onDeleteOutbox: (String) -> Unit,
-  onResolveQuestion: (String, Map<String, List<String>>) -> Unit,
-  onSkipQuestion: (String) -> Unit,
+  onResolveQuestion: (ChatQuestionPrompt, Map<String, List<String>>) -> Unit,
+  onQuestionDraftChanged: (ChatQuestionPrompt, (ChatQuestionDraft) -> ChatQuestionDraft) -> Unit,
+  onSkipQuestion: (ChatQuestionPrompt) -> Unit,
   onStarterPrompt: (String) -> Unit,
   onReplyMessage: (String) -> Unit,
   sessionActionsEnabled: Boolean,
@@ -1448,7 +1451,7 @@ private fun ChatMessageList(
               moreWorkingCount = item.moreWorkingCount,
             )
           is ChatTimelineItem.QuestionPrompt ->
-            ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
+            ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
           is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
           is ChatTimelineItem.SystemNotice -> ChatSystemNoticeRow(item)
           is ChatTimelineItem.SystemDivider -> ChatSystemDividerRow(item)

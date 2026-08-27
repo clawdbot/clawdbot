@@ -3,6 +3,27 @@ import { describe, expect, it } from "vitest";
 import { describePluginInstallSource } from "./install-source-info.js";
 
 describe("describePluginInstallSource", () => {
+  it.each([
+    [undefined, false],
+    ["latest", false],
+    ["beta", false],
+    ["1.2.3", true],
+    ["1.2.3-beta.4", true],
+    ["2026.7.1-2", true],
+    ["v1.2.3", true],
+  ])("classifies ClawHub selector %s with exactVersion=%s", (version, exactVersion) => {
+    const spec = `clawhub:demo${version ? `@${version}` : ""}`;
+    expect(describePluginInstallSource({ clawhubSpec: spec })).toEqual({
+      clawhub: {
+        spec,
+        packageName: "demo",
+        ...(version ? { version } : {}),
+        exactVersion,
+      },
+      warnings: exactVersion ? [] : ["clawhub-spec-floating"],
+    });
+  });
+
   it("marks exact npm specs with integrity as fully pinned", () => {
     expect(
       describePluginInstallSource({

@@ -409,6 +409,12 @@ Workspace synchronization excludes `.git`, `hooks`, and `git-hooks` in both
 directions. Repository credentials, history, and trusted hook code remain on
 the OpenClaw Gateway host instead of being copied into an untrusted sandbox.
 
+Mirror synchronization never copies symlinks into either workspace. Existing
+host symlinks remain intact at every depth, along with their parent directories,
+even if the sandbox deletes those directories or replaces them with files.
+Remote replacements that conflict with these preserved host paths are ignored;
+ordinary files and directories still receive remote changes and deletions.
+
 ## Custom image contract
 
 The OpenShell source image owns the remote operating system and package set.

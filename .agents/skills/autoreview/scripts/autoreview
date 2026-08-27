@@ -3368,30 +3368,37 @@ def codex_auth_config_flags(repo: Path, *, force_file: bool = False) -> list[str
     return flags
 
 
-def prepare_codex_runtime_auth(
-    repo: Path,
-    runtime_codex_home: Path,
-) -> bool:
+def codex_file_auth_source(repo: Path) -> Path | None:
     source_home = codex_source_home(repo)
     if source_home is None:
-        return False
+        return None
     config = load_codex_auth_config(source_home / "config.toml")
     credential_store = config.get("cli_auth_credentials_store")
     if credential_store not in {None, "file"}:
-        return False
+        return None
     source_auth = source_home / "auth.json"
     try:
         source_stat = source_auth.lstat()
     except OSError:
-        return False
+        return None
     if not stat.S_ISREG(source_stat.st_mode):
-        return False
+        return None
     try:
         data, truncated = read_prefix(source_auth, 1_000_000)
         parsed = json.loads(data)
     except (OSError, SystemExit, json.JSONDecodeError):
-        return False
+        return None
     if truncated or not isinstance(parsed, dict):
+        return None
+    return source_auth
+
+
+def prepare_codex_runtime_auth(
+    repo: Path,
+    runtime_codex_home: Path,
+) -> bool:
+    source_auth = codex_file_auth_source(repo)
+    if source_auth is None:
         return False
     runtime_codex_home.mkdir(parents=True, exist_ok=True)
     runtime_auth = runtime_codex_home / "auth.json"
@@ -3408,6 +3415,96 @@ def prepare_codex_runtime_auth(
                 "discarding refreshed credentials"
             ) from exc
     return True
+
+
+def codex_runtime_env(
+    repo: Path,
+    runtime_root: Path,
+    codex_bin: str,
+    *,
+    file_auth_linked: bool,
+) -> dict[str, str]:
+    runtime_home = runtime_root / "home"
+    runtime_config = runtime_home / ".config"
+    runtime_data = runtime_home / ".local" / "share"
+    runtime_state = runtime_home / ".local" / "state"
+    runtime_cache = runtime_home / ".cache"
+    runtime_codex_home = runtime_root / "codex-home"
+    for path in (
+        runtime_home,
+        runtime_config,
+        runtime_data,
+        runtime_state,
+        runtime_cache,
+        runtime_codex_home,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+    source_codex_home = codex_source_home(repo)
+    active_codex_home = (
+        runtime_codex_home
+        if file_auth_linked or source_codex_home is None
+        else source_codex_home
+    )
+    return safe_engine_env(
+        repo,
+        [Path(codex_bin).parent],
+        engine="codex",
+        extra={
+            "HOME": str(runtime_home),
+            "USERPROFILE": str(runtime_home),
+            "XDG_CACHE_HOME": str(runtime_cache),
+            "XDG_CONFIG_HOME": str(runtime_config),
+            "XDG_DATA_HOME": str(runtime_data),
+            "XDG_STATE_HOME": str(runtime_state),
+            # Keyring namespaces are derived from canonical CODEX_HOME.
+            # Linked file auth uses the isolated home; keyring/auto must
+            # retain the source namespace until Codex supports an auth split.
+            "CODEX_HOME": str(active_codex_home),
+        },
+    )
+
+
+def ensure_codex_isolation_supported(
+    args: argparse.Namespace,
+    repo: Path,
+) -> str:
+    selected_bin = args.codex_bin
+    codex_bin = resolve_command(selected_bin, repo)
+    temp_root = safe_temp_root(repo)
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-codex-probe-workspace.",
+        dir=temp_root,
+    ) as workspace_dir, tempfile.TemporaryDirectory(
+        prefix="autoreview-codex-probe-runtime.",
+        dir=temp_root,
+    ) as runtime_dir:
+        probe_env = codex_runtime_env(
+            repo,
+            Path(runtime_dir),
+            codex_bin,
+            file_auth_linked=codex_file_auth_source(repo) is not None,
+        )
+        result = run(
+            [codex_bin, "--version"],
+            Path(workspace_dir),
+            check=False,
+            env=probe_env,
+        )
+    if result.returncode != 0:
+        detail = display_escape(
+            (result.stderr or result.stdout).strip(),
+            500,
+            multiline=True,
+        )
+        suffix = f"\n{detail}" if detail else ""
+        raise SystemExit(
+            "Codex isolation preflight failed: selected binary "
+            f"{selected_bin!r} resolved to {codex_bin!r}, but --version exited "
+            f"{result.returncode} under the isolated runtime.{suffix}\n"
+            "Use an absolute --codex-bin path, set CODEX_BIN, or correct PATH. "
+            "CODEX_HOME-dependent launchers are incompatible with autoreview isolation."
+        )
+    return codex_bin
 
 
 def codex_exec_isolation_flags() -> list[str]:
@@ -3979,6 +4076,7 @@ def codex_command(
 def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     if not args.tools:
         raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
+    ensure_codex_isolation_supported(args, repo)
     temp_root = safe_temp_root(repo)
     schema_path = write_json_temp(SCHEMA, temp_root)
     with tempfile.NamedTemporaryFile(
@@ -4006,28 +4104,8 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         ) as runtime_dir:
             review_root = Path(workspace_dir)
             runtime_root = Path(runtime_dir)
-            runtime_home = runtime_root / "home"
-            runtime_config = runtime_home / ".config"
-            runtime_data = runtime_home / ".local" / "share"
-            runtime_state = runtime_home / ".local" / "state"
-            runtime_cache = runtime_home / ".cache"
             runtime_codex_home = runtime_root / "codex-home"
-            for path in (
-                runtime_home,
-                runtime_config,
-                runtime_data,
-                runtime_state,
-                runtime_cache,
-                runtime_codex_home,
-            ):
-                path.mkdir(parents=True, exist_ok=True)
             file_auth_linked = prepare_codex_runtime_auth(repo, runtime_codex_home)
-            source_codex_home = codex_source_home(repo)
-            active_codex_home = (
-                runtime_codex_home
-                if file_auth_linked or source_codex_home is None
-                else source_codex_home
-            )
             for index, model in enumerate(models):
                 output_path.write_text("")
                 cmd = codex_command(
@@ -4048,22 +4126,11 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                     max_runtime_seconds=getattr(args, "engine_timeout_seconds", None),
                     stream_output=args.stream_engine_output,
                     stream_display=CodexStreamDisplay() if args.stream_engine_output else None,
-                    env=safe_engine_env(
+                    env=codex_runtime_env(
                         repo,
-                        [Path(cmd[0]).parent],
-                        engine="codex",
-                        extra={
-                            "HOME": str(runtime_home),
-                            "USERPROFILE": str(runtime_home),
-                            "XDG_CACHE_HOME": str(runtime_cache),
-                            "XDG_CONFIG_HOME": str(runtime_config),
-                            "XDG_DATA_HOME": str(runtime_data),
-                            "XDG_STATE_HOME": str(runtime_state),
-                            # Keyring namespaces are derived from canonical CODEX_HOME.
-                            # Linked file auth uses the isolated home; keyring/auto must
-                            # retain the source namespace until Codex supports an auth split.
-                            "CODEX_HOME": str(active_codex_home),
-                        },
+                        runtime_root,
+                        cmd[0],
+                        file_auth_linked=file_auth_linked,
                     ),
                 )
                 output = output_path.read_text()
@@ -5523,6 +5590,7 @@ def reviewer_label(args: argparse.Namespace) -> str:
 
 
 ENGINE_ISOLATION_PROBES: dict[str, Callable[[argparse.Namespace, Path], object]] = {
+    "codex": ensure_codex_isolation_supported,
     "claude": ensure_claude_isolation_supported,
     "amp": ensure_amp_isolation_supported,
     "pi": ensure_pi_isolation_supported,
@@ -5538,15 +5606,15 @@ def resolve_engine_binary(reviewer: argparse.Namespace, repo: Path) -> tuple[boo
     reported unavailable with that same reason, and the selected engine is
     checked for a resolvable CLI binary on PATH.
 
-    Once a binary resolves, claude/pi/kimi are also put through the same
+    Once a binary resolves, codex/claude/pi/kimi are also put through the same
     local version and required-flag probes their real runners perform
-    before contacting the engine (ensure_claude_isolation_supported,
-    ensure_pi_isolation_supported, ensure_kimi_isolation_supported), so a
-    dry run cannot report OK for a configuration a real run would reject
-    immediately (unsupported CLI version, missing required flag). Those
-    probes only invoke the resolved binary locally with --version/--help;
-    they never contact a provider. Codex has its own unconditional
-    --no-tools rejection above and no local version gate.
+    before contacting the engine (ensure_codex_isolation_supported,
+    ensure_claude_isolation_supported, ensure_pi_isolation_supported,
+    ensure_kimi_isolation_supported), so a dry run cannot report OK for a
+    configuration a real run would reject immediately (unsupported CLI
+    version, missing required flag, or a launcher that fails under the
+    isolated runtime). Those probes only invoke the resolved binary locally
+    with --version/--help; they never contact a provider.
 
     Codex additionally validates --codex-config/--codex-speed (and their
     AUTOREVIEW_CODEX_CONFIG/AUTOREVIEW_CODEX_SPEED env equivalents) via

@@ -47,6 +47,7 @@ describe("gateway worker environment startup", () => {
       const runtime = await createGatewayWorkerEnvironmentRuntime({
         getPluginRegistry: () => ({ workerProviders: new Map() }),
         getPortalRuntime: () => undefined,
+        resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
         log: { child: () => ({ warn: () => {} }) },
@@ -108,6 +109,7 @@ describe("gateway worker environment startup", () => {
         const runtime = await createGatewayWorkerEnvironmentRuntime({
           getPluginRegistry: () => ({ workerProviders: new Map() }),
           getPortalRuntime: () => undefined,
+          resolveGatewayContext: () => undefined,
           desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
           startup,
           log: { child: () => ({ warn: () => {} }) },
@@ -205,6 +207,7 @@ describe("gateway worker environment startup", () => {
       const runtime = await createGatewayWorkerEnvironmentRuntime({
         getPluginRegistry: () => ({ workerProviders: new Map() }),
         getPortalRuntime: () => undefined,
+        resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         nodeDesktopStreamBroker: createNodeDesktopStreamBroker(),
         startup,

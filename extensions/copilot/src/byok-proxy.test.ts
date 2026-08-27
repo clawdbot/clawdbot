@@ -15,6 +15,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 describe("createCopilotByokProxy", () => {
   afterEach(() => {
     ssrfRuntimeMock.fetchWithSsrFGuard.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("presents a loopback SDK endpoint and forwards through guarded fetch", async () => {
@@ -81,6 +82,77 @@ describe("createCopilotByokProxy", () => {
       await proxy?.close();
     }
   });
+
+  it.each([307, 308])("preserves binary request bytes across a %i redirect", async (status) => {
+    const { fetchWithSsrFGuard } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/ssrf-runtime")
+    >("openclaw/plugin-sdk/ssrf-runtime");
+    ssrfRuntimeMock.fetchWithSsrFGuard.mockImplementation(fetchWithSsrFGuard);
+    const clientFetch = globalThis.fetch;
+    const received: Buffer[] = [];
+    const upstreamFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const request = new Request(url, init);
+      expect(request.method).toBe("POST");
+      received.push(Buffer.from(await request.arrayBuffer()));
+      return received.length === 1
+        ? new Response(null, { status, headers: { location: "/v1/replayed" } })
+        : new Response("ok");
+    });
+    const proxy = await createCopilotByokProxy(
+      resolveCopilotProvider({
+        model: {
+          provider: "custom-proxy",
+          api: "openai-responses",
+          id: "proxy-model",
+          baseUrl: "https://proxy.example/v1",
+        },
+      }),
+    );
+    // Keep invalid UTF-8 and a nonzero offset: forwarding the backing pool would leak other bytes.
+    const body = Buffer.from([42, 0, 255, 128, 192, 10, 42]).subarray(1, -1);
+    try {
+      const response = await clientFetch(`${proxy?.provider.provider?.baseUrl}/responses`, {
+        method: "POST",
+        body,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("ok");
+      expect(upstreamFetch).toHaveBeenCalledTimes(2);
+      expect(received).toEqual([body, body]);
+    } finally {
+      await proxy?.close();
+    }
+  });
+
+  it.each(["GET", "HEAD", "POST"])(
+    "forwards an empty %s request without a body",
+    async (method) => {
+      ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({
+        response: new Response(null, { status: 204 }),
+        release: vi.fn(async () => undefined),
+      });
+      const proxy = await createCopilotByokProxy(
+        resolveCopilotProvider({
+          model: {
+            provider: "custom-proxy",
+            api: "openai-responses",
+            id: "proxy-model",
+            baseUrl: "https://proxy.example/v1",
+          },
+        }),
+      );
+      try {
+        const response = await fetch(`${proxy?.provider.provider?.baseUrl}/responses`, { method });
+        expect(response.status).toBe(204);
+        expect(ssrfRuntimeMock.fetchWithSsrFGuard).toHaveBeenCalledWith(
+          expect.objectContaining({ init: expect.objectContaining({ method }) }),
+        );
+        expect(ssrfRuntimeMock.fetchWithSsrFGuard.mock.calls[0]?.[0].init.body).toBeUndefined();
+      } finally {
+        await proxy?.close();
+      }
+    },
+  );
 
   it("injects resolved bearer auth when the SDK request omits Authorization", async () => {
     ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({

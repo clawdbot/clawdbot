@@ -977,6 +977,7 @@ describe("scripts/changed-lanes", () => {
     expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
     expect(shouldRunControlUiI18nVerify(["ui/config/control-ui-locales.ts"])).toBe(true);
+    expect(shouldRunControlUiI18nVerify(["scripts/lib/control-ui-i18n-config.json"])).toBe(true);
     expect(shouldRunControlUiI18nVerify(["scripts/lib/example.ts"])).toBe(false);
   });
 

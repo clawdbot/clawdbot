@@ -27,7 +27,11 @@ import {
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import { assertCodexThreadStartResponse } from "./protocol-validators.js";
+import {
+  assertCodexThreadAcceptsDirectInput,
+  assertCodexThreadStartResponse,
+  CodexThreadDirectInputError,
+} from "./protocol-validators.js";
 import type { CodexThread, JsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
@@ -191,19 +195,6 @@ export async function resumeExistingCodexThread(
     // Keep ownership accounting atomic with the resume request: a
     // pre-aborted request retains no subscription, so it must not reserve.
     throwIfAborted();
-    if (resumeBinding.preserveNativeModel === true) {
-      const current = await lifecycleTiming.measure("thread-read-adoption-status", () =>
-        params.client.request(
-          "thread/read",
-          { threadId: resumeBinding.threadId, includeTurns: false },
-          { signal: params.signal },
-        ),
-      );
-      throwIfAborted();
-      if (current.thread.status?.type === "active") {
-        throw new CodexAdoptedThreadActiveError();
-      }
-    }
     resumeReservation = params.reserveResumeThread?.(resumeBinding.threadId);
     const response = await lifecycleTiming.measure("thread-resume-request", () =>
       resumeCodexAppServerThread({
@@ -218,6 +209,7 @@ export async function resumeExistingCodexThread(
       }),
     );
     resumeResponseAccepted = true;
+    assertCodexThreadAcceptsDirectInput(response.thread);
     context.assertResumeConfiguration?.();
     if (resumeBinding.pendingResumeConfiguration) {
       await attestCodexPluginThreadApps({
@@ -395,7 +387,11 @@ export async function resumeExistingCodexThread(
         );
       }
     }
-    if (resumeBinding.pendingResumeConfiguration || params.signal?.aborted) {
+    if (
+      resumeBinding.pendingResumeConfiguration ||
+      error instanceof CodexThreadDirectInputError ||
+      params.signal?.aborted
+    ) {
       throw error;
     }
     embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {

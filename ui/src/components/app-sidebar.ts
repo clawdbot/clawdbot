@@ -67,6 +67,7 @@ import {
 import { renderPanelRefreshStatus } from "./panel-refresh-status.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
 const lobsterPetImport = createIdleImport(() => import("./lobster-pet.runtime.ts"));
@@ -77,6 +78,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
+  private readonly people = new SidebarPeopleController(this);
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -202,6 +204,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         };
       },
     );
+  }
+
+  override dismissTransientMenus(): boolean {
+    const hadPersonCard = this.people.dismiss();
+    return super.dismissTransientMenus() || hadPersonCard;
   }
 
   override disconnectedCallback() {

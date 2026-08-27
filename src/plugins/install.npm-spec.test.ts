@@ -2895,6 +2895,53 @@ describe("installPluginFromNpmSpec", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it.each(["npm", "npm-pack"] as const)(
+    "restores the managed project after a post-install throw from %s and allows retry",
+    async (source) => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+      const packageName = "throw-rollback-package";
+      const pluginId = "throw-rollback-plugin";
+      const spec = `${packageName}@1.0.0`;
+      const archivePath = path.join(stateDir, "plugin.tgz");
+      fs.writeFileSync(archivePath, "fixture archive", "utf8");
+      const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+      writeInstalledNpmPlugin({
+        npmRoot: npmProjectRoot,
+        packageName: "existing-package",
+        version: "1.0.0",
+      });
+      fs.writeFileSync(path.join(npmProjectRoot, "package.json"), '{"private":true}\n');
+      fs.writeFileSync(path.join(npmProjectRoot, "package-lock.json"), '{"lockfileVersion":3}\n');
+      const projectBefore = readTextFileTree(npmProjectRoot);
+      mockNpmViewAndInstallMany([
+        { spec, packArchivePath: archivePath, packageName, pluginId, version: "1.0.0", npmRoot },
+      ]);
+      const failure = new Error("post-install logger failure");
+      const info = vi.fn((message: string) => {
+        if (message.startsWith("Plugin manifest id")) {
+          expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
+          throw failure;
+        }
+      });
+      const install = () => {
+        const params = requestDeferredPluginInstall({ npmDir: npmRoot, logger: { info } });
+        return source === "npm"
+          ? installPluginFromNpmSpec({ ...params, spec })
+          : installPluginFromNpmPackArchive({ ...params, archivePath });
+      };
+
+      await expect(install()).rejects.toBe(failure);
+      expect.soft(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
+
+      info.mockImplementation(() => {});
+      const retry = await install();
+      expect(retry).toMatchObject({ ok: true, pluginId });
+      await resolvePluginInstallTransaction(retry)?.commit();
+      expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
+    },
+  );
+
   it("does not fail rollback snapshots on plugin-local openclaw peer symlinks", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const npmProjectRoot = resolvePluginNpmProjectDir({

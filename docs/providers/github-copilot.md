@@ -333,6 +333,11 @@ configured default model is never replaced.
     resolves the account-specific API endpoint, and uses the stored GitHub token
     for Copilot requests. You do not need to manage runtime authentication
     manually.
+
+    Usage checks also use the selected profile's GitHub token. For OAuth profiles
+    that carry a tenant domain, usage follows that domain before the provider's
+    configured domain. `COPILOT_GITHUB_DOMAIN` still takes precedence.
+
   </Accordion>
 </AccordionGroup>
 

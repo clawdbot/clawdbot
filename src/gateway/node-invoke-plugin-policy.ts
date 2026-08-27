@@ -192,9 +192,11 @@ function createApprovalRuntime(params: {
         decisionPromise,
         respond,
         context: params.context,
-        // Internal calls retain the operator's connection as provenance; it is
-        // still a reviewer, not the transport requester to exclude from delivery.
-        clientConnId: params.client?.internal?.syntheticClient ? undefined : params.client?.connId,
+        // The carried connection is turn/invoke provenance, never this
+        // approval's presenter: policy approvals are minted here, not requested
+        // by the client, so the connection stays eligible as a reviewer. A
+        // sole-reviewer operator would otherwise be excluded from delivery and
+        // the request auto-denied as no-route.
         requestEventName: "plugin.approval.requested",
         requestEvent,
         twoPhase: false,

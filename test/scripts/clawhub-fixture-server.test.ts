@@ -165,64 +165,6 @@ describe("ClawHub fixture server", () => {
     expect(emptyAssertion.stderr).toContain("assert-no-requests requires <base-url>");
   });
 
-  it("parks WhatsApp startup config and restores the authored bytes exactly", () => {
-    const root = tempDirs.make("openclaw-clawhub-auth-config-");
-    const configPath = path.join(root, "openclaw.json");
-    const snapshotPath = path.join(root, "openclaw.authored.json");
-    const authoredConfig = `{
-  "gateway": { "mode": "local", "reload": { "mode": "hybrid" } },
-  "plugins": {
-    "allow": ["discord", "whatsapp"],
-    "entries": { "discord": { "enabled": true }, "whatsapp": { "enabled": true } }
-  },
-  "channels": { "discord": { "enabled": true }, "whatsapp": { "enabled": true } }
-}
-`;
-    writeFileSync(configPath, authoredConfig);
-
-    const park = spawnSync(
-      process.execPath,
-      [SCRIPT_PATH, "park-prepublish-auth-config", configPath, snapshotPath],
-      { encoding: "utf8", env: { ...process.env } },
-    );
-    expect(park.status, park.stderr).toBe(0);
-    expect(readFileSync(snapshotPath, "utf8")).toBe(authoredConfig);
-    expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
-      gateway: { mode: "local", reload: { mode: "off" } },
-      plugins: {
-        allow: ["discord"],
-        entries: { discord: { enabled: true } },
-      },
-      channels: { discord: { enabled: true } },
-    });
-
-    const restore = spawnSync(
-      process.execPath,
-      [SCRIPT_PATH, "restore-prepublish-auth-config", configPath, snapshotPath],
-      { encoding: "utf8", env: { ...process.env } },
-    );
-    expect(restore.status, restore.stderr).toBe(0);
-    expect(readFileSync(configPath, "utf8")).toBe(authoredConfig);
-  });
-
-  it("rejects malformed probe config without changing authored bytes", () => {
-    const root = tempDirs.make("openclaw-clawhub-invalid-auth-config-");
-    const configPath = path.join(root, "openclaw.json");
-    const snapshotPath = path.join(root, "openclaw.authored.json");
-    const authoredConfig = '{"plugins":{"allow":"whatsapp"}}\n';
-    writeFileSync(configPath, authoredConfig);
-
-    const park = spawnSync(
-      process.execPath,
-      [SCRIPT_PATH, "park-prepublish-auth-config", configPath, snapshotPath],
-      { encoding: "utf8", env: { ...process.env } },
-    );
-    expect(park.status).toBe(1);
-    expect(park.stderr).toContain("plugins.allow must be an array");
-    expect(readFileSync(configPath, "utf8")).toBe(authoredConfig);
-    expect(existsSync(snapshotPath)).toBe(false);
-  });
-
   it("serves exact prepublish tarballs through the ClawHub artifact contract", async () => {
     const root = tempDirs.make("openclaw-clawhub-prepublish-");
     const isolatedCwd = tempDirs.make("openclaw-clawhub-isolated-");

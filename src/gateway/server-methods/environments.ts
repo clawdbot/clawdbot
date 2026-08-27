@@ -30,8 +30,9 @@ import {
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   id: "gateway",
@@ -58,13 +59,6 @@ const WORKER_STATUS: Record<WorkerEnvironmentState, EnvironmentSummary["status"]
 };
 function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
-}
-function rejectInvalid(
-  respond: RespondFn,
-  method: string,
-  validator: Parameters<typeof respondInvalidParams>[0]["validator"],
-) {
-  return respondInvalidParams({ respond, method, validator });
 }
 function summarizeNodeEnvironment(
   node: NodeListNode,
@@ -469,8 +463,8 @@ async function respondDesktopLaunch(params: {
 
 export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.list": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsListParams(params)) {
-      return rejectInvalid(respond, "environments.list", validateEnvironmentsListParams);
+    if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
+      return;
     }
     await respondUnavailableOnThrow(respond, async () => {
       const workers = listWorkerEnvironments(context);
@@ -484,8 +478,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "environments.status": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsStatusParams(params)) {
-      return rejectInvalid(respond, "environments.status", validateEnvironmentsStatusParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsStatusParams, "environments.status", respond)
+    ) {
+      return;
     }
     await respondUnavailableOnThrow(respond, async () => {
       const environment = (await listGatewayEnvironments(context)).find(
@@ -514,8 +510,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "environments.create": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsCreateParams(params)) {
-      return rejectInvalid(respond, "environments.create", validateEnvironmentsCreateParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsCreateParams, "environments.create", respond)
+    ) {
+      return;
     }
     const service = context.workerEnvironmentService;
     if (!service) {
@@ -534,8 +532,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     );
   },
   "environments.destroy": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsDestroyParams(params)) {
-      return rejectInvalid(respond, "environments.destroy", validateEnvironmentsDestroyParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsDestroyParams, "environments.destroy", respond)
+    ) {
+      return;
     }
     const service = context.workerEnvironmentService;
     if (!service) {
@@ -574,8 +574,15 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     );
   },
   "worker.desktop.observe": async ({ params, respond, context }) => {
-    if (!validateWorkerDesktopObserveParams(params)) {
-      return rejectInvalid(respond, "worker.desktop.observe", validateWorkerDesktopObserveParams);
+    if (
+      !assertValidParams(
+        params,
+        validateWorkerDesktopObserveParams,
+        "worker.desktop.observe",
+        respond,
+      )
+    ) {
+      return;
     }
     await respondDesktopObserve({
       request: {
@@ -587,8 +594,15 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "worker.desktop.launch": async ({ params, respond, context }) => {
-    if (!validateWorkerDesktopLaunchParams(params)) {
-      return rejectInvalid(respond, "worker.desktop.launch", validateWorkerDesktopLaunchParams);
+    if (
+      !assertValidParams(
+        params,
+        validateWorkerDesktopLaunchParams,
+        "worker.desktop.launch",
+        respond,
+      )
+    ) {
+      return;
     }
     await respondDesktopLaunch({
       environmentId: params.environmentId,
@@ -598,14 +612,14 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "desktop.observe": async ({ params, respond, context }) => {
-    if (!validateDesktopObserveParams(params)) {
-      return rejectInvalid(respond, "desktop.observe", validateDesktopObserveParams);
+    if (!assertValidParams(params, validateDesktopObserveParams, "desktop.observe", respond)) {
+      return;
     }
     await respondDesktopObserve({ request: params, respond, context });
   },
   "desktop.launch": async ({ params, respond, context }) => {
-    if (!validateDesktopLaunchParams(params)) {
-      return rejectInvalid(respond, "desktop.launch", validateDesktopLaunchParams);
+    if (!assertValidParams(params, validateDesktopLaunchParams, "desktop.launch", respond)) {
+      return;
     }
     await respondDesktopLaunch({
       environmentId: params.source.environmentId,

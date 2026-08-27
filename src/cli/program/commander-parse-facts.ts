@@ -94,11 +94,15 @@ function getRootCommand(command: Command): Command {
   return root;
 }
 
-/** Classify a possible child token only after Commander owns its active command node. */
+/** Resolve lazy help before classifying a possible child on Commander's active command node. */
 export function getCommanderSubcommandFact(
   command: Command,
   args: readonly string[],
 ): { kind: "defer" } | { kind: "unknown"; name: string } | undefined {
+  const helpRequested = args.includes("-h") || args.includes("--help");
+  if (helpRequested && lazyCommands.has(command)) {
+    return { kind: "defer" };
+  }
   const firstArgument = command.args[0];
   const matchesChild = command.commands.some(
     (child) => child.name() === firstArgument || child.aliases().includes(firstArgument ?? ""),
@@ -110,10 +114,6 @@ export function getCommanderSubcommandFact(
     matchesChild
   ) {
     return undefined;
-  }
-  const helpRequested = args.includes("-h") || args.includes("--help");
-  if (helpRequested && lazyCommands.has(command)) {
-    return { kind: "defer" };
   }
   return command.commands.length > 0 ? { kind: "unknown", name: firstArgument } : undefined;
 }

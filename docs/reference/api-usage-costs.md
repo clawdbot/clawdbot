@@ -46,7 +46,7 @@ Anthropic has confirmed that Claude CLI reuse (including `claude -p`) is a sanct
 
 ## How keys are discovered
 
-- **Auth profiles**: per-agent, stored in `auth-profiles.json`.
+- **Auth profiles**: SQLite stores, with agent-local profiles overriding the shared read-through base. See [Auth credential semantics](/auth-credential-semantics#agent-copy-portability).
 - **Environment variables**: for example `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`.
 - **Config**: `models.providers.*.apiKey`, `plugins.entries.*.config.webSearch.apiKey`, `plugins.entries.firecrawl.config.webFetch.apiKey`, `memory.search.*`, `talk.providers.*.apiKey`.
 - **Skills**: `skills.entries.<name>.apiKey`, which may export the key to the skill process env.

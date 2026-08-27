@@ -274,6 +274,7 @@ async function handleChatSendWithOptions(
     // post-ACK cleanupAdmittedRun must not race that persist with a discard.
     admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
+    context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({
       admissionStartedAt,

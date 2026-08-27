@@ -1,7 +1,8 @@
 import { request, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getFreePort } from "../../test-utils/ports.js";
+import { readResponseWithLimit } from "../../infra/http-body.js";
+import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import * as httpListen from "../server/http-listen.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
@@ -35,14 +36,13 @@ async function getStatus(host: string, port: number, path: string): Promise<numb
   });
 }
 
-async function getDistinctFreePort(excluded: number): Promise<number> {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const port = await getFreePort();
-    if (port !== excluded) {
-      return port;
-    }
+function reportTargetPortCollision(server: Server, targetPort: number): void {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Missing portal listener address");
   }
-  throw new Error("Failed to reserve a distinct test port");
+  // Keep the OS allocation owned; only the next collision check sees the target port.
+  vi.spyOn(server, "address").mockReturnValueOnce({ ...address, port: targetPort });
 }
 
 describe("portal open authority fence", () => {
@@ -109,67 +109,80 @@ describe("gateway portal service", () => {
   });
 
   it("retries a target-port collision before binding sibling hosts", async () => {
-    const targetPort = await getFreePort();
-    const acceptedPort = await getDistinctFreePort(targetPort);
-    const actualListen = httpListen.listenGatewayHttpServer;
-    const calls: Array<{ host: string; port: number }> = [];
-    let primaryAttempt = 0;
-    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
-      calls.push({ host: params.bindHost, port: params.port });
-      if (params.bindHost === "127.0.0.1" && params.port === 0) {
-        primaryAttempt += 1;
-        await actualListen({
-          ...params,
-          port: primaryAttempt === 1 ? targetPort : acceptedPort,
+    await withServer(
+      (_req, res) => res.end("target"),
+      async (targetUrl) => {
+        const targetPort = Number(new URL(targetUrl).port);
+        const actualListen = httpListen.listenGatewayHttpServer;
+        const calls: Array<{ host: string; port: number }> = [];
+        let primaryAttempt = 0;
+        vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
+          calls.push({ host: params.bindHost, port: params.port });
+          await actualListen(params);
+          if (params.bindHost === "127.0.0.1" && params.port === 0) {
+            primaryAttempt += 1;
+            if (primaryAttempt === 1) {
+              reportTargetPortCollision(params.httpServer, targetPort);
+            }
+          }
         });
-        return;
-      }
-      await actualListen(params);
-    });
-    const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
+        const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
 
-    const portal = await service.open({ targetPort });
+        const portal = await service.open({ targetPort });
 
-    expect(portal.listenPort).toBe(acceptedPort);
-    expect(calls).toEqual([
-      { host: "127.0.0.1", port: 0 },
-      { host: "127.0.0.1", port: 0 },
-      { host: "::1", port: acceptedPort },
-    ]);
-    expect(httpServers).toHaveLength(2);
-    expect(httpServers.every((server) => server.listening)).toBe(true);
-    expect(await getStatus("127.0.0.1", portal.listenPort, `/?${portal.tokenQuery}`)).toBe(502);
+        expect(portal.listenPort).not.toBe(targetPort);
+        expect(calls).toEqual([
+          { host: "127.0.0.1", port: 0 },
+          { host: "127.0.0.1", port: 0 },
+          { host: "::1", port: portal.listenPort },
+        ]);
+        expect(httpServers).toHaveLength(2);
+        expect(httpServers.every((server) => server.listening)).toBe(true);
+        for (const server of httpServers) {
+          expect(server.address()).toMatchObject({ port: portal.listenPort });
+        }
+        const response = await fetch(portal.url);
+        expect(response.status).toBe(200);
+        expect((await readResponseWithLimit(response, 32)).toString("utf8")).toBe("target");
 
-    const ownedServers = [...httpServers];
-    await service.closeAll();
-    expect(httpServers).toEqual([]);
-    expect(ownedServers.every((server) => !server.listening && server.address() === null)).toBe(
-      true,
+        const ownedServers = [...httpServers];
+        await service.closeAll();
+        expect(httpServers).toEqual([]);
+        expect(ownedServers.every((server) => !server.listening && server.address() === null)).toBe(
+          true,
+        );
+      },
     );
   });
 
   it("cleans up when every allocation collides with the target port", async () => {
-    const targetPort = await getFreePort();
-    const actualListen = httpListen.listenGatewayHttpServer;
-    const attemptedServers = new Set<Server>();
-    const listen = vi
-      .spyOn(httpListen, "listenGatewayHttpServer")
-      .mockImplementation(async (params) => {
-        attemptedServers.add(params.httpServer);
-        await actualListen({ ...params, port: targetPort });
-      });
-    const { service, httpServers } = makeService(["127.0.0.1"]);
+    await withServer(
+      (_req, res) => res.end("target"),
+      async (targetUrl) => {
+        const targetPort = Number(new URL(targetUrl).port);
+        const actualListen = httpListen.listenGatewayHttpServer;
+        const attemptedServers = new Set<Server>();
+        const listen = vi
+          .spyOn(httpListen, "listenGatewayHttpServer")
+          .mockImplementation(async (params) => {
+            attemptedServers.add(params.httpServer);
+            await actualListen(params);
+            reportTargetPortCollision(params.httpServer, targetPort);
+          });
+        const { service, httpServers } = makeService(["127.0.0.1"]);
 
-    await expect(service.open({ targetPort })).rejects.toThrow(
-      `Portal listener repeatedly allocated target port ${targetPort}`,
+        await expect(service.open({ targetPort })).rejects.toThrow(
+          `Portal listener repeatedly allocated target port ${targetPort}`,
+        );
+
+        expect(listen).toHaveBeenCalledTimes(10);
+        expect(attemptedServers.size).toBe(1);
+        expect(httpServers).toEqual([]);
+        const [primaryServer] = attemptedServers;
+        expect(primaryServer?.listening).toBe(false);
+        expect(primaryServer?.address()).toBeNull();
+      },
     );
-
-    expect(listen).toHaveBeenCalledTimes(10);
-    expect(attemptedServers.size).toBe(1);
-    expect(httpServers).toEqual([]);
-    const [primaryServer] = attemptedServers;
-    expect(primaryServer?.listening).toBe(false);
-    expect(primaryServer?.address()).toBeNull();
   });
 
   it("updates an existing target without replacing its listener or token", async () => {

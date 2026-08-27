@@ -148,6 +148,7 @@ async function prepareEmbeddingServer(
         download: true,
       });
       await prepareManagedLlamaServer({
+        chatModel: { mode: "preserve" },
         embeddingModelIsDefault,
         embeddingModelPath,
         port: resolveProviderPort(provider),

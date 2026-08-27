@@ -1120,6 +1120,71 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles a transport-ambiguous dispatch so an accepted run is surfaced instead of misreported as an error", async () => {
+    let dispatchAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; timeoutMs?: number }) => {
+        if (request.method === "agent") {
+          dispatchAttempts += 1;
+          if (dispatchAttempts === 1) {
+            throw new Error("gateway timeout after 60000ms");
+          }
+          if (dispatchAttempts === 2) {
+            return {
+              runId: "accepted-ambig-run",
+              status: "in_flight",
+              admissionPending: true,
+            };
+          }
+          return { runId: "accepted-ambig-run", status: "in_flight" };
+        }
+        return request.method?.startsWith("sessions.") ? { ok: true } : {};
+      },
+    );
+    const context = { agentSessionKey: "agent:main:main" };
+
+    const result = await spawnSubagentDirect({ task: "ambiguous child" }, context);
+
+    expect(dispatchAttempts).toBe(3);
+    const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
+    expect(agentRequests.map((request) => request.params)).toEqual([
+      agentRequests[0]?.params,
+      agentRequests[0]?.params,
+      agentRequests[0]?.params,
+    ]);
+    expect(agentRequests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "accepted-ambig-run",
+      childSessionKey: expect.any(String),
+    });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not register a child when reconciliation finds a terminal run", async () => {
+    let dispatchAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent" && ++dispatchAttempts === 1) {
+        throw new Error("gateway timeout after 60000ms");
+      }
+      return request.method === "agent"
+        ? { runId: "stopped-run", status: "timeout" }
+        : { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "ambiguous terminal child" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(dispatchAttempts).toBe(2);
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("no active subagent run (status: timeout)"),
+    });
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("shares pending child capacity between native and visible spawn paths", async () => {
     const { maybeSpawnVisibleSession } = await import("../../tools/sessions-spawn-visible.js");
     hoisted.configOverride = createConfigOverride({

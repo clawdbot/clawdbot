@@ -7,7 +7,12 @@ import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
+import {
+  ensureCodexAppServerClientRuntime,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
@@ -538,7 +543,12 @@ describe("Codex delegation capability", () => {
       "tools.experimental_request_user_input.enabled": true,
       "tools.update_plan.enabled": true,
       mcp_servers: {
-        "local-example": { command: "example-mcp" },
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+        },
       },
       web_search: "live",
     };
@@ -580,7 +590,15 @@ describe("Codex delegation capability", () => {
         expect(request.config?.[disabledFeature]).toBe(false);
       }
       expect(request.config?.web_search).toBe("disabled");
-      expect(request.config?.mcp_servers).toEqual({ "local-example": { enabled: false } });
+      expect(request.config?.mcp_servers).toEqual({
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+          enabled: false,
+        },
+      });
       expect(request.developerInstructions).toContain("`message(action=send)`");
       expect(request.developerInstructions).not.toContain("`spawn_agent`");
       expect(request.developerInstructions).not.toContain("`tool_search`");
@@ -608,7 +626,14 @@ describe("Codex delegation capability", () => {
       expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
       expect(normal.config?.["features.plugins"]).toBe(true);
       expect(normal.config?.["tools.update_plan.enabled"]).toBe(false);
-      expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
+      expect(normal.config?.mcp_servers).toEqual({
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+        },
+      });
       expect(normal.developerInstructions).toContain("`spawn_agent`");
     }
   });
@@ -3344,38 +3369,62 @@ describe("Codex app-server adopted thread lifecycle", () => {
     });
   });
 
-  it("rejects an adopted thread that is active in another runner before reserving it", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
-    const { threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/read") {
-        return {
-          thread: {
-            ...threadStartResult(threadId).thread,
-            status: { type: "active" },
-          },
-        };
+  it.each([
+    { status: "active", canAcceptDirectInput: true, error: "active in another runner" },
+    { status: "idle", canAcceptDirectInput: false, error: "controlled by its parent" },
+  ])(
+    "preserves retained adopted ownership when native preflight rejects: $status",
+    async ({ status, canAcceptDirectInput, error }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+      const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
+      const harness = createFakeCodexAppServerClient(async (method: string) => {
+        if (method === "thread/read") {
+          return {
+            thread: {
+              ...threadStartResult(threadId).thread,
+              status: { type: status },
+              canAcceptDirectInput,
+            },
+          };
+        }
+        if (method === "thread/unsubscribe") {
+          return { status: "unsubscribed" };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: workspaceDir });
+      await testCodexAppServerBindingStore.mutate(identity, {
+        kind: "patch",
+        threadId,
+        patch: { clientId: harness.client.getInstanceId() },
+      });
+      const release = vi.fn();
+      await retainCodexAppServerLiveThread(harness.client, threadId, release);
+      const reserveResumeThread = vi.fn(() => ({ release: vi.fn() }));
+      const before = await testCodexAppServerBindingStore.read(identity);
+      try {
+        await expect(
+          startOrResumeThread({
+            client: harness.client,
+            reserveResumeThread,
+            params,
+            cwd: workspaceDir,
+            dynamicTools: [],
+            appServer: createThreadLifecycleAppServerOptions(),
+          }),
+        ).rejects.toThrow(error);
+
+        expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
+        expect(release).not.toHaveBeenCalled();
+        expect(await testCodexAppServerBindingStore.read(identity)).toEqual(before);
+        expect(reserveResumeThread).not.toHaveBeenCalled();
+      } finally {
+        harness.close();
       }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const reserveResumeThread = vi.fn(() => ({ release: vi.fn() }));
-
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        reserveResumeThread,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createThreadLifecycleAppServerOptions(),
-      }),
-    ).rejects.toThrow("active in another runner");
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
-    expect(reserveResumeThread).not.toHaveBeenCalled();
-  });
+    },
+  );
 });
 
 describe("Codex app-server supervised branch lifecycle", () => {
@@ -3667,7 +3716,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         project_doc_max_bytes: 0,
         mcp_servers: {
           inherited: { enabled: false },
-          "request-only": { enabled: false },
+          "request-only": { command: "request-mcp", enabled: false },
         },
       });
     }

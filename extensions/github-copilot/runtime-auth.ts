@@ -59,12 +59,6 @@ function parseCopilotApiBaseUrl(value: unknown, domain: string): string {
   return url.href.replace(/\/+$/, "");
 }
 
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
 export async function resolveCopilotRuntimeAuth(params: {
   githubToken: string;
   env?: NodeJS.ProcessEnv;
@@ -95,7 +89,10 @@ export async function resolveCopilotRuntimeAuth(params: {
       signal,
     });
     if (!response.ok) {
-      await cancelUnreadResponseBody(response);
+      // A capture tee must not delay the already-known authentication failure.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       throw new CopilotRuntimeAuthError({ reason: "http_error", status: response.status });
     }
     const baseUrl = parseCopilotApiBaseUrl(

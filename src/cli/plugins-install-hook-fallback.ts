@@ -209,6 +209,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   spec: string;
   pin?: boolean;
   safetyOverrides: InstallSafetyOverrides;
+  capabilityConsent?: import("./plugin-capability-consent.js").PluginCapabilityConsentCliOptions;
   allowBundledFallback: boolean;
   expectedPluginId?: string;
   expectedIntegrity?: string;
@@ -285,6 +286,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
             : {}),
         },
     snapshot: params.snapshot,
+    ...params.capabilityConsent,
     safetyOverrides: params.safetyOverrides,
     logger: createPluginInstallLogger(params.runtime),
     invalidateRuntimeCache: params.invalidateRuntimeCache,

@@ -7,6 +7,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import {
+  buildPluginCapabilityConsentReview,
+  type PluginCapabilityConsentHandler,
+} from "../plugins/capability-consent.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -14,6 +18,7 @@ import {
   getDoctorConfigInputForTest,
   runDoctorConfigWithInput,
 } from "./doctor-config-flow.test-utils.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -1003,21 +1008,23 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
     return changes.length > 0 ? { config: next, changes } : { config: cfg, changes: [] };
   }
 
+  const collectRelevantDoctorPluginIds = (raw: unknown): string[] => {
+    const ids = new Set<string>();
+    const root = readNullableRecord(raw);
+    const channels = readNullableRecord(root?.channels);
+    for (const channelId of Object.keys(channels ?? {})) {
+      if (channelId !== "defaults") {
+        ids.add(channelId);
+      }
+    }
+    if (hasLegacyTalkFields(root?.talk)) {
+      ids.add("elevenlabs");
+    }
+    return [...ids].toSorted();
+  };
   return {
-    collectRelevantDoctorPluginIds: (raw: unknown): string[] => {
-      const ids = new Set<string>();
-      const root = readNullableRecord(raw);
-      const channels = readNullableRecord(root?.channels);
-      for (const channelId of Object.keys(channels ?? {})) {
-        if (channelId !== "defaults") {
-          ids.add(channelId);
-        }
-      }
-      if (hasLegacyTalkFields(root?.talk)) {
-        ids.add("elevenlabs");
-      }
-      return [...ids].toSorted();
-    },
+    collectRelevantDoctorPluginIds,
+    collectDoctorConfigRepairPluginIds: collectRelevantDoctorPluginIds,
     applyPluginDoctorCompatibilityMigrations: normalizeDiscordStreamingAliasesForTest,
     listPluginDoctorLegacyConfigRules: () => [
       {
@@ -1499,7 +1506,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
           agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
           sourceConfigBeforeMigrations,
           config: effectiveConfig,
-          sourceConfig: effectiveConfig,
+          // The reader resolves source values but leaves legacy repairs to doctor.
+          sourceConfig: injectedEffectiveConfig,
           valid: legacyIssues.length === 0,
           warnings: [],
           legacyIssues,
@@ -2162,6 +2170,49 @@ describe("doctor config flow", () => {
     expect(scopeParams.getBaseSnapshot()?.index.installRecords).not.toHaveProperty("google-meet");
     result.invalidatePluginMetadataSnapshot();
     expect(scopeParams.getBaseSnapshot()).toBeUndefined();
+  });
+
+  it("does not treat noninteractive doctor fix as plugin capability consent", async () => {
+    const review = buildPluginCapabilityConsentReview({
+      pluginId: "demo",
+      manifest: { name: "Demo", contracts: { tools: ["demo.write"] } },
+      record: { source: "npm", spec: "@example/demo" },
+      config: {},
+    });
+    let acknowledgment: unknown = "not reviewed";
+    runDoctorRepairSequenceMock.mockImplementation(
+      async (params: { state: unknown; onCapabilityConsent?: PluginCapabilityConsentHandler }) => {
+        acknowledgment = await expectDefined(
+          params.onCapabilityConsent,
+          "doctor capability handler",
+        )(review);
+        return {
+          state: params.state,
+          changeNotes: [],
+          warningNotes: [],
+          authProfilesRepaired: false,
+        };
+      },
+    );
+    const prompter = createDoctorPrompter({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { repair: true, yes: true, nonInteractive: true },
+    });
+    const confirm = vi.spyOn(prompter, "confirmRuntimeRepair");
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: (params) => loadAndMaybeMigrateDoctorConfig({ ...params, prompter }),
+    });
+
+    expect(acknowledgment).toBeUndefined();
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresInteractiveConfirmation: true, initialValue: false }),
+    );
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      expect.stringContaining("demo.write"),
+      "Plugin capabilities",
+    );
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {

@@ -711,6 +711,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  html:has(.shell--chat),
+  body:has(.shell--chat) {
+    /* iOS Safari exposes the document canvas around its browser chrome; keep
+       that canvas on the same semantic surface as the narrow transcript. */
+    background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
+  }
+}
+
 /* iOS Safari zooms the viewport when a focused text control is under 16px;
    important keeps feature-local typography from silently dropping this floor.
    Controls that manage their own touch size declare it via
@@ -1005,20 +1014,34 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 }
 
 @keyframes shimmer {
-  0% {
-    background-position: -200% 0;
+  from {
+    transform: translateX(-100%);
   }
-  100% {
-    background-position: 200% 0;
+  to {
+    transform: translateX(100%);
   }
 }
 
 /* Skeleton loading primitives */
 .skeleton {
-  background: linear-gradient(90deg, var(--bg-muted) 25%, var(--bg-hover) 50%, var(--bg-muted) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s ease-in-out infinite;
+  position: relative;
+  overflow: hidden;
+  background: var(--skeleton-base, var(--bg-muted));
   border-radius: var(--radius-md);
+}
+
+.skeleton::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 25%,
+    var(--skeleton-highlight, var(--bg-hover)) 50%,
+    transparent 75%
+  );
+  content: "";
+  animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+  will-change: transform;
 }
 
 .skeleton-line {

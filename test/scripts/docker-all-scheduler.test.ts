@@ -616,6 +616,7 @@ describe("scripts/test-docker-all scheduler", () => {
     copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
     copyFileSync("scripts/test-docker-all.mts", path.join(scriptsDir, "test-docker-all.mts"));
     copyFileSync("scripts/lib/tsx-cli-shim.mjs", path.join(libDir, "tsx-cli-shim.mjs"));
+    copyFileSync("scripts/tsx.mjs", path.join(scriptsDir, "tsx.mjs"));
     copyFileSync(
       "scripts/prepublish-plugin-registry-artifact.mjs",
       path.join(scriptsDir, "prepublish-plugin-registry-artifact.mjs"),
@@ -627,6 +628,7 @@ describe("scripts/test-docker-all scheduler", () => {
     for (const fileName of [
       "docker-e2e-plan.mts",
       "docker-e2e-scenarios.mts",
+      "local-check-runtime.mts",
       "managed-child-process.mts",
       "official-external-channel-catalog.json",
       "release-version.mjs",

@@ -25,7 +25,7 @@ import {
   NODE_WAKE_RECONNECT_WAIT_MS,
   releaseNodeWakeLifecycle,
 } from "../node-wake-state.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import {
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
@@ -33,6 +33,7 @@ import {
 } from "./nodes.wake.js";
 import type { RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function respondPairingChanged(respond: RespondFn) {
   respond(
@@ -67,12 +68,7 @@ function resolveClientNodeId(
 /** Gateway handlers for queueing work until a paired node reconnects. */
 export const nodePendingWorkHandlers: GatewayRequestHandlers = {
   "node.pending.drain": async ({ params, respond, client, context }) => {
-    if (!validateNodePendingDrainParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pending.drain",
-        validator: validateNodePendingDrainParams,
-      });
+    if (!assertValidParams(params, validateNodePendingDrainParams, "node.pending.drain", respond)) {
       return;
     }
     const nodeId = resolveClientNodeId(client);
@@ -100,7 +96,7 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
         respondPairingChanged(respond);
         return;
       }
-      const p = params as { maxItems?: number };
+      const p = params;
       const drained = drainNodePendingWork(nodeId, {
         maxItems: p.maxItems,
         includeDefaultStatus: true,
@@ -110,12 +106,9 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
     });
   },
   "node.pending.enqueue": async ({ params, respond, context }) => {
-    if (!validateNodePendingEnqueueParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pending.enqueue",
-        validator: validateNodePendingEnqueueParams,
-      });
+    if (
+      !assertValidParams(params, validateNodePendingEnqueueParams, "node.pending.enqueue", respond)
+    ) {
       return;
     }
     const p = params as {

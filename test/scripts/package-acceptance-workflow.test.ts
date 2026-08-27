@@ -7258,9 +7258,10 @@ describe("package artifact reuse", () => {
     const postpublishEvidence = workflowStep(releasePublishJob, "Upload postpublish evidence");
 
     expect(packageJson.scripts).toMatchObject({
-      "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
-      "release:candidate": "node --import tsx scripts/release-candidate-checklist.mts",
-      "release:beta": "node --import tsx scripts/release-candidate-checklist.mts",
+      "release:verify-beta": "node --import ./scripts/tsx.mjs scripts/release-verify-beta.ts",
+      "release:candidate":
+        "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
+      "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
       "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     });
     expect(workflowStep(releasePublishJob, "Setup Node environment").with).toMatchObject({

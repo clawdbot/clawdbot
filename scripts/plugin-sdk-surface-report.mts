@@ -319,7 +319,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: typed ask_user option-index contract and two bounded owner-order resolvers.
       // +2: exact-session deletion parameters and synchronous companion mutation contract.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
-      4345,
+      // +1: identifier authentication input type for external channel plugins.
+      // +1: shared channel-account logout config cleanup.
+      // +1: descriptor-based allowFrom authentication classifier for channel security audits.
+      4348,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -416,7 +419,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
       // +2: bounded ask_user owner-order map builder and option resolver.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
-      2582,
+      // +1: shared channel-account logout config cleanup.
+      // +1: descriptor-based allowFrom authentication classifier for channel security audits.
+      2584,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

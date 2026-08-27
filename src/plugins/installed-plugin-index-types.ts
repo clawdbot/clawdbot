@@ -90,6 +90,10 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "marketplaceName"
   | "marketplaceSource"
   | "marketplacePlugin"
+  | "acceptedSurface"
+  | "acceptedSurfaceHash"
+  | "acceptedSurfaceAt"
+  | "acceptedSurfaceIntegrity"
 >;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;

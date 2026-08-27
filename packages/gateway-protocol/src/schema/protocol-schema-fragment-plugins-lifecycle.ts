@@ -7,6 +7,7 @@ import * as pluginApprovals from "./plugin-approvals.js";
 import * as plugins from "./plugins.js";
 
 export const PluginLifecycleProtocolSchemas = {
+  CapabilityConsentErrorDetails: plugins.CapabilityConsentErrorDetailsSchema,
   HooksStatusParams: hooks.HooksStatusParamsSchema,
   PluginApprovalRequestParams: pluginApprovals.PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: pluginApprovals.PluginApprovalResolveParamsSchema,
@@ -15,8 +16,16 @@ export const PluginLifecycleProtocolSchemas = {
   PluginCatalogInstallAction: plugins.PluginCatalogInstallActionSchema,
   PluginCatalogOfficialInstall: plugins.PluginCatalogOfficialInstallSchema,
   PluginControlUiDescriptor: plugins.PluginControlUiDescriptorSchema,
+  PluginDeclaredSurface: plugins.PluginDeclaredSurfaceSchema,
+  PluginDeclaredSurfaceWidening: plugins.PluginDeclaredSurfaceWideningSchema,
+  PluginHookGrant: plugins.PluginHookGrantSchema,
+  PluginInspectSource: plugins.PluginInspectSourceSchema,
+  PluginInstallTrust: plugins.PluginInstallTrustSchema,
+  PluginOperatorGrants: plugins.PluginOperatorGrantsSchema,
   PluginSearchPackage: plugins.PluginSearchPackageSchema,
   PluginSearchResultEntry: plugins.PluginSearchResultEntrySchema,
+  PluginsInspectParams: plugins.PluginsInspectParamsSchema,
+  PluginsInspectResult: plugins.PluginsInspectResultSchema,
   PluginsInstallParams: plugins.PluginsInstallParamsSchema,
   PluginsInstallResult: plugins.PluginsInstallResultSchema,
   PluginsListParams: plugins.PluginsListParamsSchema,

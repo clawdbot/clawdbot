@@ -334,17 +334,10 @@ export async function prepareGatewayLifecycle(params: {
     isConnectionActive,
   });
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
-    isConnectionActive,
-    onReplace: (connId, sessionKeys) => {
-      const client = clients.getByConnectionId(connId);
-      if (!client?.presenceKey) {
-        return;
-      }
-      upsertPresence(client.presenceKey, {
-        watchedSessions: sessionKeys.length > 0 ? [...sessionKeys] : undefined,
-      });
-      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
-    },
+    clients,
+    broadcast,
+    incrementPresenceVersion,
+    getHealthVersion,
   });
   deps.cron = runtimeState.cronState.cron;
   const pluginHostServices = {

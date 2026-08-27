@@ -631,6 +631,14 @@ export async function showLoadingAnimation(
   }
 }
 
+export async function getLineGroupSummary(
+  groupId: string,
+  opts: LineClientOpts,
+): Promise<messagingApi.GroupSummaryResponse> {
+  const { client } = createLineMessagingClient(opts);
+  return await client.getGroupSummary(groupId);
+}
+
 export async function getUserProfile(
   userId: string,
   opts: LineClientOpts & { useCache?: boolean },

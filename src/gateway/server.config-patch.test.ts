@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -901,6 +902,23 @@ describe("gateway config methods", () => {
     // Config hash should not change (no file write)
     const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
     expect(after.payload?.hash).toBe(current.payload?.hash);
+  });
+
+  it("acknowledges sandbox config only after the runtime snapshot applies it", async () => {
+    const original = await getCurrentConfigObject();
+    const image = `openclaw-settlement-${rateLimitEpochMs}:test`;
+
+    try {
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ agents: { defaults: { sandbox: { docker: { image } } } } }),
+        baseHash: original.hash,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(getRuntimeConfig().agents?.defaults?.sandbox?.docker?.image).toBe(image);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
   });
 
   it("accepts messages.groupChat.historyLimit: 0 through config.patch", async () => {

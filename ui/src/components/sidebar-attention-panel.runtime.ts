@@ -3,6 +3,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import "../styles/sidebar-issues.css";
@@ -121,6 +122,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
         id="sidebar-issues-panel"
         class="sidebar-issues-panel"
         role="dialog"
+        aria-modal=${isMobileNavLayout() ? "true" : nothing}
         aria-labelledby="sidebar-issues-panel-heading"
         style=${panelStyle}
         @keydown=${params.onKeydown}

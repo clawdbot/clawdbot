@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,

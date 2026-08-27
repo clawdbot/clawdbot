@@ -106,6 +106,11 @@ artifact. Plan-based migrations can use
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
 
+For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
+sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
+errors and invalid JSON reach Doctor's detection or migration warnings; the
+source remains untouched so the operator can fix it and retry.
+
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
 them after session repair under SQLite maintenance ownership. The context

@@ -26,7 +26,7 @@ import {
   isCodexAppServerLiveThreadClaimed,
   retainCodexAppServerLiveThread,
 } from "./app-server/client-runtime.js";
-import type { CodexAppServerClient } from "./app-server/client.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./app-server/client.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
@@ -152,6 +152,7 @@ function createThreadResumeResponse(params: {
   cwd?: string;
   model?: string;
   modelProvider?: string;
+  canAcceptDirectInput?: boolean | null;
 }) {
   const cwd = params.cwd ?? "/repo";
   const modelProvider = params.modelProvider ?? "openai";
@@ -168,6 +169,9 @@ function createThreadResumeResponse(params: {
       modelProvider,
       preview: "",
       source: "appServer",
+      ...(params.canAcceptDirectInput !== undefined
+        ? { canAcceptDirectInput: params.canAcceptDirectInput }
+        : {}),
       status: { type: "idle" },
       turns: [],
     },
@@ -185,6 +189,16 @@ async function writeTestBinding(
   binding: CodexAppServerThreadBinding,
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(identity, { kind: "set", binding });
+}
+
+async function completeResumeControlRequest(
+  options: CodexControlRequestOptions | undefined,
+  response: ReturnType<typeof createThreadResumeResponse>,
+  client: CodexAppServerClient,
+  auth: { authProfileId?: string } = {},
+) {
+  await options?.beforeRequest?.(async <T>() => ({ thread: response.thread }) as T);
+  await options?.onResponse?.(response, client, { ...auth, assertCurrent: () => undefined });
 }
 
 function createResumeControlRequest(
@@ -205,7 +219,7 @@ function createResumeControlRequest(
       options?: CodexControlRequestOptions,
     ) => {
       const value = typeof response === "function" ? await response() : response;
-      await options?.onResponse?.(value, harness.client, auth);
+      await completeResumeControlRequest(options, value, harness.client, auth);
       return value;
     },
   );
@@ -674,39 +688,241 @@ describe("codex command", () => {
     expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
   });
 
-  it("attaches the current session to an existing Codex thread", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const codexControlRequest = createResumeControlRequest(
-      createThreadResumeResponse({ threadId: "thread-123" }),
-    );
-    const deps = createDeps({ codexControlRequest });
+  it.each([undefined, null, true])(
+    "attaches an interactive or unknown-capability thread (%s)",
+    async (canAcceptDirectInput) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const codexControlRequest = createResumeControlRequest(
+        createThreadResumeResponse({ threadId: "thread-123", canAcceptDirectInput }),
+      );
+      const deps = createDeps({ codexControlRequest });
 
-    await expect(
-      handleCodexCommand(createContext("resume thread-123", sessionFile), { deps }),
-    ).resolves.toEqual({
-      text: "Attached this OpenClaw session to Codex thread thread-123. The next turn will validate its tools and apply this session's configuration before continuing.",
-    });
+      await expect(
+        handleCodexCommand(createContext("resume thread-123", sessionFile), { deps }),
+      ).resolves.toEqual({
+        text: "Attached this OpenClaw session to Codex thread thread-123. The next turn will validate its tools and apply this session's configuration before continuing.",
+      });
 
-    expect(codexControlRequest).toHaveBeenCalledExactlyOnceWith(
-      undefined,
-      "thread/resume",
-      { threadId: "thread-123", excludeTurns: true },
-      expect.objectContaining({
-        agentDir: path.join(tempDir, "agents", "main", "agent"),
-        sessionId: "session-1",
-      }),
-    );
-    await expect(
-      testCodexAppServerBindingStore.read({
-        kind: "session",
-        agentId: "main",
-        sessionId: "session-1",
-      }),
-    ).resolves.toMatchObject({
-      threadId: "thread-123",
-      historyCoveredThrough: expect.any(String),
-    });
-  });
+      expect(codexControlRequest).toHaveBeenCalledExactlyOnceWith(
+        undefined,
+        "thread/resume",
+        { threadId: "thread-123", excludeTurns: true },
+        expect.objectContaining({
+          agentDir: path.join(tempDir, "agents", "main", "agent"),
+          sessionId: "session-1",
+        }),
+      );
+      await expect(
+        testCodexAppServerBindingStore.read({
+          kind: "session",
+          agentId: "main",
+          sessionId: "session-1",
+        }),
+      ).resolves.toMatchObject({
+        threadId: "thread-123",
+        historyCoveredThrough: expect.any(String),
+      });
+    },
+  );
+
+  it.each([
+    { knownBeforeResume: true, sameOwner: false },
+    { knownBeforeResume: true, sameOwner: true },
+    { knownBeforeResume: false, sameOwner: false },
+    { knownBeforeResume: false, sameOwner: true },
+  ])(
+    "rejects a parent-owned child without displacing the current owner (preflight: $knownBeforeResume, same owner: $sameOwner)",
+    async ({ knownBeforeResume, sameOwner }) => {
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const threadId = "thread-parent-owned";
+      const existingThreadId = sameOwner ? threadId : "thread-existing";
+      const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+      const release = vi.fn(async () => undefined);
+      await retainCodexAppServerLiveThread(harness.client, existingThreadId, release);
+      await writeTestBinding(identity, {
+        threadId: existingThreadId,
+        clientId: harness.client.getInstanceId(),
+        cwd: "/repo",
+      });
+      const before = await testCodexAppServerBindingStore.read(identity);
+      const response = createThreadResumeResponse({ threadId, canAcceptDirectInput: false });
+      const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
+        if (method === "thread/read") {
+          return {
+            thread: { ...response.thread, canAcceptDirectInput: knownBeforeResume ? false : null },
+          } as never;
+        }
+        if (method === "thread/resume") {
+          return response as never;
+        }
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        throw new Error(`unexpected Codex method ${method}`);
+      });
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const retainClient = vi
+        .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+        .mockReturnValue({ client: harness.client, release: vi.fn() });
+      const codexControlRequest = vi.fn(
+        async (
+          _pluginConfig: unknown,
+          method: string,
+          controlParams: unknown,
+          options?: CodexControlRequestOptions,
+        ) => {
+          await options?.beforeRequest?.(
+            async <T>({
+              method: scopedMethod,
+              requestParams: scopedParams,
+            }: {
+              method: string;
+              requestParams?: unknown;
+            }) => await harness.client.request<T>(scopedMethod, scopedParams),
+          );
+          const value = await harness.client.request(method, controlParams);
+          await options?.onResponse?.(value, harness.client, { assertCurrent: () => undefined });
+          return value;
+        },
+      );
+
+      try {
+        const result = await runCommand(`resume ${threadId}`, { codexControlRequest });
+
+        expect(result.text).toContain("controlled by its parent");
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(before);
+        expect(release).not.toHaveBeenCalled();
+        const mutations = request.mock.calls
+          .map(([method]) => method)
+          .filter((method) => method !== "thread/read");
+        expect(mutations).toEqual(
+          knownBeforeResume
+            ? []
+            : sameOwner
+              ? ["thread/resume"]
+              : ["thread/resume", "thread/unsubscribe"],
+        );
+        await expect(
+          consumeCodexAppServerLiveThread(harness.client, existingThreadId),
+        ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+      } finally {
+        retainClient.mockRestore();
+        harness.client.close();
+      }
+    },
+  );
+
+  it.each([
+    { retainedBeforeResume: false, failure: "deadline" },
+    { retainedBeforeResume: true, failure: "deadline" },
+    { retainedBeforeResume: false, failure: "read" },
+    { retainedBeforeResume: true, failure: "read" },
+    { retainedBeforeResume: true, failure: "resume" },
+  ])(
+    "cleans up a rejected same-client resume only when no native owner remains (retained: $retainedBeforeResume, failure: $failure)",
+    async ({ retainedBeforeResume, failure }) => {
+      const { codexControlRequest } = await import("./command-rpc.js");
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const threadId = "thread-same-client-resume";
+      const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+      const release = vi.fn(async () => undefined);
+      if (retainedBeforeResume) {
+        await retainCodexAppServerLiveThread(harness.client, threadId, release);
+      }
+      const releaseSibling = vi.fn(async () => undefined);
+      await retainCodexAppServerLiveThread(harness.client, "thread-sibling", releaseSibling);
+      await writeTestBinding(identity, {
+        threadId,
+        clientId: harness.client.getInstanceId(),
+        cwd: "/repo",
+      });
+      const before = await testCodexAppServerBindingStore.read(identity);
+      const acquireClient = vi
+        .spyOn(sharedClientRuntime, "getLeasedSharedCodexAppServerClient")
+        .mockResolvedValue(harness.client);
+      const releaseLease = vi.spyOn(sharedClientRuntime, "releaseLeasedSharedCodexAppServerClient");
+      const response = createThreadResumeResponse({ threadId, canAcceptDirectInput: true });
+      let resumeAccepted = false;
+      const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
+        if (method === "thread/read") {
+          return { thread: response.thread } as never;
+        }
+        if (method === "thread/resume") {
+          resumeAccepted = true;
+          if (failure === "resume") {
+            throw new CodexAppServerRpcError(
+              { code: -32_603, message: "resume response assembly failed" },
+              method,
+            );
+          }
+          return response as never;
+        }
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        throw new Error(`unexpected Codex method ${method}`);
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const startedAt = Date.now();
+      try {
+        const result = await runCommand(
+          `resume ${threadId}`,
+          {
+            codexControlRequest,
+            bindingStore: {
+              ...testCodexAppServerBindingStore,
+              read: async (bindingIdentity) => {
+                if (resumeAccepted) {
+                  if (failure === "read") {
+                    throw new Error("Invalid Codex app-server binding row");
+                  }
+                  vi.setSystemTime(startedAt + 1_001);
+                }
+                return await testCodexAppServerBindingStore.read(bindingIdentity);
+              },
+            },
+          },
+          {},
+          { pluginConfig: { appServer: { requestTimeoutMs: 1_000 } } },
+        );
+
+        const keepsExistingOwner = retainedBeforeResume && failure !== "resume";
+        expect(result.text).toContain(
+          failure === "resume"
+            ? "resume response assembly failed"
+            : failure === "read"
+              ? "Invalid Codex app-server binding row"
+              : "timed out",
+        );
+        expect(request.mock.calls.map(([method]) => method)).toEqual(
+          keepsExistingOwner
+            ? ["thread/read", "thread/resume"]
+            : ["thread/read", "thread/resume", "thread/unsubscribe"],
+        );
+        expect(release).not.toHaveBeenCalled();
+        expect(releaseSibling).not.toHaveBeenCalled();
+        expect(releaseLease).toHaveBeenCalledExactlyOnceWith(harness.client);
+        expect(harness.stdinDestroyed).toBe(false);
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(before);
+        await expect(consumeCodexAppServerLiveThread(harness.client, threadId)).resolves.toEqual(
+          keepsExistingOwner
+            ? expect.objectContaining({ release: expect.any(Function) })
+            : undefined,
+        );
+        await expect(
+          consumeCodexAppServerLiveThread(harness.client, "thread-sibling"),
+        ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+      } finally {
+        releaseLease.mockRestore();
+        acquireClient.mockRestore();
+        harness.client.close();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("publishes manual resume ownership on its responding physical client before returning", async () => {
     const harness = createClientHarness();
@@ -719,7 +935,7 @@ describe("codex command", () => {
         _params: unknown,
         options?: CodexControlRequestOptions,
       ) => {
-        await options?.onResponse?.(response, harness.client, {});
+        await completeResumeControlRequest(options, response, harness.client);
         return response;
       },
     );
@@ -776,7 +992,7 @@ describe("codex command", () => {
         _params: unknown,
         options?: CodexControlRequestOptions,
       ) => {
-        await options?.onResponse?.(response, harness.client, {});
+        await completeResumeControlRequest(options, response, harness.client);
         return response;
       },
     );
@@ -852,7 +1068,7 @@ describe("codex command", () => {
           _params: unknown,
           options?: CodexControlRequestOptions,
         ) => {
-          await options?.onResponse?.(response, replacement.client, {});
+          await completeResumeControlRequest(options, response, replacement.client);
           return response;
         },
       );
@@ -926,7 +1142,7 @@ describe("codex command", () => {
         _params: unknown,
         options?: CodexControlRequestOptions,
       ) => {
-        await options?.onResponse?.(response, harness.client, {});
+        await completeResumeControlRequest(options, response, harness.client);
         return response;
       },
     );
@@ -1025,11 +1241,11 @@ describe("codex command", () => {
           _params: unknown,
           options?: CodexControlRequestOptions,
         ) => {
-          const resumed = await harness.client.request("thread/resume", {
+          await harness.client.request("thread/resume", {
             threadId: "thread-active-resume",
             excludeTurns: true,
           });
-          await options?.onResponse?.(resumed, harness.client, {});
+          await completeResumeControlRequest(options, response, harness.client);
           return response;
         },
       );
@@ -5818,6 +6034,14 @@ describe("codex command", () => {
         if (method === "thread/unsubscribe") {
           return {} as never;
         }
+        if (method === "thread/read") {
+          return {
+            thread: createThreadResumeResponse({
+              threadId: "thread-original-context",
+              cwd: tempDir,
+            }).thread,
+          } as never;
+        }
         if (method === "thread/resume") {
           return createThreadResumeResponse({
             threadId: "thread-original-context",
@@ -5927,7 +6151,12 @@ describe("codex command", () => {
         handled: true,
         reply: { text: "Original context kept" },
       });
-      expect(operations).toEqual(["thread/unsubscribe", "thread/resume", "turn/start"]);
+      expect(operations).toEqual([
+        "thread/unsubscribe",
+        "thread/read",
+        "thread/resume",
+        "turn/start",
+      ]);
       expect(request.mock.calls.find(([method]) => method === "thread/resume")?.[1]).toMatchObject({
         threadId: originalBinding.threadId,
       });

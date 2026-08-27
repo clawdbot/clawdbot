@@ -267,7 +267,7 @@ describe("gateway agent handler", () => {
     });
     expect(duplicateRespond).toHaveBeenCalledWith(
       true,
-      { runId, status: "in_flight", agentId: "ops" },
+      { runId, status: "in_flight", agentId: "ops", admissionPending: true },
       undefined,
       {
         cached: true,

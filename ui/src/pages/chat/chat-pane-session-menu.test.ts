@@ -155,4 +155,122 @@ describe("chat pane session menu boundary", () => {
       { agentId: "main", expectedSessionId: rendered.sessionId },
     );
   });
+
+  it.each([
+    { action: { kind: "toggle-pin" }, patch: { pinned: true } },
+    { action: { kind: "toggle-unread" }, patch: { unread: true } },
+    { action: { kind: "set-icon", icon: "🦞" }, patch: { icon: "🦞" } },
+    { action: { kind: "move-to-group", category: "Projects" }, patch: { category: "Projects" } },
+  ] as const)(
+    "keeps the original header identity for $action.kind after replacement",
+    async ({ action, patch: expectedPatch }) => {
+      const patch = vi.fn(async () => ({}));
+      const original = {
+        key: "agent:main:current",
+        sessionId: "original-session",
+        kind: "direct",
+        updatedAt: 0,
+      } satisfies GatewaySessionRow;
+      const sessions = createSessionCapabilityFixture({
+        patch,
+        state: {
+          error: null,
+          groups: ["Projects"],
+          result: {
+            ts: 1,
+            count: 1,
+            path: "",
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [{ ...original, sessionId: "replacement-session" }],
+          },
+        },
+      });
+      const { pane } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions,
+      });
+
+      await pane.handleHeaderSessionAction(action, original);
+
+      expect(patch).toHaveBeenCalledWith(original.key, expectedPatch, {
+        agentId: "main",
+        expectedSessionId: original.sessionId,
+      });
+    },
+  );
+
+  it("commits a trimmed label and clears with null", async () => {
+    const patch = vi.fn(async () => ({}));
+    const sessions = createSessionCapabilityFixture({ patch });
+    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
+    const session = {
+      key: "agent:main:current",
+      sessionId: "rename-current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    pane.beginHeaderRename(session);
+    pane.headerRenameValue = "  Renamed session  ";
+    pane.commitHeaderRename();
+    expect(patch).toHaveBeenCalledWith(
+      session.key,
+      { label: "Renamed session" },
+      { agentId: "main", expectedSessionId: session.sessionId },
+    );
+
+    const labeled = { ...session, label: "Renamed session" };
+    pane.beginHeaderRename(labeled);
+    pane.headerRenameValue = "   ";
+    pane.commitHeaderRename();
+    expect(patch).toHaveBeenLastCalledWith(
+      session.key,
+      { label: null },
+      { agentId: "main", expectedSessionId: session.sessionId },
+    );
+  });
+
+  it("renames the selected agent's canonical global session", () => {
+    const patch = vi.fn(async () => ({}));
+    const sessions = createSessionCapabilityFixture({ patch });
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions,
+    });
+    state.sessionKey = "global";
+    state.assistantAgentId = "research";
+    const session = {
+      key: "global",
+      sessionId: "research-global",
+      kind: "global",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+
+    pane.beginHeaderRename(session);
+    pane.headerRenameValue = "Research thread";
+    pane.commitHeaderRename();
+
+    expect(patch).toHaveBeenCalledWith(
+      "global",
+      { label: "Research thread" },
+      { agentId: "research", expectedSessionId: session.sessionId },
+    );
+  });
+
+  it("cancels and skips an unchanged generated dashboard title", () => {
+    const patch = vi.fn(async () => ({}));
+    const sessions = createSessionCapabilityFixture({ patch });
+    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
+    const session = {
+      key: "agent:main:dashboard:generated",
+      kind: "direct",
+      displayName: "Generated title",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    pane.beginHeaderRename(session);
+    expect(pane.headerRenameValue).toBe("Generated title");
+    pane.commitHeaderRename();
+    pane.beginHeaderRename(session);
+    pane.cancelHeaderRename();
+    expect(patch).not.toHaveBeenCalled();
+  });
 });
