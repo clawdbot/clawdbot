@@ -2570,7 +2570,7 @@ src/commands/doctor/shared/empty-allowlist-policy.ts	14
 src/commands/doctor/shared/empty-allowlist-scan.ts	17
 src/commands/doctor/shared/include-migration-ownership.ts	2
 src/commands/doctor/shared/legacy-config-compat.ts	1
-src/commands/doctor/shared/legacy-config-core-migrate.ts	7
+src/commands/doctor/shared/legacy-config-core-migrate.ts	1
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	18
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
