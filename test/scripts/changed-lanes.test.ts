@@ -792,6 +792,12 @@ describe("scripts/changed-lanes", () => {
       oxlintTargets: [],
       stylelintTargets: ["ui/src/styles/base.css"],
     },
+    {
+      name: "public theme palette only",
+      paths: ["ui/public/themes/tide.css"],
+      oxlintTargets: [],
+      stylelintTargets: ["ui/public/themes/tide.css"],
+    },
   ])("targets style lint for $name without broad core lint", (testCase) => {
     const plan = createChangedCheckPlan(detectChangedLanes(testCase.paths), {
       env: { PATH: "/usr/bin" },

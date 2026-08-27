@@ -93,7 +93,6 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
-  syncThemePaletteStylesheet(settings.theme);
   syncThemeFontStylesheet(settings.theme);
   syncCustomThemeStyleTag(settings.customTheme);
   applyControlUiAccent(settings.accent);
@@ -114,11 +113,19 @@ function createApplicationTheme(
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
+  let presentationGeneration = 0;
   const publish = () => {
-    applyThemePresentation(settings);
-    for (const listener of listeners) {
-      listener();
-    }
+    const generation = ++presentationGeneration;
+    syncThemePaletteStylesheet(settings.theme, () => {
+      // A slower palette cannot overwrite a newer selection or a disposed app.
+      if (generation !== presentationGeneration) {
+        return;
+      }
+      applyThemePresentation(settings);
+      for (const listener of listeners) {
+        listener();
+      }
+    });
   };
 
   const detachSystemThemeListener = () => {
@@ -147,6 +154,7 @@ function createApplicationTheme(
   };
 
   syncSystemThemeListener();
+  publish();
 
   return {
     get settings() {
@@ -191,6 +199,7 @@ function createApplicationTheme(
       return () => listeners.delete(listener);
     },
     dispose() {
+      presentationGeneration += 1;
       detachSystemThemeListener();
       listeners.clear();
     },
@@ -419,7 +428,6 @@ export function bootstrapApplication(
     initialUserMessage,
   });
   const chatAttachmentHandoff = createChatAttachmentHandoff();
-  applyThemePresentation(settings);
   const router = createApplicationRouter();
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so

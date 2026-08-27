@@ -1,16 +1,4 @@
-/*
- * Phosphor palette for the Control UI.
- *
- * Built-in palettes live outside the startup stylesheet: every theme's tokens
- * used to ship to every visitor, so each new theme cost the default path bytes
- * it never painted. The first-paint script in index.html links the active
- * family's file synchronously, which blocks render the same way the app
- * stylesheet does, so a persisted theme still paints its own colours on the
- * first frame rather than flashing the default palette.
- *
- * Resolved theme names, not family names, key the blocks below: index.html and
- * theme.ts both map family + mode to these values.
- */
+/* Phosphor palette; selected by index.html and app/theme.ts. */
 
 :root[data-theme="phosphor"] {
   /*

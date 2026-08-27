@@ -118,7 +118,8 @@ function readPaletteSources(stylesRoot: string): string {
 
 function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
   const blocks = new Map<string, TokenMap>();
-  const blockPattern = /(:root(?:\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
+  const blockPattern =
+    /(:root(?::where\(\[data-theme-mode="light"\]\)|\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
   for (const match of baseCss.matchAll(blockPattern)) {
     const selector = match[1] ?? "";
     const body = match[2] ?? "";
@@ -142,7 +143,7 @@ function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
 /** Compose each selectable theme the way theme.ts layers blocks over :root. */
 function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
   const root = blocks.get(":root") ?? new Map();
-  const light = blocks.get(':root[data-theme-mode="light"]') ?? new Map();
+  const light = blocks.get(':root:where([data-theme-mode="light"])') ?? new Map();
   const layer = (...overrides: (TokenMap | undefined)[]): TokenMap => {
     const merged: TokenMap = new Map(root);
     for (const override of overrides) {

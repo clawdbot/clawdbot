@@ -502,7 +502,8 @@
 }
 
 /* Light theme tokens apply to every light-mode family. */
-:root[data-theme-mode="light"] {
+/* Defaults must lose to named palettes even when their link precedes the app CSS. */
+:root:where([data-theme-mode="light"]) {
   /*
    * Warm paper light mode - terracotta accent on ivory
    *

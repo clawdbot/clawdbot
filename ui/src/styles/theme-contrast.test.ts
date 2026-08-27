@@ -149,7 +149,7 @@ describe("Control UI theme contrast", () => {
     expect(sessionLabelRule).toMatch(/color:\s*var\(--muted\)/);
     expect(readOpacity(sessionLabelRule)).toBe(1);
 
-    const light = readCssVarBlock(baseCss, ':root[data-theme-mode="light"]');
+    const light = readCssVarBlock(baseCss, ':root:where([data-theme-mode="light"])');
     for (const selector of [
       null,
       ':root[data-theme="openknot-light"]',

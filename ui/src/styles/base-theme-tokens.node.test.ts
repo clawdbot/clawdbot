@@ -108,7 +108,7 @@ describe("Control UI base theme tokens", () => {
 describe("Control UI theme --bg mirrors", () => {
   const RESOLVED_THEME_BG_SELECTOR = new Map<string, string>([
     ["dark", ":root"],
-    ["light", ':root[data-theme-mode="light"]'],
+    ["light", ':root:where([data-theme-mode="light"])'],
   ]);
 
   function readBlockToken(css: string, selector: string, token: string): string | undefined {

@@ -54,21 +54,6 @@ const THEME_FONT_STYLESHEETS: Partial<Record<ThemeName, ControlUiFontStylesheet>
 };
 type ControlUiFontStylesheet = `fonts/${string}.css`;
 
-const THEME_PALETTE_STYLESHEET_ID = "openclaw-theme-palette";
-/* Built-in palettes other than the default ship outside the startup stylesheet,
-   so the default path does not download tokens for six themes it never paints.
-   index.html links the persisted family before first paint; this keeps the link
-   correct when the theme changes at runtime. Claw has no entry because its
-   tokens are the :root defaults. */
-const THEME_PALETTE_STYLESHEETS: Partial<Record<ThemeName, ControlUiPaletteStylesheet>> = {
-  knot: "themes/knot.css",
-  dash: "themes/dash.css",
-  absolutely: "themes/absolutely.css",
-  tide: "themes/tide.css",
-  beacon: "themes/beacon.css",
-  phosphor: "themes/phosphor.css",
-};
-type ControlUiPaletteStylesheet = `themes/${string}.css`;
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
 function prefersLightScheme(): boolean {
@@ -124,14 +109,13 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   return resolvedMode === "light" ? "custom-light" : "custom";
 }
 
-function syncThemeStylesheet(
-  id: string,
-  asset: ControlUiFontStylesheet | ControlUiPaletteStylesheet | undefined,
-): void {
+/** Loads (or drops) the webfont stylesheet a theme declares. Idempotent. */
+export function syncThemeFontStylesheet(theme: ThemeName): void {
   if (typeof document === "undefined") {
     return;
   }
-  const existing = document.getElementById(id);
+  const asset = THEME_FONT_STYLESHEETS[theme];
+  const existing = document.getElementById(THEME_FONT_STYLESHEET_ID);
   if (!asset) {
     existing?.remove();
     return;
@@ -144,18 +128,39 @@ function syncThemeStylesheet(
     return;
   }
   const link = document.createElement("link");
-  link.id = id;
+  link.id = THEME_FONT_STYLESHEET_ID;
   link.rel = "stylesheet";
   link.href = href;
   document.head.append(link);
 }
 
-/** Loads (or drops) the webfont stylesheet a theme declares. Idempotent. */
-export function syncThemeFontStylesheet(theme: ThemeName): void {
-  syncThemeStylesheet(THEME_FONT_STYLESHEET_ID, THEME_FONT_STYLESHEETS[theme]);
-}
-
-/** Loads (or drops) the palette stylesheet a built-in theme ships. Idempotent. */
-export function syncThemePaletteStylesheet(theme: ThemeName): void {
-  syncThemeStylesheet(THEME_PALETTE_STYLESHEET_ID, THEME_PALETTE_STYLESHEETS[theme]);
+/** Publish theme colors only after their stylesheet is available. */
+export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void): void {
+  if (typeof document === "undefined" || theme === "claw" || theme === "custom") {
+    ready();
+    return;
+  }
+  // Retain the six built-in families once visited. Their exclusive selectors
+  // leave the previous theme intact during loading and make repeat switches synchronous.
+  const id = `openclaw-theme-palette-${theme}`;
+  const existing = document.getElementById(id);
+  if (existing instanceof HTMLLinkElement && existing.sheet) {
+    ready();
+    return;
+  }
+  const link = existing instanceof HTMLLinkElement ? existing : document.createElement("link");
+  link.onload = ready;
+  link.onerror = () => {
+    // Failed assets must not strand startup; normal CSS defaults stay readable.
+    // Remove the failed link so a later selection can retry rather than wait forever.
+    console.error(`Theme palette failed to load; reload to retry: ${link.href}`);
+    link.remove();
+    ready();
+  };
+  if (!existing) {
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = inferControlUiPublicAssetPath(`themes/${theme}.css`);
+    document.head.append(link);
+  }
 }

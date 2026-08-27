@@ -1699,7 +1699,7 @@
     "lint:ui:i18n": "pnpm ui:i18n:verify",
     "lint:ui:lit": "lit-analyzer \"ui/src/**/*.ts\" --quiet",
     "lint:ui:no-raw-window-open": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json ui/src",
-    "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/src/**/*.ts\"",
+    "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/src/**/*.ts\" \"ui/public/themes/*.css\"",
     "lint:web-fetch-provider-boundaries": "node --import tsx scripts/check-web-fetch-provider-boundaries.mts",
     "lint:webhook:no-low-level-body-read": "node --import tsx scripts/check-webhook-auth-body-order.mts",
     "mac:open": "open dist/OpenClaw.app",
