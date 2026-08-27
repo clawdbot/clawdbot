@@ -23,6 +23,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { resolveUserPath } from "../utils.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectInferenceRoute,
@@ -138,7 +139,10 @@ async function activateSetupInferenceUnredacted(
   }
   // Missing-file snapshots still carry the load-time implicit-main roster.
   // Setup must probe against that runtime view without treating it as authored config.
-  const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
+  // A fresh re-read otherwise leaves a file SecretRef unresolved while the live
+  // runtime already resolved it; reuse the applied snapshot while the source still
+  // matches, and only fall through to the raw read once it has genuinely diverged.
+  const cfg: OpenClawConfig = resolveAppliedSnapshotConfig(snapshot);
   // The source snapshot includes raw compatibility migrations for comparison,
   // while the writer still projects changes back onto the untouched authored bytes.
   const sourceCfg: OpenClawConfig = snapshot.sourceConfig ?? snapshot.config;
@@ -556,9 +560,12 @@ async function activateSetupInferenceUnredacted(
     let gatewayRestartRequired = false;
     if (!needsPersistence) {
       const latestSnapshot = await readSnapshot();
+      // Same reuse as the initial read above: an unchanged file SecretRef must not
+      // read as drift just because this re-read is raw and the applied snapshot
+      // already resolved it.
       const latestRuntime =
         latestSnapshot.exists && latestSnapshot.valid
-          ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
+          ? resolveAppliedSnapshotConfig(latestSnapshot)
           : undefined;
       const latestRoute = latestRuntime
         ? await projectInferenceRoute(latestRuntime, requestedAgentId, routeDeps)

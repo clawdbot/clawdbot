@@ -13,6 +13,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import { projectInferenceRoute } from "./inference-route.js";
 import { executeSystemAgentOperation } from "./operations.js";
+import { activateSetupInference } from "./setup-inference-activate.js";
 import { verifySetupInference } from "./setup-inference-verify.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
@@ -125,6 +126,51 @@ test("the setup-inference probe keeps a SecretRef provider key the Gateway resol
   });
 
   expect(result).toMatchObject({ ok: true, modelRef: `${PROVIDER}/${MODEL}` });
+  expect(probedKey).toBe(RESOLVED_KEY);
+});
+
+test("existing-model activation keeps a SecretRef provider key the Gateway resolved", async () => {
+  // Before this fix, activateSetupInferenceUnredacted's initial cfg read the raw file
+  // snapshot (`snapshot.runtimeConfig ?? snapshot.config`) instead of the applied one,
+  // so a file SecretRef stayed unresolved during existing-model activation even though
+  // the same probe already worked through verifySetupInference above.
+  const { root } = writeSecretRefConfig();
+  await publishAppliedRuntimeConfig();
+
+  let probedKey: string | undefined;
+  const runEmbeddedAgent = async (params: {
+    config: OpenClawConfig;
+    provider: string;
+    agentDir?: string;
+  }) => {
+    const auth = await resolveApiKeyForProviderCore({
+      provider: params.provider,
+      cfg: params.config,
+      ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+      modelApi: "openai-completions",
+    });
+    probedKey = auth.apiKey;
+    return {
+      meta: {
+        finalAssistantVisibleText: "OK",
+        executionTrace: { winnerProvider: PROVIDER, winnerModel: MODEL },
+      },
+    };
+  };
+
+  const runtime: RuntimeEnv = { log: () => {}, error: () => {}, exit: () => {} };
+  await activateSetupInference({
+    kind: "existing-model",
+    surface: "cli",
+    runtime,
+    deps: {
+      runEmbeddedAgent: runEmbeddedAgent as never,
+      createTempDir: async () => fs.mkdtempSync(path.join(root, "activate-")),
+    },
+  });
+
+  // The credential resolution happens before owner attestation, so it is provable
+  // regardless of whether this bare stub run goes on to report a full owner binding.
   expect(probedKey).toBe(RESOLVED_KEY);
 });
 
