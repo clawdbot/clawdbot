@@ -1074,10 +1074,10 @@ export async function handleSlackAction(
       throw new Error("Slack channel management is disabled.");
     }
     assertSlackChannelManagementAllowed({ account, context });
-    const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
-    assertSlackDetachedTargetAllowed(account.accountId, teamId);
-    const writeOpts = buildActionOpts("write", teamId);
     if (action === "createChannel") {
+      const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
+      assertSlackDetachedTargetAllowed(account.accountId, teamId);
+      const writeOpts = buildActionOpts("write", teamId);
       const name = readStringParam(params, "name", { required: true });
       const isPrivate = readBooleanParam(params, "isPrivate") === true;
       const result = await slackActionRuntime.createSlackChannel(name, {
@@ -1086,27 +1086,32 @@ export async function handleSlackAction(
       });
       return jsonResult({ ok: true, created: result });
     }
-    const channelId = readStringParam(params, "channelId", { required: true });
+    const target = resolveChannelTarget();
+    const writeOpts = buildActionOpts("write", target.teamId);
     if (action === "renameChannel") {
       const name = readStringParam(params, "name", { required: true });
-      const result = await slackActionRuntime.renameSlackChannel(channelId, name, writeOpts);
+      const result = await slackActionRuntime.renameSlackChannel(target.channelId, name, writeOpts);
       return jsonResult({ ok: true, renamed: result });
     }
     if (action === "addMember") {
       const userId = readStringParam(params, "userId", { required: true });
-      const result = await slackActionRuntime.addSlackChannelMember(channelId, userId, writeOpts);
+      const result = await slackActionRuntime.addSlackChannelMember(
+        target.channelId,
+        userId,
+        writeOpts,
+      );
       return jsonResult({ ok: true, added: result });
     }
     if (action === "removeMember") {
       const userId = readStringParam(params, "userId", { required: true });
       const result = await slackActionRuntime.removeSlackChannelMember(
-        channelId,
+        target.channelId,
         userId,
         writeOpts,
       );
       return jsonResult({ ok: true, removed: result });
     }
-    const result = await slackActionRuntime.archiveSlackChannel(channelId, writeOpts);
+    const result = await slackActionRuntime.archiveSlackChannel(target.channelId, writeOpts);
     return jsonResult({ ok: true, archived: result });
   }
 

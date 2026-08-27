@@ -1261,15 +1261,36 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+| Group       | Default  |
+| ----------- | -------- |
+| messages    | enabled  |
+| reactions   | enabled  |
+| pins        | enabled  |
+| memberInfo  | enabled  |
+| emojiList   | enabled  |
+| permissions | disabled |
 
 Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+
+### Channel management
+
+The `permissions` gate is **disabled by default** because it grants privileged workspace mutation. Enable it explicitly to expose native channel-management actions:
+
+```json5
+{
+  channels: {
+    slack: {
+      actions: { permissions: true },
+    },
+  },
+}
+```
+
+When enabled, authorized requesters can use `channel-create` (`conversations.create`), `channel-edit` (`conversations.rename`), `addParticipant` (`conversations.invite`), `kick` (`conversations.kick`), and `channel-delete` (`conversations.archive`). `channel-delete` archives the channel; archived channels remain restorable in Slack.
+
+Channel management is gated by an owner-or-admin authorization check, mirroring the Microsoft Teams group-management surface. A request is allowed only when the sender is the conversation owner (`senderIsOwner`), the gateway client carries the `operator.admin` scope, or the request originates from a direct operator action. Every other caller is rejected before any Slack API call is made, and the action stays hidden from the model unless the gate is on.
+
+These actions mutate workspace state, so the Slack app or user token must hold the matching OAuth scopes: `channels:write` (and `groups:write` for private channels) for create/rename/archive, and `channels:write` / `groups:write` plus `channels:read` / `groups:read` for invite/kick. Re-authorize the Slack app to grant any missing scopes after enabling the gate. Use a user token (`xoxp-`) when the bot token lacks workspace-admin privileges.
 
 Use `emoji-list` to discover workspace custom emoji and aliases:
 

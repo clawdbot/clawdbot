@@ -576,6 +576,45 @@ describe("handleSlackAction", () => {
       expect(archiveSlackChannel).toHaveBeenCalledWith("C123", { cfg, teamId: "T123" });
     });
 
+    it("archives a channel without requiring a userId", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "archiveChannel", channelId: "C123" },
+        cfg,
+        ownerContext,
+      );
+      expect(requireDetails(result).ok).toBe(true);
+      expect(archiveSlackChannel).toHaveBeenCalledTimes(1);
+      const call = archiveSlackChannel.mock.calls[0] as unknown[];
+      expect(call[0]).toBe("C123");
+      expect(call).toHaveLength(2);
+    });
+
+    it("splits a team-qualified channel target into a bare channel id and team", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "renameChannel", channelId: "team:T123:channel:C456", name: "renamed" },
+        cfg,
+        ownerContext,
+      );
+      expect(requireDetails(result).ok).toBe(true);
+      expect(renameSlackChannel).toHaveBeenCalledWith("C456", "renamed", {
+        cfg,
+        teamId: "T123",
+      });
+    });
+
+    it("archives a team-qualified channel target without a userId", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "archiveChannel", channelId: "team:T123:channel:C456" },
+        cfg,
+        ownerContext,
+      );
+      expect(requireDetails(result).ok).toBe(true);
+      expect(archiveSlackChannel).toHaveBeenCalledWith("C456", { cfg, teamId: "T123" });
+    });
+
     it("requires a name for createChannel", async () => {
       const cfg = mgmtConfig();
       await expect(

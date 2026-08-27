@@ -413,13 +413,14 @@ export async function handleSlackMessageAction(params: {
       if (readBooleanParam(actionParams, "isPrivate") === true) {
         invocation.isPrivate = true;
       }
+    } else if (action === "channel-edit") {
+      invocation.channelId = resolveChannelId();
+      invocation.name = readStringParam(actionParams, "name", { required: true });
+    } else if (action === "channel-delete") {
+      invocation.channelId = resolveChannelId();
     } else {
       invocation.channelId = resolveChannelId();
-      if (action === "channel-edit") {
-        invocation.name = readStringParam(actionParams, "name", { required: true });
-      } else {
-        invocation.userId = readStringParam(actionParams, "userId", { required: true });
-      }
+      invocation.userId = readStringParam(actionParams, "userId", { required: true });
     }
     return await invoke(invocation, cfg, ctx.toolContext);
   }
