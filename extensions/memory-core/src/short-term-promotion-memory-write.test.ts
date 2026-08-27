@@ -1,4 +1,3 @@
-import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,23 +20,22 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     openState.failInPlaceWriteAfterBytes = null;
     let shortWriteArmed = openState.shortFirstRestoreWrite;
     openState.shortFirstRestoreWrite = false;
+    const realWrite = handle.write.bind(handle);
     const failingWriteFile = async (content: string) => {
       const partial = Buffer.from(content, "utf-8").subarray(0, partialBytes);
-      await handle.write(partial, 0, partial.length, 0);
+      await realWrite(partial, 0, partial.length, 0);
       throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
     };
     const write = async (buffer: Buffer, offset: number, length: number, position: number) => {
       const cappedLength = shortWriteArmed && length > 1 ? Math.floor(length / 2) : length;
       shortWriteArmed = false;
-      return await handle.write(buffer, offset, cappedLength, position);
+      return await realWrite(buffer, offset, cappedLength, position);
     };
-    return {
-      writeFile: failingWriteFile,
-      write,
-      truncate: handle.truncate.bind(handle),
-      sync: handle.sync.bind(handle),
-      close: handle.close.bind(handle),
-    } as unknown as FileHandle;
+    Object.defineProperties(handle, {
+      writeFile: { value: failingWriteFile },
+      write: { value: write },
+    });
+    return handle;
   };
   return { ...actual, default: { ...actual, open }, open };
 });
@@ -68,60 +66,49 @@ async function setupReadOnlyMemoryDir(originalContent: string): Promise<string> 
   return memoryPath;
 }
 
-it("keeps the original MEMORY.md when the in-place fallback write fails partway", async () => {
-  const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
-  const memoryPath = await setupReadOnlyMemoryDir(original);
-  const promoted = `${original}${"- promoted entry\n".repeat(200)}`;
-  openState.failInPlaceWriteAfterBytes = 1024;
+it.runIf(process.platform !== "win32")(
+  "keeps the original MEMORY.md when the in-place fallback write fails partway",
+  async () => {
+    const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
+    const memoryPath = await setupReadOnlyMemoryDir(original);
+    const promoted = `${original}${"- promoted entry\n".repeat(200)}`;
+    openState.failInPlaceWriteAfterBytes = 1024;
 
-  await expect(
-    writeMemoryContent({
-      memoryPath,
-      memoryWritePath: memoryPath,
-      expectedHash: hashMemoryContent(original),
-      expectedContent: original,
-      allowInPlaceFallback: true,
-      content: promoted,
-    }),
-  ).rejects.toMatchObject({ code: "EFBIG" });
+    await expect(
+      writeMemoryContent({
+        memoryPath,
+        memoryWritePath: memoryPath,
+        expectedHash: hashMemoryContent(original),
+        expectedContent: original,
+        allowInPlaceFallback: true,
+        content: promoted,
+      }),
+    ).rejects.toMatchObject({ code: "EFBIG" });
 
-  expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
-});
+    expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
+  },
+);
 
-it("completes the restore across short writes before truncating", async () => {
-  const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
-  const memoryPath = await setupReadOnlyMemoryDir(original);
-  const promoted = `# Long-Term Memory\n\n## 2026-08-19\n${"- promoted entry\n".repeat(200)}`;
-  openState.failInPlaceWriteAfterBytes = 1024;
-  openState.shortFirstRestoreWrite = true;
+it.runIf(process.platform !== "win32")(
+  "completes the restore across short writes before truncating",
+  async () => {
+    const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
+    const memoryPath = await setupReadOnlyMemoryDir(original);
+    const promoted = `# Long-Term Memory\n\n## 2026-08-19\n${"- promoted entry\n".repeat(200)}`;
+    openState.failInPlaceWriteAfterBytes = 1024;
+    openState.shortFirstRestoreWrite = true;
 
-  await expect(
-    writeMemoryContent({
-      memoryPath,
-      memoryWritePath: memoryPath,
-      expectedHash: hashMemoryContent(original),
-      expectedContent: original,
-      allowInPlaceFallback: true,
-      content: promoted,
-    }),
-  ).rejects.toMatchObject({ code: "EFBIG" });
+    await expect(
+      writeMemoryContent({
+        memoryPath,
+        memoryWritePath: memoryPath,
+        expectedHash: hashMemoryContent(original),
+        expectedContent: original,
+        allowInPlaceFallback: true,
+        content: promoted,
+      }),
+    ).rejects.toMatchObject({ code: "EFBIG" });
 
-  expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
-});
-
-it("writes promoted content through the in-place fallback when the write succeeds", async () => {
-  const original = "# Long-Term Memory\n\n- existing entry\n";
-  const memoryPath = await setupReadOnlyMemoryDir(original);
-  const promoted = `${original}- promoted entry\n`;
-
-  await writeMemoryContent({
-    memoryPath,
-    memoryWritePath: memoryPath,
-    expectedHash: hashMemoryContent(original),
-    expectedContent: original,
-    allowInPlaceFallback: true,
-    content: promoted,
-  });
-
-  expect(await fs.readFile(memoryPath, "utf-8")).toBe(promoted);
-});
+    expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
+  },
+);
