@@ -914,23 +914,24 @@ export function createModelAuthAvailabilityResolver(
       !modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile"
         ? basePolicy.binding.profileId
         : undefined;
-    const explicitProfileOrder = profileOrder(
+    const orderResolution = profileOrder(
       provider,
       ref.modelId,
       ref.preferredProfileId,
       ref.lockedProfileId,
-    ).hasExplicitOrder;
+    );
     const materializedModelId = ref.modelId
       ? normalizeModelIdForProvider(provider, ref.modelId)?.toLowerCase()
       : undefined;
     const materialized =
-      !modelLock &&
-      !bindingProfileId &&
-      !basePolicy.required &&
-      !explicitProfileOrder &&
-      materializedModelId
+      !modelLock && !bindingProfileId && !basePolicy.required && materializedModelId
         ? params.preparedRuntimeAuthMaterializations?.find(
             (fact) =>
+              // Explicit order remains authoritative: runtime success only satisfies it
+              // when the producer names a profile still admitted by the current order.
+              (!orderResolution.hasExplicitOrder ||
+                (fact.authProfileId !== undefined &&
+                  orderResolution.profileIds.includes(fact.authProfileId))) &&
               normalizeProvider(fact.provider) === provider &&
               fact.modelId === materializedModelId &&
               routeResolution.routes.some((route) => {
@@ -1015,12 +1016,6 @@ export function createModelAuthAvailabilityResolver(
     const policy = directPolicy(
       provider,
       targetForMode(selectedConfiguredMode ?? basePolicy.direct.mode),
-    );
-    const orderResolution = profileOrder(
-      provider,
-      ref.modelId,
-      ref.preferredProfileId,
-      ref.lockedProfileId,
     );
     let profileIds = orderResolution.profileIds;
     if (profileIds.length === 0 && !modelLock && !bindingProfileId && !policy.required) {
