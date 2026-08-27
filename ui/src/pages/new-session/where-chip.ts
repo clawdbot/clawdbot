@@ -82,7 +82,7 @@ export function resolveWhereChip(params: {
   if (params.autoDevice) {
     return {
       kind: "auto-device",
-      label: t("newSession.anyAvailableNode"),
+      label: t("newSession.autoDevice"),
       cloudMachines: [],
       selectedMachineId: "",
       devices,
@@ -192,7 +192,8 @@ export function renderWhereChip(params: {
               ${renderSessionMenuItem(
                 {
                   value: "auto-device",
-                  label: t("newSession.anyAvailableNode"),
+                  label: t("newSession.autoDevice"),
+                  sub: t("newSession.autoDeviceSub"),
                   icon: icons.monitor,
                   checked: params.autoDevice === true,
                   disabled: Boolean(params.state.autoDeviceDisabledReason),

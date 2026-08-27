@@ -87,8 +87,10 @@ describe("Where chip", () => {
 
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
-    expect(writer.querySelector('[data-value="auto-device"]')?.textContent).toContain(
-      "Any available node",
+    const autoRow = writer.querySelector('[data-value="auto-device"]');
+    expect(autoRow?.textContent).toContain("Auto");
+    expect(autoRow?.querySelector(".session-menu__sub")?.textContent).toContain(
+      "Least-busy device",
     );
     expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
