@@ -261,7 +261,7 @@ export type SubagentRunRecord = {
   killReconciliation?: SubagentKillReconciliationState;
   /** Durable operator cancellation ownership before runtime side effects complete. */
   killIntent?: SubagentKillIntent;
-  /** Durable requester-stop policy until silent completion cleanup finishes. */
+  /** Durable requester-delivery closure until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;
   endedReason?: SubagentLifecycleEndedReason;
