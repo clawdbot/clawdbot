@@ -126,7 +126,7 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
               id: 21,
               name: "openclaw/crabbox-gate",
               output: {
-                summary: `Trusted Crabbox AWS proof run_abc123 / cbx_def456; build, check, and check:changed passed on exact head ${headSha}.`,
+                summary: `Trusted Crabbox AWS proof run_abc123 / cbx_def456; build, check, and full test passed on exact head ${headSha}.`,
               },
               status: "completed",
             },
@@ -138,7 +138,7 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
     event: "pull_request",
     head_sha: headSha,
     id: 7001,
-    path: ".github/workflows/ci.yml@refs/pull/123/merge",
+    path: ".github/workflows/ci.yml",
     status: "completed",
   };
   const publisherRun = {
@@ -146,7 +146,7 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
     event: "workflow_dispatch",
     head_branch: "main",
     id: 8001,
-    path: ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main",
+    path: ".github/workflows/pr-crabbox-gate-publisher.yml",
     status: "completed",
   };
   const workflowJobs = {
@@ -162,8 +162,18 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
         id: 7003,
         labels: ["blacksmith-4vcpu-ubuntu-2404"],
         name: "check",
-        runner_name: "Blacksmith runner",
+        runner_name: null,
         status: "completed",
+        steps:
+          scenario.crabboxBypass === "non-infra"
+            ? [
+                {
+                  conclusion: "failure",
+                  name: "The hosted runner encountered an error",
+                  status: "completed",
+                },
+              ]
+            : [],
       },
     ],
   };
@@ -280,13 +290,6 @@ gh_route() {
           fi
           ;;
       esac
-      ;;
-    "run view")
-      if [ "$OPENCLAW_TEST_CRABBOX_BYPASS" = "non-infra" ]; then
-        printf 'AssertionError: expected true to be false\\n'
-      else
-        printf 'The hosted runner encountered an error while running this job.\\n'
-      fi
       ;;
     "repo view") printf 'openclaw/openclaw\\n' ;;
     "api "*)

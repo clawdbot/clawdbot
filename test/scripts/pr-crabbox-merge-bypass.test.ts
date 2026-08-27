@@ -30,7 +30,7 @@ function input() {
           id: 21,
           name: "openclaw/crabbox-gate",
           output: {
-            summary: `Trusted Crabbox AWS proof ${runId} / ${leaseId}; build, check, and check:changed passed on exact head ${headSha}.`,
+            summary: `Trusted Crabbox AWS proof ${runId} / ${leaseId}; build, check, and full test passed on exact head ${headSha}.`,
           },
           status: "completed",
         },
@@ -39,9 +39,6 @@ function input() {
     expectedLeaseId: leaseId,
     expectedRunId: runId,
     headSha,
-    jobLogs: {
-      [failedJobId]: "The hosted runner encountered an error while running this job.",
-    },
     jobs: {
       jobs: [
         {
@@ -55,8 +52,9 @@ function input() {
           id: failedJobId,
           labels: ["blacksmith-4vcpu-ubuntu-2404"],
           name: "check",
-          runner_name: "Blacksmith runner",
+          runner_name: null as string | null,
           status: "completed",
+          steps: [],
         },
       ],
     },
@@ -70,7 +68,7 @@ function input() {
       event: "workflow_dispatch",
       head_branch: "main",
       id: 8001,
-      path: ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main",
+      path: ".github/workflows/pr-crabbox-gate-publisher.yml",
       status: "completed",
     },
     requiredChecks: [{ bucket: "fail", name: "openclaw/ci-gate", state: "SKIPPED" }],
@@ -79,7 +77,7 @@ function input() {
       event: "pull_request",
       head_sha: headSha,
       id: ciRunId,
-      path: ".github/workflows/ci.yml@refs/pull/123/merge",
+      path: ".github/workflows/ci.yml",
       status: "completed",
     },
   };
@@ -135,16 +133,29 @@ describe("Crabbox admin merge bypass verifier", () => {
     [
       "untrusted publisher workflow",
       (value: ReturnType<typeof input>) => {
-        value.publisherRun.path = ".github/workflows/ci.yml@refs/heads/main";
+        value.publisherRun.path = ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main";
       },
       /not bound to the protected-main publisher workflow/u,
     ],
     [
-      "non-infrastructure failure",
+      "non-canonical CI workflow path",
       (value: ReturnType<typeof input>) => {
-        value.jobLogs[failedJobId] = "AssertionError: expected true to be false";
+        value.workflowRun.path = ".github/workflows/ci.yml@refs/pull/123/merge";
       },
-      /not a recognized infrastructure failure/u,
+      /normal CI workflow identity/u,
+    ],
+    [
+      "failed workflow step with spoofed infrastructure text",
+      (value: ReturnType<typeof input>) => {
+        value.jobs.jobs[1]!.steps = [
+          {
+            conclusion: "failure",
+            name: "The hosted runner encountered an error",
+            status: "completed",
+          },
+        ];
+      },
+      /has a failed workflow step/u,
     ],
   ])("rejects %s", (_label, mutate, error) => {
     const value = input();
@@ -162,7 +173,6 @@ describe("Crabbox admin merge bypass verifier", () => {
     const value = input();
     value.workflowRun.conclusion = "startup_failure";
     value.jobs.jobs.splice(1);
-    value.jobLogs = {};
     expect(validateCrabboxMergeBypass(value).infrastructureJobs).toEqual([
       {
         backend: "github-actions",
@@ -171,5 +181,38 @@ describe("Crabbox admin merge bypass verifier", () => {
         name: "workflow startup",
       },
     ]);
+  });
+
+  it("rejects a blocking job after any workflow step executed", () => {
+    const value = input();
+    value.jobs.jobs[1]!.steps = [
+      {
+        conclusion: "success",
+        name: "product tests",
+        status: "completed",
+      },
+    ];
+    expect(() => validateCrabboxMergeBypass(value)).toThrow(/only no-step outages may bypass/u);
+  });
+
+  it("rejects a zero-step failure after a runner was acquired", () => {
+    const value = input();
+    value.jobs.jobs[1]!.runner_name = "Blacksmith runner";
+    expect(() => validateCrabboxMergeBypass(value)).toThrow(/only unacquired outages may bypass/u);
+  });
+
+  it.each(["cancelled", "action_required", "stale"])("rejects a zero-step %s job", (conclusion) => {
+    const value = input();
+    value.jobs.jobs[1]!.conclusion = conclusion;
+    expect(() => validateCrabboxMergeBypass(value)).toThrow(
+      /conclusion is not a startup or provisioning outage/u,
+    );
+  });
+
+  it("rejects an intentionally cancelled workflow run", () => {
+    const value = input();
+    value.workflowRun.conclusion = "cancelled";
+    value.jobs.jobs[1]!.conclusion = "cancelled";
+    expect(() => validateCrabboxMergeBypass(value)).toThrow(/normal CI workflow identity/u);
   });
 });

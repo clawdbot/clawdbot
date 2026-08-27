@@ -292,9 +292,9 @@ describe("remote Crabbox AWS gate contract", () => {
     expect(result.stdout).toContain("pnpm build");
     expect(result.stdout).toContain("pnpm check");
     expect(result.stdout).toContain(
-      "CI=1 OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 pnpm check:changed --base origin/main --head HEAD",
+      "CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test",
     );
-    expect(result.stdout).not.toContain("pnpm test");
+    expect(result.stdout).not.toContain("pnpm check:changed");
   });
 });
 

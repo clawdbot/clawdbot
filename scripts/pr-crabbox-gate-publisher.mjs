@@ -20,7 +20,7 @@ const EXPECTED_MARKERS = [
   "OPENCLAW_CRABBOX_GATE_MODE=remote_crabbox_aws",
   "OPENCLAW_CRABBOX_GATE_STAGE=build:ok",
   "OPENCLAW_CRABBOX_GATE_STAGE=check:ok",
-  "OPENCLAW_CRABBOX_GATE_STAGE=check_changed:ok",
+  "OPENCLAW_CRABBOX_GATE_STAGE=test:ok",
   "OPENCLAW_CRABBOX_GATE_RESULT=success",
 ];
 
@@ -69,9 +69,9 @@ export function buildCrabboxGateCommand(headSha, bootstrapSha256) {
     "pnpm build",
     "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=build:ok' 'OPENCLAW_CRABBOX_GATE_STAGE=check:start'",
     "pnpm check",
-    "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=check:ok' 'OPENCLAW_CRABBOX_GATE_STAGE=check_changed:start'",
-    "CI=1 OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 pnpm check:changed --base origin/main --head HEAD",
-    "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=check_changed:ok' 'OPENCLAW_CRABBOX_GATE_RESULT=success'",
+    "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=check:ok' 'OPENCLAW_CRABBOX_GATE_STAGE=test:start'",
+    "CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test",
+    "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=test:ok' 'OPENCLAW_CRABBOX_GATE_RESULT=success'",
   ].join("; ");
 }
 
@@ -347,7 +347,7 @@ export async function runPublisher({ broker, event, github, organization, env, n
       head_sha: context.headSha,
       name: CHECK_NAME,
       output: {
-        summary: `Trusted Crabbox AWS proof ${context.runId} / ${context.leaseId}; build, check, and check:changed passed on exact head ${context.headSha}.`,
+        summary: `Trusted Crabbox AWS proof ${context.runId} / ${context.leaseId}; build, check, and full test passed on exact head ${context.headSha}.`,
         title: "Crabbox AWS exact-head gate passed",
       },
       status: "completed",

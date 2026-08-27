@@ -72,7 +72,7 @@ function retainedLog() {
     `OPENCLAW_CRABBOX_BOOTSTRAP_SHA256=${bootstrapSha256}`,
     "OPENCLAW_CRABBOX_GATE_STAGE=build:ok",
     "OPENCLAW_CRABBOX_GATE_STAGE=check:ok",
-    "OPENCLAW_CRABBOX_GATE_STAGE=check_changed:ok",
+    "OPENCLAW_CRABBOX_GATE_STAGE=test:ok",
     "OPENCLAW_CRABBOX_GATE_RESULT=success",
   ].join("\n");
 }
@@ -110,12 +110,12 @@ function brokerEvents(overrides: Record<number, Record<string, unknown>> = {}) {
     { exitCode: 0, type: "command.finished" },
     { type: "lease.released" },
   ];
-  return values.map((value, index) => ({
-    ...value,
-    ...overrides[index],
-    runID: runId,
-    seq: index + 1,
-  }));
+  return values.map((value, index) =>
+    Object.assign(value, overrides[index], {
+      runID: runId,
+      seq: index + 1,
+    }),
+  );
 }
 
 function pullRequest(overrides: Record<string, unknown> = {}) {
@@ -187,7 +187,7 @@ describe("Crabbox immutable broker proof", () => {
     ],
     ["malformed event type", {}, brokerEvents({ 3: { type: 7 } }), retainedLog()],
     ["nonzero command result", {}, brokerEvents({ 4: { exitCode: 1 } }), retainedLog()],
-    ["retained marker", {}, brokerEvents(), retainedLog().replace("check_changed:ok", "missing")],
+    ["retained marker", {}, brokerEvents(), retainedLog().replace("test:ok", "missing")],
   ])("rejects mismatched %s", (_label, runOverrides, events, log) => {
     expect(() =>
       validateBrokerProof({
@@ -218,7 +218,7 @@ describe("Crabbox immutable broker proof", () => {
 
   it("accepts bounded output preview truncation with a complete retained log", () => {
     const events = brokerEvents();
-    events.splice(events.length - 1, 0, {
+    events.splice(-1, 0, {
       message: "stdout/stderr event capture capped at 65536 bytes",
       runID: runId,
       seq: events.length,

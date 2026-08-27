@@ -811,11 +811,13 @@ quota issues, or explicit owned-capacity testing.
 
 For an explicitly authorized admin-only PR landing fallback, set
 `OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
-The mode does not replace the default hosted gate and does not claim full-suite
-equivalence. After the exact prep head is pushed, the trusted wrapper downloads
+The mode does not replace the default hosted aggregate gate. After the exact
+prep head is pushed, the trusted wrapper downloads
 checksum-verified Crabbox v0.46, runs sanitized brokered AWS with `umask 022`,
-the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and
-`pnpm check:changed`, then dispatches the protected-main
+the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and the full
+`pnpm test` suite under the bounded remote profile
+`CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1`,
+then dispatches the protected-main
 `pr-crabbox-gate-publisher.yml` workflow. That workflow rereads the live PR and
 the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
@@ -832,9 +834,14 @@ verification permits the server ruleset bypass only when the Crabbox check is
 completed successfully by GitHub Actions on the prepared SHA, the authenticated
 actor is still an active organization admin, and the sole unsatisfied required
 check is the normal CI gate with a recognized hosted-runner infrastructure
-failure. Missing or mismatched checks, ordinary test failures, unknown runner
-backends, pending contexts, and additional required-check failures remain
-blocking. The pinned squash merge still uses the exact prepared head.
+failure represented by GitHub-owned job metadata with no executed workflow
+steps and no assigned `runner_name`. Job logs are never authority because PR
+code controls their text. Missing or mismatched checks, cancellation,
+action-required or stale conclusions, an assigned runner, any failed or executed
+workflow step, unknown runner backends, pending contexts, and additional
+required-check failures remain blocking. Only workflow `startup_failure` or an
+unacquired zero-step hosted job with `failure`/`timed_out` qualifies. The pinned
+squash merge still uses the exact prepared head.
 
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id

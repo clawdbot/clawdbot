@@ -1,29 +1,11 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const CHECK_APP_ID = 15368;
 const CRABBOX_CHECK_NAME = "openclaw/crabbox-gate";
 const CI_CHECK_NAME = "openclaw/ci-gate";
-const INFRASTRUCTURE_LOG_PATTERNS = [
-  /the hosted runner encountered an error/iu,
-  /the runner has received a shutdown signal/iu,
-  /lost communication with the runner/iu,
-  /the job was not acquired by runner/iu,
-  /runner .*(?:offline|lost|unavailable)/iu,
-  /blacksmith .*(?:capacity|infrastructure|failed to provision|no runner)/iu,
-  /system\.io\.ioexception: no space left on device/iu,
-  /failed to (?:create|initialize|start) .*(?:runner|virtual machine|container)/iu,
-];
-const BLOCKING_JOB_CONCLUSIONS = new Set([
-  "action_required",
-  "cancelled",
-  "failure",
-  "stale",
-  "startup_failure",
-  "timed_out",
-]);
+const BYPASSABLE_JOB_CONCLUSIONS = new Set(["failure", "timed_out"]);
 
 function record(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -148,7 +130,6 @@ export function validateCrabboxMergeBypass({
   expectedLeaseId,
   expectedRunId,
   headSha,
-  jobLogs,
   jobs,
   membership,
   publisherRun,
@@ -177,7 +158,7 @@ export function validateCrabboxMergeBypass({
     headSha,
     name: CRABBOX_CHECK_NAME,
   });
-  const expectedSummary = `Trusted Crabbox AWS proof ${expectedRunId} / ${expectedLeaseId}; build, check, and check:changed passed on exact head ${headSha}.`;
+  const expectedSummary = `Trusted Crabbox AWS proof ${expectedRunId} / ${expectedLeaseId}; build, check, and full test passed on exact head ${headSha}.`;
   if (record(crabboxCheck.output, "openclaw/crabbox-gate output").summary !== expectedSummary) {
     throw new Error("openclaw/crabbox-gate does not bind the expected broker proof");
   }
@@ -189,7 +170,7 @@ export function validateCrabboxMergeBypass({
     publisher.conclusion !== "success" ||
     publisher.event !== "workflow_dispatch" ||
     publisher.head_branch !== "main" ||
-    publisher.path !== ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main"
+    publisher.path !== ".github/workflows/pr-crabbox-gate-publisher.yml"
   ) {
     throw new Error("Crabbox check is not bound to the protected-main publisher workflow");
   }
@@ -206,9 +187,9 @@ export function validateCrabboxMergeBypass({
     run.id !== ciRunId ||
     run.head_sha !== headSha ||
     run.status !== "completed" ||
-    !["cancelled", "failure", "startup_failure", "timed_out"].includes(run.conclusion) ||
+    !["failure", "startup_failure", "timed_out"].includes(run.conclusion) ||
     !["pull_request", "workflow_dispatch"].includes(run.event) ||
-    !requiredString(run.path, "CI workflow path").startsWith(".github/workflows/ci.yml@")
+    run.path !== ".github/workflows/ci.yml"
   ) {
     throw new Error("normal CI workflow identity, exact head, or terminal result does not match");
   }
@@ -227,16 +208,16 @@ export function validateCrabboxMergeBypass({
     throw new Error("normal CI gate job does not match its exact check run");
   }
 
-  const blockingJobs = jobList
+  const unsuccessfulJobs = jobList
     .map((value) => record(value, "CI job"))
     .filter(
       (job) =>
         job.id !== ciGateJobId &&
         typeof job.conclusion === "string" &&
-        BLOCKING_JOB_CONCLUSIONS.has(job.conclusion),
+        !["neutral", "skipped", "success"].includes(job.conclusion),
     );
   const infrastructureJobs = [];
-  if (run.conclusion === "startup_failure" && blockingJobs.length === 0) {
+  if (run.conclusion === "startup_failure" && unsuccessfulJobs.length === 0) {
     infrastructureJobs.push({
       backend: "github-actions",
       conclusion: "startup_failure",
@@ -244,19 +225,32 @@ export function validateCrabboxMergeBypass({
       name: "workflow startup",
     });
   } else {
-    if (blockingJobs.length === 0) {
-      throw new Error("normal CI has no blocking job with infrastructure evidence");
+    if (unsuccessfulJobs.length === 0) {
+      throw new Error("normal CI has no blocking job with GitHub-owned infrastructure evidence");
     }
-    const logs = record(jobLogs, "CI job logs");
-    for (const job of blockingJobs) {
+    for (const job of unsuccessfulJobs) {
       const id = requiredPositiveInteger(job.id, "CI job id");
+      if (!BYPASSABLE_JOB_CONCLUSIONS.has(job.conclusion)) {
+        throw new Error(`CI job ${id} conclusion is not a startup or provisioning outage`);
+      }
       const backend = runnerBackend(job);
       if (!["blacksmith", "github-hosted"].includes(backend)) {
         throw new Error(`CI job ${id} runner backend is not a recognized hosted runner`);
       }
-      const log = requiredString(logs[String(id)], `CI job ${id} log`);
-      if (!INFRASTRUCTURE_LOG_PATTERNS.some((pattern) => pattern.test(log))) {
-        throw new Error(`CI job ${id} failure is not a recognized infrastructure failure`);
+      if (typeof job.runner_name === "string" && job.runner_name.trim().length > 0) {
+        throw new Error(`CI job ${id} acquired a runner; only unacquired outages may bypass`);
+      }
+      if (!Array.isArray(job.steps)) {
+        throw new Error(`CI job ${id} is missing GitHub-owned step metadata`);
+      }
+      const failedStep = job.steps.find((value) =>
+        ["action_required", "failure"].includes(record(value, `CI job ${id} step`).conclusion),
+      );
+      if (failedStep) {
+        throw new Error(`CI job ${id} has a failed workflow step`);
+      }
+      if (job.steps.length > 0) {
+        throw new Error(`CI job ${id} executed workflow steps; only no-step outages may bypass`);
       }
       infrastructureJobs.push({
         backend,
@@ -303,26 +297,12 @@ function readJson(file, label) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const jobs = readJson(args.jobs, "CI jobs");
-  const jobLogs = {};
-  for (const value of record(jobs, "CI jobs response").jobs ?? []) {
-    const job = record(value, "CI job");
-    if (!Number.isSafeInteger(job.id)) {
-      continue;
-    }
-    const logPath = path.join(args["job-logs"], `${job.id}.log`);
-    try {
-      jobLogs[String(job.id)] = readFileSync(logPath, "utf8");
-    } catch {
-      // Missing logs remain absent and fail closed unless GitHub reports startup_failure.
-    }
-  }
   const proof = validateCrabboxMergeBypass({
     actor: readJson(args.actor, "authenticated actor"),
     checkRuns: readJson(args["check-runs"], "check runs"),
     expectedLeaseId: requiredString(args["lease-id"], "lease id"),
     expectedRunId: requiredString(args["run-id"], "run id"),
     headSha: requiredString(args.head, "head SHA"),
-    jobLogs,
     jobs,
     membership: readJson(args.membership, "organization membership"),
     publisherRun: readJson(args["publisher-run"], "Crabbox publisher workflow run"),

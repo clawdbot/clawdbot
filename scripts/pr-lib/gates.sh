@@ -318,7 +318,7 @@ run_remote_crabbox_aws_gate() {
     node "$script_parent_dir/pr-crabbox-gate-publisher.mjs" --print-command "$head_sha" "$bootstrap_sha"
   )
   log_file=".local/gates-crabbox-aws.log"
-  echo "Running exact-head Crabbox AWS build, check, and check:changed proof as active org admin $actor." >&2
+  echo "Running exact-head Crabbox AWS build, check, and full test proof as active org admin $actor." >&2
   run_quiet_logged "Crabbox AWS exact-head gates" "$log_file" \
     env \
     -u AWS_ACCESS_KEY_ID \

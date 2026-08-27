@@ -37,7 +37,7 @@ verify_crabbox_admin_merge_bypass() {
 
   local proof_dir=".local/merge-crabbox-bypass"
   rm -rf "$proof_dir"
-  mkdir -p "$proof_dir/job-logs"
+  mkdir -p "$proof_dir"
   read_required_checks_for_crabbox_bypass "$pr" "$proof_dir/required-checks.json" || return 1
   gh_plain api user >"$proof_dir/actor.json" || return 1
   local actor
@@ -100,30 +100,6 @@ verify_crabbox_admin_merge_bypass() {
   fi
   jq '{jobs: [.[] | .jobs[]]}' "$proof_dir/job-pages.json" >"$proof_dir/jobs.json" || return 1
 
-  local job_id
-  while IFS= read -r job_id; do
-    [ -n "$job_id" ] || continue
-    if ! gh_plain run view "$ci_run_id" \
-      --repo openclaw/openclaw \
-      --job "$job_id" \
-      --log >"$proof_dir/job-logs/$job_id.log" 2>"$proof_dir/job-logs/$job_id.error"; then
-      rm -f "$proof_dir/job-logs/$job_id.log"
-    fi
-  done < <(
-    jq -r \
-      --argjson gate_job_id "$ci_gate_job_id" '
-        .jobs[]
-        | select(.id != $gate_job_id)
-        | select(.conclusion == "action_required"
-            or .conclusion == "cancelled"
-            or .conclusion == "failure"
-            or .conclusion == "stale"
-            or .conclusion == "startup_failure"
-            or .conclusion == "timed_out")
-        | .id
-      ' "$proof_dir/jobs.json"
-  )
-
   local encoded_actor
   encoded_actor=$(jq -rn --arg value "$actor" '$value | @uri')
   gh_plain api "orgs/openclaw/memberships/$encoded_actor" \
@@ -136,7 +112,6 @@ verify_crabbox_admin_merge_bypass() {
     --check-runs "$proof_dir/check-runs.json" \
     --workflow-run "$proof_dir/workflow-run.json" \
     --jobs "$proof_dir/jobs.json" \
-    --job-logs "$proof_dir/job-logs" \
     --head "$head_sha" \
     --run-id "$REMOTE_GATES_RUN_ID" \
     --lease-id "$REMOTE_GATES_LEASE_ID" \
