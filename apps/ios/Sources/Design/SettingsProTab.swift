@@ -360,8 +360,12 @@ struct SettingsProTab: View {
         self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
+    var canOpenNotificationsRouteFromApprovals: Bool {
+        self.ownsNavigationStack ? self.directRoute == nil : self.navigateToRoute != nil
+    }
+
     func openNotificationsRouteFromApprovals() {
-        guard self.directRoute == nil else { return }
+        guard self.canOpenNotificationsRouteFromApprovals else { return }
         if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
             self.onApprovalNotificationsRoute?(approvalID)
         }

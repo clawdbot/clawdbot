@@ -138,7 +138,7 @@ describe("exa web search provider", () => {
     expect(pluginEntry.enabled).toBe(true);
   });
 
-  it("keeps the lightweight contract surface aligned with provider metadata", () => {
+  it("keeps the contract export aligned with provider metadata", () => {
     const provider = createExaWebSearchProvider();
     const contractProvider = createContractExaWebSearchProvider();
     if (!contractProvider.applySelectionConfig) {
@@ -171,7 +171,13 @@ describe("exa web search provider", () => {
       autoDetectOrder: provider.autoDetectOrder,
       credentialPath: provider.credentialPath,
     });
-    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    try {
+      expect(contractProvider.createTool({ config: {}, searchConfig: {} })).not.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
     const pluginEntry = applied.plugins?.entries?.exa;
     if (!pluginEntry) {
       throw new Error("expected contract Exa plugin entry");
@@ -278,6 +284,25 @@ describe("exa web search provider", () => {
         },
         summary: { query: "launch details" },
       },
+    });
+  });
+
+  it.each([
+    { name: "a non-string value", query: { value: 123 } },
+    {
+      name: "a throwing getter",
+      query: {
+        get() {
+          throw new Error("Unrelated inherited contents option was accessed");
+        },
+      },
+    },
+  ])("ignores inherited text query with $name", ({ query }) => {
+    const prototype = Object.defineProperty({}, "query", query);
+    const text = Object.assign(Object.create(prototype), { maxCharacters: 1 });
+
+    expect(testing.parseExaContents({ text })).toEqual({
+      value: { text: { maxCharacters: 1 } },
     });
   });
 

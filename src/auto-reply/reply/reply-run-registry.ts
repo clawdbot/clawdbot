@@ -6,7 +6,6 @@ export {
   ReplyRunSuccessorAdmissionBlockedError,
 } from "./reply-run-registry.contracts.js";
 export type {
-  ReplyBackendHandle,
   ReplyBackendMessageInjection,
   ReplyBackendQueueMessageOptions,
   ReplyBackendQueueMessageResult,
@@ -14,7 +13,6 @@ export type {
   ReplyMessageInjectionRejectionReason,
   ReplyMessageInjectionTarget,
   ReplyOperation,
-  ReplyOperationPhase,
   ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 export type { ReplyRunMessageInjectionResolution } from "./reply-run-registry.message-injection.js";
@@ -47,7 +45,6 @@ export {
   resolveActiveReplyOperationForSessionId,
   resolveActiveReplyRunSessionId,
   resolveActiveReplyRunThreadId,
-  resolveReplyRunPhaseForSessionId,
   supersedeReplyRunByRunId,
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,

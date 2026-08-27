@@ -54,6 +54,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     sessionKey,
     agentId,
     authorize,
+    beforeDrain,
     begin,
     reclaim,
   }) => {
@@ -68,6 +69,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       scope: target.storePath,
       identities: lifecycleIdentities,
       prepare: async () => {
+        beforeDrain?.();
         const { worktree } = resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
@@ -84,6 +86,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           );
         }
         worktreePath = worktree.path;
+        authorize?.();
         const released = await interruptSessionWorkAdmissions({
           scope: target.storePath,
           identities: lifecycleIdentities,
@@ -106,8 +109,10 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
         // immediately before drain so revoked callers cannot commit stale placement authority.
         authorize?.();
+        // Eligibility ends at this operation's drain, unlike caller authority during teardown.
+        beforeDrain?.();
         const drainingPlacement = begin();
-        reclaimedPlacement = await reclaim(worktreePath, drainingPlacement);
+        reclaimedPlacement = await reclaim(worktreePath, drainingPlacement, authorize);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
       },
     });
@@ -152,7 +157,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           // Failed teardown is still a session mutation: reauthorize inside the shared lifecycle
           // fence before provider cleanup or the failed-to-local transition becomes durable.
           authorize?.();
-          reclaimedPlacement = await reclaim();
+          reclaimedPlacement = await reclaim(authorize);
         },
       });
       if (!reclaimedPlacement) {

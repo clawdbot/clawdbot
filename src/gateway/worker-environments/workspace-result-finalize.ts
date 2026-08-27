@@ -4,7 +4,6 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -35,7 +34,9 @@ type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "act
 type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
 type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel">;
 
-export class WorkerWorkspaceReconciliationError extends Error {}
+export class WorkerWorkspaceReconciliationError extends Error {
+  override name = "WorkerWorkspaceReconciliationError";
+}
 
 type WorkspaceConflictReport = {
   paths: string[];
@@ -336,10 +337,9 @@ export async function executeRemoteExecTurn(params: {
   }).catch((reconciliationError: unknown) => {
     const currentEnvironment = params.environments.get(params.placement.environmentId);
     if (
-      environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
       environment.nodeDeviceId &&
       currentEnvironment?.state === "attached" &&
-      currentEnvironment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+      currentEnvironment.providerId === environment.providerId &&
       currentEnvironment.environmentId === environment.environmentId &&
       currentEnvironment.ownerEpoch === environment.ownerEpoch &&
       currentEnvironment.nodeDeviceId === environment.nodeDeviceId &&
@@ -348,7 +348,7 @@ export async function executeRemoteExecTurn(params: {
       reconciliationError instanceof WorkerWorkspaceReconciliationError &&
       reconciliationError.cause instanceof WorkerTunnelOwnerDisconnectedError
     ) {
-      // Offline paired nodes keep their exact lease; the next turn reconciles its dirty workspace.
+      // Offline nodes keep their exact lease; the next turn reconciles its dirty workspace.
       params.placements.cancelWorkspaceResultAndReleaseTurn(params.turnClaim, {
         reason: "node-disconnect",
       });

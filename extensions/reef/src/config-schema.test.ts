@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import reefChannelEntry from "../index.js";
 import { reefPlugin } from "./channel.js";
 import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./config-schema.js";
-import { setActiveReef } from "./runtime.js";
+import { createReefRuntimeAuthority } from "./runtime.js";
 
 describe("Reef configuration boundary", () => {
   it("defaults to the canonical Reef relay", () => {
@@ -80,7 +80,7 @@ describe("Reef configuration boundary", () => {
     const setAutonomy = vi.fn();
     const decide = vi.fn().mockResolvedValue(true);
     const listFriends = vi.fn().mockResolvedValue([]);
-    setActiveReef({
+    createReefRuntimeAuthority().activate({
       flow: { send: flowSend },
       friends: {
         mintCode,

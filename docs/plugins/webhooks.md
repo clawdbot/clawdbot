@@ -142,9 +142,14 @@ with any other status returns `400 invalid_request`.
   "flowId": "flow_123",
   "runtime": "acp",
   "childSessionKey": "agent:main:acp:worker",
+  "runId": "run_123",
   "task": "Inspect the next message batch"
 }
 ```
+
+`childSessionKey` identifies the backing run but does not grant authority over it. For automatic
+lifecycle tracking and cancellation, include the exact `runId`; the backing task must be owned by
+the route's configured session. Foreign, stale, or replaced runs are rejected at use time.
 
 ## Response shape
 

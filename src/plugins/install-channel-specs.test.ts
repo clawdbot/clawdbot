@@ -75,6 +75,24 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     });
   });
 
+  it.each([
+    { channel: "stable" as const, expectedVersion: "2026.7.1" },
+    { channel: "extended-stable" as const, expectedVersion: "2026.7.1" },
+  ])("preserves the $channel release-cohort contract", ({ channel, expectedVersion }) => {
+    expect(
+      resolveNpmInstallSpecsForUpdateChannel({
+        spec: "@openclaw/codex",
+        updateChannel: channel,
+        officialPackageName: "@openclaw/codex",
+        coreVersion: "2026.7.1-2",
+        versionBoundToCore: true,
+      }),
+    ).toEqual({
+      installSpec: `@openclaw/codex@${expectedVersion}`,
+      recordSpec: "@openclaw/codex",
+    });
+  });
+
   it("preserves beta behavior for a version-bound plugin", () => {
     expect(
       resolveNpmInstallSpecsForUpdateChannel({

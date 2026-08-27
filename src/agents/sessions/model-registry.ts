@@ -38,7 +38,6 @@ import {
 } from "./model-registry-runtime.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
-  clearConfigValueCache,
   resolveConfigValueOrThrow,
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
@@ -312,9 +311,6 @@ function mergeCompat(
   return merged as Model["compat"];
 }
 
-/** Clear the config value command cache. Exported for testing. */
-export const clearApiKeyCache = clearConfigValueCache;
-
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
@@ -583,13 +579,9 @@ export class ModelRegistry {
       if (options.includePluginCatalogs !== false) {
         let pluginCatalogs: readonly PersistedPluginModelCatalog[] = [];
         try {
-          if (this.pluginCatalogs) {
-            pluginCatalogs = this.pluginCatalogs;
-          } else {
-            const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
-            pluginCatalogs = loaded.catalogs;
-            pluginCatalogErrors.push(...loaded.warnings);
-          }
+          const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
+          pluginCatalogs = loaded.catalogs;
+          pluginCatalogErrors.push(...loaded.warnings);
         } catch (error) {
           pluginCatalogErrors.push(
             `Failed to load generated plugin model catalogs: ${
@@ -597,21 +589,10 @@ export class ModelRegistry {
             }`,
           );
         }
-        for (const pluginCatalog of pluginCatalogs) {
-          const pluginResult = this.loadCustomModels(
-            `sqlite:plugin-model-catalog/${pluginCatalog.pluginId}`,
-            {
-              catalogPluginId: pluginCatalog.pluginId,
-              contents: pluginCatalog.contents,
-              includePluginCatalogs: false,
-              requireGeneratedCatalog: true,
-            },
-          );
-          if (pluginResult.error) {
-            pluginCatalogErrors.push(pluginResult.error);
-            continue;
-          }
-          models.push(...pluginResult.models);
+        const pluginResult = this.loadCapturedPluginCatalogs(pluginCatalogs);
+        models.push(...pluginResult.models);
+        if (pluginResult.error) {
+          pluginCatalogErrors.push(pluginResult.error);
         }
       }
 

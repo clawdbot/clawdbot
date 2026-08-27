@@ -39,6 +39,57 @@ afterEach(() => {
 });
 
 describe("sessions page managed roster", () => {
+  it.each([
+    {
+      name: "offers person grouping for multiple session owners despite a single-identity handshake",
+      ownerCount: 2,
+      handshakeIdentities: false,
+      available: true,
+    },
+    {
+      name: "hides person grouping for one session owner despite a multiple-identity handshake",
+      ownerCount: 1,
+      handshakeIdentities: true,
+      available: false,
+    },
+    {
+      name: "hides person grouping without session owners despite a multiple-identity handshake",
+      ownerCount: 0,
+      handshakeIdentities: true,
+      available: false,
+    },
+  ])("$name", async ({ ownerCount, handshakeIdentities, available }) => {
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: {
+        ...sessionMutationGatewayHello(),
+        policy: { hasMultipleSessionSharingIdentities: handshakeIdentities },
+      },
+    });
+    const managed = createManagedSessions();
+    const context = createContext(mutableGateway.gateway, managed.sessions);
+    const owners = [
+      { type: "human" as const, id: "profile-ada", label: "Ada Lovelace" },
+      { type: "human" as const, id: "profile-bob", label: "Bob Rivera" },
+    ].slice(0, ownerCount);
+    const page = await createRenderedPage(context, {
+      ts: 0,
+      path: "(multiple)",
+      count: owners.length,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      owners,
+      sessions: owners.map((owner, index) => ({
+        key: `agent:main:${owner.id}`,
+        kind: "direct",
+        updatedAt: index,
+        owner: { actor: owner },
+      })),
+    });
+
+    const personOption = page.querySelector('.session-groupby__select option[value="person"]');
+    expect(personOption !== null).toBe(available);
+  });
+
   it("rejects route data from an earlier same-client connection epoch", async () => {
     const client = {} as GatewayBrowserClient;
     const mutableGateway = createGateway(client);

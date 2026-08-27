@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
@@ -12,6 +12,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   applyExclusiveSlotSelectionMock,
   buildPluginSnapshotReportMock,
@@ -1933,10 +1934,10 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", "wecom"]);
 
-    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
+    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.7.2");
     expect(npmInstallCall().expectedPluginId).toBe("wecom-openclaw-plugin");
     expect(npmInstallCall().expectedIntegrity).toBe(
-      "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
+      "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
     );
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
   });
@@ -1944,20 +1945,27 @@ describe("plugins cli install", () => {
   it.each(OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY)(
     "keeps official external npm installs trusted without integrity for $pluginId",
     async ({ pluginId, npmSpec }) => {
-      primeSuccessfulPluginPersistence(pluginId);
-      findBundledPluginSourceMock.mockReturnValue(undefined);
-      installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult(pluginId));
+      await withTempDir("openclaw-official-plugin-install-", async (cwd) => {
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+        try {
+          primeSuccessfulPluginPersistence(pluginId);
+          findBundledPluginSourceMock.mockReturnValue(undefined);
+          installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult(pluginId));
 
-      await runPluginsCommand(["plugins", "install", pluginId]);
+          await runPluginsCommand(["plugins", "install", pluginId]);
 
-      expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
-        lookup: { kind: "pluginId", value: pluginId },
+          expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
+            lookup: { kind: "pluginId", value: pluginId },
+          });
+          expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+          expect(npmInstallCall().spec).toBe(npmSpec);
+          expect(npmInstallCall().expectedPluginId).toBe(pluginId);
+          expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
+          expect(npmInstallCall().expectedIntegrity).toBeUndefined();
+        } finally {
+          cwdSpy.mockRestore();
+        }
       });
-      expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-      expect(npmInstallCall().spec).toBe(npmSpec);
-      expect(npmInstallCall().expectedPluginId).toBe(pluginId);
-      expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-      expect(npmInstallCall().expectedIntegrity).toBeUndefined();
     },
   );
 
@@ -1972,15 +1980,15 @@ describe("plugins cli install", () => {
     installHooksFromNpmSpecMock.mockResolvedValue({
       ok: false,
       error:
-        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.5.7",
+        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.7.2",
     });
 
     await expect(runPluginsCommand(["plugins", "install", "wecom"])).rejects.toThrow("__exit__:1");
 
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(hookNpmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
+    expect(hookNpmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.7.2");
     expect(hookNpmInstallCall().expectedIntegrity).toBe(
-      "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
+      "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
     );
   });
 

@@ -8,7 +8,6 @@ import {
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { countChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
@@ -174,10 +173,10 @@ function createProfileContext(
         callerSignal,
         async (signal) => await rawAvailability.isHttpReachable(timeoutMs, signal),
       ),
-    isTransportAvailable: async (timeoutMs, callerSignal) =>
+    isTransportAvailable: async (timeoutMs, callerSignal, pageProbe) =>
       await withLease(
         callerSignal,
-        async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal),
+        async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal, pageProbe),
       ),
     isReachable: async (timeoutMs, options) =>
       await withLease(
@@ -285,13 +284,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
               if (capabilities.usesChromeMcp) {
                 try {
-                  activeRunning = await profileCtx.isTransportAvailable(300);
-                  if (activeRunning) {
-                    activeTabCount = await countChromeMcpTabs(activeProfile.name, activeProfile, {
-                      ephemeral: true,
-                      signal,
-                    }).catch(() => 0);
-                  }
+                  activeRunning = await profileCtx.isTransportAvailable(300, signal, {
+                    onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+                  });
                 } catch {
                   activeRunning = false;
                 }

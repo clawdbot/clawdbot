@@ -22,20 +22,6 @@ function normalizeOptionalThreadId(value: unknown): string | undefined {
   );
 }
 
-function sameDeliveryContext(
-  left: DeliveryContext | undefined,
-  right: DeliveryContext | undefined,
-): boolean {
-  return (
-    left !== undefined &&
-    right !== undefined &&
-    left.channel === right.channel &&
-    left.to === right.to &&
-    left.accountId === right.accountId &&
-    normalizeOptionalThreadId(left.threadId) === normalizeOptionalThreadId(right.threadId)
-  );
-}
-
 /** Replace model-selected media with the exact host-owned delivery set. */
 export function constrainRestartRecoveryDeliveryPayloads(
   payloads: ReplyPayload[] | undefined,
@@ -320,13 +306,6 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   // Recovery can preclaim a run by id. Preserve its original source semantics
   // while the resumed RPC replaces only the active delivery run id.
   const adoptsExistingClaim = params.entry.restartRecoveryDeliveryRunId === params.runId;
-  if (
-    adoptsExistingClaim &&
-    params.deliveryContext !== undefined &&
-    !sameDeliveryContext(params.entry.restartRecoveryDeliveryContext, params.deliveryContext)
-  ) {
-    throw new Error("restart recovery delivery route changed after the run was claimed");
-  }
   const createsTranscriptOnlySourceClaim =
     params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;

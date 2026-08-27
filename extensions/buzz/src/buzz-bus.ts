@@ -108,6 +108,7 @@ function startBuzzPresenceHeartbeat(params: {
   relay: Relay;
   secretKey: Uint8Array;
   onError?: (error: Error) => void;
+  onFatalError: (error: Error) => void;
 }): () => void {
   let stopped = false;
   let publishInFlight = false;
@@ -122,13 +123,17 @@ function startBuzzPresenceHeartbeat(params: {
       await params.relay.publish(buildBuzzPresenceEvent(params.secretKey));
       errorReported = false;
     } catch (error) {
-      if (!stopped && !errorReported) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error("Buzz presence heartbeat failed", { cause: error });
+      // nostr-tools rejects an unacknowledged publish without closing its socket.
+      // Reconnect that stalled session; an explicit relay rejection is only a warning.
+      if (!stopped && failure.message === "publish timed out") {
+        params.onFatalError(failure);
+      } else if (!stopped && !errorReported) {
         errorReported = true;
-        params.onError?.(
-          error instanceof Error
-            ? error
-            : new Error("Buzz presence heartbeat failed", { cause: error }),
-        );
+        params.onError?.(failure);
       }
     } finally {
       publishInFlight = false;
@@ -221,8 +226,13 @@ export async function startBuzzBus(options: {
   privateKey: string;
   authTag?: string;
   channelIds: string[];
-  since?: number;
-  onMessage: (message: BuzzInboundMessage, bus: BuzzBus, signal: AbortSignal) => Promise<void>;
+  since?: (channelId: string) => number;
+  onMessage: (
+    message: BuzzInboundMessage,
+    bus: BuzzBus,
+    signal: AbortSignal,
+    assertCurrent: () => void,
+  ) => Promise<void>;
   onMessageError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
   onDedupeError?: (error: Error) => void;
@@ -244,12 +254,11 @@ export async function startBuzzBus(options: {
   const signal = options.signal
     ? AbortSignal.any([options.signal, lifecycleAbort.signal])
     : lifecycleAbort.signal;
-  let fatalErrorReported = false;
   const reportFatalError = (error: Error) => {
-    if (signal.aborted || fatalErrorReported) {
+    if (signal.aborted) {
       return;
     }
-    fatalErrorReported = true;
+    lifecycleAbort.abort(error);
     options.onFatalError?.(error);
   };
   const replayGuard = createChannelReplayGuard<Event>({
@@ -370,7 +379,7 @@ export async function startBuzzBus(options: {
             channelIds: activeChannelIds,
             botPublicKey: publicKey,
             since: sessionStartedAt,
-            messageSince: options.since ?? sessionStartedAt,
+            messageSince: (channelId) => options.since?.(channelId) ?? sessionStartedAt,
             messageLimit: resolveBuzzRoomHistoryLimit(activeChannelIds.length),
             reserveDispatchCapacity: (slots) => dispatchQueue.reserveCapacity(slots),
             onHistoryError: options.onHistoryError,
@@ -386,7 +395,16 @@ export async function startBuzzBus(options: {
               // each worker so queued history cannot create unbounded in-flight state.
               const admission = (reservation ?? dispatchQueue).enqueue(async () => {
                 await replayGuard.processGuarded(event, async () => {
-                  await options.onMessage(message, bus, signal);
+                  const assertCurrent = () => {
+                    signal.throwIfAborted();
+                    if (!isMember(message.channelId, event.pubkey)) {
+                      throw new Error("Buzz sender is no longer a room member");
+                    }
+                  };
+                  // Queue waits and dedupe claims can outlive signed membership changes.
+                  // Throw rather than commit a cancelled message as successfully processed.
+                  assertCurrent();
+                  await options.onMessage(message, bus, signal, assertCurrent);
                 });
               });
               if (admission !== "overflow") {
@@ -434,6 +452,7 @@ export async function startBuzzBus(options: {
       relay,
       secretKey,
       onError: options.onPresenceError,
+      onFatalError: reportFatalError,
     });
     if (options.profileName?.trim()) {
       void syncBuzzProfile({

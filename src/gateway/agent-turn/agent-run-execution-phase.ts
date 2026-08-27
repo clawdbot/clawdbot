@@ -1,6 +1,9 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
-import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
+import {
+  attachAgentCommandAdmissionFacts,
+  attachAgentCommandRecoveryAdmissionFacts,
+} from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
@@ -61,6 +64,7 @@ import {
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export function startAgentRunExecution(params: {
+  assertContextCurrent?: () => void;
   prepared: PreparedAgentRunDispatch;
   mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   request: AgentRunRequest;
@@ -161,6 +165,7 @@ export function startAgentRunExecution(params: {
           sessionKey: params.resolvedSessionKey,
           runId: params.runId,
           task: message,
+          gatewayContextResolver: params.context.resolveGatewayContext,
         });
       }
       if (
@@ -265,9 +270,14 @@ export function startAgentRunExecution(params: {
       );
 
       const localUserIngress = getGatewayLocalUserIngress(params.client);
-      if (localUserIngress) {
+      if (params.isRestartRecoveryResumeRun) {
+        attachAgentCommandRecoveryAdmissionFacts(runContext);
+      } else if (localUserIngress) {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
+      // Routing and runtime publication await after admission. Retired owners
+      // must fail before the prepared user turn becomes an agent run.
+      params.assertContextCurrent?.();
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
       dispatchAgentRunFromGateway(
         withAgentRunDispatchExecutionIdentity(
@@ -381,7 +391,11 @@ export function startAgentRunExecution(params: {
               abortSignal: prepared.activeRunAbort.controller.signal,
               lifecycleGeneration: params.lifecycleGeneration,
               onExecutionStarted: () => {
-                if (prepared.activeRunAbort.markExecutionStarted() && params.resolvedSessionKey) {
+                if (!prepared.activeRunAbort.markExecutionStarted()) {
+                  return;
+                }
+                params.io.emitExecutionStarted?.();
+                if (params.resolvedSessionKey) {
                   emitSessionsChanged(params.context, {
                     sessionKey: params.resolvedSessionKey,
                     agentId: params.agentId,

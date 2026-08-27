@@ -19,7 +19,9 @@ import {
   resolveBuildAllStep,
   resolveBuildAllStepOnCacheHit,
   resolveBuildAllSteps,
+  resolveBuildAllTsdownPlan,
   restoreBuildAllStepCacheOutputs,
+  runBuildAllSteps,
   writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mts";
 import {
@@ -375,6 +377,133 @@ describe("resolveBuildAllSteps", () => {
     expect(BUILD_ALL_PROFILES.ciArtifacts).not.toContain("tsdown-unified");
   });
 
+  it("admits package builds before their explicit clean step", () => {
+    const packageSteps = resolveBuildAllSteps("package");
+    expect(packageSteps.map((step) => step.label)).toEqual([
+      "clean:dist",
+      ...resolveBuildAllSteps("full").map((step) => step.label),
+    ]);
+    const runStep = vi.fn(() => ({ status: 0 }));
+
+    const result = runBuildAllSteps("package", {
+      cacheEnabled: false,
+      env: {},
+      logger: { error: vi.fn(), warn: vi.fn() },
+      memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+      runStep,
+      steps: packageSteps,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(runStep).not.toHaveBeenCalled();
+  });
+
+  it("admits the complete default build once and freezes its heap for every child", () => {
+    const tsdownSteps = resolveBuildAllSteps("full").filter((step) =>
+      step.label.startsWith("tsdown-"),
+    );
+    const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+    const executionOrder: string[] = [];
+    const restoreCache = vi.fn();
+    const result = runBuildAllSteps("full", {
+      cacheEnabled: true,
+      env: {},
+      finalizeCache: vi.fn(),
+      logger: { error: vi.fn(), warn: vi.fn() },
+      memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+      now: () => 0,
+      resolveCacheState(step) {
+        executionOrder.push(`cache:${step.label}`);
+        return step.label === "tsdown-packages"
+          ? {
+              cacheable: true,
+              fresh: true,
+              restorable: true,
+              reason: "fresh-cache",
+              signature: "test-signature",
+              outputRoot: "/test/cache",
+              stampPath: "/test/cache-stamp.json",
+              inputFiles: 1,
+              outputFiles: 1,
+              relativeOutputFiles: ["dist/test.js"],
+              stampedOutputs: ["dist/test.js"],
+            }
+          : { cacheable: false, fresh: false, reason: "no-cache" };
+      },
+      restoreCache,
+      runStep(invocation) {
+        executionOrder.push(
+          `run:${expectDefined(tsdownSteps[tsdownInvocations.length], "next tsdown step").label}`,
+        );
+        tsdownInvocations.push(invocation);
+        return { status: 0 };
+      },
+      steps: tsdownSteps,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(tsdownInvocations).toHaveLength(3);
+    for (const invocation of tsdownInvocations) {
+      expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("4352");
+    }
+    expect(restoreCache).toHaveBeenCalledOnce();
+    expect(executionOrder).toEqual([
+      "cache:tsdown-ai",
+      "run:tsdown-ai",
+      "cache:tsdown-packages",
+      "run:tsdown-packages",
+      "cache:tsdown-unified",
+      "run:tsdown-unified",
+    ]);
+
+    const fatalRunner = vi.fn(() => ({ status: 0 }));
+    const fatalResult = runBuildAllSteps("full", {
+      cacheEnabled: false,
+      env: {},
+      logger: { error: vi.fn(), warn: vi.fn() },
+      memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+      now: () => 0,
+      resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+      runStep: fatalRunner,
+      steps: tsdownSteps,
+    });
+    expect(fatalResult.exitCode).toBe(1);
+    expect(fatalRunner).not.toHaveBeenCalled();
+
+    const cacheDisabledRunner = vi.fn(() => ({ status: 0 }));
+    runBuildAllSteps("ciArtifacts", {
+      env: { OPENCLAW_BUILD_CACHE: "0" },
+      finalizeCache: vi.fn(),
+      logger: { error: vi.fn(), warn: vi.fn() },
+      now: () => 0,
+      resolveCacheState: () => ({
+        cacheable: true,
+        fresh: true,
+        reason: "fresh",
+        restorable: false,
+        signature: "test-signature",
+        outputRoot: "/test/cache",
+        stampPath: "/test/cache-stamp.json",
+        inputFiles: 1,
+        outputFiles: 1,
+        relativeOutputFiles: ["dist/test.js"],
+        stampedOutputs: ["dist/test.js"],
+      }),
+      runStep: cacheDisabledRunner,
+      steps: [expectDefined(tsdownSteps[0], "first tsdown step")],
+    });
+    expect(cacheDisabledRunner).toHaveBeenCalledOnce();
+  });
+
+  it("skips heap admission for partial profiles", () => {
+    const partialEnv = { MARKER: "unchanged" };
+    expect(
+      resolveBuildAllTsdownPlan("qaRuntime", partialEnv, {
+        cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+      }),
+    ).toEqual({ env: partialEnv, heapShortfall: null });
+  });
+
   it("rebuilds runtime JS while reusing fresh declaration groups", () => {
     const ai = getBuildAllStep("tsdown-ai");
     const packages = getBuildAllStep("tsdown-packages");
@@ -611,6 +740,30 @@ describe("resolveBuildAllSteps", () => {
     expect(labels).not.toContain("check-plugin-sdk-exports");
   });
 
+  it("selects the runtime-only graph from the runner environment", () => {
+    const selectedLabels: string[] = [];
+    const result = runBuildAllSteps("full", {
+      cacheEnabled: false,
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      logger: { error: vi.fn(), warn: vi.fn() },
+      memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+      now: () => 0,
+      resolveCacheState(step) {
+        selectedLabels.push(step.label);
+        return { cacheable: false, fresh: false, reason: "no-cache" };
+      },
+      runStep: () => ({ status: 0 }),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(selectedLabels).toEqual(
+      resolveBuildAllSteps("full", { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }).map(
+        (step) => step.label,
+      ),
+    );
+    expect(selectedLabels).not.toContain("write-plugin-sdk-entry-dts");
+  });
+
   it("uses a source performance profile with QA assets and immutable build provenance", () => {
     expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
       "plugins:assets:build",
@@ -689,9 +842,9 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("copies generated plugin assets before runtime postbuild snapshots static outputs", () => {
-    for (const profile of ["full", "ciArtifacts", "qaRuntime", "sourcePerformance"]) {
+    for (const profile of ["full", "package", "ciArtifacts", "qaRuntime", "sourcePerformance"]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
-      const lastTsdown = profile === "full" ? "tsdown-unified" : "tsdown";
+      const lastTsdown = profile === "full" || profile === "package" ? "tsdown-unified" : "tsdown";
       expect(labels.indexOf("plugins:assets:copy")).toBeGreaterThan(labels.indexOf(lastTsdown));
       expect(labels.indexOf("runtime-postbuild")).toBeGreaterThan(
         labels.indexOf("plugins:assets:copy"),
@@ -705,7 +858,7 @@ describe("resolveBuildAllSteps", () => {
   it("builds isolated external plugin output after tsdown and before runtime postbuild", () => {
     for (const profile of Object.keys(BUILD_ALL_PROFILES)) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
-      const lastTsdown = profile === "full" ? "tsdown-unified" : "tsdown";
+      const lastTsdown = profile === "full" || profile === "package" ? "tsdown-unified" : "tsdown";
       expect(labels.indexOf("external-plugins:local-dist")).toBeGreaterThan(
         labels.indexOf(lastTsdown),
       );
@@ -726,9 +879,9 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("includes ui:build in the full and ciArtifacts profiles after runtime postbuild", () => {
-    for (const profile of ["full", "ciArtifacts"]) {
+    for (const profile of ["full", "package", "ciArtifacts"]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
-      const lastTsdown = profile === "full" ? "tsdown-unified" : "tsdown";
+      const lastTsdown = profile === "full" || profile === "package" ? "tsdown-unified" : "tsdown";
       expect(labels).toContain("ui:build");
       // Control UI bundling must run after tsdown clears dist so that
       // dist/control-ui survives `pnpm build` without a second command.

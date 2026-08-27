@@ -5,6 +5,7 @@ import {
   validateUsersSelfResult,
   validateUsersSetAvatarResult,
   validateUsersSetDisplayNameResult,
+  validateUsersSetRoleResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { usersHandlers } from "./users.js";
 
@@ -12,6 +13,8 @@ const linkEmail = vi.hoisted(() => vi.fn());
 const listProfiles = vi.hoisted(() => vi.fn());
 const setAvatar = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
+const setUserProfileRole = vi.hoisted(() => vi.fn());
+const invalidateOperatorRolePolicy = vi.hoisted(() => vi.fn());
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
 const getUserProfileDisplay = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
@@ -26,8 +29,11 @@ vi.mock("../../state/user-profiles.js", () => ({
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setUserProfileRole,
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
+
+vi.mock("../operator-role-policy.js", () => ({ invalidateOperatorRolePolicy }));
 
 async function runUsersHandler(
   method: keyof typeof usersHandlers,
@@ -70,6 +76,8 @@ describe("users gateway methods", () => {
     listProfiles.mockReset();
     setAvatar.mockReset();
     setDisplayName.mockReset();
+    setUserProfileRole.mockReset();
+    invalidateOperatorRolePolicy.mockReset();
     getUserProfileDisplay.mockReturnValue({
       id: profile.id,
       displayName: profile.displayName,
@@ -288,6 +296,116 @@ describe("users gateway methods", () => {
       hasAvatar: false,
       updatedAt: profile.updatedAt,
     });
+  });
+
+  it("assigns a configured profile role and invalidates its cached policy", async () => {
+    const assignedProfile = { ...profile, role: "guest", updatedAt: 2 };
+    const disconnectClientsForUserProfile = vi.fn();
+    setUserProfileRole.mockReturnValue(assignedProfile);
+
+    const respond = await runUsersHandler(
+      "users.setRole",
+      { profileId: profile.id, role: "guest" },
+      adminClient,
+      {
+        getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+        disconnectClientsForUserProfile,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
+    expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
+    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, "guest");
+    expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
+    expect(invalidateOperatorRolePolicy.mock.invocationCallOrder[0]).toBeLessThan(
+      respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(disconnectClientsForUserProfile).toHaveBeenCalledWith(profile.id);
+    expect(disconnectClientsForUserProfile.mock.invocationCallOrder[0]).toBeLessThan(
+      respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("invalidates downgraded operator connections before acknowledging the role change", async () => {
+    const assignedProfile = { ...profile, role: "guest", updatedAt: 2 };
+    const connectedOperator = { scopes: ["operator.admin"] };
+    const disconnectClientsForUserProfile = vi.fn(() => {
+      connectedOperator.scopes = [];
+    });
+    const respond = vi.fn(() => {
+      expect(connectedOperator.scopes).not.toContain("operator.admin");
+    });
+    setUserProfileRole.mockReturnValue(assignedProfile);
+
+    await expectDefined(
+      usersHandlers["users.setRole"],
+      "users.setRole test invariant",
+    )({
+      client: adminClient,
+      context: {
+        getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+        disconnectClientsForUserProfile,
+      },
+      params: { profileId: profile.id, role: "guest" },
+      respond,
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
+    expect(disconnectClientsForUserProfile).toHaveBeenCalledWith(profile.id);
+  });
+
+  it("clears profile roles even when role definitions have been removed", async () => {
+    setUserProfileRole.mockReturnValue(profile);
+
+    const respond = await runUsersHandler(
+      "users.setRole",
+      { profileId: profile.id, role: null },
+      adminClient,
+      { getRuntimeConfig: () => ({}) },
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, { profile });
+    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, null);
+    expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
+  });
+
+  it("rejects undefined profile roles before changing storage or cached policy", async () => {
+    const respond = await runUsersHandler(
+      "users.setRole",
+      { profileId: profile.id, role: "maintainer" },
+      adminClient,
+      { getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }) },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("gateway.roles.definitions"),
+      }),
+    );
+    expect(setUserProfileRole).not.toHaveBeenCalled();
+    expect(invalidateOperatorRolePolicy).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed profile role assignments before reading configuration", async () => {
+    const getRuntimeConfig = vi.fn();
+
+    const respond = await runUsersHandler(
+      "users.setRole",
+      { profileId: profile.id, role: "   " },
+      adminClient,
+      { getRuntimeConfig },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
+    expect(setUserProfileRole).not.toHaveBeenCalled();
   });
 
   it("returns protocol-complete avatar mutations", async () => {

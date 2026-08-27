@@ -16,6 +16,7 @@ import {
   mockDefaultSessionEntry,
   readLatestAssistantTextByIdentity,
   recordOutboundMessageForPromptContext,
+  resolveHumanDelayConfig,
   setupDraftStreams,
   telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
@@ -25,6 +26,29 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
+  it("forwards route-scoped humanDelay to the block dispatcher", async () => {
+    const humanDelay = { mode: "custom" as const, minMs: 800, maxMs: 2_500 };
+    const cfg = { agents: { defaults: { humanDelay } } } as Parameters<
+      typeof dispatchWithContext
+    >[0]["cfg"];
+    resolveHumanDelayConfig.mockReturnValue(humanDelay);
+
+    await dispatchWithContext({
+      context: createContext({
+        route: {
+          agentId: "ops",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+      cfg,
+      streamMode: "off",
+    });
+
+    expect(resolveHumanDelayConfig).toHaveBeenCalledWith(cfg, "ops");
+    const dispatch = expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), {});
+    expectRecordFields(dispatch.dispatcherOptions, { humanDelay });
+  });
+
   it("forwards cfg to direct reply delivery", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });

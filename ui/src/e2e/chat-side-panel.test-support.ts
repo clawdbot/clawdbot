@@ -1,5 +1,27 @@
 import type { Page } from "playwright";
 
+export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+    let identityMintFailed = false;
+    Object.defineProperty(globalThis.crypto, "getRandomValues", {
+      configurable: true,
+      value(array: Uint8Array<ArrayBuffer>) {
+        if (!identityMintFailed) {
+          identityMintFailed = true;
+          throw new Error("device identity unavailable");
+        }
+        Object.defineProperty(globalThis.crypto, "getRandomValues", {
+          configurable: true,
+          value: getRandomValues,
+        });
+        getRandomValues(array);
+        return array;
+      },
+    });
+  });
+}
+
 export async function openChatSidePanelType(page: Page, label: string): Promise<void> {
   const panel = page.locator(".sidebar-region__right-runtime .side-panel");
   if ((await panel.count()) === 0) {

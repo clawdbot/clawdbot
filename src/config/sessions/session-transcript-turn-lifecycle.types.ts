@@ -31,6 +31,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   endedAt?: number;
   lifecycleRunId?: SessionEntry["lifecycleRunId"];
   lastRunId?: SessionEntry["lastRunId"];
+  lastRunError?: SessionEntry["lastRunError"];
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   mainRestartRecovery?: SessionEntry["mainRestartRecovery"];
   restartRecoveryBeforeAgentReplyState?: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];
