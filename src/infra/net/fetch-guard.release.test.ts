@@ -5,6 +5,7 @@ import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import type { CaptureEventRecord } from "../../proxy-capture/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readResponseWithLimit } from "../http-body.js";
 import { fetchWithSsrFGuard } from "./fetch-guard.js";
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 import { fetchWithRuntimeDispatcher, type DispatcherAwareRequestInit } from "./runtime-fetch.js";
@@ -80,7 +81,7 @@ describe("guarded request release", () => {
         }
       },
       async (baseUrl) => {
-        let heldBody: Promise<string> | undefined;
+        let heldBody: Promise<Buffer> | undefined;
         const get = async (path: string) => {
           const result = await fetchWithSsrFGuard({
             url: `${baseUrl}${path}`,
@@ -96,7 +97,7 @@ describe("guarded request release", () => {
         try {
           const abandoned = await get("/abandoned");
           const held = await get("/held");
-          heldBody = held.response.text();
+          heldBody = readResponseWithLimit(held.response, 32);
           void heldBody.catch(() => undefined);
           expect(abandoned.response.status).toBe(503);
           expect(held.dispatcherReused).toBe(true);
@@ -110,7 +111,7 @@ describe("guarded request release", () => {
           });
 
           (await heldResponse.promise).end("-alive");
-          expect(await withinDeadline(heldBody)).toBe("kept-alive");
+          expect((await withinDeadline(heldBody)).toString("utf8")).toBe("kept-alive");
           await held.release();
           expect(await withinDeadline(captures.get("/held")!.promise)).toMatchObject({
             kind: "response",
@@ -121,7 +122,9 @@ describe("guarded request release", () => {
           const completed = await get("/complete");
           expect(completed.dispatcherReused).toBe(true);
           expect(dispatchers[2]).toBe(dispatchers[0]);
-          expect(await completed.response.text()).toBe("complete");
+          expect((await readResponseWithLimit(completed.response, 32)).toString("utf8")).toBe(
+            "complete",
+          );
           await completed.release();
           expect(await withinDeadline(captures.get("/complete")!.promise)).toMatchObject({
             kind: "response",
@@ -159,7 +162,7 @@ describe("guarded request release", () => {
               : { init: { signal: parent.signal } }),
             policy: { allowPrivateNetwork: true },
           });
-          const body = result.response.text();
+          const body = readResponseWithLimit(result.response, 32);
           try {
             parent.abort(reason);
             await expect(withinDeadline(body)).rejects.toBe(reason);
@@ -188,7 +191,7 @@ describe("guarded request release", () => {
           timeoutMs: 5_000,
           policy: { allowPrivateNetwork: true },
         });
-        const body = result.response.text();
+        const body = readResponseWithLimit(result.response, 32);
         try {
           ignored.abort(new Error("ignored init signal"));
           parent.abort(reason);

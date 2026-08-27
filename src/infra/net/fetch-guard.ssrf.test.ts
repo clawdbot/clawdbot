@@ -3,6 +3,7 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 // trusted proxy modes, and safe header retention.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readResponseWithLimit } from "../http-body.js";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
   fetchWithSsrFGuard,
@@ -1033,7 +1034,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       }).then(
         async (result) => {
           try {
-            return await result.response.text();
+            return (await readResponseWithLimit(result.response, 32)).toString("utf8");
           } finally {
             await result.release();
           }
