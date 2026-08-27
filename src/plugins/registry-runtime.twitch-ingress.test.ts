@@ -4,14 +4,16 @@ import {
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "../channels/message-access/admission-evidence.js";
+import { importBundledChannelContractSourceArtifact } from "../channels/plugins/contracts/test-helpers/runtime-artifacts.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runChannelInboundEvent } from "../plugin-sdk/channel-inbound.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
 import { createPluginRuntime } from "./runtime/index.js";
+import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 const transport = await vi.hoisted(async () => {
@@ -76,18 +78,12 @@ vi.mock("@twurple/chat", () => ({
   LogLevel: { WARNING: "warning" },
 }));
 
-const publicApiId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "twitch",
-  artifactBasename: "api.js",
-});
-// SAFETY: The public-surface resolver selects this plugin's existing api artifact, never private modules.
-const { twitchPlugin, setTwitchRuntime } = (await import(
-  publicApiId
-)) as typeof import("../../extensions/twitch/api.js");
+const { twitchPlugin, setTwitchRuntime } = await importBundledChannelContractSourceArtifact<{
+  twitchPlugin: ChannelPlugin<unknown>;
+  setTwitchRuntime: (runtime: PluginRuntime) => void;
+}>("twitch", "api.js");
 
-type TwitchAccount = ReturnType<typeof twitchPlugin.config.resolveAccount>;
-type Policy = Pick<TwitchAccount, "allowFrom" | "allowedRoles">;
+type Policy = { allowFrom?: string[]; allowedRoles?: string[] };
 type EvidenceResult = ReturnType<typeof consumeChannelAdmissionEvidence>;
 
 async function withTwitchMonitor(
@@ -110,10 +106,10 @@ async function withTwitchMonitor(
       channel: "testchannel",
       ...policy,
     };
-    const account = { accountId, ...accountConfig };
     const cfg: OpenClawConfig = {
       channels: { twitch: { accounts: { [accountId]: accountConfig } } },
     };
+    const account = twitchPlugin.config.resolveAccount(cfg, accountId);
     await state.writeConfig(cfg);
     const contexts: object[] = [];
     const evidence: EvidenceResult[] = [];
