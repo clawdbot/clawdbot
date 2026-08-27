@@ -332,9 +332,11 @@ async function executeMainSessionCronJob(
       }
       await waitWithAbort(
         Math.min(
-          heartbeatResult.reason === HEARTBEAT_SKIP_PREEMPTED
-            ? HEARTBEAT_IDLE_RETRY_GRACE_MS
-            : retryDelayMs,
+          heartbeatResult.retryAtMs !== undefined
+            ? Math.max(0, heartbeatResult.retryAtMs - state.deps.nowMs())
+            : heartbeatResult.reason === HEARTBEAT_SKIP_PREEMPTED
+              ? HEARTBEAT_IDLE_RETRY_GRACE_MS
+              : retryDelayMs,
           maxWaitMs - elapsedMs,
         ),
       );

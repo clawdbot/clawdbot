@@ -39,10 +39,12 @@ export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_NO_PENDING_EVENT = "no-pending-event";
 export const HEARTBEAT_SKIP_PREEMPTED = "preempted";
+export const HEARTBEAT_SKIP_CHANNEL_NOT_READY = "channel-not-ready";
 const RETRYABLE_HEARTBEAT_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_PREEMPTED,
+  HEARTBEAT_SKIP_CHANNEL_NOT_READY,
 ]);
 const RETRYABLE_GUARD_SKIP_REASONS = new Set(["not-due", "min-spacing", "flood"]);
 
@@ -412,6 +414,7 @@ function resolveHeartbeatRetrySchedule(
   const now = Date.now();
   const deferWakeOnly =
     result.reason === HEARTBEAT_SKIP_PREEMPTED ||
+    result.reason === HEARTBEAT_SKIP_CHANNEL_NOT_READY ||
     (result.reason === HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT &&
       (pendingWake.intent === "scheduled" || pendingWake.intent === "task"));
   return {
