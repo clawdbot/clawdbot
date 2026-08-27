@@ -85,16 +85,18 @@ Keep the token out of repository config and shell arguments.
 ### Daytona
 
 <Warning>
-Direct Daytona cloud-worker dispatch is currently unsupported. OpenClaw requires a non-empty `settings.class` and forwards it as `--class`, but Crabbox's direct Daytona backend rejects that flag because the snapshot controls sizing. Omitting the class fails OpenClaw's profile validation; setting it to `beast` or another value does not resolve the incompatibility.
+Direct Daytona cloud-worker dispatch remains unsupported. Omitting `settings.class` removes OpenClaw's class requirement, but does not establish compatibility with its fixed-ID replay, setup transport, and cleanup contracts. Setting a class such as `beast` is not a workaround: Crabbox's Daytona backend rejects `--class` because the snapshot controls sizing.
 </Warning>
 
-Use another supported backend, such as the AWS profile in [Configuration](/gateway/cloud-workers#configuration), for cloud-worker sessions until this integration is compatible. For standalone Crabbox usage, see its [Daytona provider documentation](https://github.com/openclaw/crabbox/blob/main/docs/providers/daytona.md); those instructions are not an OpenClaw cloud-worker setup recipe.
+For managed Daytona evaluation, use Crabbox 0.46.0 with an authenticated managed coordinator configured for Daytona. Omit `settings.class`, leave `settings.warmImage` and `settings.desktop` disabled, and prepare Node.js, `npx`, and the matching OpenClaw installation through the existing [setup prerequisites](/gateway/cloud-workers#the-setup-command). Keep provider credentials and snapshot selection in Crabbox's configuration, not OpenClaw profile settings.
+
+These are prerequisites, not proof that a profile is usable. Verify actual OpenClaw dispatch, node enrollment, a session turn, and reclaim with provider-side deletion before relying on the profile. Read-only discovery or a standalone Crabbox command does not establish that result. For an already supported path, use the AWS profile in [Configuration](/gateway/cloud-workers#configuration). Crabbox's [Daytona provider documentation](https://github.com/openclaw/crabbox/blob/main/docs/providers/daytona.md) describes its native provider; standalone instructions are not an OpenClaw cloud-worker acceptance recipe.
 
 ## Configuration
 
 Manage profiles in the Control UI under **Settings → Connections → Cloud workers**, or edit `cloudWorkers.profiles` directly in `openclaw.json` — both write the same config keys. The settings page lists each profile's backend, class, lifetime, and idle-stop in plain language, and shows whether it is advertised to `environments.list` or waiting on a Gateway restart. With no profiles configured it explains the feature, links back to this page, and starts the add flow.
 
-**Machine class** is a required text field. Enter a class accepted by the selected Crabbox backend and binary; the provider determines its effective sizing. Changing the backend or binary leaves the class unchanged, so verify that it is accepted before saving.
+**Machine class** is required in the class-based editor. Enter a class accepted by the selected Crabbox backend and binary; the provider determines its effective sizing. Changing the backend or binary leaves the class unchanged, so verify that it is accepted before saving. To configure a classless profile, use **Settings → Advanced** and omit `settings.class`; **Edit** on an existing classless profile opens Advanced. OpenClaw then omits `--class` unless the placement supplies a class, leaving resource selection to Crabbox without claiming a default size. Explicit `null`, empty or whitespace strings, and nonstring class values are invalid.
 
 Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
@@ -139,6 +141,8 @@ Warm images work on `machine0` through Crabbox's `--strategy image`; other backe
 Before capture, OpenClaw removes per-lease worker identities, device tokens, and session state, including node-host workspaces and SSH-transport workspaces under `~/.openclaw-worker/workspaces`. Machine-level caches intentionally survive: npm caches, content-addressed worker bundle installs under `~/.openclaw-worker`, and per-repository Git seeds under `~/.openclaw-worker/git-seeds`. A seed is a pristine post-sync repository copy, not a session snapshot. Images also retain whatever `settings.setup` wrote elsewhere, so keep setup credential-free and enable reuse only for mutually trusted workloads.
 
 Scrubbing has a three-minute timeout. Checkpoint creation has a separate three-minute timeout, extended to ten minutes on `machine0` because image capture stops the source and waits for image availability even with `--wait=false`. Capture failure does not prevent teardown; without a usable image, later workers provision cold. Capture needs a Crabbox release with fixed-ID checkpoint forks, and coordinator-brokered leases additionally need `broker.adminToken`; without either, capture degrades to cold-only provisioning with a warning.
+
+Warm-image provisioning requires a known class from `settings.class` or the placement's `machineClass`; `warmImage: true` without either fails before any provider command. Classless profiles otherwise stay cold. Reuse is exact-class: a placement override does not reuse another class's image, and only successful node enrollment records the class used for later capture, including after a Gateway restart.
 
 ### Per-project default profiles
 
@@ -319,7 +323,7 @@ openclaw gateway call sessions.dispatch \
 
 ### Choose a machine class per session
 
-A worker profile's `settings.class` remains its default. In the Control UI, selecting a **Cloud · profile** destination in the Place picker reveals a machine section listing the profile's advertised classes, with reported vCPU and RAM when available and the default marked; picking one updates the place chip (for example `hetzner · Fast`) and carries the choice into dispatch. To choose a different size for one new placement over RPC instead, pass `machineClass` with `profileId`:
+A worker profile's `settings.class`, when configured, remains its default. In the Control UI, selecting a **Cloud · profile** destination in the Place picker reveals a machine section listing the profile's advertised classes, with reported vCPU and RAM when available and the default marked; picking one updates the place chip (for example `hetzner · Fast`) and carries the choice into dispatch. To choose a different size for one new placement over RPC instead, pass `machineClass` with `profileId`:
 
 ```bash
 openclaw gateway call sessions.dispatch \
@@ -327,7 +331,7 @@ openclaw gateway call sessions.dispatch \
   --params '{"key":"agent:main:big-refactor","profileId":"aws","machineClass":"large"}'
 ```
 
-The bundled Crabbox provider reads `classCatalog.profiles` from `crabbox providers --json` for the selected backend when `classCatalog.disposition` is `mapped`. It uses Linux/amd64 primary profiles, preserving their order and marking the configured class as the default; other targets, architectures, and fallback machines are not merged into these choices. The picker includes at most 32 options; it appends the configured class only when a usable advertised list exists. Reported vCPU and RAM appear independently. RAM follows Crabbox's summary contract: positive integer GB/GiB values are shown; other units, fractional values, and missing dimensions stay unknown. Native type names are never used to guess dimensions. Unmapped, missing, unknown, failed, empty, or unusable catalog metadata produces no machine selector, even if legacy `classes` are present. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
+The bundled Crabbox provider reads `classCatalog.profiles` from `crabbox providers --json` for the selected backend when `classCatalog.disposition` is `mapped`. It uses Linux/amd64 primary profiles, preserving their order and marking the configured class as the default; other targets, architectures, and fallback machines are not merged into these choices. The picker includes at most 32 options; it appends the configured class only when a usable advertised list exists. A classless profile retains all advertised choices up to that limit, with no invented default or reserved default slot. Reported vCPU and RAM appear independently. RAM follows Crabbox's summary contract: positive integer GB/GiB values are shown; other units, fractional values, and missing dimensions stay unknown. Native type names are never used to guess dimensions. Unmapped, missing, unknown, failed, empty, or unusable catalog metadata produces no machine selector, even if legacy `classes` are present. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
 
 Successful catalogs, including valid empty catalogs, are cached for the Gateway lifetime. Failed probes are retried by the next discovery request; a Gateway restart is not needed to recover.
 

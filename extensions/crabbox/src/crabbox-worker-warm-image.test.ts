@@ -13,13 +13,8 @@ import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 const LEASE_ID = operationLeaseId(OPERATION_ID);
 const CHECKPOINT_ID = "chk_profile_warm";
-const PROFILE = {
-  provider: "aws",
-  class: "standard",
-  ttl: "24h",
-  idleTimeout: "60m",
-  warmImage: true,
-};
+const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m", warmImage: true };
+const PROFILE = { ...CLASSLESS_PROFILE, class: "standard" };
 const WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
@@ -219,16 +214,23 @@ describe("Crabbox profile warm images", () => {
     );
   });
 
-  it("never invokes checkpoint commands when warm images are disabled", async () => {
-    const { provider, calls } = createWarmProvider();
-    const profile = { ...PROFILE, warmImage: false };
-    const lease = await provisionWarmProfile(provider, profile);
+  it.each(["standard", undefined])(
+    "never invokes checkpoint commands with warm images disabled and class %s",
+    async (machineClass) => {
+      const { provider, calls } = createWarmProvider();
+      const profile = {
+        ...CLASSLESS_PROFILE,
+        ...(machineClass ? { class: machineClass } : {}),
+        warmImage: false,
+      };
+      const lease = await provisionWarmProfile(provider, profile);
 
-    await provider.destroy({ leaseId: lease.leaseId, profile });
+      await provider.destroy({ leaseId: lease.leaseId, profile });
 
-    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-    expect(calls.at(-1)?.argv[1]).toBe("stop");
-  });
+      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+      expect(calls.at(-1)?.argv[1]).toBe("stop");
+    },
+  );
 
   it("scrubs every worker identity and workspace before capturing an enrolled lease", async () => {
     const { provider, calls } = createWarmProvider();
@@ -556,60 +558,98 @@ describe("Crabbox profile warm images", () => {
     expect(calls.at(-1)?.argv[1]).toBe("stop");
   });
 
-  it("captures and restores placement overrides under their actual machine-class image key", async () => {
-    const { provider, calls } = createWarmProvider();
-    await captureWarmImage(provider, PROFILE, OPERATION_ID, "fast");
+  it.each(["aws", "hetzner"])(
+    "rejects a requested warm image without a resolved class before %s commands",
+    async (backend) => {
+      const { provider, calls } = createWarmProvider();
+      await expect(
+        provisionWarmProfile(provider, {
+          provider: backend,
+          ttl: PROFILE.ttl,
+          idleTimeout: PROFILE.idleTimeout,
+          warmImage: true,
+        }),
+      ).rejects.toMatchObject({
+        code: "invalid_profile",
+        message: "Crabbox warmImage requires a configured class or a placement machine class",
+      });
+      expect(calls).toEqual([]);
+    },
+  );
 
-    calls.length = 0;
-    await provisionWarmProfile(provider, PROFILE, `provision:v2:${"1".repeat(64)}`);
-    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-    expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
+  it.each(["standard", undefined])(
+    "captures and restores placement overrides with configured class %s",
+    async (machineClass) => {
+      const { provider, calls } = createWarmProvider();
+      const profile = { ...CLASSLESS_PROFILE, ...(machineClass ? { class: machineClass } : {}) };
+      await captureWarmImage(provider, profile, OPERATION_ID, "fast");
 
-    const nextOperation = `provision:v2:${"2".repeat(64)}`;
-    calls.length = 0;
-    await provisionWarmProfile(provider, PROFILE, nextOperation, "fast");
-    const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
-    expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(operationLeaseId(nextOperation));
-    expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
-  });
+      calls.length = 0;
+      await provisionWarmProfile(provider, profile, `provision:v2:${"1".repeat(64)}`, "standard");
+      expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+      expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
 
-  it("captures the persisted effective machine class after a Gateway restart rearms heartbeat", async () => {
-    const initial = createWarmProvider();
-    const lease = await provisionWarmProfile(initial.provider, PROFILE, OPERATION_ID, "fast");
-    initial.provider.dispose();
+      const nextOperation = `provision:v2:${"2".repeat(64)}`;
+      calls.length = 0;
+      await provisionWarmProfile(provider, profile, nextOperation, "fast");
+      const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
+      expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(operationLeaseId(nextOperation));
+      expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
+    },
+  );
 
-    const restarted = createWarmProvider(undefined, initial.stateDir);
-    await restarted.provider.inspect({ leaseId: lease.leaseId, profile: PROFILE });
-    await restarted.provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+  it.each(["standard", undefined])(
+    "recovers the persisted effective class after restart with configured class %s",
+    async (machineClass) => {
+      const initial = createWarmProvider();
+      const profile = { ...CLASSLESS_PROFILE, ...(machineClass ? { class: machineClass } : {}) };
+      const lease = await provisionWarmProfile(initial.provider, profile, OPERATION_ID, "fast");
+      initial.provider.dispose();
 
-    expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+      const restarted = createWarmProvider(undefined, initial.stateDir);
+      await restarted.provider.inspect({ leaseId: lease.leaseId, profile });
+      await restarted.provider.destroy({ leaseId: lease.leaseId, profile });
 
-    restarted.calls.length = 0;
-    await provisionWarmProfile(restarted.provider, PROFILE, `provision:v2:${"1".repeat(64)}`);
-    expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-    expect(restarted.calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
+      expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
 
-    restarted.calls.length = 0;
-    await provisionWarmProfile(
-      restarted.provider,
-      PROFILE,
-      `provision:v2:${"2".repeat(64)}`,
-      "fast",
-    );
-    const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
-    expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
-  });
+      restarted.calls.length = 0;
+      await provisionWarmProfile(
+        restarted.provider,
+        profile,
+        `provision:v2:${"1".repeat(64)}`,
+        "standard",
+      );
+      expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+      expect(restarted.calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
 
-  it("never snapshots an inspected lease whose effective machine class is unknown", async () => {
-    const { provider, calls } = createWarmProvider();
-    const lease = { leaseId: LEASE_ID, profile: PROFILE };
+      restarted.calls.length = 0;
+      await provisionWarmProfile(
+        restarted.provider,
+        profile,
+        `provision:v2:${"2".repeat(64)}`,
+        "fast",
+      );
+      const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
+      expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
+    },
+  );
 
-    await provider.inspect(lease);
-    await provider.destroy(lease);
+  it.each(["standard", undefined])(
+    "never snapshots an inspection-only lease with configured class %s",
+    async (machineClass) => {
+      const { provider, calls } = createWarmProvider();
+      const lease = {
+        leaseId: LEASE_ID,
+        profile: { ...CLASSLESS_PROFILE, ...(machineClass ? { class: machineClass } : {}) },
+      };
 
-    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-    expect(calls.at(-1)?.argv[1]).toBe("stop");
-  });
+      await provider.inspect(lease);
+      await provider.destroy(lease);
+
+      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+      expect(calls.at(-1)?.argv[1]).toBe("stop");
+    },
+  );
 
   it("forks an available image into the exact operation-owned lease before normal enrollment", async () => {
     const { provider, calls } = createWarmProvider();

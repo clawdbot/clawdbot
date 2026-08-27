@@ -69,6 +69,86 @@ describe("Crabbox plugin generation lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    { backend: "daytona", executionMode: "worker-turn" },
+    { backend: "hetzner", executionMode: "remote-exec" },
+  ] as const)(
+    "supports a classless $backend profile through $executionMode lifecycle",
+    async ({ backend, executionMode }) => {
+      const runCommand = vi
+        .spyOn(processRuntime, "runCommandWithTimeout")
+        .mockImplementation(async (argv) => {
+          if (argv[1] === "providers") {
+            return commandResult({
+              stdout: JSON.stringify([
+                { provider: backend, classCatalog: { disposition: "unmapped" } },
+              ]),
+            });
+          }
+          return argv[1] === "inspect"
+            ? inspectResult(argv[argv.indexOf("--id") + 1]!)
+            : commandResult();
+        });
+      const generation = registerCrabboxGeneration();
+      const profile = {
+        binary: PROFILE.binary,
+        idleTimeout: PROFILE.idleTimeout,
+        ttl: PROFILE.ttl,
+        provider: backend,
+      };
+      try {
+        expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(67 * 60_000);
+        expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
+        const waitForDeviceId = vi.fn(async () => "device-classless");
+        const lease = await generation.provider.provision(profile, "classless-operation", {
+          executionMode,
+          beginNodeEnrollment: async () => ({
+            ...(executionMode === "worker-turn"
+              ? {
+                  mode: "connect" as const,
+                  setupCode: "fixture-setup-code",
+                  setupId: "fixture-setup-id",
+                }
+              : { mode: "resume" as const, deviceId: "device-classless" }),
+            openclawVersion: "2026.8.1",
+            packageSpecs: ["openclaw@2026.8.1"],
+            displayName: "Classless worker",
+            waitForDeviceId,
+          }),
+        });
+        expect(lease.node).toEqual({ deviceId: "device-classless" });
+        expect(waitForDeviceId).toHaveBeenCalledOnce();
+        await expect(
+          generation.provider.inspect({ leaseId: lease.leaseId, profile }),
+        ).resolves.toEqual({ status: "active" });
+        await expect(
+          generation.provider.destroy({ leaseId: lease.leaseId, profile }),
+        ).resolves.toBeUndefined();
+        const calls = runCommand.mock.calls.map(([argv]) => argv);
+        expect(calls.map((argv) => argv[1])).toEqual([
+          "providers",
+          "warmup",
+          "inspect",
+          "run",
+          "inspect",
+          "inspect",
+          "stop",
+        ]);
+        expect(calls.flat()).not.toContain("--class");
+        expect(calls.at(-1)).toEqual([
+          PROFILE.binary,
+          "stop",
+          "--provider",
+          backend,
+          "--id",
+          lease.leaseId,
+        ]);
+      } finally {
+        await stopGeneration(generation.services);
+      }
+    },
+  );
+
   it("registers cleanup that fences pending heartbeats and late starts", async () => {
     vi.useFakeTimers();
     const runCommand = vi
