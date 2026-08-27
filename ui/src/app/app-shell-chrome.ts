@@ -410,8 +410,11 @@ export class ShellChromeOwner {
       }
       return;
     }
+    if (document.openClawModalLayers?.size) {
+      return;
+    }
     if (host.navDrawerOpen && isMobileNavLayout()) {
-      if (event.defaultPrevented || document.openClawModalLayers?.size) {
+      if (event.defaultPrevented) {
         return;
       }
       if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
@@ -421,7 +424,11 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
       } else if (event.key === "Tab") {
         trapNavDrawerFocus(host, event);
-      } else if (isCommandPaletteShortcut(event) || isTerminalPanelShortcut(event)) {
+      } else if (
+        isCommandPaletteShortcut(event) ||
+        isTerminalPanelShortcut(event) ||
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
+      ) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }
