@@ -87,12 +87,10 @@ function modelDiscoveryResponse(body: unknown, init?: ResponseInit): Response {
 }
 
 describe("bedrock mantle discovery", () => {
-  const originalEnv = process.env;
   let testRegionIndex = 0;
   let testRegion = "";
 
   beforeEach(() => {
-    process.env = { ...originalEnv };
     vi.restoreAllMocks();
     discoveryDebugSpy.mockClear();
     discoveryLoggerState.debugEnabled = true;
@@ -101,7 +99,6 @@ describe("bedrock mantle discovery", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    process.env = originalEnv;
   });
 
   // ---------------------------------------------------------------------------
