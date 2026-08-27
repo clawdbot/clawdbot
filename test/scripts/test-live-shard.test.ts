@@ -124,10 +124,14 @@ describe("scripts/test-live-shard", () => {
       "test/image-generation.runtime.live.test.ts",
       "test/openai-onboarding.live.test.ts",
     ]);
+    expect(selectLiveShardFiles("native-live-extensions-media-audio", allFiles)).toContain(
+      "extensions/tts-local-cli/speech-provider.live.test.ts",
+    );
     expect(selectLiveShardFiles("native-live-extensions-media", allFiles)).toEqual([
       "extensions/minimax/minimax.live.test.ts",
       "extensions/music-generation-providers.live.test.ts",
       "extensions/openai/openai-tts.live.test.ts",
+      "extensions/tts-local-cli/speech-provider.live.test.ts",
       "extensions/video-generation-providers.live.test.ts",
       "extensions/volcengine/tts.live.test.ts",
       "extensions/vydra/vydra.live.test.ts",
