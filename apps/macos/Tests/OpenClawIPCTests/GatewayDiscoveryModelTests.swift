@@ -3,6 +3,16 @@ import Testing
 
 @MainActor
 struct GatewayDiscoveryModelTests {
+    @Test func `inactive discovery does not retain its model for host resolution`() {
+        weak var released: GatewayDiscoveryModel?
+        do {
+            let model = GatewayDiscoveryModel(localDisplayName: "Test Mac")
+            released = model
+            #expect(model.gateways.isEmpty)
+        }
+        #expect(released == nil)
+    }
+
     @Test func `local gateway matches lan host`() {
         let local = GatewayDiscoveryModel.LocalIdentity(
             hostTokens: ["studio"],

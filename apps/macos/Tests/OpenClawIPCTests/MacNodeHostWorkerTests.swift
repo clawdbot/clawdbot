@@ -616,15 +616,17 @@ struct MacNodeHostWorkerTests {
             try? FileManager.default.removeItem(at: directory)
         }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        // Shell builtins handle TERM without waiting on a sleep child. Keep cleanup
+        // pending on stdin until the owner's existing termination deadline reaps it.
         let firstScript = """
-        trap 'printf "%s\n" "$$" > "$1"; /bin/sleep 0.2; exit 0' TERM
+        trap 'printf "%s\n" "$$" > "$1"; IFS= read -r _; exit 0' TERM
         printf '%s\n' '{"type":"ready","version":"first","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
         let replacementScript = """
         printf '%s\n' "$$" > "$1"
         printf '%s\n' '{"type":"ready","version":"replacement","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: [
@@ -651,8 +653,8 @@ struct MacNodeHostWorkerTests {
         case .success:
             Issue.record("changed launch succeeded after stop returned")
             await worker.stop()
-        case .failure:
-            break
+        case let .failure(error):
+            #expect(error.localizedDescription == "worker stopped")
         }
         #expect(TestProcessSupport.pollPID(in: replacementPIDFile) == nil)
     }
