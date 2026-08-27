@@ -5995,8 +5995,7 @@ button.chat-pr__diff {
   gap: 2px;
 }
 
-.chat-controls__model-settings-icon,
-.chat-controls__mobile-effort-option {
+.chat-controls__model-settings-icon {
   display: none;
 }
 
@@ -7346,8 +7345,7 @@ button.chat-pr__diff {
     display: none;
   }
 
-  .agent-chat__input .chat-controls__model-settings-icon,
-  .agent-chat__input .chat-controls__mobile-effort-option {
+  .agent-chat__input .chat-controls__model-settings-icon {
     display: inline-flex;
   }
 

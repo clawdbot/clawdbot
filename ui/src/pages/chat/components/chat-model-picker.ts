@@ -32,7 +32,6 @@ type ChatModelPickerParams = {
   defaultModelLabel: string;
   disabled: boolean;
   disabledReason?: string;
-  mobileSecondary?: { disabled: boolean; label: string; value: string };
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelPickerOption[];
@@ -350,28 +349,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       highlightModelRow(menu, row);
     }
   };
-  const openEffortPicker = (event: MouseEvent) => {
-    event.stopPropagation();
-    if (params.mobileSecondary?.disabled !== false) {
-      return;
-    }
-    // SAFETY: Lit binds this handler directly to the effort button rendered below.
-    const modelPicker = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>(
-      ".chat-controls__model-picker",
-    );
-    const effortPicker = modelPicker?.parentElement?.querySelector<HTMLDetailsElement>(
-      ".chat-controls__effort-picker",
-    );
-    if (!modelPicker || !effortPicker) {
-      return;
-    }
-    effortPicker.setAttribute("data-chat-focus-panel", "");
-    modelPicker.open = false;
-    effortPicker.open = true;
-  };
-  const settingsLabel = params.mobileSecondary
-    ? `${t("chat.selectors.model")}: ${triggerTitle}; ${params.mobileSecondary.label}: ${params.mobileSecondary.value}`
-    : `${t("chat.selectors.model")}: ${triggerTitle}`;
+  const settingsLabel = `${t("chat.selectors.model")}: ${triggerTitle}`;
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
@@ -457,19 +435,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           class="chat-controls__inline-select-menu chat-controls__model-menu"
           aria-label=${t("chat.selectors.model")}
         >
-          ${params.mobileSecondary
-            ? html`
-                <button
-                  class="chat-controls__inline-select-option chat-controls__mobile-effort-option"
-                  type="button"
-                  ?disabled=${params.mobileSecondary.disabled}
-                  @click=${openEffortPicker}
-                >
-                  <span>${params.mobileSecondary.label}</span>
-                  <span>${params.mobileSecondary.value}</span>
-                </button>
-              `
-            : nothing}
           ${params.modelSelectionLocked
             ? html`
                 <div

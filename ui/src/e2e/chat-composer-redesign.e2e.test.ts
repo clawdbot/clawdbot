@@ -61,17 +61,9 @@ suite.define(() => {
           trigger: '[data-chat-thinking-select="true"]',
         },
       ]) {
-        if (picker.menu === ".chat-controls__effort-menu") {
-          await mobileModelSettings.click();
-          await composer.locator(".chat-controls__mobile-effort-option").click();
-        } else {
-          await composer.locator(picker.trigger).click();
-        }
+        await composer.locator(picker.trigger).click();
         await page.waitForTimeout(100);
-        const visibleTrigger =
-          picker.menu === ".chat-controls__effort-menu"
-            ? mobileModelSettings
-            : composer.locator(picker.trigger);
+        const visibleTrigger = composer.locator(picker.trigger);
         const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
           composer.boundingBox(),
           composer.locator(".agent-chat__composer-footer").boundingBox(),
@@ -94,10 +86,8 @@ suite.define(() => {
         expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(853);
         await page.keyboard.press("Escape");
       }
-      await mobileModelSettings.press("Enter");
-      const mobileEffortOption = composer.locator(".chat-controls__mobile-effort-option");
-      await expect.poll(() => mobileEffortOption.isVisible()).toBe(true);
-      await mobileEffortOption.press("Enter");
+      const mobileEffortTrigger = composer.locator('[data-chat-thinking-select="true"]');
+      await mobileEffortTrigger.press("Enter");
       const focusedEffortControl = composer.locator(
         "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-toggle]:not([disabled])",
       );
@@ -108,7 +98,7 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => mobileModelSettings.evaluate((node) => node === document.activeElement))
+        .poll(() => mobileEffortTrigger.evaluate((node) => node === document.activeElement))
         .toBe(true);
     });
   });
@@ -764,7 +754,8 @@ suite.define(() => {
       }
       expect(mobilePickerBox.x).toBeGreaterThanOrEqual(0);
       expect(mobilePickerBox.x + mobilePickerBox.width).toBeLessThanOrEqual(393);
-      await composer.locator(".chat-controls__mobile-effort-option").click();
+      await page.keyboard.press("Escape");
+      await composer.locator('[data-chat-thinking-select="true"]').click();
       await expect
         .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
         .toBe(true);

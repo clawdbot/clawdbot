@@ -474,7 +474,6 @@ function composerControlsHtml() {
             <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__model-menu">
-            <button class="chat-controls__inline-select-option chat-controls__mobile-effort-option">Effort <span>Medium</span></button>
             <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
             <div class="chat-controls__model-options">
               <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>

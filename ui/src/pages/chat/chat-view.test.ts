@@ -7423,7 +7423,7 @@ describe("chat model controls", () => {
     ).not.toBeNull();
   });
 
-  it("labels the mobile secondary setting as Fast mode when reasoning is unavailable", () => {
+  it("keeps Fast mode on its dedicated control when reasoning is unavailable", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -7453,12 +7453,10 @@ describe("chat model controls", () => {
     };
 
     const container = renderModelControls(state);
-    const mobileSecondary = container.querySelector(".chat-controls__mobile-effort-option");
     const modelTrigger = container.querySelector('[data-chat-model-select="true"]');
 
-    expect(mobileSecondary?.textContent).toContain("Fast mode");
-    expect(mobileSecondary?.textContent).toContain("Standard");
-    expect(modelTrigger?.getAttribute("aria-label")).toContain("Fast mode: Standard");
+    expect(container.querySelector(".chat-controls__mobile-effort-option")).toBeNull();
+    expect(modelTrigger?.getAttribute("aria-label")).not.toContain("Fast mode");
     expect(modelTrigger?.getAttribute("aria-label")).not.toContain("Thinking level");
     expect(getThinkingSlider(container)).toBeNull();
     expect(container.querySelector("[data-chat-speed-toggle]")).not.toBeNull();

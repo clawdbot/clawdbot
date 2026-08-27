@@ -330,7 +330,8 @@ suite.define(() => {
       await mobileModelSettings.click();
       await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
       await captureProjectUiProof(page, "mobile-new-session-model-open.png");
-      await page.locator(".chat-controls__mobile-effort-option").click();
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
       await captureProjectUiProof(page, "mobile-new-session-effort-open.png");
       await page.keyboard.press("Escape");
