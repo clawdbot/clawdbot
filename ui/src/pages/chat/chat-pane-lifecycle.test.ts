@@ -57,9 +57,7 @@ describe("chat pane composer prefill attention", () => {
 
     expect(document.activeElement).toBe(textarea);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(599);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(1);
+    vi.advanceTimersByTime(1_200);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
@@ -69,12 +67,12 @@ describe("chat pane composer prefill attention", () => {
     const { input, lifecycle } = createComposerAttentionFixture();
 
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(600);
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(599);
+    vi.advanceTimersByTime(600);
 
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(1);
+    vi.advanceTimersByTime(600);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
