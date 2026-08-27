@@ -77,12 +77,18 @@ function sleep(ms) {
 export function registerCleanupSignals(cleanup, options = {}) {
   const onSignal = options.onSignal ?? ((signal, handler) => process.on(signal, handler));
   const exit = options.exit ?? ((code) => process.exit(code));
-  const state = { interrupted: null };
+  // Callers await this promise before reporting a signal exit; otherwise
+  // main's process.exit can beat remote teardown and leave the command running.
+  const state = { interrupted: null, cleanupPromise: Promise.resolve() };
   for (const signal of SIGNAL_NUMBERS.keys()) {
     onSignal(signal, () => {
+      if (state.interrupted) {
+        return;
+      }
       state.interrupted = signal;
-      void cleanup()
+      state.cleanupPromise = cleanup()
         .catch(() => {})
+        .then(() => {})
         .finally(() => exit(signalExitCode(signal)));
     });
   }
@@ -108,12 +114,17 @@ export async function runPtyExec(sandbox, payload, options = {}) {
     });
     await ptyHandle.waitForConnection();
     if (signalState.interrupted) {
+      await signalState.cleanupPromise;
       return signalExitCode(signalState.interrupted);
     }
     // `exec` replaces the interactive shell so the PTY session ends with the
     // command and reports its exit code. The command stays single quoted, which
     // keeps embedded newlines inside one shell word for the line-based PTY.
     await ptyHandle.sendInput(`exec /bin/sh -c ${shellEscape(payload.command)}\n`);
+    if (signalState.interrupted) {
+      await signalState.cleanupPromise;
+      return signalExitCode(signalState.interrupted);
+    }
 
     process.stdin.on("data", (chunk) => {
       void ptyHandle.sendInput(new Uint8Array(chunk)).catch(() => {});
@@ -126,6 +137,10 @@ export async function runPtyExec(sandbox, payload, options = {}) {
     });
 
     const result = await ptyHandle.wait();
+    if (signalState.interrupted) {
+      await signalState.cleanupPromise;
+      return signalExitCode(signalState.interrupted);
+    }
     if (result.error && result.exitCode === undefined) {
       process.stderr.write(`[daytona-sandbox] pty failed: ${result.error}\n`);
       return 1;

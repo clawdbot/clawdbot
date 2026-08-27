@@ -188,4 +188,57 @@ describe("daytona exec launcher", () => {
     expect(sandbox.process.killPtySession).toHaveBeenCalledWith(ptyId);
     expect(ptyHandle.disconnect).toHaveBeenCalledTimes(1);
   });
+
+  it("waits for PTY termination before returning after a signal", async () => {
+    const launcher = await loadLauncher();
+    const handlers = new Map<string, () => void>();
+    let resolveWait: ((result: { exitCode: number }) => void) | undefined;
+    let resolveKill: (() => void) | undefined;
+    const ptyHandle = {
+      waitForConnection: vi.fn(async () => {}),
+      sendInput: vi.fn(async () => {}),
+      wait: vi.fn(
+        () =>
+          new Promise<{ exitCode: number }>((resolve) => {
+            resolveWait = resolve;
+          }),
+      ),
+      disconnect: vi.fn(async () => {}),
+    };
+    const sandbox = {
+      process: {
+        createPty: vi.fn(async (_options: { id: string }) => ptyHandle),
+        killPtySession: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveKill = resolve;
+            }),
+        ),
+      },
+    };
+
+    const pending = launcher.runPtyExec(
+      sandbox,
+      { command: "sleep 30", cwd: "/workspace", env: {} },
+      {
+        onSignal: (signal, handler) => handlers.set(signal, handler),
+        exit: () => {},
+      },
+    );
+    await vi.waitFor(() => expect(ptyHandle.wait).toHaveBeenCalledTimes(1));
+
+    handlers.get("SIGTERM")?.();
+    resolveWait?.({ exitCode: 0 });
+    const settled = vi.fn();
+    void pending.then(settled, settled);
+    await vi.waitFor(() => expect(sandbox.process.killPtySession).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(settled).not.toHaveBeenCalled();
+
+    resolveKill?.();
+    await expect(pending).resolves.toBe(143);
+    expect(ptyHandle.disconnect).toHaveBeenCalledTimes(1);
+  });
 });
