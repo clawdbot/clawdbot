@@ -1938,7 +1938,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
             mcp_servers: {
               "arbitrary.server": { enabled: false },
               "local helper": { enabled: false },
-              "request-only": { enabled: false },
+              "request-only": { command: "request-mcp", enabled: false },
             },
             web_search: "disabled",
           }),
@@ -2062,7 +2062,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "skills.include_instructions": false,
       "tools.experimental_request_user_input.enabled": false,
       "tools.update_plan.enabled": false,
-      mcp_servers: { inherited: { enabled: false } },
+      mcp_servers: { inherited: { command: "unsafe", enabled: false } },
       web_search: "disabled",
     });
   });

@@ -538,7 +538,12 @@ describe("Codex delegation capability", () => {
       "tools.experimental_request_user_input.enabled": true,
       "tools.update_plan.enabled": true,
       mcp_servers: {
-        "local-example": { command: "example-mcp" },
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+        },
       },
       web_search: "live",
     };
@@ -580,7 +585,15 @@ describe("Codex delegation capability", () => {
         expect(request.config?.[disabledFeature]).toBe(false);
       }
       expect(request.config?.web_search).toBe("disabled");
-      expect(request.config?.mcp_servers).toEqual({ "local-example": { enabled: false } });
+      expect(request.config?.mcp_servers).toEqual({
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+          enabled: false,
+        },
+      });
       expect(request.developerInstructions).toContain("`message(action=send)`");
       expect(request.developerInstructions).not.toContain("`spawn_agent`");
       expect(request.developerInstructions).not.toContain("`tool_search`");
@@ -608,7 +621,14 @@ describe("Codex delegation capability", () => {
       expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
       expect(normal.config?.["features.plugins"]).toBe(true);
       expect(normal.config?.["tools.update_plan.enabled"]).toBe(false);
-      expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
+      expect(normal.config?.mcp_servers).toEqual({
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+        },
+      });
       expect(normal.developerInstructions).toContain("`spawn_agent`");
     }
   });
@@ -3667,7 +3687,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         project_doc_max_bytes: 0,
         mcp_servers: {
           inherited: { enabled: false },
-          "request-only": { enabled: false },
+          "request-only": { command: "request-mcp", enabled: false },
         },
       });
     }
