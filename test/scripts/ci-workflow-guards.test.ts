@@ -2354,9 +2354,14 @@ NODE
       );
       expect(resolveBase.outputs.sha).toBe("${{ steps.base.outputs.sha }}");
       expect(resolveStep.env.GH_TOKEN).toBe("${{ github.token }}");
-      expect(resolveStep.run).toContain(
-        'gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha',
-      );
+      if (ownerWorkflow === controlUiWorkflow) {
+        expect(resolveStep.run.match(/gh api/gu)).toHaveLength(1);
+        expect(resolveStep.run).toContain("gh api graphql");
+      } else {
+        expect(resolveStep.run).toContain(
+          'gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha',
+        );
+      }
       expect(resolveStep.run).toContain('[[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]');
 
       const checkoutSteps = (
@@ -2381,11 +2386,13 @@ NODE
     expect(controlUiResolveStep.run).toContain(
       'if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then',
     );
-    expect(controlUiResolveStep.run).toContain('sha="${WORKFLOW_SHA}"');
+    expect(controlUiResolveStep.run).toContain('source_ref="${WORKFLOW_SHA}"');
     expect(controlUiResolveStep.run).toContain(
-      "contents/scripts/lib/control-ui-i18n-config.json?ref=${sha}",
+      '-F configRef="${source_ref}:scripts/lib/control-ui-i18n-config.json"',
     );
-    expect(controlUiResolveStep.run).toContain("jq -ce '[.[].locale]");
+    expect(controlUiResolveStep.run).toContain(
+      "jq -ce '.data.repository.config.text | fromjson | [.[].locale]",
+    );
 
     for (const preflight of [controlUiPreflight, nativePreflight]) {
       expect(preflight.needs).toBe("resolve-base");
