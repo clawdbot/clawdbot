@@ -591,7 +591,7 @@ describe("short-term promotion", () => {
     expect(store.entries).toEqual({});
   });
 
-  it("classifies non-durable promotion snippets without blocking durable guidance", () => {
+  baseIt("classifies non-durable promotion snippets without blocking durable guidance", () => {
     const rejected = [
       "Output Directory Path: /home/user/data/temp/feishu_project_issues/7058806450",
       "summary.md: **Not generated.** The pipeline aborted before reaching the summary step because no log files were downloaded.",
