@@ -1077,7 +1077,7 @@ describe("iMessage approval reactions", () => {
     ).resolves.toBeNull();
   });
 
-  it("keeps the durable claim alive on transient Gateway errors", async () => {
+  it("propagates transient Gateway errors for durable ingress retry", async () => {
     registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
@@ -1089,23 +1089,23 @@ describe("iMessage approval reactions", () => {
     resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(gatewayError);
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
 
-    const handled = await maybeResolveIMessageApprovalReaction({
-      cfg: {
-        channels: { imessage: { allowFrom: ["+15551230000"] } },
-      },
-      accountId: "default",
-      message: buildTapbackReactionPayload({
-        sender: "+15551230000",
-        reaction_emoji: "👍",
-        reacted_to_guid: "pending-approval",
+    // Transient errors must throw so the durable ingress drain releases the
+    // claim and replays the reaction; committing or dropping it here would
+    // lose the operator's click.
+    await expect(
+      maybeResolveIMessageApprovalReaction({
+        cfg: {
+          channels: { imessage: { allowFrom: ["+15551230000"] } },
+        },
+        accountId: "default",
+        message: buildTapbackReactionPayload({
+          sender: "+15551230000",
+          reaction_emoji: "👍",
+          reacted_to_guid: "pending-approval",
+        }),
+        bodyText: "",
       }),
-      bodyText: "",
-    });
-
-    // Transient errors should return handled:false so the durable ingress
-    // while(true) loop retries via iMessageApprovalControlBindings.wait(),
-    // rather than committing the claim and losing the operator's click.
-    expect(handled).toBe(false);
+    ).rejects.toBe(gatewayError);
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: "exec-pending" }),
     );

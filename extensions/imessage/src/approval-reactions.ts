@@ -57,7 +57,7 @@ type IMessageApprovalReactionHandleResult =
   | {
       handled: true;
       stopPolling: true;
-      stopPollingReason: "resolved" | "not-found" | "resolver-error";
+      stopPollingReason: "resolved" | "not-found";
     };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord & {
@@ -593,14 +593,11 @@ export async function handleIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction failed id=${target.approvalId} sender=${event.actorHandle}: ${String(error)}`,
     );
-    // A transient Gateway 5xx/network/auth error must not silently drop the
-    // operator's approval click. Unlike the NotFound case (which is terminal
-    // and stops polling), transient errors should keep the durable ingress
-    // claim alive so the while(true) loop in monitor-provider.ts:1398-1417
-    // retries via iMessageApprovalControlBindings.wait(). This is the same
-    // fix pattern as matrix (#129879) and signal (#130134): throw or return
-    // handled:false to avoid committing the durable claim prematurely.
-    return { handled: false };
+    // A transient Gateway 5xx/network/auth error is not terminal: propagate it
+    // so the durable ingress drain releases the claim and replays the reaction
+    // under its retry policy, as the signal (#130134) and matrix (#129879)
+    // owners do. Returning any result here would commit or drop the claim.
+    throw error;
   }
 }
 
