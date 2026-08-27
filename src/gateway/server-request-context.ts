@@ -218,7 +218,9 @@ export function createGatewayRequestContext(
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
     ...(params.loadPublishedGatewayReplyDispatchRuntime
-      ? { loadPublishedGatewayReplyDispatchRuntime: params.loadPublishedGatewayReplyDispatchRuntime }
+      ? {
+          loadPublishedGatewayReplyDispatchRuntime: params.loadPublishedGatewayReplyDispatchRuntime,
+        }
       : {}),
     ...(params.readPreparedGatewayModelCatalog
       ? { readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog }

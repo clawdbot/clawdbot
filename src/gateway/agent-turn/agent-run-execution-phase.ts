@@ -251,11 +251,10 @@ export function startAgentRunExecution(params: {
       // Resolve through the live Gateway context rather than this module's imports. Plugin
       // loaders can host a second OpenClaw module graph; the context callback remains bound to
       // the Gateway owner that published this generation.
-      const replyDispatchRuntime =
-        await params.context.loadPublishedGatewayReplyDispatchRuntime?.({
-          agentId: params.activeSessionAgentId,
-          abortSignal: prepared.activeRunAbort.controller.signal,
-        });
+      const replyDispatchRuntime = await params.context.loadPublishedGatewayReplyDispatchRuntime?.({
+        agentId: params.activeSessionAgentId,
+        abortSignal: prepared.activeRunAbort.controller.signal,
+      });
       if (!replyDispatchRuntime?.pluginGeneration) {
         throw new Error(
           `prepared reply dispatch runtime was not published for ${params.activeSessionAgentId}`,
