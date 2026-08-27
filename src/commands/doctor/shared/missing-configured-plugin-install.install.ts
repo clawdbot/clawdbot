@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
+import { isUnavailableClawHubTarget } from "../../../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import {
   CLAWHUB_INSTALL_ERROR_CODE,
@@ -14,6 +15,7 @@ import {
   type ClawHubRiskAcknowledgementRequest,
 } from "../../../plugins/clawhub.js";
 import {
+  installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
@@ -22,6 +24,7 @@ import {
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
+import { isUnavailableNpmTarget } from "../../../plugins/install-types.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -135,6 +138,9 @@ export async function installCandidate(params: {
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const changes: string[] = [];
   const warnings: string[] = [];
+  // A channel fallback changes which artifact the operator gets, so it must stay
+  // visible on the success path instead of being dropped with the attempt log.
+  const channelNotices: string[] = [];
   const clawhubSpecs = candidate.clawhubSpec
     ? resolveClawHubInstallSpecsForUpdateChannel({
         spec: candidate.clawhubSpec,
@@ -190,21 +196,34 @@ export async function installCandidate(params: {
     !(params.preferNpm && npmInstallSpec) &&
     candidate.defaultChoice !== "npm";
   if (shouldTryClawHub) {
-    const clawhubInstallSpecLabel = sanitizeTerminalText(clawhubInstallSpec);
-    const clawhubResult = await installPluginFromClawHub({
-      spec: clawhubInstallSpec,
-      config: params.config,
-      extensionsDir,
-      env: params.env,
-      expectedPluginId: candidate.pluginId,
-      mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
-      logger: {
-        terminalLinks: false,
-        warn: (message) => warnings.push(stripAnsi(message)),
+    let usedClawHubSpec = clawhubInstallSpec;
+    const clawhubResult = await installWithChannelFallback({
+      installSpec: clawhubInstallSpec,
+      // An integrity pin identifies one exact artifact, so it outranks the channel.
+      ...(candidate.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
+      install: async (spec) => {
+        usedClawHubSpec = spec;
+        return await installPluginFromClawHub({
+          spec,
+          config: params.config,
+          extensionsDir,
+          env: params.env,
+          expectedPluginId: candidate.pluginId,
+          mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
+          logger: {
+            terminalLinks: false,
+            warn: (message) => warnings.push(stripAnsi(message)),
+          },
+          ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+          ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+        });
       },
-      ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-      ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+      isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
+      onFallback: (message) => {
+        channelNotices.push(message);
+      },
     });
+    const clawhubInstallSpecLabel = sanitizeTerminalText(usedClawHubSpec);
     if (clawhubResult.ok) {
       const pluginId = clawhubResult.pluginId;
       return {
@@ -224,7 +243,7 @@ export async function installCandidate(params: {
             repairReason: params.repairReason,
           }),
         ],
-        notices: warnings,
+        notices: [...channelNotices, ...warnings],
         warnings: [],
       };
     }
@@ -265,21 +284,9 @@ export async function installCandidate(params: {
     };
   }
   const npmInstallMode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
-  let result = await installPluginFromNpmSpec({
-    spec: npmInstallSpec,
-    config: params.config,
-    extensionsDir,
-    npmDir,
-    expectedPluginId: candidate.pluginId,
-    expectedIntegrity: candidate.expectedIntegrity,
-    ...(candidate.trustedSourceLinkedOfficialInstall
-      ? { trustedSourceLinkedOfficialInstall: true }
-      : {}),
-    mode: npmInstallMode,
-  });
-  if (!result.ok && npmInstallMode === "install" && isPluginAlreadyExistsError(result.error)) {
-    result = await installPluginFromNpmSpec({
-      spec: npmInstallSpec,
+  const runNpmInstall = async (spec: string, mode: "install" | "update") =>
+    await installPluginFromNpmSpec({
+      spec,
       config: params.config,
       extensionsDir,
       npmDir,
@@ -288,9 +295,24 @@ export async function installCandidate(params: {
       ...(candidate.trustedSourceLinkedOfficialInstall
         ? { trustedSourceLinkedOfficialInstall: true }
         : {}),
-      mode: "update",
+      mode,
     });
-  }
+  const installOnce = async (spec: string) => {
+    const attempt = await runNpmInstall(spec, npmInstallMode);
+    return !attempt.ok && npmInstallMode === "install" && isPluginAlreadyExistsError(attempt.error)
+      ? await runNpmInstall(spec, "update")
+      : attempt;
+  };
+  const result = await installWithChannelFallback({
+    installSpec: npmInstallSpec,
+    // An integrity pin identifies one exact artifact, so it outranks the channel.
+    ...(candidate.expectedIntegrity ? {} : { fallbackSpec: npmSpecs?.fallbackSpec }),
+    install: installOnce,
+    isRetryable: (attempt) => !attempt.ok && isUnavailableNpmTarget(attempt),
+    onFallback: (message) => {
+      channelNotices.push(message);
+    },
+  });
   if (!result.ok) {
     return {
       records: params.records,
@@ -298,6 +320,7 @@ export async function installCandidate(params: {
       notices: [],
       warnings: [
         ...warnings,
+        ...channelNotices,
         `Failed to install missing configured plugin "${candidate.pluginId}" from ${npmInstallSpec}: ${result.error}`,
       ],
       failedPluginId: candidate.pluginId,
@@ -328,7 +351,7 @@ export async function installCandidate(params: {
         repairReason: params.repairReason,
       }),
     ],
-    notices: [],
+    notices: channelNotices,
     warnings: [],
   };
 }

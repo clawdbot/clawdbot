@@ -217,6 +217,7 @@ export async function resumeExistingCodexThread(
         },
         request: resumeParams,
         signal: params.signal,
+        assertCurrent: context.assertResumeOwnership,
       }),
     );
     context.assertResumeConfiguration?.();

@@ -512,7 +512,7 @@ export async function unsubscribeCodexAppServerLiveThread(
       return;
     }
     assertCurrent?.();
-    await client.request("thread/unsubscribe", { threadId }, { timeoutMs });
+    await client.request("thread/unsubscribe", { threadId }, { timeoutMs, assertCurrent });
   });
   const ownsTransition = runtime !== undefined && transition === undefined;
   if (transition) {

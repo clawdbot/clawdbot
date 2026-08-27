@@ -563,6 +563,7 @@ function buildChannelInboundEventContextValue(
     SenderUsername: params.sender.username,
     SenderTag: params.sender.tag,
     SenderIsBot: params.sender.isBot,
+    SenderIsSelf: params.sender.isSelf === true ? true : undefined,
     MemberRoleIds: params.sender.roles,
     Timestamp: params.timestamp,
     Provider: params.provider ?? params.channel,

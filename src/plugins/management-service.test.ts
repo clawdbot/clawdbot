@@ -611,13 +611,13 @@ describe("plugin management service", () => {
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
 
-  it("does not pin a runtime id when the hosted entry only exposes its package name", async () => {
+  it("resolves hosted-only beta installs without pinning the package name as a runtime id", async () => {
     const installRecord = {
       source: "clawhub",
       spec: "clawhub:@openclaw/bluebubbles",
       installPath: "/tmp/extensions/bluebubbles",
     };
-    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.readConfig.mockResolvedValue(configSnapshot({ update: { channel: "beta" } }));
     // Package identity without a declared runtime id must not become an expectedPluginId pin.
     mockHostedOfficialCatalog([
       {
@@ -650,6 +650,14 @@ describe("plugin management service", () => {
 
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(
       expect.not.objectContaining({ expectedPluginId: expect.anything() }),
+    );
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.objectContaining({ spec: "clawhub:@openclaw/bluebubbles@beta" }),
+    );
+    expect(mocks.persistInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        install: expect.objectContaining({ spec: "clawhub:@openclaw/bluebubbles" }),
+      }),
     );
     expect(result.plugin.id).toBe("bluebubbles");
   });
