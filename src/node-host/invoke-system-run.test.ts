@@ -783,6 +783,58 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   );
 
+  it("does not append the escalation hint to freeform mac exec-host denials", async () => {
+    // Host-authored freeform messages (cancelled prompt, temporarily unavailable
+    // approval store) may describe retryable outcomes; the normalized reason
+    // does not establish that an exec-policy change would fix them.
+    const result = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "APPROVAL_CANCELLED",
+          message: "approval prompt cancelled",
+          reason: "approval-required",
+        },
+      }),
+    });
+
+    expect(result.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(result.sendInvokeResult, "approval prompt cancelled", true);
+  });
+
+  it("does not append the escalation hint to screen-recording permission denials", async () => {
+    // The fix for a missing Screen Recording permission is granting the macOS
+    // permission, not adjusting exec policy — the hint would misdirect.
+    const result = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "PERMISSION_MISSING",
+          message: "PERMISSION_MISSING: screenRecording",
+          reason: "permission:screenRecording",
+        },
+      }),
+    });
+
+    expect(result.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(result.sendInvokeResult, "PERMISSION_MISSING: screenRecording", true);
+  });
+
+  it("does not publish a cancelled Mac exec-host completion", async () => {
+    const controller = new AbortController();
+    const result = await runMacSystemInvoke({
+      signal: controller.signal,
+      runViaMacAppExecHost: async () => {
+        controller.abort();
+        return { ok: true, payload: createLocalRunResult("cancelled") };
+      },
+    });
+
+    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+    expect(result.sendInvokeResult).not.toHaveBeenCalled();
+    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+  });
+
   it("routes local, mac host, and canonical shell-wrapper requests", async () => {
     const localInvoke = await runLocalSystemInvoke({});
 

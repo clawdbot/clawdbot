@@ -287,6 +287,9 @@ async function sendSystemRunDenied(
   params: {
     reason: SystemRunDeniedReason;
     message: string;
+    /** Suppress for host-authored freeform messages (mac app exec host), where
+     * the generic policy hint may mislabel a transient outcome. */
+    suppressEscalationHint?: boolean;
   },
 ) {
   await opts.sendNodeEvent(
@@ -306,7 +309,9 @@ async function sendSystemRunDenied(
     // A missing companion reply can follow execution; it is not a policy denial.
     error: {
       code: params.reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
-      message: deniedMessageWithEscalationHint(params),
+      message: params.suppressEscalationHint
+        ? params.message
+        : deniedMessageWithEscalationHint(params),
     },
   });
 }
@@ -318,12 +323,24 @@ async function sendSystemRunDenied(
 const SYSTEM_RUN_DENIED_ESCALATION_HINT =
   "to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again";
 
+/** Denial reasons that an exec-policy change actually corrects. */
+const POLICY_OWNED_DENIED_REASONS = new Set<SystemRunDeniedReason>([
+  "security=deny",
+  "approval-required",
+  "allowlist-miss",
+  "execution-plan-miss",
+]);
+
 function deniedMessageWithEscalationHint(params: {
   reason: SystemRunDeniedReason;
   message: string;
 }): string {
-  // Transient persistence failure: an identical retry may legitimately succeed.
-  if (params.reason === "approval-state-write-failed") {
+  // Only policy-owned denials carry the hint: transient outcomes
+  // (approval-state-write-failed), infrastructure availability
+  // (companion-unavailable), OS permission grants (permission:screenRecording)
+  // are all fixed by something other than an exec-policy change, and the
+  // hint's "identical retry will be denied" claim would be wrong for them.
+  if (!POLICY_OWNED_DENIED_REASONS.has(params.reason)) {
     return params.message;
   }
   // Already carries its own next-step guidance; a generic hint would contradict it.
@@ -1014,6 +1031,10 @@ async function executeSystemRunPhase(
       await sendSystemRunDenied(opts, phase.execution, {
         reason: normalizeDeniedReason(response.error.reason),
         message: response.error.message,
+        // Freeform host-authored message (cancelled prompt, temporarily
+        // unavailable approval store, permission prompts) — the normalized
+        // reason does not establish that an exec-policy change would fix it.
+        suppressEscalationHint: true,
       });
       return;
     } else {
