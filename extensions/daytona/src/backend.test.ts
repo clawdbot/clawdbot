@@ -535,12 +535,10 @@ describe("daytona backend shell transport", () => {
     const handle = await createFactory(setup.pluginConfig)(setup.createParams);
     created.process.executeSessionCommand.mockClear();
     let releaseUpload: (() => void) | undefined;
-    created.fs.uploadFile.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseUpload = resolve;
-        }),
-    );
+    const pendingUpload = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    created.fs.uploadFile.mockReturnValueOnce(pendingUpload);
 
     const controller = new AbortController();
     const pending = handle.runShellCommand({
@@ -563,12 +561,10 @@ describe("daytona backend shell transport", () => {
     const handle = await createFactory(setup.pluginConfig)(setup.createParams);
     created.process.executeSessionCommand.mockClear();
     let releaseSession: (() => void) | undefined;
-    created.process.createSession.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseSession = resolve;
-        }),
-    );
+    const pendingSession = new Promise<void>((resolve) => {
+      releaseSession = resolve;
+    });
+    created.process.createSession.mockReturnValueOnce(pendingSession);
 
     const controller = new AbortController();
     const pending = handle.runShellCommand({
