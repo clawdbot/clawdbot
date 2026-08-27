@@ -88,25 +88,8 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   if (theme === "claw") {
     return resolvedMode === "light" ? "light" : "dark";
   }
-  if (theme === "knot") {
-    return resolvedMode === "light" ? "openknot-light" : "openknot";
-  }
-  if (theme === "dash") {
-    return resolvedMode === "light" ? "dash-light" : "dash";
-  }
-  if (theme === "absolutely") {
-    return resolvedMode === "light" ? "absolutely-light" : "absolutely";
-  }
-  if (theme === "tide") {
-    return resolvedMode === "light" ? "tide-light" : "tide";
-  }
-  if (theme === "beacon") {
-    return resolvedMode === "light" ? "beacon-light" : "beacon";
-  }
-  if (theme === "phosphor") {
-    return resolvedMode === "light" ? "phosphor-light" : "phosphor";
-  }
-  return resolvedMode === "light" ? "custom-light" : "custom";
+  const family = theme === "knot" ? "openknot" : theme;
+  return resolvedMode === "light" ? `${family}-light` : family;
 }
 
 /** Loads (or drops) the webfont stylesheet a theme declares. Idempotent. */
@@ -160,8 +143,8 @@ export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void):
     }
     ready();
   };
-  link.addEventListener("load", finish, { once: true });
-  link.addEventListener("error", finish, { once: true });
+  link.addEventListener("load", finish);
+  link.addEventListener("error", finish);
   if (!existing) {
     link.id = id;
     link.rel = "stylesheet";
