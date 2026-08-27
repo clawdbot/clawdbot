@@ -55,9 +55,12 @@ export type GatewayProbeAuthSummary = {
   capability: GatewayProbeCapability;
 };
 
+export type GatewayControlUiBuildSource = "bundled" | "configured";
+
 export type GatewayProbeServerSummary = {
   version: string | null;
   buildId?: string;
+  controlUiBuildSource?: GatewayControlUiBuildSource;
   connId: string | null;
 };
 
@@ -465,6 +468,9 @@ export async function probeGateway(opts: {
             version: typeof hello?.server?.version === "string" ? hello.server.version : null,
             ...(typeof hello?.server?.buildId === "string"
               ? { buildId: hello.server.buildId }
+              : {}),
+            ...(hello?.server?.controlUiBuildSource
+              ? { controlUiBuildSource: hello.server.controlUiBuildSource }
               : {}),
             connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
           };
