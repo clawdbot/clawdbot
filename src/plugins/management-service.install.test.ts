@@ -140,7 +140,6 @@ describe("managed plugin installation", () => {
         request: {
           source: "clawhub",
           packageName: "@openclaw/diffs",
-          acknowledgeClawHubRisk: true,
         },
         env: {},
       }),
@@ -150,7 +149,6 @@ describe("managed plugin installation", () => {
         spec: "clawhub:@openclaw/diffs@2026.6.11",
         expectedPluginId: "diffs",
         expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
-        acknowledgeClawHubRisk: true,
       }),
     );
     expect(mocks.persistInstall).not.toHaveBeenCalled();
@@ -228,7 +226,7 @@ describe("managed plugin installation", () => {
 
     await expect(
       installManagedPlugin({
-        request: { source: "clawhub", packageName: "sonos", acknowledgeClawHubRisk: true },
+        request: { source: "clawhub", packageName: "sonos" },
         env: {},
       }),
     ).rejects.toThrow("expected sonos, got impostor");

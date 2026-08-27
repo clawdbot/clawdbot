@@ -3,7 +3,7 @@ import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
-import { installPluginFromClawHub, type ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
+import { installPluginFromClawHub } from "./clawhub.js";
 import {
   getExternalizedBundledPluginClawHubSpec,
   getExternalizedBundledPluginNpmSpec,
@@ -59,8 +59,6 @@ export async function syncPluginsForUpdateChannel(params: {
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
 }): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
@@ -80,10 +78,6 @@ export async function syncPluginsForUpdateChannel(params: {
   const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? [], env);
   let installs = next.plugins?.installs ?? {};
   let changed = false;
-  const clawHubRiskAcknowledgementOptions = {
-    ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
-  };
 
   if (params.channel === "dev") {
     for (const [pluginId, record] of Object.entries(installs)) {
@@ -212,7 +206,6 @@ export async function syncPluginsForUpdateChannel(params: {
           ...(bridge.clawhubUrl ? { baseUrl: bridge.clawhubUrl } : {}),
           mode: "update",
           expectedPluginId: targetPluginId,
-          ...clawHubRiskAcknowledgementOptions,
           logger,
         });
         if (!result.ok && npmSpec && shouldFallbackClawHubBridgeToNpm({ result, npmSpec })) {

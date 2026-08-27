@@ -58,7 +58,6 @@ export type InstalledFilter = "all" | "enabled" | "disabled" | "issues";
 export type PluginRowMessage = {
   kind: "success" | "error" | "warning";
   text: string;
-  acknowledge?: { packageName: string; version?: string };
   installPolicyWarning?: {
     details: PluginInstallPolicyWarningDetails;
     request: PluginInstallRequest;
@@ -509,31 +508,6 @@ function renderRowMessage(
   return html`
     <div class="plugins-row-message plugins-row-message--${resolvedMessage.kind}" role=${role}>
       <span>${resolvedMessage.text}</span>
-      ${resolvedMessage.acknowledge
-        ? html`
-            <button
-              type="button"
-              class="btn btn--sm"
-              title=${props.mutationBlockedReason ?? ""}
-              ?disabled=${busy || !props.canMutate}
-              @click=${() =>
-                requestInstall(
-                  props,
-                  {
-                    source: "clawhub",
-                    packageName: resolvedMessage.acknowledge?.packageName ?? "",
-                    ...(resolvedMessage.acknowledge?.version
-                      ? { version: resolvedMessage.acknowledge.version }
-                      : {}),
-                    acknowledgeClawHubRisk: true,
-                  },
-                  installIdentity,
-                )}
-            >
-              ${busy ? t("pluginsPage.installing") : t("pluginsPage.acknowledgeRisk")}
-            </button>
-          `
-        : nothing}
     </div>
   `;
 }
@@ -604,7 +578,7 @@ function renderInstallButton(
   installIdentity: string,
 ) {
   const installMessage = props.messages[installIdentity];
-  if (installMessage?.installPolicyWarning || installMessage?.acknowledge) {
+  if (installMessage?.installPolicyWarning) {
     return nothing;
   }
   return html`
