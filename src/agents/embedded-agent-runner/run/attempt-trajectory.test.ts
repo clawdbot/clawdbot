@@ -18,7 +18,7 @@ vi.mock("./attempt-transcript-helpers.js", () => ({
 
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 
-function createInput(disableTrajectory = false, extraAttempt?: Record<string, unknown>) {
+function createInput(disableTrajectory = false, extraAttempt: Record<string, unknown> = {}) {
   return {
     activeSession: { sessionId: "session-1" },
     attempt: {
@@ -40,7 +40,7 @@ function createInput(disableTrajectory = false, extraAttempt?: Record<string, un
       thinkLevel: "medium",
       trigger: "user",
       workspaceDir: "/tmp/workspace",
-      ...(extraAttempt ?? {}),
+      ...extraAttempt,
     },
     clientToolCount: 2,
     effectiveToolCount: 7,
