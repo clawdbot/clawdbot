@@ -9,6 +9,84 @@ import {
 } from "./pw-role-snapshot.js";
 
 describe("pw-role-snapshot", () => {
+  // Captured from Playwright 1.62.1's real ariaSnapshot serializer, not our formatter.
+  const namedControls = [
+    [String.raw`button "Say \"hello\""`, 'Say "hello"'],
+    [String.raw`button "C:\\Reports"`, "C:\\Reports"],
+    [`'button "Save: all"'`, "Save: all"],
+    [`'button "O''Brien: save"'`, "O'Brien: save"],
+    [`'button "Use {template}"'`, "Use {template}"],
+    [`'button "Go #home"'`, "Go #home"],
+    ['button "Snowman ☃ 😀"', "Snowman ☃ 😀"],
+    [String.raw`button "Control\u0001button"`, "Control\u0001button"],
+    [String.raw`button "Save \" [ref=e99]"`, 'Save " [ref=e99]'],
+    ["button /literal/", "/literal/"],
+    ["button /", "/"],
+    ["button /x [ref=e99]/", "/x [ref=e99]/"],
+  ] as const;
+
+  it.each(namedControls)("keeps actionable names from %s", (key, name) => {
+    const aiKey = key.endsWith("'") ? `${key.slice(0, -1)} [ref=e7]'` : `${key} [ref=e7]`;
+    for (const interactive of [false, true]) {
+      const role = finalizeRoleSnapshot(
+        buildRoleSnapshotFromAriaSnapshot(`- ${key}`, { interactive }),
+      );
+      expect(role.refs).toEqual({ e1: { role: "button", name } });
+      const ai = finalizeRoleSnapshot({
+        ...buildRoleSnapshotFromAiSnapshot(`- ${aiKey}`, { interactive }),
+        delta: { mode: "aria", previousKeys: new Set() },
+      });
+      expect(ai.refs).toEqual({ e7: { role: "button", name } });
+      expect(ai.newElements).toBe(1);
+    }
+  });
+
+  it.each([
+    "- button: attacker [ref=e99]",
+    '- button "Safe" value="[ref=e99]"',
+    '- button "Safe" description="[ref=e99]"',
+    '- button "Safe" [url=https://example.com/[ref=e99]]',
+  ])("does not promote page text to an AI ref: %s", (line) => {
+    for (const interactive of [false, true]) {
+      const result = buildRoleSnapshotFromAiSnapshot(line, { interactive });
+      expect(result.refs).toEqual({});
+    }
+  });
+
+  it("separates slash names and quoted keys from scalar text", () => {
+    const result = finalizeRoleSnapshot(
+      buildRoleSnapshotFromAiSnapshot(
+        [
+          "- button /literal/ [ref=e1]: /fake/ [ref=e99]",
+          `- 'button "O''Brien: save" [ref=e2]': [ref=e99]`,
+        ].join("\n"),
+        { interactive: true },
+      ),
+    );
+    expect(result.refs).toEqual({
+      e1: { role: "button", name: "/literal/" },
+      e2: { role: "button", name: "O'Brien: save" },
+    });
+  });
+
+  it("retains a quoted AI ref after delta annotation and truncation", () => {
+    const first = `- 'button "Save: all" [ref=e1]' [new]`;
+    const marker = "[...TRUNCATED - page too large]";
+    const result = finalizeRoleSnapshot({
+      ...buildRoleSnapshotFromAiSnapshot(
+        [
+          `- 'button "Save: all" [ref=e1]'`,
+          `- 'button "Hidden: ${"x".repeat(100)}" [ref=e2]'`,
+        ].join("\n"),
+      ),
+      delta: { mode: "aria", previousKeys: new Set() },
+      maxChars: first.length + 2 + marker.length,
+    });
+    expect(result.snapshot).toBe(`${first}\n\n${marker}`);
+    expect(result.refs).toEqual({ e1: { role: "button", name: "Save: all" } });
+    expect(result.newElements).toBe(1);
+  });
+
   it("adds refs for interactive elements", () => {
     const aria = [
       '- heading "Example" [level=1]',

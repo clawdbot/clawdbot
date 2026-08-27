@@ -92,6 +92,15 @@ describe("chrome MCP snapshot conversion", () => {
     });
   });
 
+  it("preserves control-character names through the shared ref finalizer", () => {
+    const name = 'Save\t"quoted"\b\u0001\u2028\u2029: [ref=other]';
+    const built = buildAiSnapshotFromChromeMcpSnapshot({
+      root: { id: "actual", role: "button", name },
+    });
+    expect(built.snapshot).toBe(`- button ${JSON.stringify(name)} [ref=actual]`);
+    expect(finalizeRoleSnapshot(built).refs).toEqual({ actual: { role: "button", name } });
+  });
+
   it("escapes line breaks before page text can impersonate snapshot refs", () => {
     const built = buildAiSnapshotFromChromeMcpSnapshot({
       root: {
