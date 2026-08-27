@@ -7108,9 +7108,14 @@ button.chat-pr__diff {
   }
 
   .agent-chat__composer-shell {
-    width: calc(100% - var(--chat-mobile-edge-inset) - var(--chat-mobile-edge-inset));
-    margin: var(--chat-composer-top-margin) var(--chat-mobile-edge-inset)
+    width: calc(
+      100% - max(var(--chat-mobile-edge-inset), var(--safe-area-left)) -
+        max(var(--chat-mobile-edge-inset), var(--safe-area-right))
+    );
+    margin: var(--chat-composer-top-margin)
+      max(var(--chat-mobile-edge-inset), var(--safe-area-right))
       calc(14px + var(--safe-area-bottom));
+    margin-left: max(var(--chat-mobile-edge-inset), var(--safe-area-left));
     gap: 6px;
   }
 
