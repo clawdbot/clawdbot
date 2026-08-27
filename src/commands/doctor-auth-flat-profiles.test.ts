@@ -691,7 +691,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       "openai-codex:charlie",
       "openai-codex:delta",
       "openai-codex:echo",
-    ];
+    ] as const;
     const authPath = await writeLegacyAuthProfilesJson(state, {
       version: 1,
       profiles: {
@@ -733,6 +733,10 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: {}, env: state.env });
     const canonicalNamed = namedLegacy.map((id) => profileIdMap.get(id) ?? "");
     const canonicalDefault = profileIdMap.get("openai-codex:default") ?? "";
+    // Derive the single first canonical id from the tuple-typed literal so indexed
+    // access (computed property names, record indexing) stays string-typed under
+    // noUncheckedIndexedAccess instead of widening to `string | undefined`.
+    const firstCanonical = profileIdMap.get(namedLegacy[0]) ?? "";
     for (const canonical of [...canonicalNamed, canonicalDefault]) {
       expect(canonical).toMatch(/^openai:(?!codex)/);
     }
@@ -765,8 +769,8 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     );
     // Named-profile order preserved exactly once each, on the canonical ids.
     expect(loaded!.order?.openai ?? []).toEqual(canonicalNamed);
-    expect(loaded!.lastGood?.openai).toBe(canonicalNamed[0]);
-    expect(loaded!.usageStats?.[canonicalNamed[0]]).toMatchObject({ lastUsed: 123 });
+    expect(loaded!.lastGood?.openai).toBe(firstCanonical);
+    expect(loaded!.usageStats?.[firstCanonical]).toMatchObject({ lastUsed: 123 });
     // Default credential stays available but is not injected into the explicit named order.
     expect(loaded!.order?.openai ?? []).not.toContain(canonicalDefault);
     // Consumed legacy files are archived.
