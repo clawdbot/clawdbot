@@ -167,6 +167,40 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
+  /** Atomically append data (O_APPEND) creating the file if missing.
+   * Callers MUST supply a bounded-signal: the Python helper reads all of stdin
+   * before writing, so a dead producer without signal cleanup hangs the process.
+   */
+  async appendFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const target = this.resolveTarget(params);
+    await this.ensureRemoteWritable(target, "append files", params.signal);
+    const pinned = await this.resolvePinnedParent({
+      containerPath: target.containerPath,
+      mountRootPath: target.mountRootPath,
+      action: "append files",
+      requireWritable: true,
+      signal: params.signal,
+    });
+    await this.assertNoHardlinkedFile({
+      containerPath: target.containerPath, action: "append files", signal: params.signal,
+    });
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    await this.runMutation({
+      args: ["append", pinned.mountRootPath, pinned.relativeParentPath, pinned.basename, params.mkdir !== false ? "1" : "0"],
+      stdin: buffer,
+      signal: params.signal,
+    });
+  }
+
   async writeFile(params: {
     filePath: string;
     cwd?: string;

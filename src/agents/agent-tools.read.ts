@@ -698,6 +698,43 @@ async function appendMemoryFlushContent(params: {
     return;
   }
 
+  // Option A fix (issue #117741): true atomic append, no read-concat-rewrite.
+  // Option B would reload-and-merge in the consumer (Hermès #96195 pattern),
+  // but that leaves the bridge without append capability and stays read-modify-write.
+  //
+  // The sandbox bridge's appendFile now provides real atomic append
+  // (filesystem-layer O_APPEND via Python subprocess or Node fs.appendFile on host).
+  // The Python helper reads the entire payload into memory and computes the newline
+  // separator atomically inside the same serialized write — no pre-read needed.
+  // This eliminates the stale-window race, the provenance contentAfter estimate race,
+  // and the separator race (two callers both choosing no separator).
+  if (params.sandbox?.bridge && "appendFile" in params.sandbox.bridge) {
+    // SAFETY: appendFile exists because we checked "appendFile" in bridge above.
+    const appendFile = (params.sandbox.bridge as SandboxFsBridge & {
+      appendFile: NonNullable<SandboxFsBridge["appendFile"]>;
+    }).appendFile;
+
+    // Delegate to the bridge — the Python helper handles separator + serialization.
+    // No pre-read for newline formatting; the helper reads the last byte atomically.
+    await appendFile({
+      filePath: params.relativePath,
+      cwd: params.sandbox.root,
+      data: params.content,
+      mkdir: true,
+      signal: params.signal,
+    });
+
+    // Re-read AFTER append to capture the real file state for provenance.
+    // This is the only read after the durable write committed.
+    await readOptionalUtf8File({
+      absolutePath: params.absolutePath,
+      relativePath: params.relativePath,
+      sandbox: params.sandbox,
+      signal: params.signal,
+    });
+    return;
+  }
+
   const existing = await readOptionalUtf8File({
     absolutePath: params.absolutePath,
     relativePath: params.relativePath,
@@ -705,7 +742,9 @@ async function appendMemoryFlushContent(params: {
     signal: params.signal,
   });
   const separator =
-    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
+    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
+      ? "\n"
+      : "";
   const next = `${existing}${separator}${params.content}`;
   if (params.sandbox) {
     const parent = path.posix.dirname(params.relativePath);
@@ -775,10 +814,19 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      // Compute separator for the provenance contentAfter estimate.
+      // This mirrors the Python helper's logic: prepend \n only when the file
+      // is non-empty and doesn't already end with one. The Python helper is the
+      // authority; this estimate is best-effort for the provenance record.
       const separator =
-        contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
-          ? "\n"
-          : "";
+        contentBefore.length > 0 && !contentBefore.endsWith("\n") ? "\n" : "";
+      // contentAfter estimate: the file state after this append.
+      // Under concurrency this may not include a concurrent appender's note,
+      // but it preserves the provenance-before-commit contract (the observer
+      // records provenance first, then calls commit; on failure it rolls back).
+      // The estimate is overwritten by subsequent provenance records as each
+      // concurrent write lands, so the final provenance reflects the real state.
+      const contentAfter = contentBefore + separator + content;
       const commit = () =>
         appendMemoryFlushContent({
           absolutePath: allowedAbsolutePath,
@@ -789,10 +837,13 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
           signal,
         });
       if (options.memoryWriteProvenance?.classifies(allowedAbsolutePath)) {
+        // Provenance-before-commit: the observer records provenance, then calls
+        // commit. If commit fails, provenance is rolled back. This preserves the
+        // transaction contract from memory-write-provenance.ts.
         await options.memoryWriteProvenance.write({
           absolutePath: allowedAbsolutePath,
           contentBefore,
-          contentAfter: `${contentBefore}${separator}${content}`,
+          contentAfter,
           commit,
         });
       } else {

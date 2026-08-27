@@ -12,6 +12,7 @@ import type {
 } from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
+  buildPinnedAppendPlan,
   buildPinnedCreatePlan,
   SANDBOX_CREATE_EXISTS_EXIT_CODE,
   buildPinnedCopyPlan,
@@ -144,6 +145,39 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       ...buildPinnedWritePlan({
         check: writeCheck,
         pinned: pinnedWriteTarget,
+        mkdir: params.mkdir !== false,
+      }),
+      stdin: buffer,
+      signal: params.signal,
+    });
+  }
+
+  async appendFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const target = this.resolveResolvedPath(params);
+    this.ensureWriteAccess(target, "append files");
+    const appendCheck = {
+      target,
+      options: { action: "append files", requireWritable: true } as const,
+    };
+    await this.pathGuard.assertPathSafety(target, appendCheck.options);
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const pinnedAppendTarget = await this.pathGuard.resolveAnchoredPinnedEntry(
+      target,
+      "append files",
+    );
+    await this.runCheckedCommand({
+      ...buildPinnedAppendPlan({
+        check: appendCheck,
+        pinned: pinnedAppendTarget,
         mkdir: params.mkdir !== false,
       }),
       stdin: buffer,
