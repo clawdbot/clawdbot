@@ -20,7 +20,8 @@ vi.mock("../wizard/setup.post-install-migration.js", () => ({
   offerPostInstallMigrations,
 }));
 
-const { runProviderPluginAuthMethodUnpersisted } = await import("./provider-auth-choice.js");
+const { runProviderPluginAuthMethod, runProviderPluginAuthMethodUnpersisted } =
+  await import("./provider-auth-choice.js");
 
 describe("runProviderPluginAuthMethodUnpersisted", () => {
   it("delegates remote browser destinations to structured wizard clients", async () => {
@@ -46,5 +47,35 @@ describe("runProviderPluginAuthMethodUnpersisted", () => {
     });
 
     expect(openUrl).toHaveBeenCalledWith("https://provider.example/oauth?state=state-1");
+  });
+});
+
+describe("runProviderPluginAuthMethod agent ownership", () => {
+  it("accepts a fully-scoped call on an explicit multi-agent roster", async () => {
+    // The configure wizard supplies agentDir/workspaceDir but no agentId, so the
+    // owner is never needed. Resolving it eagerly used to throw
+    // AgentSelectionRequiredError here and abort provider setup.
+    const method: ProviderPlugin["auth"][number] = {
+      id: "api-key",
+      label: "API key",
+      kind: "api_key",
+      run: async () => ({ profiles: [] }),
+    };
+
+    const applied = await runProviderPluginAuthMethod({
+      config: {
+        agents: {
+          ownership: "explicit",
+          entries: { main: { agentDir: "/tmp/main" }, ops: { agentDir: "/tmp/ops" } },
+        },
+      },
+      runtime: createNonExitingRuntime(),
+      prompter: createWizardPrompter(),
+      method,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(applied.config).toBeDefined();
   });
 });

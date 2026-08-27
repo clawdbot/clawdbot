@@ -41,7 +41,11 @@ describe("registerConfigureCommand", () => {
   it("forwards repeated --section values", async () => {
     await runCli(["configure", "--section", "auth", "--section", "channels"]);
 
-    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(["auth", "channels"], runtime);
+    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(
+      ["auth", "channels"],
+      runtime,
+      {},
+    );
   });
 
   it.each([
@@ -52,7 +56,17 @@ describe("registerConfigureCommand", () => {
   ] as const)("preserves %s for shared section validation", async (_label, sections) => {
     await runCli(["configure", ...sections.flatMap((section) => ["--section", section])]);
 
-    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith([...sections], runtime);
+    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith([...sections], runtime, {});
+  });
+
+  it("forwards --agent as the explicit setup owner", async () => {
+    // Without an owner, an explicit multi-agent roster aborts the wizard with
+    // AgentSelectionRequiredError, whose text tells callers to pass --agent <id>.
+    await runCli(["configure", "--section", "auth", "--agent", "ops"]);
+
+    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(["auth"], runtime, {
+      agentId: "ops",
+    });
   });
 
   it("reports errors through runtime when configure command fails", async () => {

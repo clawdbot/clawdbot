@@ -3,6 +3,7 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
@@ -604,12 +605,23 @@ export async function runConfigureWizard(
         },
       };
     }
+    // `--agent` is the operator's explicit owner and outranks both defaults below. Without it,
+    // an explicit multi-agent roster with no System Agent has no sole owner, so the wizard used
+    // to abort with AgentSelectionRequiredError naming a flag that did not exist.
+    const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : undefined;
+    if (requestedAgentId && !listAgentIds(nextConfig).includes(requestedAgentId)) {
+      throw new Error(
+        `Unknown agent "${opts.agentId}". Configured agents: ${listAgentIds(nextConfig).join(", ") || "(none)"}.`,
+      );
+    }
     // Configure keeps legacy default-owner semantics; only explicit fleets opt into
     // the System Agent target used unconditionally by setup and recovery callers.
     const resolveSetupTarget = () =>
-      nextConfig.agents?.ownership === "explicit"
-        ? resolveSystemAgentOnboardingTarget(nextConfig)
-        : resolveOnboardingAgentTarget(inheritLegacyDefaultAgentId(baseConfig, nextConfig));
+      requestedAgentId
+        ? resolveOnboardingAgentTarget(nextConfig, requestedAgentId)
+        : nextConfig.agents?.ownership === "explicit"
+          ? resolveSystemAgentOnboardingTarget(nextConfig)
+          : resolveOnboardingAgentTarget(inheritLegacyDefaultAgentId(baseConfig, nextConfig));
     let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
     let didPersistConfig = false;

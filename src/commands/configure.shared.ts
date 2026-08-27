@@ -49,6 +49,8 @@ export type ChannelsWizardMode = "configure" | "remove";
 export type ConfigureWizardParams = {
   command: "configure" | "update";
   sections?: WizardSection[];
+  /** Explicit setup owner from `--agent`; required on explicit multi-agent rosters. */
+  agentId?: string;
 };
 
 export const CONFIGURE_SECTION_OPTIONS: Array<{
