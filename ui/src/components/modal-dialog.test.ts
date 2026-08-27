@@ -154,6 +154,9 @@ describe("openclaw-modal-dialog", () => {
     expect(styles).toMatch(
       /:host\(\.drawer\)\s+wa-dialog\[open\]::part\(dialog\)\s*\{[^}]*animation:\s*openclaw-drawer-in 200ms cubic-bezier\(0\.32, 0\.72, 0, 1\);/u,
     );
+    expect(styles).toMatch(
+      /@keyframes openclaw-drawer-in\s*\{\s*from\s*\{\s*transform:\s*translateX\(100%\);\s*\}\s*to\s*\{\s*transform:\s*translateX\(0\);/u,
+    );
   });
   it("emits modal-cancel on Escape", async () => {
     const { modal, dialog } = await renderModal();
