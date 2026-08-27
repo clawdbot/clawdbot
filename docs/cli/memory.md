@@ -44,6 +44,9 @@ default agent's heartbeat firing to trigger reconciliation. See
 [Dreaming](/concepts/dreaming) for scheduling details.
 
 Status also lists any extra search paths from `memory.search.extraPaths`.
+For providers that discover their default model at initialization, plain status
+defers model identity checks until that model is known. Use `--deep` to initialize
+the provider and verify the model and provider settings against the existing index.
 
 ## `memory index`
 

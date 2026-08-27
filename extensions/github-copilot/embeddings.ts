@@ -145,22 +145,29 @@ async function discoverEmbeddingModels(params: {
   }
 }
 
+function normalizeCopilotEmbeddingModel(model: string): string {
+  const normalized = model.trim();
+  const prefix = `${COPILOT_EMBEDDING_PROVIDER_ID}/`;
+  const stripped = normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+  // Keep invalid selections explicit and normalization idempotent across
+  // cold memory options and direct provider creation.
+  return stripped && stripped === stripped.trim() && !stripped.startsWith(prefix)
+    ? stripped
+    : normalized;
+}
+
 function pickBestModel(available: string[], userModel?: string): string {
   if (userModel) {
-    const normalized = userModel.trim();
-    // Strip the provider prefix if users set "github-copilot/model-name".
-    const stripped = normalized.startsWith(`${COPILOT_EMBEDDING_PROVIDER_ID}/`)
-      ? normalized.slice(`${COPILOT_EMBEDDING_PROVIDER_ID}/`.length)
-      : normalized;
+    const normalized = normalizeCopilotEmbeddingModel(userModel);
     if (available.length === 0) {
       throw new Error("No embedding models available from GitHub Copilot");
     }
-    if (!available.includes(stripped)) {
+    if (!available.includes(normalized)) {
       throw new Error(
-        `GitHub Copilot embedding model "${stripped}" is not available. Available: ${available.join(", ")}`,
+        `GitHub Copilot embedding model "${normalized}" is not available. Available: ${available.join(", ")}`,
       );
     }
-    return stripped;
+    return normalized;
   }
   for (const preferred of PREFERRED_MODELS) {
     if (available.includes(preferred)) {
@@ -306,6 +313,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   id: COPILOT_EMBEDDING_PROVIDER_ID,
   transport: "remote",
   authProviderId: COPILOT_EMBEDDING_PROVIDER_ID,
+  normalizeModel: ({ model }) => normalizeCopilotEmbeddingModel(model),
   autoSelectPriority: 15,
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: (err: unknown) => isCopilotSetupError(err),

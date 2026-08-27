@@ -174,23 +174,18 @@ vi.mock("./embeddings.js", async (importOriginal) => {
     const audio = lower.split("audio").length - 1;
     return [alpha, beta, image, audio];
   };
+  const resolveFallbackModel = (providerId: string, fallbackSourceModel: string) =>
+    providerId === "gemini" || providerId === "fallback-provider"
+      ? `${providerId}-embed`
+      : fallbackSourceModel;
   return {
     ...actual,
-    resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
-      providerId === "gemini" || providerId === "fallback-provider"
-        ? `${providerId}-embed`
-        : fallbackSourceModel,
-    resolveEmbeddingProviderAdapterId: (
-      providerId: string,
-      config?: {
-        models?: {
-          providers?: Record<string, { api?: string; baseUrl?: string; models?: unknown[] }>;
-        };
-      },
-    ) => config?.models?.providers?.[providerId]?.api ?? providerId,
+    resolveEmbeddingProviderFallbackModel: resolveFallbackModel,
     resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
       providerId === "local" ? "local" : "remote",
-    resolveEmbeddingProviderIndexIdentity: (options: { provider?: string; model?: string }) =>
+    resolveEmbeddingProviderIndexIdentity: (
+      options: Parameters<typeof actual.resolveEmbeddingProviderIndexIdentity>[0],
+    ) =>
       options.provider === providerState.identityAlias.provider
         ? {
             provider: {
@@ -211,7 +206,12 @@ vi.mock("./embeddings.js", async (importOriginal) => {
               },
             ],
           }
-        : undefined,
+        : {
+            provider: {
+              id: options.config.models?.providers?.[options.provider]?.api ?? options.provider,
+              model: options.model.trim() || resolveFallbackModel(options.provider, ""),
+            },
+          },
     createEmbeddingProvider: async (options: ProviderCall) => {
       providerState.providerCalls.push({
         provider: options.provider,

@@ -23,8 +23,6 @@ import {
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
-  resolveEmbeddingProviderAdapterId,
-  resolveEmbeddingProviderFallbackModel,
   resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
   type EmbeddingProviderId,
@@ -46,6 +44,7 @@ import {
 } from "./manager-reindex-state.js";
 import {
   markMemoryVectorRebuildRequired,
+  memoryTableExists,
   requiresMemoryVectorRebuild,
 } from "./manager-vector-rebuild-state.js";
 import type { MemoryWatchSettleQueue } from "./watch-settle.js";
@@ -100,11 +99,6 @@ const EMBEDDING_CACHE_SEED_BATCH_SIZE = 1_000;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
-function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
-  return Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
-  );
-}
 export abstract class MemoryManagerSyncBase {
   protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
   protected abstract readonly cfg: OpenClawConfig;
@@ -379,19 +373,16 @@ export abstract class MemoryManagerSyncBase {
             ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
           })
         : undefined;
-    // Plain status can compare identity before provider init. Mirror provider
-    // init's empty-model fallback so adapter defaults do not look mismatched.
+    // Dynamic defaults stay unknown until provider initialization. Plain status
+    // must not reinterpret an undiscovered semantic model as keyword-only.
     const configuredProvider =
       this.settings.provider === "none"
         ? null
-        : (configuredIndexIdentity?.provider ?? {
-            id:
-              resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
-              this.settings.provider,
+        : {
+            id: configuredIndexIdentity?.provider.id ?? this.settings.provider,
             model:
-              this.settings.model.trim() ||
-              resolveEmbeddingProviderFallbackModel(this.settings.provider, "fts-only", this.cfg),
-          });
+              (configuredIndexIdentity?.provider.model ?? this.settings.model.trim()) || undefined,
+          };
     const provider = hasProviderOverride
       ? params.provider!
       : this.provider
@@ -408,7 +399,7 @@ export abstract class MemoryManagerSyncBase {
       provider.model === this.provider.model
         ? this.resolveProviderIndexIdentities()
         : [];
-    const configuredProviderIdentities = configuredIndexIdentity
+    const configuredProviderIdentities = configuredIndexIdentity?.cacheKeyData
       ? resolveMemoryIndexProviderIdentities({
           provider: configuredIndexIdentity.provider,
           cacheKeyData: configuredIndexIdentity.cacheKeyData,
