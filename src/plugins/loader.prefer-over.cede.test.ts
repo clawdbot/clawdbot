@@ -431,7 +431,18 @@ describe("plugin loader preferOver cede", () => {
   // replacement that rolled back, it takes the vacant channel — and matching the registration by
   // channel id alone read that unrelated owner as success, silencing the one diagnostic that
   // reports a channel served by the wrong plugin.
-  it("reports a ceded channel taken by a plugin that never claimed it", () => {
+  // The declared owner fails during register here, so nothing can serve the channel. An undeclared
+  // plugin must not fill that gap: the claimant that could legitimately serve it (`zz-fallback`)
+  // ceded and stood down, so admitting a plugin that never claimed the channel would rank it above
+  // the fallback the declaration actually displaced. The channel goes unowned and says so.
+  //
+  // Leaving it unowned is not a new choice made here. The companion test below runs this same
+  // failure with no squatter present and the channel is unowned on the parent commit too: the
+  // fallback's cede, not this guard, is what stops it serving. What changes is only that an
+  // undeclared plugin no longer papers over that state by accident. Restoring the ceding fallback
+  // when its replacement fails would be a real improvement, but it is a separate one -- the gap
+  // predates this branch.
+  it("leaves a ceded channel unowned rather than let a plugin that never claimed it take over", () => {
     const root = makePluginLoaderTempDir();
     const fallbackDir = writeMultiChannelPlugin({
       rootDir: root,
@@ -476,17 +487,18 @@ describe("plugin loader preferOver cede", () => {
       env,
     });
 
-    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).toBe(
-      "zz-squatter",
-    );
-    const diagnostic = registry.diagnostics.find((diag) =>
-      diag.message.includes("zzalpha (ceded to zz-replacement)"),
-    );
-    expect(diagnostic).toMatchObject({
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")).toBeUndefined();
+    expect(
+      registry.diagnostics.find((diag) => diag.message.includes("zzalpha is declared by")),
+    ).toMatchObject({ level: "error", pluginId: "zz-squatter" });
+    expect(
+      registry.diagnostics.find((diag) =>
+        diag.message.includes("zzalpha (ceded to zz-replacement)"),
+      ),
+    ).toMatchObject({
       level: "error",
       pluginId: "zz-fallback",
-      message:
-        "ceded channel is registered by zz-squatter, not its declared owner: zzalpha (ceded to zz-replacement)",
+      message: "ceded channel has no registered owner: zzalpha (ceded to zz-replacement)",
     });
   });
 
@@ -802,5 +814,218 @@ describe("plugin loader preferOver cede", () => {
     expect(
       registry.plugins.find((plugin) => plugin.id === "zz-second")?.cededChannelIds,
     ).toBeUndefined();
+  });
+
+  // A plugin that never claimed the channel has no cede entry to skip on, so the cede plan alone
+  // does not keep it out. Registering first would otherwise hand it the runtime slot and reject the
+  // declared replacement, leaving schema ownership and message transport on different plugins --
+  // the exact split this file exists to close. Diagnostics already reported that split; they do not
+  // stop messages reaching the wrong plugin.
+  it("rejects an undeclared squatter that registers a channel before its declared owner", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const squatterDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-squatter",
+      channelIds: ["zzgamma"],
+      registeredChannelIds: ["zzalpha"],
+      toolName: "zz_squatter_tool",
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: {
+        zzalpha: { token: "alpha" },
+        zzbeta: { token: "beta" },
+        zzgamma: { token: "gamma" },
+      },
+      // Squatter first, so it reaches registerChannel before the declared replacement.
+      plugins: { load: { paths: [squatterDir, fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).toBe(
+      "zz-replacement",
+    );
+    expect(
+      registry.diagnostics.find((diag) => diag.message.includes("zzalpha is declared by")),
+    ).toMatchObject({ level: "error", pluginId: "zz-squatter" });
+  });
+
+  // A set-aside declaration resolves to no winner, so `cededChannelOwners` has no entry for the
+  // channel. Keying admission off the winner alone left this case open, and it is the one an
+  // operator reaches by hand: explicitly selecting a claimant is what sets the declaration aside.
+  // Selecting a plugin must not buy weaker protection than leaving it to auto-enable.
+  it("rejects an undeclared squatter when an explicit selection sets the declaration aside", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const squatterDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-squatter",
+      channelIds: ["zzgamma"],
+      registeredChannelIds: ["zzalpha"],
+      toolName: "zz_squatter_tool",
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: {
+        zzalpha: { token: "alpha" },
+        zzbeta: { token: "beta" },
+        zzgamma: { token: "gamma" },
+      },
+      plugins: {
+        // Hand-picking the plugin the declaration names sets that declaration aside.
+        entries: { "zz-fallback": { enabled: true } },
+        load: { paths: [squatterDir, fallbackDir, replacementDir] },
+      },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    const owner = registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId;
+    expect(owner).not.toBe("zz-squatter");
+    expect(["zz-fallback", "zz-replacement"]).toContain(owner);
+    expect(
+      registry.diagnostics.find((diag) => diag.message.includes("zzalpha is declared by")),
+    ).toMatchObject({ level: "error", pluginId: "zz-squatter" });
+  });
+
+  // `channelPluginIdBelongsToManifest` treats a plugin whose own id is the channel id as claiming
+  // it even with no `channels` entry. Admission has to agree, or this plugin loses its own channel
+  // -- and, through the registration-conflict set, its tools with it.
+  it("admits a plugin whose own id is the contested channel id and declares no channels", () => {
+    const root = makePluginLoaderTempDir();
+    const selfDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zzalpha",
+      channelIds: [],
+      registeredChannelIds: ["zzalpha"],
+      toolName: "zz_self_tool",
+    });
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: {
+        entries: { zzalpha: { enabled: true } },
+        load: { paths: [selfDir, fallbackDir, replacementDir] },
+      },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(
+      registry.diagnostics.find(
+        (diag) => diag.pluginId === "zzalpha" && diag.message.includes("is declared by"),
+      ),
+    ).toBeUndefined();
+  });
+
+  // The contract admission inherits, pinned with no squatter in the picture: when the declared
+  // winner fails during its own register, the channel is left unowned. The fallback ceded and
+  // stood down before any register ran, so nothing else is entitled to it. This holds on the
+  // parent commit too -- the admission guard only ever turns a registration away, so in a load
+  // where every registrant is a claimant it never fires.
+  it("leaves a contested channel unowned when the declared winner fails and nothing squats", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+      throwOnRegister: true,
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")).toBeUndefined();
   });
 });

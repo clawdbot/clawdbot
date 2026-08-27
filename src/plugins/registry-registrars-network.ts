@@ -43,8 +43,13 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
 }
 
 export function createNetworkRegistrars(state: PluginRegistryState) {
-  const { registry, coreGatewayMethods, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
-    state;
+  const {
+    registry,
+    declaredChannelClaimants,
+    coreGatewayMethods,
+    pluginsWithChannelRegistrationConflict,
+    pushDiagnostic,
+  } = state;
   let reportedLegacyCatalogSkip = false;
 
   const registerGatewayMethod = (
@@ -341,6 +346,33 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         (channelId) => normalizeCededChannelId(channelId) === cededChannelId,
       )
     ) {
+      return;
+    }
+    // Skipping the cede losers above only covers plugins that claimed the channel. A plugin that
+    // never claimed it has no cede entry to skip on, so registering first would hand it the runtime
+    // slot and push the declared replacement onto the duplicate path below -- leaving schema
+    // ownership and message transport naming different plugins, the split the cede plan exists to
+    // close. Claimants stay admissible even when they are not the winner: a set-aside declaration
+    // deliberately leaves every member registering, and the first registrant keeps the channel.
+    // What counts as a claim has to match `channelPluginIdBelongsToManifest`, the loader's own
+    // answer to the same question: a plugin whose id is the channel id claims it even with no
+    // `channels` entry, so reading `channelIds` alone would reject that plugin's own channel.
+    // `channelIds` comes from the manifest the claimant list is built from, so testing it is
+    // equivalent to testing membership of that list; the list is needed only to know a declaration
+    // contests this channel, and to name the claimants in the diagnostic.
+    const declaredClaimants = declaredChannelClaimants.get(cededChannelId);
+    if (
+      declaredClaimants &&
+      normalizeCededChannelId(record.id) !== cededChannelId &&
+      !record.channelIds.some((claimed) => normalizeCededChannelId(claimed) === cededChannelId)
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel registration rejected: ${id} is declared by ${declaredClaimants.join(", ")}`,
+      });
+      pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);

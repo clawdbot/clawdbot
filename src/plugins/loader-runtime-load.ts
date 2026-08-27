@@ -223,14 +223,20 @@ function loadOpenClawPluginsInternal(
       manifestRegistry,
       memorySlot,
     });
-    const { cededChannelIdsByPlugin, cededChannelOwners } = collectCededChannelIdsByPlugin({
-      registry: manifestRegistry,
-      config: context.cfg,
-      sourceConfig: context.activationSourceConfig,
-      env: context.env,
-      onlyPluginIdSet,
-      dreamingSidecar,
-    });
+    const { cededChannelIdsByPlugin, cededChannelOwners, declaredChannelClaimants } =
+      collectCededChannelIdsByPlugin({
+        registry: manifestRegistry,
+        config: context.cfg,
+        sourceConfig: context.activationSourceConfig,
+        env: context.env,
+        onlyPluginIdSet,
+        dreamingSidecar,
+      });
+    // Populate in place rather than reassigning: the registrars captured this map when the
+    // registry was built, which happens before the cede plan can be computed.
+    for (const [channelId, claimantIds] of declaredChannelClaimants) {
+      registryBuilder.declaredChannelClaimants.set(channelId, claimantIds);
+    }
     const pluginLoadStartMs = performance.now();
     for (const candidate of orderedCandidates) {
       const manifestRecord = manifestBySource.get(candidate.source);

@@ -82,6 +82,11 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     coreGatewayMethods: new Set(coreGatewayMethodNames),
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
+    // Filled in by the runtime loader once the cede plan is computed, which happens after this
+    // state exists. Registration reads it to keep a channel's runtime owner and its schema owner
+    // the same plugin; it stays empty for loads that never plan cedes. Never cleared, which is
+    // safe only because a registry state is built once per load and never reused across loads.
+    declaredChannelClaimants: new Map<string, readonly string[]>(),
     pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
     pushDiagnostic,
     ...modelCatalogRegistrars,

@@ -301,12 +301,13 @@ export function pushCededChannelWithoutOwnerDiagnostics(params: {
       if (cededTo === undefined || cededToRecord?.format === "bundle") {
         continue;
       }
-      // The registration has to be the declared winner's, not merely one whose channel id matches.
-      // A plugin that registers the contested channel without claiming it in its manifest is absent
-      // from the claimant set and so receives no cede; loading between the ceding fallback and the
-      // replacement, it takes the vacant channel and the replacement is rejected as a duplicate.
-      // Matching on channel id alone read that unrelated registration as success and suppressed the
-      // one diagnostic that reports a channel served by the wrong plugin.
+      // The registration has to be the declared winner's, not merely one whose channel id matches:
+      // matching on channel id alone reads an unrelated registration as success and suppresses the
+      // one diagnostic that reports a channel served by the wrong plugin. `registerChannel` now
+      // turns away a plugin that never claimed a declaration-contested channel, so the case this
+      // guarded -- a non-claimant loading between the ceding fallback and the replacement and
+      // taking the vacant channel -- no longer reaches here. What still does is the winner failing
+      // during its own register, which leaves the channel with no owner and is reported below.
       const servedBy =
         params.registry.channels.find(
           (entry) => normalizeCededChannelId(entry.plugin.id) === claimedId,

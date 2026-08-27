@@ -120,6 +120,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   return {
     registry: state.registry,
+    declaredChannelClaimants: state.declaredChannelClaimants,
     createApi,
     rollbackPluginGlobalSideEffects,
     pushDiagnostic: state.pushDiagnostic,

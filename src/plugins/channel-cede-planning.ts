@@ -61,6 +61,7 @@ export function collectCededChannelIdsByPlugin(params: {
 }): {
   cededChannelIdsByPlugin: Map<string, string[]>;
   cededChannelOwners: Map<string, string>;
+  declaredChannelClaimants: Map<string, string[]>;
 } {
   const policy = createConfiguredChannelOwnershipPolicy({
     config: params.config,
@@ -135,5 +136,25 @@ export function collectCededChannelIdsByPlugin(params: {
       channels.push(channelId);
     }
   }
-  return { cededChannelIdsByPlugin, cededChannelOwners };
+  // Who may register a channel some manifest declares a replacement for. Scoped to declaration-
+  // contested channels because that is what this plan reasons about: a channel with one claimant,
+  // or two claimants and no declaration between them, keeps the first-registrant rule the runtime
+  // has always applied. Set-aside declarations are included deliberately -- they resolve to no
+  // winner, so `cededChannelOwners` has no entry, but the claimants are still the only plugins
+  // entitled to the channel, and an operator who hand-picks a claimant must not get less
+  // protection than one who lets auto-enable decide.
+  const declaredChannelClaimants = new Map<string, string[]>();
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    if (claimants.length < 2) {
+      continue;
+    }
+    const declaresReplacement = claimants.some((claimantId) => {
+      const claimant = params.registry.plugins.find((entry) => entry.id === claimantId);
+      return claimant ? policy.resolveChannelPreferOverIds(claimant, claimedId).length > 0 : false;
+    });
+    if (declaresReplacement) {
+      declaredChannelClaimants.set(claimedId, claimants);
+    }
+  }
+  return { cededChannelIdsByPlugin, cededChannelOwners, declaredChannelClaimants };
 }

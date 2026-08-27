@@ -526,8 +526,8 @@ function decideChannelSchemaOwnership(params: {
   }
   // Nothing separates the pair as compared here — and a suppressed pair arrives tied even across
   // origins, because the entry adopts the nearer record's rank before the comparison. The runtime
-  // winner decides the tie: the facade keeps the first registrant
-  // (`registry-registrars-network.ts:370` rejects the rest), so a tied pair the schema settled by
+  // winner decides the tie: the facade keeps the first registrant among the claimants
+  // (`registerChannel` rejects the rest as duplicates), so a tied pair the schema settled by
   // last writer split the planes — the config was validated against one plugin's schema while the
   // facade served the claimant registered first. When the winner sits outside the pair, how the
   // tie arose still decides: a set-aside declaration keeps the first claimant, matching the
