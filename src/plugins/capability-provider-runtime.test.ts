@@ -881,6 +881,10 @@ describe("resolvePluginCapabilityProviders", () => {
         generateImage: async () => ({ images: [] }),
       },
     } as never);
+    addCapabilityProvider(loaded, "imageGenerationProviders", {
+      id: "xai",
+      provider: { defaultModel: "shadowed-model" },
+    });
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
@@ -906,6 +910,8 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["xai", "fal"]);
+    expect(providers[0]).toBe(active.imageGenerationProviders[0]?.provider);
+    expect(providers[1]).toBe(loaded.imageGenerationProviders[0]?.provider);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
     expectActiveRegistryLookup(["fal", "xai"]);
   });
