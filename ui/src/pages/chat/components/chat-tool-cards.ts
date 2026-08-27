@@ -3,6 +3,7 @@ import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
@@ -29,7 +30,6 @@ import {
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -975,18 +975,7 @@ export function renderExpandedToolCardContent(
     : nothing;
   const diffCopyAction =
     view.diff && view.diff.length > 0
-      ? html`
-          <openclaw-tooltip content=${t("common.copy")}>
-            <button
-              class="chat-tool-card__action-btn"
-              type="button"
-              @click=${() => void copyToClipboard(serializeDiff(view.diff ?? []))}
-              aria-label=${t("common.copy")}
-            >
-              <span class="chat-tool-card__action-icon">${icons.copy}</span>
-            </button>
-          </openclaw-tooltip>
-        `
+      ? renderCopyButton(serializeDiff(view.diff), t("common.copy"))
       : nothing;
 
   // Command calls render terminal-style: `$ command` + raw output. Remaining

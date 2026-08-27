@@ -4,7 +4,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import { copyMarkdownLabel } from "../../../components/copy-button.ts";
+import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
@@ -22,7 +22,6 @@ import {
   buildMoreDetailsCompanionQuestion,
 } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
@@ -355,14 +354,17 @@ function createMessageActionContextButton(params: {
   label: string;
   disabled: boolean;
   tooltip: string;
-  onClick: () => void;
+  onClick: (event: Event) => void;
 }): { element: HTMLElement; button: HTMLButtonElement } {
   const button = document.createElement("button");
   button.type = "button";
   button.disabled = params.disabled;
   button.setAttribute("role", "menuitem");
   button.setAttribute("aria-label", params.label);
-  button.textContent = params.label;
+  const label = document.createElement("span");
+  label.dataset.copyLabel = "";
+  label.textContent = params.label;
+  button.append(label);
   button.addEventListener("click", params.onClick);
   const tooltip = document.createElement("openclaw-tooltip");
   tooltip.content = params.tooltip;
@@ -494,9 +496,14 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
       label: t("chat.messages.copySelection"),
       disabled: false,
       tooltip: t("chat.messages.copySelection"),
-      onClick: () => {
-        void copyToClipboard(selectedText);
-        removeReplyContextMenu();
+      onClick: (copyEvent) => {
+        void handleCopyButton(copyEvent, selectedText, t("chat.messages.copySelection")).then(
+          (copied) => {
+            if (copied) {
+              removeReplyContextMenu(props.paneId);
+            }
+          },
+        );
       },
     });
     menu.append(action.element);
