@@ -250,7 +250,9 @@ The sidebar organizes everything around the agent. The identity row at the top i
 
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 
-**Rename** in the sidebar, chat header, and Sessions page targets the session you started editing. If that session is reset or replaced before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again.
+**Rename** in the sidebar, chat header, and Sessions page targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
+
+**New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
 
 ### Session placement
 

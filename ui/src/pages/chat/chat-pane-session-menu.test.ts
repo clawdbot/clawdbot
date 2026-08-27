@@ -156,6 +156,49 @@ describe("chat pane session menu boundary", () => {
     );
   });
 
+  it.each([
+    { action: { kind: "toggle-pin" }, patch: { pinned: true } },
+    { action: { kind: "toggle-unread" }, patch: { unread: true } },
+    { action: { kind: "set-icon", icon: "🦞" }, patch: { icon: "🦞" } },
+    { action: { kind: "move-to-group", category: "Projects" }, patch: { category: "Projects" } },
+  ] as const)(
+    "keeps the original header identity for $action.kind after replacement",
+    async ({ action, patch: expectedPatch }) => {
+      const patch = vi.fn(async () => ({}));
+      const original = {
+        key: "agent:main:current",
+        sessionId: "original-session",
+        kind: "direct",
+        updatedAt: 0,
+      } satisfies GatewaySessionRow;
+      const sessions = createSessionCapabilityFixture({
+        patch,
+        state: {
+          error: null,
+          groups: ["Projects"],
+          result: {
+            ts: 1,
+            count: 1,
+            path: "",
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [{ ...original, sessionId: "replacement-session" }],
+          },
+        },
+      });
+      const { pane } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions,
+      });
+
+      await pane.handleHeaderSessionAction(action, original);
+
+      expect(patch).toHaveBeenCalledWith(original.key, expectedPatch, {
+        agentId: "main",
+        expectedSessionId: original.sessionId,
+      });
+    },
+  );
+
   it("commits a trimmed label and clears with null", async () => {
     const patch = vi.fn(async () => ({}));
     const sessions = createSessionCapabilityFixture({ patch });

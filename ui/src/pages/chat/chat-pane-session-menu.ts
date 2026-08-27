@@ -99,15 +99,15 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       gatewayHasActiveRun: candidate.hasActiveRun,
     });
     const session = toActionSession(row);
-    // Header actions capture a rendered row, but any awaited menu work can
-    // outlive that row. Resolve at the patch boundary so a deleted no-ID row
-    // cannot be recreated by a stale sessions.patch request.
+    // Refresh metadata only on the selected instance; replacements must keep
+    // the captured ID so the Gateway rejects the stale action. No-ID rows
+    // still need current-list presence before a metadata patch can create them.
     const resolveCurrentSession = (notify = false) => {
-      const currentRow = scope.sessions.state.result?.sessions.find((candidate) =>
-        areUiSessionKeysEquivalent(candidate.key, row.key),
+      const currentRow = scope.sessions.state.result?.sessions.find(
+        (candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, row.key) &&
+          (!session.sessionId || candidate.sessionId === session.sessionId),
       );
-      // A durable ID makes the captured row safe: the Gateway rejects a
-      // deleted or replaced identity. No-ID rows need current-list proof.
       const resolvedRow = currentRow ?? (session.sessionId ? row : null);
       if (!resolvedRow && notify) {
         showToast({ message: t("common.refresh") });
@@ -352,7 +352,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       ? (normalizeOptionalString(row.displayName) ??
         (row.worktree ? undefined : normalizeOptionalString(row.derivedTitle)))
       : undefined;
-    // The edit belongs to this instance, even if a reset reuses its key.
+    // The edit belongs to this instance, even if a replacement reuses its key.
     this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
     // Dashboard titles are generated session text; channel/account decoration
     // remains display-only and must never become the stored label.

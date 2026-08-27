@@ -90,7 +90,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("sessions.changed", {
           ...replacement,
           sessionKey: original.key,
-          reason: "reset",
+          reason: "create",
         });
         await expect.poll(() => row.textContent()).toContain(replacement.label);
         await input.press("Enter");
