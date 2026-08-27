@@ -143,4 +143,25 @@ describe("protection fast path", () => {
     // shape, not for ordinary timing noise.
     expect(elapsedMs).toBeLessThan(50);
   });
+
+  it("advances a long newline-free stream in token-sized deltas without rescanning it", () => {
+    // codex review: a provider streaming one long unbroken line (no candidate, no
+    // fence) in small deltas fed `partialLine + text` through indexOf on every call.
+    // Since partialLine never contains a newline, only `text` itself can complete a
+    // line, so scanning the concatenated buffer re-copies and re-scans the entire
+    // carried prefix on every delta -- quadratic even though nothing but plain prose
+    // is happening. A repro at 400 KB of 10-byte deltas took over a second on the
+    // prior implementation; this stays comfortably linear.
+    const state = createProtectionScanState();
+    const chunk = "abcdefghij";
+    const chunkCount = 40_000; // 400 KB total, in 10-byte deltas -- codex's own repro size.
+    const start = performance.now();
+    for (let index = 0; index < chunkCount; index += 1) {
+      advanceProtectionScanState(state, chunk);
+    }
+    const elapsedMs = performance.now() - start;
+
+    expect(state.partialLine.length).toBe(chunk.length * chunkCount);
+    expect(elapsedMs).toBeLessThan(200);
+  });
 });

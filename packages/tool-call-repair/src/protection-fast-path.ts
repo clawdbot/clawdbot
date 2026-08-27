@@ -132,15 +132,28 @@ export function advanceProtectionScanState(state: ProtectionScanState, text: str
     state.structuralUnknown = true;
     return;
   }
-  let buffer = state.partialLine + text;
-  let newline = buffer.indexOf("\n");
-  while (newline !== -1) {
-    const line = buffer.slice(0, newline).replace(/\r$/, "");
-    applyLine(state, line);
-    buffer = buffer.slice(newline + 1);
-    newline = buffer.indexOf("\n");
+  // `partialLine` never contains a newline (it is always the fragment after the last
+  // completed line), so a line can only complete here if `text` itself contains one.
+  // Searching `text` alone -- instead of the concatenated `partialLine + text` -- keeps
+  // a long newline-free stream (e.g. one long unbroken output line, fed in small
+  // provider-sized deltas) linear: otherwise both the concatenation and the indexOf
+  // scan below would re-copy and re-scan the ever-growing carried prefix on every call.
+  let newline = text.indexOf("\n");
+  if (newline === -1) {
+    state.partialLine += text;
+    return;
   }
-  state.partialLine = buffer;
+  let line = (state.partialLine + text.slice(0, newline)).replace(/\r$/, "");
+  applyLine(state, line);
+  let cursor = newline + 1;
+  newline = text.indexOf("\n", cursor);
+  while (newline !== -1) {
+    line = text.slice(cursor, newline).replace(/\r$/, "");
+    applyLine(state, line);
+    cursor = newline + 1;
+    newline = text.indexOf("\n", cursor);
+  }
+  state.partialLine = text.slice(cursor);
 }
 
 /**
