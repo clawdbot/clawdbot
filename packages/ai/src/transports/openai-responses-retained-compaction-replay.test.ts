@@ -1,7 +1,11 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
-import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  type OpenAIResponsesReplayMode,
+} from "./openai-responses-compaction-replay.js";
+import { resolveResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 
 const model = {
@@ -18,10 +22,13 @@ const model = {
 } satisfies Model<"openai-responses">;
 const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 
-function createAssistant(text: string, providerReplay?: ProviderReplayState): AssistantMessage {
+function createAssistant(
+  content: string | AssistantMessage["content"],
+  providerReplay?: ProviderReplayState,
+): AssistantMessage {
   return {
     role: "assistant",
-    content: [{ type: "text", text }],
+    content: typeof content === "string" ? [{ type: "text", text: content }] : content,
     api: model.api,
     provider: model.provider,
     model: model.id,
@@ -64,13 +71,19 @@ function compactionState(
 const converters = [
   {
     name: "transport-owned",
-    convert: (context: Context) =>
-      convertResponsesMessages(model, context, new Set(["openai"]), replayIdentity),
+    convert: (context: Context, replayMode: OpenAIResponsesReplayMode = "checkpoint") =>
+      convertResponsesMessages(model, context, new Set(["openai"]), {
+        ...replayIdentity,
+        replayMode,
+      }),
   },
   {
     name: "provider-owned",
-    convert: (context: Context) =>
-      convertProviderResponsesMessages(model, context, new Set(["openai"]), replayIdentity),
+    convert: (context: Context, replayMode: OpenAIResponsesReplayMode = "checkpoint") =>
+      convertProviderResponsesMessages(model, context, new Set(["openai"]), {
+        ...replayIdentity,
+        replayMode,
+      }),
   },
 ] as const;
 
@@ -104,4 +117,91 @@ describe("Responses retained-user compaction replay", () => {
     expect(encoded).not.toContain("discarded assistant");
     expect(encoded).not.toContain("assistant content absorbed by compaction");
   });
+
+  it.each(
+    converters.flatMap((converter) =>
+      [
+        {
+          scenario: "compacted-prefix",
+          retainedUsers: false,
+          fullHistory: false,
+          laterUser: false,
+        },
+        { scenario: "retained-users", retainedUsers: true, fullHistory: false, laterUser: false },
+        { scenario: "full-history", retainedUsers: false, fullHistory: true, laterUser: false },
+        { scenario: "later-user", retainedUsers: false, fullHistory: false, laterUser: true },
+      ].map((scenario) => Object.assign({}, converter, scenario)),
+    ),
+  )(
+    "$name preserves the compacted prefix and current context across tool rounds ($scenario)",
+    ({ convert, scenario, retainedUsers, fullHistory, laterUser }) => {
+      const messages: Context["messages"] = [
+        { role: "user", content: "active request before compaction", timestamp: 1 },
+        createAssistant(
+          [],
+          compactionState(
+            retainedUsers ? "openai-responses-retained-compaction" : "openai-responses-compaction",
+          ),
+        ),
+      ];
+      if (laterUser) {
+        messages.push({ role: "user", content: "new request after compaction", timestamp: 2 });
+      }
+      const carrier = {
+        role: "user",
+        content: "current request metadata",
+        runtimeContextCarrier: true,
+        timestamp: 3,
+      } satisfies Context["messages"][number];
+      const replayMode = fullHistory ? "full-history" : "checkpoint";
+      const prefix = convert({ messages }, replayMode);
+      let input = convert({ messages: [...messages, carrier] }, replayMode);
+      expect(input.slice(0, prefix.length), scenario).toEqual(prefix);
+      expect(input.at(-1), scenario).toMatchObject({
+        role: "user",
+        content: [{ type: "input_text", text: carrier.content }],
+      });
+
+      for (const round of [1, 2]) {
+        const callId = `call_${round}`;
+        const itemId = `fc_${round}`;
+        messages.push(
+          createAssistant([
+            { type: "toolCall", id: `${callId}|${itemId}`, name: "lookup", arguments: {} },
+          ]),
+          {
+            role: "toolResult",
+            toolCallId: `${callId}|${itemId}`,
+            toolName: "lookup",
+            content: [{ type: "text", text: `result ${round}` }],
+            isError: false,
+            timestamp: round + 3,
+          },
+        );
+        const nextInput = convert({ messages: [...messages, carrier] }, replayMode);
+        const continued = resolveResponsesContinuationRequest(
+          {
+            lastRequest: { model: model.id, store: true, input },
+            lastResponseId: `resp_${round}`,
+            lastResponseItems: [
+              {
+                type: "function_call",
+                id: itemId,
+                call_id: callId,
+                name: "lookup",
+                arguments: "{}",
+                status: "completed",
+              },
+            ],
+          },
+          { model: model.id, store: true, input: nextInput },
+        );
+        expect(continued.continuationStatus, `${scenario} round ${round}`).toBe("continued");
+        expect(continued.request.input).toEqual([
+          { type: "function_call_output", call_id: callId, output: `result ${round}` },
+        ]);
+        input = nextInput;
+      }
+    },
+  );
 });

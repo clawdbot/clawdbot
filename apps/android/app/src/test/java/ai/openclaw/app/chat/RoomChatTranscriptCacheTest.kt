@@ -78,7 +78,8 @@ class RoomChatTranscriptCacheTest {
       saveTranscript(
         messages =
           listOf(
-            message("hello", role = "user", timestampMs = 10, idempotencyKey = "run-1:user", extraParts = listOf(imagePart)),
+            message("hello", role = "user", timestampMs = 10, idempotencyKey = "run-1:user", extraParts = listOf(imagePart))
+              .copy(senderLabel = "Alex (Slack)"),
             // Inline binary-only messages remain disposable and are skipped entirely.
             ChatMessage(id = "img", role = "user", content = listOf(imagePart), timestampMs = 11),
             ChatMessage(id = "managed", role = "assistant", content = listOf(managedImage), timestampMs = 11),
@@ -94,10 +95,11 @@ class RoomChatTranscriptCacheTest {
       assertEquals(listOf("user", "assistant", "assistant"), loaded.map { it.role })
       assertEquals(listOf(10L, 11L, 12L), loaded.map { it.timestampMs })
       assertEquals(listOf("run-1:user", null, null), loaded.map { it.idempotencyKey })
+      assertEquals(listOf("Alex (Slack)", null, null), loaded.map { it.senderLabel })
     }
 
   @Test
-  fun transcriptRoundTripKeepsManagedAudioAndVideoMetadata() =
+  fun transcriptRoundTripKeepsManagedAudioVideoAndDocumentMetadata() =
     runTest {
       val audio =
         ChatMessageContent(
@@ -118,17 +120,64 @@ class RoomChatTranscriptCacheTest {
           width = 1920,
           height = 1080,
         )
+      val userDocument =
+        ChatMessageContent(
+          type = "file",
+          mimeType = "application/pdf",
+          fileName = "proposal.pdf",
+          artifactId = "artifact_managed_media_55555555-5555-4555-8555-555555555555",
+          url = "/api/chat/media/outgoing/main/55555555-5555-4555-8555-555555555555/full",
+          sizeBytes = 4_096,
+        )
+      val assistantDocument =
+        ChatMessageContent(
+          type = "file",
+          mimeType = "text/plain",
+          fileName = "summary.txt",
+          url = "https://files.example/summary.txt",
+          sizeBytes = 48,
+        )
+      val mixedText = ChatMessageContent(type = "text", text = "See attached.")
       saveTranscript(
         messages =
           listOf(
             ChatMessage(id = "audio", role = "assistant", content = listOf(audio), timestampMs = 10),
             ChatMessage(id = "video", role = "assistant", content = listOf(video), timestampMs = 11),
+            ChatMessage(
+              id = "user-document",
+              role = "user",
+              content = listOf(userDocument),
+              timestampMs = 12,
+              idempotencyKey = "run-document:user",
+              entryId = "live-user-entry",
+              senderLabel = "Alex (Slack)",
+            ),
+            ChatMessage(id = "assistant-document", role = "assistant", content = listOf(assistantDocument), timestampMs = 13),
+            ChatMessage(id = "user-mixed", role = "user", content = listOf(mixedText, userDocument), timestampMs = 14),
+            ChatMessage(id = "assistant-mixed", role = "assistant", content = listOf(mixedText, assistantDocument), timestampMs = 15),
           ),
       )
 
       val loaded = loadTranscript()
 
-      assertEquals(listOf(audio, video), loaded.map { it.content.single() })
+      assertEquals(
+        listOf(
+          listOf(audio),
+          listOf(video),
+          listOf(userDocument),
+          listOf(assistantDocument),
+          listOf(mixedText, userDocument),
+          listOf(mixedText, assistantDocument),
+        ),
+        loaded.map { it.content },
+      )
+      assertEquals(listOf("assistant", "assistant", "user", "assistant", "user", "assistant"), loaded.map { it.role })
+      assertEquals("Alex (Slack)", loaded[2].senderLabel)
+      assertEquals("run-document:user", loaded[2].idempotencyKey)
+      assertTrue(loaded.all { it.entryId == null && it.content.all { part -> part.base64 == null } })
+      assertTrue(loadTranscript(gatewayId = "gateway-b").isEmpty())
+      assertTrue(loadTranscript(agentId = "other").isEmpty())
+      assertTrue(loadTranscript(sessionKey = "other").isEmpty())
     }
 
   @Test
@@ -200,6 +249,7 @@ class RoomChatTranscriptCacheTest {
 
       assertEquals(listOf("legacy one", "legacy two"), loaded[0].content.map { it.text })
       assertEquals(listOf("structured legacy"), loaded[1].content.map { it.text })
+      assertEquals(listOf(null, null), loaded.map { it.senderLabel })
     }
 
   @Test

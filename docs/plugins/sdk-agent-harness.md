@@ -118,6 +118,14 @@ Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
 
+For auxiliary session control calls, `resolveSessionModelRef` from
+`openclaw/plugin-sdk/model-session-runtime` resolves the current model selection.
+`prepareAgentRuntimeAuth` from `openclaw/plugin-sdk/agent-harness-runtime` selects
+its auth route and ordered credential attempts from the caller's loaded auth
+snapshot. Preserve the selected attempt's profile, API, and fallback restrictions
+when materializing credentials; this keeps control calls on the same billing
+route as agent turns.
+
 ### Request-transport contract
 
 `supports(ctx)` receives the resolved model transport in `ctx.modelProvider`.
@@ -371,6 +379,14 @@ side effects finish. Both helpers accept the same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 
+Pass `ctx.foregroundPromptContext` built with
+`buildEmbeddedForegroundPromptContext(params, agentDir)` from the same
+`EmbeddedRunAttemptParams` the attempt ran with. The detached Skill Workshop
+experience review rebuilds its system prompt and tool catalog from that
+context, so the review shares the foreground turn's prompt-cache prefix.
+Omit it only for runs that have no foreground prompt, such as CLI hook
+contexts; the review is skipped for those.
+
 ### User input and tool surfaces
 
 Native harnesses that expose a runtime-level user-input request should use the
@@ -591,8 +607,22 @@ The OpenClaw transcript remains the compatibility layer for:
 - switching back to the built-in OpenClaw harness on a later turn
 - generic `/new`, `/reset`, and session deletion behavior
 
-If your harness stores a sidecar binding, implement `reset(...)` so OpenClaw
-can clear it when the owning OpenClaw session is reset.
+Store native bindings in plugin state. Implement `reset(...)` for an in-place
+session reset and `withSessionDeletion(params, run)` for removal of a session
+key, including expiry and maintenance. A physical session ID changing at the
+same key is a transfer, not deletion; preserve any compaction adoption path.
+
+`withSessionDeletion` acquires the native owner's lease before calling
+`run({ commit, rollback })`. Core invokes the synchronous `commit()` at the
+session row deletion boundary and `rollback()` if the transaction fails.
+Rollback must also tolerate a failed or unapplied commit. Keep asynchronous
+subscription cleanup after `run` so it does not hold the SQLite writer queue;
+do not restore bindings for errors after the session transaction committed.
+
+Recheck `params.assertCurrent()` after awaited work and immediately before
+mutating native state. The callback belongs to one registered harness lifetime;
+retaining it after the operation closes does not retain authority. Post-delete
+hooks are notifications, not the owner of durable binding removal.
 
 ## Tool and media results
 

@@ -18,7 +18,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { stop } from "./ops-lifecycle.js";
+import { start, stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { enqueueRun, run } from "./ops-run.js";
 import { runWithCronAdmission } from "./run-admission.js";
@@ -512,6 +512,112 @@ describe("cron service run admission cleanup", () => {
       expect(persistedJob?.state.lastError).toBe("prior failure");
     },
   );
+
+  it("does not revive a pre-stop manual activation when the scheduler immediately restarts", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:03.125Z");
+    const job = createDueIsolatedJob({
+      id: "manual-activation-retired-by-restart",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    job.state.lastError = "prior failure";
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    let now = dueAt;
+    let restart: Promise<void> | undefined;
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+    const stopObserving = observeCronJobWrites(job.id, ({ queuedAtMs, runningAtMs }) => {
+      if (queuedAtMs === dueAt) {
+        now = dueAt + 1;
+      } else if (runningAtMs === dueAt + 1 && !restart) {
+        stop(state);
+        restart = start(state);
+      }
+    });
+
+    try {
+      await expect(run(state, job.id, "force")).resolves.toEqual({
+        ok: true,
+        ran: false,
+        reason: "stopped",
+      });
+      await restart;
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+      const persisted = (await loadCronStore(store.storePath)).jobs.find(
+        (entry) => entry.id === job.id,
+      );
+      expect(persisted?.state.runningAtMs).toBeUndefined();
+      expect(persisted?.state.lastError).toBe("prior failure");
+      const receipt = openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+        )
+        .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
+      expect(receipt?.status).toBe("skipped");
+    } finally {
+      stopObserving();
+      await restart;
+      stop(state);
+    }
+  });
+
+  it("rejects an activated manual run when its scheduler restarts before payload dispatch", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:03.150Z");
+    const job = createDueIsolatedJob({
+      id: "manual-dispatch-retired-by-restart",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    let restart: Promise<void> | undefined;
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      onEvent: (event) => {
+        if (event.action === "started" && !restart) {
+          stop(state);
+          restart = start(state);
+        }
+      },
+    });
+
+    try {
+      await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      await restart;
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+      const receipt = openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+        )
+        .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
+      expect(receipt?.status).toBe("error");
+    } finally {
+      await restart;
+      stop(state);
+    }
+  });
 
   it.each(["manual", "scheduled", "startup"] as const)(
     "retries %s cleanup when stop wins the reservation write",

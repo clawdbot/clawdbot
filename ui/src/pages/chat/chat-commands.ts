@@ -3,6 +3,7 @@ import type { CommandsListResult } from "../../../../packages/gateway-protocol/s
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
@@ -31,6 +32,7 @@ import { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import type { ChatExportResult } from "./export.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
 
@@ -76,7 +78,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     sessionsResultAgentId?: string | null;
     createChatSession?: () => Promise<boolean>;
     confirmConversationReset?: () => Promise<boolean>;
-    exportCurrentChat?: () => Promise<void> | void;
+    exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
   } & UiSessionDefaultsHost &
@@ -389,7 +391,10 @@ export async function dispatchChatSlashCommand(
       }
       break;
     case "export-session":
-      await host.exportCurrentChat?.();
+      if ((await host.exportCurrentChat?.()) === "empty") {
+        injectCommandResult(host, t("chat.commandResults.emptyExport"));
+        scheduleChatScroll(host, false, false, { contentChanged: true });
+      }
       return "completed";
   }
 
@@ -464,7 +469,7 @@ export async function dispatchChatSlashCommand(
     );
   }
 
-  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
+  if (result.modelChanged) {
     if (targetIsCurrent()) {
       await host.refreshCurrentSessionTools?.();
     }

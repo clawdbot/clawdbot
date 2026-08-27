@@ -1,0 +1,95 @@
+{
+  "id": "a2a",
+  "name": "A2A",
+  "description": "A2A v1.0 Agent-to-Agent protocol channel plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "a2a"
+  ],
+  "channelConfigs": {
+    "a2a": {
+      "label": "A2A",
+      "description": "A2A peer authentication, discovery, and task delivery.",
+      "uiHints": {
+        "advertisedUrl": {
+          "label": "Advertised Gateway URL"
+        },
+        "peers.*.token": {
+          "label": "Inbound Bearer Token",
+          "sensitive": true
+        },
+        "peers.*.outboundToken": {
+          "label": "Outbound Bearer Token",
+          "sensitive": true
+        }
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configWrites": {
+            "type": "boolean"
+          },
+          "advertisedUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://"
+          },
+          "replyTimeoutMs": {
+            "type": "integer",
+            "minimum": 5000,
+            "maximum": 600000
+          },
+          "rateLimitPerMinute": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "exposeAgents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "peers": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "token"
+              ],
+              "properties": {
+                "token": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://"
+                },
+                "outboundToken": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

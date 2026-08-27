@@ -1,4 +1,5 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
@@ -42,6 +43,18 @@ export type SidebarSessionSection<Row> = {
   work?: boolean;
   rows: Row[];
 };
+
+export function collectKnownSessionGroups(
+  catalog: readonly string[],
+  rows: readonly GatewaySessionRow[],
+): string[] {
+  const catalogSet = new Set(catalog);
+  const discovered = rows
+    .map((row) => normalizeOptionalString(row.category))
+    .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
+    .toSorted((a, b) => a.localeCompare(b));
+  return [...catalog, ...new Set(discovered)];
+}
 
 const DEFAULT_SESSION_SECTION_ORDER = ["ungrouped", "groups", "work"] as const;
 
@@ -239,12 +252,14 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   const groups: Row[] = [];
   const coding: Row[] = [];
   const categories = new Map<string, Row[]>();
+  const knownGroups: string[] = [];
   const people = new Map<string, SidebarSessionSection<Row>>();
   if (grouping === "category") {
     for (const name of options.knownGroups ?? []) {
       const trimmed = name.trim();
       if (trimmed && !categories.has(trimmed)) {
         categories.set(trimmed, []);
+        knownGroups.push(trimmed);
       }
     }
   }
@@ -313,14 +328,9 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       );
     }),
   );
-  const knownGroups = [
-    ...new Set((options.knownGroups ?? []).map((name) => name.trim()).filter(Boolean)),
-  ];
   const orderedCategories = [
-    ...knownGroups.filter((name) => categories.has(name)),
-    ...[...categories.keys()]
-      .filter((name) => !knownGroups.includes(name))
-      .toSorted((a, b) => a.localeCompare(b)),
+    ...knownGroups,
+    ...[...categories.keys()].slice(knownGroups.length).toSorted((a, b) => a.localeCompare(b)),
   ];
   const orderedSections: SidebarSessionSection<Row>[] = orderedCategories.map((category) => ({
     id: `category:${category}`,

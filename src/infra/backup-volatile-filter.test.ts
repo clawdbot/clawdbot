@@ -30,6 +30,12 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress`, false],
     [`${stateDir}/delivery-queue/pending.tmp`, true],
     [`${stateDir}/session-delivery-queue/pending.tmp`, true],
+    [`${stateDir}/browser/openclaw/user-data/SingletonCookie`, true],
+    [`${stateDir}/browser/openclaw/user-data/SingletonLock`, true],
+    [`${stateDir}/browser/openclaw/user-data/SingletonSocket`, true],
+    [`${stateDir}/sandbox/skills-workspaces/workspace-main`, true],
+    [`${stateDir}/sandbox/skills-workspaces/workspace-main/skills/demo`, true],
+    [`${stateDir}/cache/control-ui-assets/generation/assets/app.js`, true],
 
     // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],
@@ -38,6 +44,12 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/cron/jobs.json`, false],
     // non-volatile: cron runs but wrong extension
     [`${stateDir}/cron/runs/2026-01-01/job.json`, false],
+    [`${stateDir}/browser/openclaw/user-data/Preferences`, false],
+    [`${stateDir}/browser/openclaw/user-data/nested/SingletonSocket`, false],
+    [`${stateDir}/browser/openclaw/SingletonSocket`, false],
+    [`${stateDir}/sandbox/registry.json`, false],
+    [`${stateDir}/sandbox/workspaces/workspace-main/README.md`, false],
+    [`${stateDir}/cache/other-product/artifact.bin`, false],
     // non-volatile: plain config
     [`${stateDir}/config.json`, false],
     // non-volatile: workspace files outside state
@@ -107,6 +119,12 @@ describe("isVolatileBackupPath", () => {
       true,
     );
     expect(isVolatileBackupPath(`${winStateDir}\\cron\\runs\\2026\\job.jsonl`, winPlan)).toBe(true);
+    expect(
+      isVolatileBackupPath(`${winStateDir}\\browser\\openclaw\\user-data\\SingletonLock`, winPlan),
+    ).toBe(true);
+    expect(
+      isVolatileBackupPath(`${winStateDir}\\sandbox\\skills-workspaces\\workspace-main`, winPlan),
+    ).toBe(true);
     // `..` escape via backslashes must also be rejected.
     expect(isVolatileBackupPath(`${winStateDir}\\sessions\\..\\config.jsonl`, winPlan)).toBe(false);
   });

@@ -15,6 +15,7 @@ export type RowBuilderContext = {
   agentDir: string;
   inheritedAuthDir?: string;
   authIndex: ModelListAuthIndex;
+  canonicalizeProvider: (provider: string) => string;
   providerDiscoveryProviderIds?: readonly string[];
   providerRuntimeDiscoveryProviderIds?: readonly string[];
   providerManifestFallbackProviderIds?: readonly string[];

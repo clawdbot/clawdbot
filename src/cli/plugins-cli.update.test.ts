@@ -1722,7 +1722,19 @@ describe("plugins cli update", () => {
       nextConfig,
       [
         { pluginId: "alpha", status: "updated", message: "Updated alpha -> 1.1.0" },
-        { pluginId: "beta", status: "error", message: "Failed to update beta: registry timeout" },
+        {
+          pluginId: "beta",
+          status: "error",
+          message: "Failed to update beta: registry timeout",
+          channelFallback: {
+            requestedSpec: "@openclaw/beta@beta",
+            usedSpec: "@openclaw/beta@latest",
+            requestedLabel: "beta",
+            usedLabel: "latest",
+            reason: "failed",
+            message: "Beta channel unavailable; tried latest.",
+          },
+        },
       ],
       true,
     );
@@ -1740,7 +1752,10 @@ describe("plugins cli update", () => {
       installRecords: nextConfig.plugins?.installs,
       reason: "source-changed",
     });
-    expect(pluginsCliRuntimeLogs).toContain("Failed to update beta: registry timeout");
+    expect(runtimeErrors).toContain("Failed to update beta: registry timeout");
+    expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");
+    expect(pluginsCliRuntimeLogs).toContain("Beta channel unavailable; tried latest.");
+    expect(pluginsCliRuntimeLogs).not.toContain("Failed to update beta: registry timeout");
   });
 
   it("exits non-zero when a ClawHub update is skipped for missing risk acknowledgement", async () => {
@@ -1800,7 +1815,8 @@ describe("plugins cli update", () => {
     );
 
     expect(configWriteMock).not.toHaveBeenCalled();
-    expect(pluginsCliRuntimeLogs).toContain(
+    expect(runtimeErrors).toContain('Failed to update hook pack "demo-hooks": registry timeout');
+    expect(pluginsCliRuntimeLogs).not.toContain(
       'Failed to update hook pack "demo-hooks": registry timeout',
     );
   });

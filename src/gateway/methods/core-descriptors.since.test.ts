@@ -102,6 +102,7 @@ const CURRENT_TRAIN_METHODS = [
   "secrets.store.delete",
   "users.prefs.get",
   "users.prefs.set",
+  "users.setRole",
   "desktop.observe",
   "desktop.launch",
   "device.scopes.requestUpgrade",
@@ -120,6 +121,7 @@ const CURRENT_TRAIN_METHODS = [
   "tools.github.authorize.start",
   "tools.github.authorize.poll",
   "tools.github.authorize.cancel",
+  "session.members.listEvidence",
 ] as const;
 
 describe("core gateway method release trains", () => {

@@ -97,14 +97,23 @@ including empty results without range metadata. Only an explicit
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
 
-### Channel state migration declarations
+### Plugin state migration declarations
 
-Channel plugins should declare `doctorContract.stateMigrations: true` in
+Plugins should declare `doctorContract.stateMigrations: true` in
 `openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
 artifact. Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
+
+Use `phase: "after-session-repair"` when a migration needs canonical session
+ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
+them after session repair under SQLite maintenance ownership. The context
+provides bounded `readPluginStateEntriesInKeyRange` and
+`readSessionIdentityEvidenceBatch` reads, plus
+`deletePluginStateEntriesIfUnchanged` only during a fenced repair. Preserve
+unknown or ambiguous ownership. Delete only the observed raw rows; callbacks
+retained after maintenance ends cannot authorize later writes.
 
 The setup-entry `legacyStateMigrations` option and feature flag,
 `setupFeatures.legacyStateMigrations`,

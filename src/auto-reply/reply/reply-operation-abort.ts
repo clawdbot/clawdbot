@@ -1,7 +1,9 @@
 import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import {
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
+  resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -34,6 +36,19 @@ export function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): b
   }
   const abortSignal = replyOperation?.abortSignal;
   return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
+}
+
+export function resolveReplyOperationTerminationFields(
+  error: unknown,
+  signal: AbortSignal | undefined,
+  replyOperation?: ReplyOperation,
+) {
+  return {
+    ...resolveAgentRunErrorLifecycleFields(error, signal),
+    ...(isReplyOperationRestartAbort(replyOperation)
+      ? { aborted: true as const, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON }
+      : {}),
+  };
 }
 
 export function isReplyOperationSuperseded(replyOperation?: ReplyOperation): boolean {

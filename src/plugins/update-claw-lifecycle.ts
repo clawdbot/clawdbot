@@ -1,10 +1,8 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { isPackageVersionDowngrade } from "../infra/package-update-utils.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { installPluginFromNpmSpec } from "./install.js";
-import type { PluginUpdateChannelFallback, PluginUpdateOutcome } from "./update-source.js";
 
 type ClawHubInstallRecord = {
   source?: string;
@@ -39,33 +37,6 @@ export function resolveClawHubRiskAcknowledgementOptions(params: {
   return {
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(!params.dryRun && params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
-  };
-}
-
-export function buildPluginUpdateVersionOutcome(params: {
-  pluginId: string;
-  currentVersion?: string;
-  nextVersion?: string;
-  channelFallbackSuffix: string;
-  channelFallback?: PluginUpdateChannelFallback;
-}): PluginUpdateOutcome {
-  const currentLabel = params.currentVersion ?? "unknown";
-  const nextLabel = params.nextVersion ?? "unknown";
-  const unchanged = Boolean(
-    params.currentVersion && params.nextVersion && params.currentVersion === params.nextVersion,
-  );
-  const verb = isPackageVersionDowngrade(params.currentVersion, params.nextVersion)
-    ? "Downgraded"
-    : "Updated";
-  return {
-    pluginId: params.pluginId,
-    status: unchanged ? "unchanged" : "updated",
-    currentVersion: params.currentVersion,
-    nextVersion: params.nextVersion,
-    message: unchanged
-      ? `${params.pluginId} already at ${currentLabel}.${params.channelFallbackSuffix}`
-      : `${verb} ${params.pluginId}: ${currentLabel} -> ${nextLabel}.${params.channelFallbackSuffix}`,
-    ...(params.channelFallback ? { channelFallback: params.channelFallback } : {}),
   };
 }
 

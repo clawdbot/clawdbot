@@ -48,7 +48,7 @@ describe("openclaw-modal-dialog", () => {
   });
 
   it("opens a labelled modal dialog with an optional description", async () => {
-    const { webAwesomeDialog, dialog } = await renderModal();
+    const { modal, webAwesomeDialog, dialog } = await renderModal();
 
     expect(dialog.open).toBe(true);
     expect(dialog.localName).toBe("dialog");
@@ -57,6 +57,18 @@ describe("openclaw-modal-dialog", () => {
     expect(dialog.getAttribute("aria-label")).toBe("Confirm action");
     expect(dialog.getAttribute("aria-description")).toBe("Review the operation before continuing.");
     expect(dialog.getRootNode()).toBe(webAwesomeDialog.shadowRoot);
+    expect(document.openClawModalLayers?.has(modal)).toBe(true);
+
+    modal.hide();
+    await modal.updateComplete;
+    expect(document.openClawModalLayers?.has(modal)).toBe(false);
+
+    modal.show();
+    await modal.updateComplete;
+    expect(document.openClawModalLayers?.has(modal)).toBe(true);
+
+    modal.remove();
+    expect(document.openClawModalLayers?.has(modal)).toBe(false);
   });
 
   it("focuses the dialog container first", async () => {

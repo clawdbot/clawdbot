@@ -5,6 +5,7 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
+import { repairObsoleteGeneratedExecApprovals } from "../../infra/exec-approvals-generated-migration.js";
 import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -18,7 +19,6 @@ import {
   maybeRepairOpenAICodexAuthConfig,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
-import { maybeMigrateExternalCliProfileMetadata } from "../doctor-external-cli-profiles.js";
 import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { migrateLegacySkillWorkshopProposals } from "../doctor-skill-workshop-sqlite.js";
@@ -110,6 +110,13 @@ export async function runDoctorRepairSequence(params: {
     }
     return params.runWithPluginMetadataSnapshot(resolveCurrentPluginMetadataScope(), run);
   };
+
+  const removedExecApprovals = repairObsoleteGeneratedExecApprovals();
+  if (removedExecApprovals > 0) {
+    changeNotes.push(
+      `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
+    );
+  }
 
   const applyMutation = (mutation: {
     config: DoctorConfigMutationState["candidate"];
@@ -339,21 +346,6 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   appendRepairNotes(staleOAuthShadowRepair);
-  const externalCliProfileMigration = maybeMigrateExternalCliProfileMetadata({
-    cfg: state.candidate,
-    env,
-  });
-  if (externalCliProfileMigration.configChanged) {
-    state = applyDoctorConfigMutation({
-      state,
-      mutation: {
-        config: state.candidate,
-        changes: ["External CLI OAuth migration updated auth.profiles."],
-      },
-      shouldRepair: true,
-    });
-  }
-  appendRepairNotes(externalCliProfileMigration);
   const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
@@ -379,7 +371,6 @@ export async function runDoctorRepairSequence(params: {
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
-    externalCliProfileMigration.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 
   return {
