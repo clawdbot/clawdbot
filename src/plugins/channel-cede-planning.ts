@@ -92,12 +92,24 @@ export function collectCededChannelIdsByPlugin(params: {
   // that names a plugin, or is off, is decided by config and already filtered in
   // `channel-ownership-policy.ts`. Declining the cede keeps the first-registrant rule, which is
   // the same answer the runtime reaches on its own.
+  // Only plugins that can actually take the slot in THIS load contend for it: one the operator
+  // disabled, or one outside a scoped load, never reaches `resolveMemorySlotDecision` and cannot
+  // displace anyone. Counting them made a deterministic contest look order-dependent and declined
+  // a cede that should have stood, leaving the earlier claimant serving a channel schema ownership
+  // had already moved.
   const memorySlotIsUnset = params.config.plugins?.slots?.memory === undefined;
   const singleKindMemoryIds = new Set(
     params.registry.plugins
       .filter(
         (entry) =>
-          hasKind(entry.kind, "memory") && !(Array.isArray(entry.kind) && entry.kind.length > 1),
+          hasKind(entry.kind, "memory") &&
+          !(Array.isArray(entry.kind) && entry.kind.length > 1) &&
+          !policy.isPluginPolicyDisabled(entry.id) &&
+          matchesScopedPluginOrDreamingSidecar({
+            onlyPluginIdSet: params.onlyPluginIdSet,
+            pluginId: entry.id,
+            sidecar: params.dreamingSidecar,
+          }),
       )
       .map((entry) => entry.id),
   );

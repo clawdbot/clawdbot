@@ -35,8 +35,11 @@ describe("collectCededChannelIdsByPlugin", () => {
     };
   }
 
-  function cededFor(plugins: PluginManifestRecord[]) {
-    const config = { channels: { zzalpha: { token: "alpha" } } } as unknown as OpenClawConfig;
+  function cededFor(plugins: PluginManifestRecord[], extraConfig?: Record<string, unknown>) {
+    const config = {
+      channels: { zzalpha: { token: "alpha" } },
+      ...extraConfig,
+    } as unknown as OpenClawConfig;
     return collectCededChannelIdsByPlugin({
       registry: { plugins, diagnostics: [] } as unknown as PluginManifestRegistry,
       config,
@@ -98,6 +101,30 @@ describe("collectCededChannelIdsByPlugin", () => {
       ringClaimant("zz-plain-early"),
       memoryClaimant("zz-mem-solo", ["zz-plain-early"]),
     ]);
+
+    expect(cededChannelOwners.get("zzalpha")).toBe("zz-mem-solo");
+    expect(cededChannelIdsByPlugin.get("zz-plain-early")).toEqual(["zzalpha"]);
+  });
+
+  // Codex P2 3875920566, on the guard above. The contention set counted every single-kind memory
+  // plugin in the REGISTRY, so an unrelated one the operator disabled -- which can never take the
+  // slot -- made the contest look order-dependent and declined a cede that was in fact
+  // deterministic, leaving the earlier claimant serving a channel schema ownership had moved.
+  // Contention is only real among plugins that can actually participate in this load.
+  it("ignores a policy-disabled memory plugin when judging slot contention", () => {
+    const disabledElsewhere = {
+      ...memoryClaimant("zz-mem-off"),
+      channels: [] as string[],
+      channelConfigs: {},
+    } as PluginManifestRecord;
+    const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor(
+      [
+        ringClaimant("zz-plain-early"),
+        memoryClaimant("zz-mem-solo", ["zz-plain-early"]),
+        disabledElsewhere,
+      ],
+      { plugins: { entries: { "zz-mem-off": { enabled: false } } } },
+    );
 
     expect(cededChannelOwners.get("zzalpha")).toBe("zz-mem-solo");
     expect(cededChannelIdsByPlugin.get("zz-plain-early")).toEqual(["zzalpha"]);

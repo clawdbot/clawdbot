@@ -253,9 +253,13 @@ export function createConfiguredChannelOwnershipPolicy(params: {
         // trusts still loads once selected), so only operator policy can empty the serving set —
         // asking the fuller activation decision here would hand the channel back to an outside
         // claimant while the narrowed pair still serves it.
+        // Slot eligibility counts here for the same reason disablement does: the loader rejects a
+        // single-kind memory candidate the slot passed over just as deterministically as one the
+        // operator disabled, so a pair whose only survivor loses the slot serves nothing either.
         const someNarrowedCandidateServes = [...candidates.ids].some(
           (candidateId) =>
-            !isPluginPolicyDisabled(params.config, candidateId, canonicalId, params.registry),
+            !isPluginPolicyDisabled(params.config, candidateId, canonicalId, params.registry) &&
+            !isRejectedByMemorySlot(canonicalId(candidateId)),
         );
         if (someNarrowedCandidateServes) {
           return false;

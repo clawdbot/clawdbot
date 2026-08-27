@@ -604,6 +604,61 @@ describe("createConfiguredChannelOwnershipPolicy", () => {
     expect(policy.isPluginActive("zzproof-other", "zzproofchat")).toBe(false);
   });
 
+  // Codex P2 3875920556, on the slot filter added in 6766cb07c3. The narrowed-pair fallback asked
+  // only about policy disablement, but a narrowed candidate can also be unable to register because
+  // the memory slot passed it over -- the loader rejects it exactly as deterministically. With one
+  // pair member disabled and the other slot-rejected, nothing narrowed serves, yet the outside
+  // claimant was still reported inactive while it is what actually registers.
+  it("falls back to the outside claimant when the narrowed survivor loses the memory slot", () => {
+    const claimant = (id: string, extra?: Record<string, unknown>) => ({
+      id,
+      origin: "config",
+      channels: ["zzslotchat"],
+      channelConfigs: { zzslotchat: {} },
+      ...extra,
+    });
+    const declaredRegistry = {
+      diagnostics: [],
+      plugins: [
+        claimant("zzslot-plus", {
+          kind: ["memory"],
+          channelConfigs: { zzslotchat: { preferOver: ["zzslot-core"] } },
+        }),
+        claimant("zzslot-core"),
+        claimant("zzslot-other"),
+      ],
+    } as unknown as PluginManifestRegistry;
+    const sourceConfig = {
+      channels: { zzslotchat: { accountLabel: "zz-slot" } },
+      plugins: {
+        entries: { "zzslot-core": { enabled: false } },
+        // The slot names a third plugin, so the surviving narrowed candidate never registers.
+        slots: { memory: "zzsome-other-memory" },
+      },
+    } as unknown as OpenClawConfig;
+    const materialized = materializePluginAutoEnableCandidatesInternal({
+      config: sourceConfig,
+      candidates: resolveConfiguredPluginAutoEnableCandidates({
+        config: sourceConfig,
+        env: {},
+        registry: declaredRegistry,
+        configuredChannelIds: ["zzslotchat"],
+      }),
+      env: {},
+      manifestRegistry: declaredRegistry,
+    }).config;
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config: materialized,
+      sourceConfig,
+      registry: declaredRegistry,
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzslot-plus", "zzslotchat")).toBe(false);
+    expect(policy.isPluginActive("zzslot-other", "zzslotchat")).toBe(true);
+  });
+
   // Codex P1 3845532981: the narrowing above presumes some pair member serves. When the operator
   // disables EVERY narrowed candidate, auto-enable activates none of them, the computed winner is
   // inactive, and the loader stands no cede — the default-loaded claimant outside the pair
