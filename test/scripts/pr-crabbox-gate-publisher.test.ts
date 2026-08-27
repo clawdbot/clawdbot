@@ -216,6 +216,30 @@ describe("Crabbox immutable broker proof", () => {
     ).not.toThrow();
   });
 
+  it("accepts bounded output preview truncation with a complete retained log", () => {
+    const events = brokerEvents();
+    events.splice(events.length - 1, 0, {
+      message: "stdout/stderr event capture capped at 65536 bytes",
+      runID: runId,
+      seq: events.length,
+      type: "output.truncated",
+    });
+    events.forEach((value, index) => {
+      value.seq = index + 1;
+    });
+    expect(() =>
+      validateBrokerProof({
+        bootstrapSha256,
+        context: context(),
+        events,
+        log: retainedLog(),
+        now: Date.parse("2026-08-27T02:00:00Z"),
+        run: brokerRun({ eventCount: events.length }),
+        userId: 42,
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects out-of-order complete broker events", () => {
     const events = brokerEvents();
     const uploaded = events[2];

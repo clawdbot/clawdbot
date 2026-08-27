@@ -224,9 +224,6 @@ export function validateBrokerProof({ bootstrapSha256, context, events, log, now
       throw new Error("Crabbox event sequence or run identity does not match");
     }
     eventTypes.push(eventType);
-    if (eventType === "output.truncated") {
-      throw new Error("Crabbox output event stream was truncated");
-    }
     if (eventType === "run.failed" || eventType.endsWith(".failed")) {
       throw new Error(`Crabbox proof contains failed event ${eventType}`);
     }
