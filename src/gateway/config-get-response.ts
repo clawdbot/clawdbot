@@ -2,6 +2,7 @@ import { readConfigFileSnapshot } from "../config/config.js";
 import { redactConfigSnapshot } from "../config/redact-snapshot.js";
 import {
   getRuntimeConfigAppliedHash,
+  getRuntimeConfigLifecycleEpoch,
   getRuntimeConfigSnapshotMetadata,
   hashRuntimeConfigValue,
 } from "../config/runtime-snapshot.js";
@@ -19,6 +20,7 @@ let configGetResponseCache:
       pluginRegistryVersion: number;
       configSnapshotSourceFingerprint: string | null;
       configSnapshotRevision: number | null;
+      configLifecycleEpoch: number;
       promise: Promise<ConfigGetResponse>;
     }
   | undefined;
@@ -87,9 +89,18 @@ export async function readConfigGetResponse(params: {
   // loop.
   //
   // A snapshot without a source fingerprint proves nothing about the file, so it never hits.
+  //
+  // Both halves still recycle together across a runtime-state reset. `resetConfigRuntimeState`
+  // zeroes the revision counter, and `clearSecretsRuntimeSnapshotState` reaches it on the
+  // managed-secrets failure paths without invalidating this cache, so a comment-only edit
+  // published afterwards counts back up to the cached revision while the parsed-source
+  // fingerprint and the applied hash all hold still -- putting the stale raw hash right back in
+  // the loop the revision was added to break. The lifecycle epoch only ever counts up, so a
+  // snapshot from before a reset can never present the same identity as one from after it.
   const configSnapshotMetadata = getRuntimeConfigSnapshotMetadata();
   const configSnapshotSourceFingerprint = configSnapshotMetadata?.sourceFingerprint ?? null;
   const configSnapshotRevision = configSnapshotMetadata?.revision ?? null;
+  const configLifecycleEpoch = getRuntimeConfigLifecycleEpoch();
   // With an active watcher, cache hits never re-read the file. External edits
   // become visible after its successful commit; the write path invalidates early.
   if (
@@ -100,7 +111,8 @@ export async function readConfigGetResponse(params: {
     configGetResponseCache.configSnapshotSourceFingerprint !== null &&
     configGetResponseCache.configSnapshotSourceFingerprint === configSnapshotSourceFingerprint &&
     configGetResponseCache.configSnapshotRevision !== null &&
-    configGetResponseCache.configSnapshotRevision === configSnapshotRevision
+    configGetResponseCache.configSnapshotRevision === configSnapshotRevision &&
+    configGetResponseCache.configLifecycleEpoch === configLifecycleEpoch
   ) {
     return await configGetResponseCache.promise;
   }
@@ -121,6 +133,7 @@ export async function readConfigGetResponse(params: {
     pluginRegistryVersion,
     configSnapshotSourceFingerprint,
     configSnapshotRevision,
+    configLifecycleEpoch,
     promise,
   };
   try {

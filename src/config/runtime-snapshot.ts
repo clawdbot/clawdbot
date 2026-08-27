@@ -111,6 +111,10 @@ let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
 let runtimeConfigAppliedHash: string | null = null;
 let runtimeConfigSnapshotRevision = 0;
+// Bumped, never reset. `resetConfigRuntimeState` zeroes the revision counter, so two different
+// snapshots either side of a reset can carry the same revision number. Anything caching against
+// the revision needs a value that cannot recycle to tell them apart.
+let runtimeConfigLifecycleEpoch = 0;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 type ManagedRuntimeConfigWritePreflight = (
   sourceConfig: OpenClawConfig,
@@ -242,6 +246,7 @@ export function resetConfigRuntimeState(): void {
   runtimeConfigSnapshotMetadata = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
+  runtimeConfigLifecycleEpoch += 1;
   resetPublishedConfigRuntimeEnv();
 }
 
@@ -259,6 +264,11 @@ export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
 
 export function getRuntimeConfigSnapshotMetadata(): RuntimeConfigSnapshotMetadata | null {
   return runtimeConfigSnapshotMetadata;
+}
+
+/** Counts runtime-state resets, so a recycled snapshot revision is still distinguishable. */
+export function getRuntimeConfigLifecycleEpoch(): number {
+  return runtimeConfigLifecycleEpoch;
 }
 
 /** Resolved source-config revision accepted by the active Gateway runtime. */

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     updatedAtMs: number;
   } | null,
   pluginRegistryVersion: 1,
+  lifecycleEpoch: 0,
   readConfigFileSnapshot: vi.fn<() => Promise<ConfigFileSnapshot>>(),
 }));
 
@@ -33,6 +34,7 @@ vi.mock("../config/runtime-snapshot.js", async (importOriginal) => {
     ...actual,
     getRuntimeConfigAppliedHash: () => mocks.appliedConfigHash,
     getRuntimeConfigSnapshotMetadata: () => mocks.configSnapshotMetadata,
+    getRuntimeConfigLifecycleEpoch: () => mocks.lifecycleEpoch,
   };
 });
 
@@ -85,6 +87,7 @@ beforeEach(() => {
     updatedAtMs: 0,
   };
   mocks.pluginRegistryVersion = 1;
+  mocks.lifecycleEpoch = 0;
   mocks.readConfigFileSnapshot.mockReset();
   mocks.readConfigFileSnapshot.mockResolvedValue(configSnapshot({ gateway: { port: 19_001 } }));
 });
@@ -139,6 +142,38 @@ describe("config.get response cache", () => {
     ).resolves.toMatchObject({ appliedConfigHash: "resolved-token:applied-1" });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  // `resetConfigRuntimeState` zeroes the snapshot revision counter, and the managed-secrets
+  // failure paths reach it without invalidating this cache. A comment-only edit published after
+  // that reset counts the revision back to a number the cache already holds, while the parsed
+  // fingerprint and applied hash never moved -- so every field of the pre-reset key matches and
+  // the response serves the raw hash from before the edit. Clients hand that hash back as the
+  // compare-and-swap base, every write is rejected, and the retry gets the same stale hash.
+  it("rebuilds after a runtime-state reset recycles the snapshot revision", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...configSnapshot({ gateway: { port: 19_001 } }),
+      hash: "raw-before-edit",
+    });
+    const first = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+    expect(first.hash).toBe("raw-token:raw-before-edit");
+
+    // The reset, then a comment-only edit republished: same parsed config, new bytes on disk.
+    mocks.lifecycleEpoch = 1;
+    mocks.configSnapshotMetadata = {
+      revision: 1,
+      fingerprint: "runtime-1",
+      sourceFingerprint: "source-1",
+      updatedAtMs: 0,
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...configSnapshot({ gateway: { port: 19_001 } }),
+      hash: "raw-after-edit",
+    });
+
+    const second = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+    expect(second.hash).toBe("raw-token:raw-after-edit");
   });
 
   it("rebuilds when the active plugin metadata generation changes", async () => {
