@@ -298,17 +298,6 @@ export const slackOutbound: ChannelOutboundAdapter = {
         }) ?? "",
     };
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
-    // TTS voice-note delivery is media-first: the synthesized audio is the
-    // primary message and the spoken text rides as the upload caption. Skip
-    // rendered-block resolution entirely — Slack rejects blocks alongside a
-    // media upload, and a voice note is not a block presentation.
-    if (payload.audioAsVoice === true && resolvePayloadMediaUrls(payload).length > 0) {
-      return await sendTextMediaPayload({
-        channel: "slack",
-        ctx: { ...ctx, payload },
-        adapter: slackOutbound,
-      });
-    }
     const renderedResolution = readSlackRenderedPresentation(slackData);
     let resolution: SlackReplyBlockResolution;
     if (renderedResolution) {

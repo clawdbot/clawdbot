@@ -65,7 +65,8 @@ describe("TTS runtime native voice-note routing", () => {
       expect(testApi.supportsNativeVoiceNoteTts(channel)).toBe(true);
       expect(testApi.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
     }
-    expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(false);
+    expect(testApi.resolveTtsSynthesisTarget("slack")).toBe("voice-note");
+    expect(testApi.supportsNativeVoiceNoteTts("email")).toBe(false);
     expect(testApi.supportsNativeVoiceNoteTts(undefined)).toBe(false);
   });
 

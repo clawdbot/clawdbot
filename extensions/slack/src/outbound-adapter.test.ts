@@ -532,7 +532,7 @@ describe("slackOutbound", () => {
     );
   });
 
-  it("delivers a TTS voice note as a single captioned media upload without blocks", async () => {
+  it("delivers a TTS voice note as a captioned media upload when no rendered blocks are present", async () => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-voice" });
 
     const result = await slackOutbound.sendPayload!({
@@ -545,9 +545,6 @@ describe("slackOutbound", () => {
         audioAsVoice: true,
         spokenText: "Spoken summary of the deploy.",
         trustedLocalMedia: true,
-        presentation: {
-          blocks: [{ type: "text", text: "Block body that must not be sent" }],
-        },
       },
       mediaLocalRoots: ["/tmp"],
       accountId: "default",
@@ -564,6 +561,67 @@ describe("slackOutbound", () => {
     );
     expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
     expect(result).toMatchObject({ channel: "slack", messageId: "m-voice" });
+  });
+
+  it("preserves rendered blocks alongside a TTS voice-note media upload", async () => {
+    sendMessageSlackMock
+      .mockResolvedValueOnce({ messageId: "m-voice" })
+      .mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    const result = await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Spoken summary of the deploy.",
+        mediaUrl: "file:///tmp/tts/deploy.ogg",
+        audioAsVoice: true,
+        spokenText: "Spoken summary of the deploy.",
+        trustedLocalMedia: true,
+        presentation: {
+          blocks: [{ type: "text", text: "Block body that must accompany the voice note" }],
+        },
+      },
+      mediaLocalRoots: ["/tmp"],
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(1, "C123", "", {
+      cfg,
+      threadTs: undefined,
+      accountId: "default",
+      mediaUrl: "file:///tmp/tts/deploy.ogg",
+      mediaAccess: undefined,
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile: undefined,
+    });
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
+      2,
+      "C123",
+      "Spoken summary of the deploy.\n\nBlock body that must accompany the voice note",
+      expect.objectContaining({
+        authoredTextPlacement: "blocks",
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Spoken summary of the deploy.", verbatim: true },
+          },
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Block body that must accompany the voice note" },
+          },
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      channel: "slack",
+      receipt: {
+        platformMessageIds: ["m-voice", "m-blocks"],
+        primaryPlatformMessageId: "m-voice",
+      },
+    });
   });
 
   it("does not take the voice path when audioAsVoice is set but no media is present", async () => {

@@ -812,10 +812,10 @@ whether voice-style TTS should ask providers for a native `voice-note` target or
 keep normal `audio-file` synthesis, and whether the channel transcodes
 non-native output before sending.
 
-Telegram also advertises captioned final TTS. With `tts.mode: "final"` and
-Auto-TTS set to `always` (or eligible `inbound` mode), streamed text is held
-until synthesis finishes and sent as the voice-note caption. Text beyond
-Telegram's caption limit follows the voice note as a normal text message. If
+Telegram and Slack also advertise captioned final TTS. With `tts.mode: "final"`
+and Auto-TTS set to `always` (or eligible `inbound` mode), streamed text is held
+until synthesis finishes and sent as the voice-note caption. Text beyond the
+channel caption limit follows the voice note as a normal text message. If
 synthesis or a proven pre-send delivery step fails, OpenClaw sends the visible
 text instead. `tagged` mode keeps its normal streaming behavior, and text
 inside a `[[tts:text]]` block remains audio-only.
@@ -827,11 +827,12 @@ Local CLI providers may still use `{{OutputPath}}` as scratch space before
 OpenClaw imports the completed bytes. See [Media playback](/nodes/media-playback)
 for inline-player formats and limits.
 
-| Target                                | Format                                                                                                                                |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size. |
-| Other channels                        | **MP3** (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI). 44.1 kHz / 128 kbps is the default balance for speech.                  |
-| Talk / telephony                      | Provider-native **PCM** (Inworld 22050 Hz, Google 24 kHz), or `ulaw_8000` from Gradium for telephony.                                 |
+| Target                                | Format                                                                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size.   |
+| Slack                                 | Voice-note replies prefer **Opus** like the channels above; Slack recognizes the upload as audio and transcodes it for inline playback. |
+| Other channels                        | **MP3** (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI). 44.1 kHz / 128 kbps is the default balance for speech.                    |
+| Talk / telephony                      | Provider-native **PCM** (Inworld 22050 Hz, Google 24 kHz), or `ulaw_8000` from Gradium for telephony.                                   |
 
 Per-provider notes:
 
@@ -865,10 +866,10 @@ When `tts.auto` is enabled, OpenClaw:
   `summaryModel` (or `agents.defaults.model.primary`).
 - Attaches the generated audio to the reply.
 - In `mode: "final"`, sends TTS after streamed text completes. Channels without
-  captioned-final support receive an audio-only supplement; Telegram puts text
-  within its caption limit on the voice note and sends overflow as follow-up
-  text. Generated media goes through the same channel media normalization as
-  normal reply attachments.
+  captioned-final support receive an audio-only supplement; Telegram and Slack
+  put text within their caption limit on the voice note and send overflow as
+  follow-up text. Generated media goes through the same channel media
+  normalization as normal reply attachments.
 
 If the reply exceeds `maxLength`, OpenClaw never skips audio outright:
 

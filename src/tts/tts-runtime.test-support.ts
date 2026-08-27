@@ -80,7 +80,10 @@ vi.mock("../channels/plugins/tts-capabilities.js", () => ({
     if (normalized === "feishu" || normalized === "whatsapp") {
       return { synthesisTarget: "voice-note", transcodesAudio: true };
     }
-    if (normalized === "discord" || normalized === "matrix" || normalized === "telegram") {
+    if (normalized === "slack" || normalized === "telegram") {
+      return { synthesisTarget: "voice-note", captionedFinalText: true };
+    }
+    if (normalized === "discord" || normalized === "matrix") {
       return { synthesisTarget: "voice-note" };
     }
     return undefined;
@@ -151,6 +154,7 @@ export const nativeVoiceNoteChannels = [
   "discord",
   "feishu",
   "matrix",
+  "slack",
   "telegram",
   "whatsapp",
 ] as const;

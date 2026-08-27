@@ -328,11 +328,23 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
 
   it("keeps non-native voice-note channels as regular audio files", async () => {
     await expectTtsPayloadResult({
-      channel: "slack",
-      prefsName: "openclaw-speech-core-tts-slack-test",
-      text: "Slack replies should be delivered as regular audio attachments.",
+      channel: "email",
+      prefsName: "openclaw-speech-core-tts-email-test",
+      text: "Email replies should be delivered as regular audio attachments.",
       target: "audio-file",
       audioAsVoice: undefined,
+    });
+  });
+
+  it("routes Slack TTS as a native voice note with captioned final text", async () => {
+    expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(true);
+    expect(testApi.resolveTtsSynthesisTarget("slack")).toBe("voice-note");
+    await expectTtsPayloadResult({
+      channel: "slack",
+      prefsName: "openclaw-speech-core-tts-slack-voice-note-test",
+      text: "Slack replies are spoken as voice notes with the text as caption.",
+      target: "voice-note",
+      audioAsVoice: true,
     });
   });
 
