@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
-import type { PreparedCliRunContext, RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
@@ -135,31 +135,24 @@ describe("executeAgentTurn: CLI session routing", () => {
         input: "stdin" as const,
         serialize: true,
       };
-      const executionContext: PreparedCliRunContext = {
-        params: {
-          ...run,
-          admittedRunContext: createTestAdmittedRunContext(run.runId),
-          skillsSnapshot: undefined,
-        },
-        started: Date.now(),
+      const prepared = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: run.model,
+        runId: run.runId,
         workspaceDir: run.workspaceDir,
-        cwd: run.cwd,
-        backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
-        preparedBackend: { backend, env: {} },
-        reusableCliSession: { mode: "reuse", sessionId: observedCliSessionId },
-        hadSessionFile: false,
-        contextEngineConfig: run.config ?? {},
-        modelId: run.model ?? "claude-sonnet-4-6",
-        normalizedModel: run.model ?? "claude-sonnet-4-6",
-        systemPrompt: "system",
-        systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-        claudeSkillsPluginArgs: [],
-        bootstrapPromptWarningLines: [],
-        authEpochVersion: 2,
+        config: run.config,
+        backend,
+      });
+      prepared.params = {
+        ...run,
+        admittedRunContext: prepared.params.admittedRunContext,
+        skillsSnapshot: undefined,
       };
+      prepared.cwd = run.cwd;
+      prepared.reusableCliSession = { mode: "reuse", sessionId: observedCliSessionId };
       executeDeps.invokeNodeClaudeCliRun = nodeInvoke;
       try {
-        await executePreparedCliRun(executionContext, observedCliSessionId);
+        await executePreparedCliRun(prepared, observedCliSessionId);
       } finally {
         executeDeps.invokeNodeClaudeCliRun = restoreNodeInvoke;
       }
