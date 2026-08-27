@@ -835,6 +835,32 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
+  it("marks pending reply work after its chat run registration is gone", async () => {
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        getPendingReplyCount: () => 1,
+        markMainSessionsAbortedForRestart,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKeys: new Set(),
+        sessionIds: new Set(),
+        activeRuns: [],
+        reason: "gateway restart shutdown",
+      }),
+    );
+  });
+
   it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
@@ -1340,7 +1366,7 @@ describe("createGatewayCloseHandler", () => {
     expect(nodeSendToSession).not.toHaveBeenCalled();
   });
 
-  it("awaits terminal persistence before deciding restart recovery", async () => {
+  it("awaits terminal persistence before deferring restart recovery to its owner", async () => {
     const controller = new AbortController();
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
     const chatAbortControllers = new Map([
@@ -1374,7 +1400,13 @@ describe("createGatewayCloseHandler", () => {
       drainTimeoutMs: 0,
     });
 
-    expect(markMainSessionsAbortedForRestart).not.toHaveBeenCalled();
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKeys: new Set(),
+        sessionIds: new Set(),
+        activeRuns: [],
+      }),
+    );
     expect(controller.signal.aborted).toBe(true);
     expect(chatAbortControllers.size).toBe(0);
   });

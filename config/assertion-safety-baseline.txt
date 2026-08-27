@@ -3929,7 +3929,6 @@ ui/src/app/browser.ts	1
 ui/src/app/canvas-surface-lease.runtime.ts	3
 ui/src/app/config.ts	1
 ui/src/app/custom-theme.ts	2
-ui/src/app/gateway-store.ts	1
 ui/src/app/native-bridge.ts	3
 ui/src/app/native-gateways.runtime.ts	4
 ui/src/app/native-link-routing.ts	3
@@ -4059,7 +4058,6 @@ ui/src/lib/session-pull-requests.ts	2
 ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
-ui/src/lib/sessions/navigation.ts	1
 ui/src/lib/sessions/reconcile.ts	10
 ui/src/lib/sessions/session-key.ts	4
 ui/src/lib/sessions/swarm-activity.ts	1

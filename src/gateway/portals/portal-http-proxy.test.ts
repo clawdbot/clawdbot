@@ -648,6 +648,88 @@ describe("portal HTTP proxy", () => {
     }
   });
 
+  it.each([
+    ["direct", "complete"],
+    ["local", "complete"],
+    ["worker", "complete"],
+    ["direct", "abort"],
+    ["local", "abort"],
+    ["worker", "abort"],
+  ] as const)(
+    "delivers %s response headers before the first body chunk and handles %s",
+    async (kind, completion) => {
+      let appResponse: ServerResponse | undefined;
+      targetHandler = (req, res) => {
+        if (req.url === "/events") {
+          appResponse = res;
+          res.setHeader("Content-Type", "text/event-stream");
+          res.setHeader("X-App", "header-first");
+          res.flushHeaders();
+          return;
+        }
+        if (req.url === "/start" && req.method === "POST" && appResponse) {
+          res.writeHead(204).end();
+          if (completion === "complete") {
+            appResponse.end("data: started\n\n");
+          } else {
+            appResponse.destroy();
+          }
+          return;
+        }
+        res.writeHead(404).end();
+      };
+      const portal =
+        kind === "direct"
+          ? undefined
+          : await portalService().open({
+              targetPort,
+              ...(kind === "worker"
+                ? { target: workerTarget(async () => createWorkerStream(targetPort), targetPort) }
+                : {}),
+            });
+      const connection = {
+        host: "127.0.0.1",
+        port: portal?.listenPort ?? targetPort,
+        ...(portal ? { headers: { Cookie: portalAuthCookie(portal) } } : {}),
+      };
+      const browserRequest = request({
+        ...connection,
+        path: "/events",
+        signal: AbortSignal.timeout(3_000),
+      });
+      const responseHeaders = new Promise<IncomingMessage>((resolve, reject) => {
+        browserRequest.once("response", resolve);
+        browserRequest.once("error", reject);
+      });
+      browserRequest.end();
+      try {
+        // An idle event stream opens before the client asks the app to produce data.
+        const browserResponse = await responseHeaders;
+        expect(browserResponse.statusCode).toBe(200);
+        expect(browserResponse.headers["content-type"]).toBe("text/event-stream");
+        expect(browserResponse.headers["x-app"]).toBe("header-first");
+        const chunks: Buffer[] = [];
+        const responseClosed = new Promise<void>((resolve) => {
+          browserResponse.on("data", (chunk: Buffer) => chunks.push(chunk));
+          browserResponse.on("error", () => undefined);
+          browserResponse.once("close", resolve);
+        });
+        expect(await httpCall({ ...connection, path: "/start", method: "POST" })).toMatchObject({
+          status: 204,
+        });
+        await responseClosed;
+        expect(browserResponse.statusCode).toBe(200);
+        expect(browserResponse.complete).toBe(completion === "complete");
+        expect(Buffer.concat(chunks).toString("utf8")).toBe(
+          completion === "complete" ? "data: started\n\n" : "",
+        );
+      } finally {
+        browserRequest.destroy();
+        appResponse?.destroy();
+      }
+    },
+  );
+
   it.each(["rejected", "closed", "reset"] as const)(
     "shows the worker retry page for HTTP and upgrades when its node stream is %s",
     async (streamState) => {

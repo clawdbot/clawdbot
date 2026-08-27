@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
+import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -37,7 +38,13 @@ async function markRecoveryStore(params: {
     entry: SessionEntry,
     sessionKey: string,
   ) =>
-    | { action: "mark"; replaceRuns?: boolean; resetRuntime?: boolean; runs?: RestartRecoveryRun[] }
+    | {
+        action: "mark";
+        forceRestartSafeTools?: boolean;
+        replaceRuns?: boolean;
+        resetRuntime?: boolean;
+        runs?: RestartRecoveryRun[];
+      }
     | { action: "retire_terminal" }
     | undefined;
 }) {
@@ -70,6 +77,9 @@ async function markRecoveryStore(params: {
         }
         if (plan.replaceRuns) {
           entry.restartRecoveryRuns = plan.runs;
+        }
+        if (plan.forceRestartSafeTools) {
+          entry.restartRecoveryForceSafeTools = true;
         }
         transitionMainSessionRecovery(entry, {
           kind: "mark_interrupted",
@@ -121,7 +131,15 @@ export async function markRestartAbortedMainSessions(params: {
     .filter((run) => run.runId && run.lifecycleGeneration && (run.sessionKey || run.sessionId));
   const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
   const result = { marked: 0, skipped: 0 };
-  if (sessionKeys.size === 0 && sessionIds.size === 0) {
+  // Channel work can outlive its chat-run registration. The admission owner
+  // retains the authoritative store and session identities until the turn releases.
+  const activeAdmissions = collectActiveSessionWorkAdmissions();
+  if (
+    sessionKeys.size === 0 &&
+    sessionIds.size === 0 &&
+    activeRuns.length === 0 &&
+    activeAdmissions.size === 0
+  ) {
     return result;
   }
 
@@ -169,7 +187,11 @@ export async function markRestartAbortedMainSessions(params: {
     storePaths.add(path.join(sessionsDir, "sessions.json"));
   }
 
+  for (const storePath of activeAdmissions.keys()) {
+    storePaths.add(storePath);
+  }
   for (const storePath of storePaths) {
+    const activeAdmissionIdentities = activeAdmissions.get(storePath) ?? new Set<string>();
     const storeResult = await markRecoveryStore({
       storePath,
       plan: (entry, sessionKey) => {
@@ -190,14 +212,20 @@ export async function markRestartAbortedMainSessions(params: {
         if (
           entry.status !== "running" &&
           matchingActiveRuns.length === 0 &&
-          registeredActiveRuns.length === 0
+          registeredActiveRuns.length === 0 &&
+          !activeAdmissionIdentities.has(sessionKey) &&
+          !activeAdmissionIdentities.has(entry.sessionId)
         ) {
           return undefined;
         }
+        const matchedActiveAdmission =
+          activeAdmissionIdentities.has(sessionKey) ||
+          activeAdmissionIdentities.has(entry.sessionId);
         const matches =
-          typeof entry.sessionId === "string" && sessionIds.has(entry.sessionId)
+          matchedActiveAdmission ||
+          (typeof entry.sessionId === "string" && sessionIds.has(entry.sessionId)
             ? true
-            : !preferSessionIdMatch && sessionKeys.has(sessionKey);
+            : !preferSessionIdMatch && sessionKeys.has(sessionKey));
         if (!matches) {
           return undefined;
         }
@@ -212,7 +240,13 @@ export async function markRestartAbortedMainSessions(params: {
             lifecycleGeneration,
           })),
         ]);
-        return { action: "mark", replaceRuns: true, resetRuntime: !wasRunning, runs };
+        return {
+          action: "mark",
+          forceRestartSafeTools: matchedActiveAdmission,
+          replaceRuns: true,
+          resetRuntime: !wasRunning,
+          runs,
+        };
       },
     });
     result.marked += storeResult.marked;
