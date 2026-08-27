@@ -703,10 +703,8 @@ export class ShellChromeOwner {
       : Promise.resolve(false);
   }
 
-  private dispatchLazyShellEvent(event: LazyShellEvent): boolean {
-    return window.dispatchEvent(
-      new CustomEvent(event.eventType, { cancelable: true, detail: event.detail }),
-    );
+  private dispatchLazyShellEvent({ eventType, detail }: LazyShellEvent): boolean {
+    return window.dispatchEvent(new CustomEvent(eventType, { cancelable: true, detail }));
   }
 
   private clearPendingLazyAction(event: LazyShellEvent): void {
