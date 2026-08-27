@@ -69,7 +69,9 @@ function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boo
   return false;
 }
 
-function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelAuthMode): string {
+function resolveConfiguredAuthChannelInput(mode: ChannelAuthMode): string {
+  // Account callbacks need runtime values; this auto-enabled view is never persisted.
+  const cfg = applyPluginAutoEnable({ config: getRuntimeConfig(), env: process.env }).config;
   const configured = listChannelPlugins()
     .filter((plugin): plugin is ChannelPlugin => supportsChannelAuthMode(plugin, mode))
     .filter((plugin) => isConfiguredAuthPlugin(plugin, cfg))
@@ -107,7 +109,7 @@ async function resolveChannelPluginForMode(
   const autoEnabled = applyPluginAutoEnable({ config: snapshot.sourceConfig, env: process.env });
   const cfg = autoEnabled.config;
   const explicitChannel = opts.channel?.trim();
-  const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(cfg, mode);
+  const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(mode);
   const normalizedChannelId = normalizeChannelId(channelInput);
 
   const resolved = await resolveInstallableChannelPlugin({
