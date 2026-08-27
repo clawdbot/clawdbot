@@ -115,7 +115,7 @@ async function writeArchive(params: {
 }
 
 describe("backupRestoreCommand", () => {
-  it.each([
+  it.for([
     { targetForm: "qualified", suffix: "" },
     { targetForm: "root-relative", suffix: "" },
     { targetForm: "qualified", suffix: " " },
