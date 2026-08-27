@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
@@ -787,8 +788,8 @@ describe("read tool", () => {
   it("waits for a queued write before reading the same new file", async () => {
     const tempDir = tempDirs.make("openclaw-read-write-order-");
     const filePath = path.join(tempDir, "race-target.txt");
-    const blockerStarted = Promise.withResolvers<void>();
-    const releaseBlocker = Promise.withResolvers<void>();
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
     const blocker = withFileMutationQueue(filePath, async () => {
       blockerStarted.resolve();
       await releaseBlocker.promise;
@@ -813,7 +814,9 @@ describe("read tool", () => {
         () => "settled" as const,
         () => "settled" as const,
       ),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 25);
+      }),
     ]);
 
     releaseBlocker.resolve();
