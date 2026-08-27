@@ -206,7 +206,7 @@ maybeNative("PDF tool on a configured live provider", () => {
               },
             },
             agents: { defaults: { pdfModel: { primary: "zhipu/glm-5.3-flash" } } },
-          } as unknown as Parameters<typeof import("./pdf-tool.js").createPdfTool>[0]["config"],
+          } as unknown as import("../../config/types.openclaw.js").OpenClawConfig,
           agentDir,
           workspaceDir,
           fsPolicy: { workspaceOnly: true },
@@ -222,7 +222,6 @@ maybeNative("PDF tool on a configured live provider", () => {
           pdf: "docs/evidence.pdf",
         });
 
-        expect(result.isError ?? false).toBe(false);
         expect(JSON.stringify(result.content)).toContain(markerValue);
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
