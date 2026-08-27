@@ -2016,6 +2016,7 @@ describe("plugins cli install", () => {
 
     expect(npmInstallCall(0).spec).toBe("@openclaw/brave-plugin@beta");
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain(
       "No @openclaw/brave-plugin@beta release is published for this gateway",

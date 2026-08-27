@@ -49,7 +49,11 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
-import { isUnavailableNpmTarget, type PluginInstallLogger } from "./install-types.js";
+import {
+  isUnavailableNpmTarget,
+  PLUGIN_INSTALL_ERROR_CODE,
+  type PluginInstallLogger,
+} from "./install-types.js";
 import {
   installPluginFromNpmPackArchive,
   installPluginFromNpmSpec,
@@ -170,6 +174,8 @@ export type ManagedPluginSourceInstallRequest =
       mode?: "install" | "update";
       expectedPluginId?: string;
       expectedIntegrity?: string;
+      /** Host-validated official catalog provenance for release-cohort resolution. */
+      trustedSourceLinkedOfficialInstall?: true;
       acknowledgeClawHubRisk?: boolean;
       onClawHubRisk?: NonNullable<Parameters<typeof installPluginFromClawHub>[0]["onClawHubRisk"]>;
     }
@@ -1244,7 +1250,9 @@ function resolveOfficialManagedInstallSpec(params: {
   config: OpenClawConfig;
 }): string | null {
   const { request } = params;
-  if (request.source === "npm" && request.trustedSourceLinkedOfficialInstall !== true) {
+  const trustedSourceLinkedOfficialInstall =
+    request.source !== "official" && request.trustedSourceLinkedOfficialInstall === true;
+  if (request.source === "npm" && !trustedSourceLinkedOfficialInstall) {
     return null;
   }
   // An integrity pin identifies one exact artifact, so it outranks the channel.
@@ -1255,7 +1263,12 @@ function resolveOfficialManagedInstallSpec(params: {
     request.source === "clawhub"
       ? parseClawHubPluginSpec(request.spec)?.name
       : parseRegistryNpmSpec(request.spec)?.name;
-  if (!packageName || !getOfficialExternalPluginCatalogEntryForPackage(packageName)) {
+  if (
+    !packageName ||
+    (request.source !== "official" &&
+      !trustedSourceLinkedOfficialInstall &&
+      !getOfficialExternalPluginCatalogEntryForPackage(packageName))
+  ) {
     return null;
   }
   const updateChannel = resolveRegistryUpdateChannel({
@@ -1321,6 +1334,7 @@ export async function installManagedPluginSource(
   }
   return {
     ...result,
+    code: PLUGIN_INSTALL_ERROR_CODE.RELEASE_COHORT_UNAVAILABLE,
     error: `No ${installSpec} release is published for this gateway. Installing ${request.spec} would resolve a build from another release; pass an explicit version to install one anyway.`,
   };
 }
@@ -1567,6 +1581,7 @@ function resolveManagedClawHubInstallRequest(params: {
   return {
     source: "clawhub",
     spec: buildClawHubSpec(packageName, version),
+    ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
     ...(expectedPluginId ? { expectedPluginId } : {}),
     ...(expectedIntegrity ? { expectedIntegrity } : {}),
     ...(params.request.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),

@@ -29,6 +29,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   INVALID_OPENCLAW_EXTENSIONS: "invalid_openclaw_extensions",
   NPM_METADATA_FAILURE: "npm_metadata_failure",
   NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+  RELEASE_COHORT_UNAVAILABLE: "release_cohort_unavailable",
   PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
   SECURITY_SCAN_BLOCKED: "security_scan_blocked",
   SECURITY_SCAN_FAILED: "security_scan_failed",
