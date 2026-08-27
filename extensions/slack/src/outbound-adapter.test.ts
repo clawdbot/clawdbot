@@ -587,32 +587,37 @@ describe("slackOutbound", () => {
     });
 
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(1, "C123", "", {
-      cfg,
-      threadTs: undefined,
-      accountId: "default",
-      mediaUrl: "file:///tmp/tts/deploy.ogg",
-      mediaAccess: undefined,
-      mediaLocalRoots: ["/tmp"],
-      mediaReadFile: undefined,
-    });
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
+      1,
+      "C123",
+      "Spoken summary of the deploy.",
+      {
+        cfg,
+        threadTs: undefined,
+        accountId: "default",
+        mediaUrl: "file:///tmp/tts/deploy.ogg",
+        mediaAccess: undefined,
+        mediaLocalRoots: ["/tmp"],
+        mediaReadFile: undefined,
+      },
+    );
     expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
     expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
       2,
       "C123",
-      "Spoken summary of the deploy.\n\nBlock body that must accompany the voice note",
+      "Block body that must accompany the voice note",
       expect.objectContaining({
-        authoredTextPlacement: "blocks",
         blocks: [
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: "Spoken summary of the deploy.", verbatim: true },
-          },
           {
             type: "section",
             text: { type: "mrkdwn", text: "Block body that must accompany the voice note" },
           },
         ],
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[1]?.[2]?.blocks).not.toContainEqual(
+      expect.objectContaining({
+        text: expect.objectContaining({ text: "Spoken summary of the deploy." }),
       }),
     );
     expect(result).toMatchObject({

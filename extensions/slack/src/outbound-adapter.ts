@@ -126,7 +126,10 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   return { username, iconUrl, iconEmoji };
 }
 
-function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyBlockResolution {
+function resolveSlackOutboundBlockResolution(
+  payload: ReplyPayload,
+  options: { materializeAuthoredText?: boolean } = {},
+): SlackReplyBlockResolution {
   const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
   const presentation = normalizeMessagePresentation(payload.presentation);
   const hasStructuredContent = Boolean(
@@ -153,7 +156,7 @@ function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyB
         slack: preservedSlackData,
       },
     },
-    { materializeAuthoredText: true },
+    { materializeAuthoredText: options.materializeAuthoredText ?? true },
   );
 }
 
@@ -299,11 +302,19 @@ export const slackOutbound: ChannelOutboundAdapter = {
     };
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const renderedResolution = readSlackRenderedPresentation(slackData);
+    // A TTS voice payload carries its final text in `payload.text` alongside
+    // auxiliary rendered blocks. Slack rejects `blocks` with `mediaUrl`, so the
+    // audio upload and the block delivery are separate messages; the
+    // captioned-final contract requires that final text ride as the upload
+    // caption rather than being materialized into the follow-up blocks.
+    const isVoicePayload = payload.audioAsVoice === true;
     let resolution: SlackReplyBlockResolution;
     if (renderedResolution) {
       resolution = renderedResolution;
     } else {
-      resolution = resolveSlackOutboundBlockResolution(payload);
+      resolution = resolveSlackOutboundBlockResolution(payload, {
+        materializeAuthoredText: !isVoicePayload,
+      });
     }
     if (resolution.segments.length === 0) {
       return await sendTextMediaPayload({
@@ -313,10 +324,14 @@ export const slackOutbound: ChannelOutboundAdapter = {
       });
     }
     const mediaUrls = resolvePayloadMediaUrls(payload);
+    // For voice payloads the final text is the upload caption; the block
+    // messages carry only auxiliary rendered content, so authored text is not
+    // folded into the delivery messages where it would duplicate the caption.
+    const deliveryText = isVoicePayload ? "" : payload.text;
     const deliveryMessages = resolveSlackReplyDeliveryMessages({
       authoredTextPlacement: resolution.authoredTextPlacement,
       segments: resolution.segments,
-      text: payload.text,
+      text: deliveryText,
     });
     const useSingleDeliveryMarker = mediaUrls.length === 0 && deliveryMessages.length === 1;
     const sentResults: Awaited<ReturnType<SlackSendFn>>[] = [];
@@ -324,7 +339,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
       "slack",
       toSlackOutboundResult(
         await sendPayloadMediaSequenceAndFinalize({
-          text: "",
+          text: isVoicePayload ? (payload.text ?? "") : "",
           mediaUrls,
           send: async ({ text, mediaUrl }) =>
             await sendSlackOutboundMessage({
