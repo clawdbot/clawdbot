@@ -1094,6 +1094,56 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("remote=");
   });
 
+  it("restores an existing main checkout after a failed rebase", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'remote\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam remote
+      git -C "$seed" push -q origin main
+      printf 'local\\n' > "$repo/state.txt"
+      git -C "$repo" commit -qam local
+      printf 'keep this user change\\n' > "$repo/user-note.txt"
+      expected_head="$(git -C "$repo" rev-parse HEAD)"
+      expected_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      set +e
+      output="$(checkout_git_openclaw_ref "$repo" main 2>&1)"
+      status=$?
+      set -e
+      [[ "$status" -ne 0 ]]
+      actual_head="$(git -C "$repo" rev-parse HEAD)"
+      actual_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      rebase_merge="$(git -C "$repo" rev-parse --git-path rebase-merge)"
+      rebase_apply="$(git -C "$repo" rev-parse --git-path rebase-apply)"
+      [[ "$actual_head" == "$expected_head" ]]
+      [[ "$actual_status" == "$expected_status" ]]
+      [[ "$(cat "$repo/user-note.txt")" == "keep this user change" ]]
+      [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+      [[ "$output" == *"restored to its pre-update state"* ]]
+      printf 'recovery=head-restored status-clean rebase-state-cleared\\n'
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("recovery=head-restored status-clean rebase-state-cleared");
+  });
+
   it("uses non-frozen lockfile installs only for moving git refs", () => {
     const result = runInstallCliShell(`
       set -euo pipefail

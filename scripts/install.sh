@@ -2628,11 +2628,43 @@ resolve_git_openclaw_ref() {
     esac
 }
 
+verify_git_rebase_recovery() {
+    local repo_dir="$1"
+    local expected_head="$2"
+    local expected_status="$3"
+    local actual_head=""
+    local actual_status=""
+    local rebase_merge=""
+    local rebase_apply=""
+
+    if ! git -C "$repo_dir" rebase --abort >/dev/null 2>&1; then
+        return 1
+    fi
+    if ! actual_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
+        return 1
+    fi
+    if ! actual_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+        return 1
+    fi
+    if ! rebase_merge="$(git -C "$repo_dir" rev-parse --git-path rebase-merge 2>/dev/null)"; then
+        return 1
+    fi
+    if ! rebase_apply="$(git -C "$repo_dir" rev-parse --git-path rebase-apply 2>/dev/null)"; then
+        return 1
+    fi
+
+    [[ "$actual_head" == "$expected_head" ]] || return 1
+    [[ "$actual_status" == "$expected_status" ]] || return 1
+    [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+}
+
 checkout_git_openclaw_ref() {
     local repo_dir="$1"
     local ref="$2"
     local branch_probe_status=0
     local tag_probe_status=0
+    local original_head=""
+    local original_status=""
 
     GIT_REF_KIND=""
 
@@ -2644,9 +2676,20 @@ checkout_git_openclaw_ref() {
         run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
         run_quiet_step "Checking out main" git -C "$repo_dir" checkout main
         if [[ "$GIT_UPDATE" == "1" ]]; then
+            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
+                ui_error "Could not record repository state before updating from origin/main"
+                return 1
+            fi
+            if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+                ui_error "Could not record repository state before updating from origin/main"
+                return 1
+            fi
             if ! run_quiet_step "Updating repository" git -C "$repo_dir" rebase origin/main; then
-                git -C "$repo_dir" rebase --abort >/dev/null 2>&1 || true
-                ui_error "Could not update repository from origin/main"
+                if verify_git_rebase_recovery "$repo_dir" "$original_head" "$original_status"; then
+                    ui_error "Could not update repository from origin/main; the checkout was restored to its pre-update state"
+                else
+                    ui_error "Could not update repository from origin/main; checkout recovery was not verified. Run git -C \"$repo_dir\" rebase --abort and inspect the checkout before retrying"
+                fi
                 return 1
             fi
         fi
