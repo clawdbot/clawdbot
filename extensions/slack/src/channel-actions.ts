@@ -40,7 +40,9 @@ function resolveSlackActionContext(
     !ctx.mediaReadFile &&
     !ctx.conversationReadOrigin &&
     !ctx.requesterAccountId &&
-    !ctx.requesterSenderId
+    !ctx.requesterSenderId &&
+    ctx.senderIsOwner !== true &&
+    !ctx.gatewayClientScopes
   ) {
     return undefined;
   }
@@ -54,6 +56,8 @@ function resolveSlackActionContext(
     conversationReadOrigin: ctx.conversationReadOrigin,
     requesterAccountId: ctx.requesterAccountId ?? undefined,
     requesterSenderId: ctx.requesterSenderId ?? undefined,
+    senderIsOwner: ctx.senderIsOwner === true ? true : undefined,
+    gatewayClientScopes: ctx.gatewayClientScopes,
   };
 }
 

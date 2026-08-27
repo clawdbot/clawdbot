@@ -388,5 +388,41 @@ export async function handleSlackMessageAction(params: {
     );
   }
 
+  if (
+    action === "channel-create" ||
+    action === "channel-edit" ||
+    action === "addParticipant" ||
+    action === "kick" ||
+    action === "channel-delete"
+  ) {
+    const invocation: Record<string, unknown> = {
+      action:
+        action === "channel-create"
+          ? "createChannel"
+          : action === "channel-edit"
+            ? "renameChannel"
+            : action === "addParticipant"
+              ? "addMember"
+              : action === "kick"
+                ? "removeMember"
+                : "archiveChannel",
+      accountId,
+    };
+    if (action === "channel-create") {
+      invocation.name = readStringParam(actionParams, "name", { required: true });
+      if (readBooleanParam(actionParams, "isPrivate") === true) {
+        invocation.isPrivate = true;
+      }
+    } else {
+      invocation.channelId = resolveChannelId();
+      if (action === "channel-edit") {
+        invocation.name = readStringParam(actionParams, "name", { required: true });
+      } else {
+        invocation.userId = readStringParam(actionParams, "userId", { required: true });
+      }
+    }
+    return await invoke(invocation, cfg, ctx.toolContext);
+  }
+
   throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
 }
