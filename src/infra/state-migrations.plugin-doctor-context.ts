@@ -129,29 +129,60 @@ function guardIngressQueueMutations<TPayload, TMetadata, TCompletedMetadata>(
   queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>,
   assertCurrent: () => void,
 ): ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> {
-  const guard = <TArgs extends unknown[], TResult>(method: (...args: TArgs) => TResult) => {
-    return (...args: TArgs): TResult => {
-      assertCurrent();
-      return method.apply(queue, args);
-    };
-  };
   const guarded: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> = {
     ...queue,
-    enqueue: guard(queue.enqueue),
-    claimNext: guard(queue.claimNext),
-    claim: guard(queue.claim),
-    complete: guard(queue.complete),
-    release: guard(queue.release),
-    fail: guard(queue.fail),
-    delete: guard(queue.delete),
-    recoverStaleClaims: guard(queue.recoverStaleClaims),
-    prune: guard(queue.prune),
+    enqueue: (...args) => {
+      assertCurrent();
+      return queue.enqueue(...args);
+    },
+    claimNext: (...args) => {
+      assertCurrent();
+      return queue.claimNext(...args);
+    },
+    claim: (...args) => {
+      assertCurrent();
+      return queue.claim(...args);
+    },
+    complete: (...args) => {
+      assertCurrent();
+      return queue.complete(...args);
+    },
+    release: (...args) => {
+      assertCurrent();
+      return queue.release(...args);
+    },
+    fail: (...args) => {
+      assertCurrent();
+      return queue.fail(...args);
+    },
+    delete: (...args) => {
+      assertCurrent();
+      return queue.delete(...args);
+    },
+    recoverStaleClaims: (...args) => {
+      assertCurrent();
+      return queue.recoverStaleClaims(...args);
+    },
+    prune: (...args) => {
+      assertCurrent();
+      return queue.prune(...args);
+    },
   };
-  if (queue.refreshClaim) {
-    guarded.refreshClaim = guard(queue.refreshClaim);
+  // Optional members stay optional: bind the receiver up front so the wrapper needs
+  // neither a detached method reference nor a type assertion to call it.
+  const refreshClaim = queue.refreshClaim?.bind(queue);
+  if (refreshClaim) {
+    guarded.refreshClaim = (...args) => {
+      assertCurrent();
+      return refreshClaim(...args);
+    };
   }
-  if (queue.resubmit) {
-    guarded.resubmit = guard(queue.resubmit);
+  const resubmit = queue.resubmit?.bind(queue);
+  if (resubmit) {
+    guarded.resubmit = (...args) => {
+      assertCurrent();
+      return resubmit(...args);
+    };
   }
   return guarded;
 }
