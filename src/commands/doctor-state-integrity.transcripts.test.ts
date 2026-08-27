@@ -341,6 +341,44 @@ describe("doctor transcript and heartbeat session repairs", () => {
     expect(fs.existsSync(storePath)).toBe(false);
   });
 
+  it("does not create a recovery row when the SQLite main entry changes during confirmation", async () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, ops: {} } } };
+    setupSessionState(cfg, process.env, tempHome, "ops");
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
+    const mainKey = "agent:ops:main";
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: mainKey, storePath },
+      {
+        heartbeatIsolatedBaseSessionKey: mainKey,
+        sessionId: "sqlite-heartbeat-race-ops",
+        updatedAt: 1,
+      },
+    );
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) => {
+      if (!params.message.startsWith("Move heartbeat-owned main session")) {
+        return false;
+      }
+      await upsertSessionEntryCore(
+        { agentId: "ops", sessionKey: mainKey, storePath },
+        { lastInteractionAt: 2, updatedAt: 2 },
+      );
+      return true;
+    });
+
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const keys = listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
+    expect(keys).toEqual([mainKey]);
+    expect(keys.filter((key) => key.startsWith("agent:ops:heartbeat-recovered-"))).toStrictEqual(
+      [],
+    );
+    expect(
+      loadSessionEntryReadOnly({ agentId: "ops", sessionKey: mainKey, storePath })
+        ?.lastInteractionAt,
+    ).toBe(2);
+    expect(fs.existsSync(storePath)).toBe(false);
+  });
+
   it("moves a plugin-repaired SQLite heartbeat row without restoring stale state", async () => {
     routeStateOwnerState.owners = [
       {

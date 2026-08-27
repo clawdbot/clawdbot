@@ -362,7 +362,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
       ],
       skipMaintenance: true,
       storePath: params.store.path,
-      upserts: [{ entry: mainEntry, sessionKey: recoveredKey }],
+      upserts: [{ entry: mainEntry, requiresRemovalSessionKey: mainKey, sessionKey: recoveredKey }],
     });
     if (result.removedSessionKeys.includes(mainKey)) {
       movedEntry = mainEntry;

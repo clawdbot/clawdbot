@@ -140,6 +140,8 @@ export class SessionEntryLifecycleUpsertConflictError extends Error {
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
+  /** Apply this upsert only when the named removal was projected in the same mutation. */
+  requiresRemovalSessionKey?: string;
   /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
   routeContext?: ConversationRouteContext | null;
   resetBoundary?: SessionResetBoundaryRequest;
