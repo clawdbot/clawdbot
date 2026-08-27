@@ -509,7 +509,8 @@ export interface ContextEngine {
      * bounded by maximum silence instead of total time — a legitimately slow
      * compaction finishes while a hung one still aborts. Progress cannot
      * defer the bound indefinitely: an absolute ceiling of 10x the timeout
-     * always applies. Host-injected like the other lifecycle fields: engines
+     * (clamped to the Node-safe timer maximum) always applies. Host-injected
+     * like the other lifecycle fields: engines
      * with a declared `acceptedHostParams` list must include `onProgress` to
      * receive it.
      */

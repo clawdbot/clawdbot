@@ -71,6 +71,27 @@ export async function compactWithSafetyTimeout<T>(
 
   const timeoutAbortCtrl = new AbortController();
   const timeoutError = new Error("Compaction timed out");
+  // Timeout precedence: the rejection listener must be the FIRST observer of
+  // the timeout signal. A cooperative callback that settles synchronously when
+  // aborted (via the composed signal or the cancel hook) would otherwise queue
+  // its fulfillment ahead of this rejection and the race could fulfill with a
+  // completed result after the deadline.
+  let timeoutAbortListener: (() => void) | undefined;
+  const timeoutAbortPromise = new Promise<never>((_, reject) => {
+    timeoutAbortListener = () => reject(abortErrorFromSignal(timeoutAbortCtrl.signal));
+    timeoutAbortCtrl.signal.addEventListener("abort", timeoutAbortListener, { once: true });
+  });
+  const timeoutListener: () => void = () => {
+    cancel();
+  };
+  timeoutAbortCtrl.signal.addEventListener("abort", timeoutListener, { once: true });
+  let externalAbortListener: (() => void) | undefined;
+  let externalAbortPromise: Promise<never> | undefined;
+  const abortSignal = opts?.abortSignal;
+  const composedAbortSignal = abortSignal
+    ? AbortSignal.any([timeoutAbortCtrl.signal, abortSignal])
+    : timeoutAbortCtrl.signal;
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   const clearTimer = () => {
     if (timer !== undefined) {
@@ -103,25 +124,6 @@ export async function compactWithSafetyTimeout<T>(
   );
   const absoluteTimer = setTimeout(() => timeoutAbortCtrl.abort(timeoutError), absoluteCeilingMs);
   absoluteTimer.unref?.();
-
-  const timeoutListener: () => void = () => {
-    cancel();
-  };
-  let externalAbortListener: (() => void) | undefined;
-  let externalAbortPromise: Promise<never> | undefined;
-  const abortSignal = opts?.abortSignal;
-  const composedAbortSignal = abortSignal
-    ? AbortSignal.any([timeoutAbortCtrl.signal, abortSignal])
-    : timeoutAbortCtrl.signal;
-
-  timeoutAbortCtrl.signal.addEventListener("abort", timeoutListener, { once: true });
-  // A non-settling compaction must still reject on timeout, so the abort
-  // itself is raced — not just signaled into an uncooperative callback.
-  let timeoutAbortListener: (() => void) | undefined;
-  const timeoutAbortPromise = new Promise<never>((_, reject) => {
-    timeoutAbortListener = () => reject(abortErrorFromSignal(timeoutAbortCtrl.signal));
-    timeoutAbortCtrl.signal.addEventListener("abort", timeoutAbortListener, { once: true });
-  });
 
   try {
     if (abortSignal) {

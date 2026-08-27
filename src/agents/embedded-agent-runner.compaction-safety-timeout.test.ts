@@ -231,6 +231,31 @@ describe("compactWithSafetyTimeout", () => {
     expect(() => pulse?.()).not.toThrow();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("rejects on timeout even when cancellation settles the compaction first", async () => {
+    // Timeout precedence: the production cancel hook (activeSession
+    // .abortCompaction) can complete a cooperative compaction synchronously
+    // when the timeout fires. That fulfillment must not beat the timeout
+    // rejection out of the race — the rejection listener is registered as the
+    // first observer of the timeout signal, ahead of the cancel hook.
+    vi.useFakeTimers();
+    let settleFromCancel: (() => void) | undefined;
+    const compactPromise = compactWithSafetyTimeout(
+      () =>
+        new Promise<string>((resolve) => {
+          settleFromCancel = () => resolve("completed-during-cancel");
+        }),
+      30,
+      {
+        onCancel: () => settleFromCancel?.(),
+      },
+    );
+    const assertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe("resolveCompactionTimeoutMs", () => {
