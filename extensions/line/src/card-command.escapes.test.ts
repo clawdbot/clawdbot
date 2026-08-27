@@ -69,6 +69,11 @@ describe("line card option separators", () => {
       actions: String.raw`Path|C:\temp`,
       expected: [{ type: "message", label: "Path", text: String.raw`C:\temp` }],
     },
+    {
+      kind: "a backslash before a colon, which actions do not split on",
+      actions: String.raw`Path|C\:\temp`,
+      expected: [{ type: "message", label: "Path", text: String.raw`C\:\temp` }],
+    },
   ])("resolves $kind into the authored card actions", async ({ actions, expected }) => {
     expect(
       cardActions(await runCardCommand(`action "Menu" "Body" --actions "${actions}"`)),
@@ -104,6 +109,18 @@ describe("line card option separators", () => {
       String.raw`receipt "Receipt" "Coffee\, large:$10,Time: 10:30:$5" --total "$15"`,
     );
     expect(cardAltText(line)).toBe("Receipt: Coffee, large $10, Time: 10:30 $5");
+  });
+
+  it("keeps a backslashed pipe literal in a receipt name, which receipts do not split on", async () => {
+    const line = await runCardCommand(String.raw`receipt "Receipt" "A\|B:$10" --total "$10"`);
+    expect(cardAltText(line)).toBe(String.raw`Receipt: A\|B $10`);
+  });
+
+  it("keeps a backslashed comma literal in a confirm label, which confirm does not split on", async () => {
+    const line = await runCardCommand(
+      String.raw`confirm "Ship it?" --yes "Yes\,now|go" --no "No|stop"`,
+    );
+    expect(line.templateMessage).toMatchObject({ confirmLabel: String.raw`Yes\,now` });
   });
 
   it("keeps an escaped pipe inside a confirm button label", async () => {
