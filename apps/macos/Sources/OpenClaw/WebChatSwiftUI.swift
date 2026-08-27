@@ -889,7 +889,7 @@ private struct MacChatSurface: View {
     var body: some View {
         OpenClawChatWindowShell(
             viewModel: self.viewModel,
-            userAccent: ColorHexSupport.color(fromHex: self.appState.seamColorHex),
+            userAccent: ColorHexSupport.color(fromHex: self.appState.effectiveAccentHex),
             displayOptions: self.displayOptions,
             emptyAssistantIntro: Self.emptyAssistantIntro,
             emptyAssistantPrompts: Self.emptyAssistantPrompts,
