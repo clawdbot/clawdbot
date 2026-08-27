@@ -35,6 +35,10 @@ import {
   type WhatsAppNormalizedInboundMessage,
 } from "./message-normalization.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
+import {
+  extractWhatsAppPollUpdateMessage,
+  maybeEmitWhatsAppPollVoteReceivedHook,
+} from "./poll-votes.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 import type { WebInboundCallbackMessage } from "./types.js";
@@ -109,6 +113,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     resolveInboundJid,
     resolveReactionTargetJids,
     rememberBaileysMessage,
+    getCachedBaileysMessage,
     assertCanSendToJid,
     sendTrackedMessage,
     socketOperations,
@@ -489,6 +494,40 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     }
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
+      // Poll ownership is recorded solely from the accepted-send path in
+      // send.ts, not from observing a fromMe echo here — fromMe also covers
+      // polls created manually from another linked device on the same
+      // WhatsApp account, which the accepted-send path never sees. Trusting
+      // any fromMe poll-creation echo as "OpenClaw created this" would let
+      // opted-in plugins receive votes on polls OpenClaw never sent.
+
+      if (extractWhatsAppPollUpdateMessage(msg.message)) {
+        // Poll votes are passive data (per #78963): decode and hook-dispatch
+        // only, never enter the normal admission/reply pipeline below.
+        if (msg.key) {
+          try {
+            maybeEmitWhatsAppPollVoteReceivedHook({
+              cfg: options.loadConfig?.() ?? options.cfg,
+              accountId: options.accountId,
+              message: msg.message,
+              key: msg.key,
+              getCachedMessage: getCachedBaileysMessage,
+              selfJid: self.jid,
+              selfLid: self.lid,
+            });
+          } catch (error) {
+            // A poll-hook store read/write can throw synchronously (e.g. a
+            // plugin-state I/O failure). That must not abort this
+            // messages.upsert batch — later, unrelated messages in the same
+            // batch still need to reach the normal admission pipeline below.
+            inboundLogger.error(
+              { error: formatError(error) },
+              "whatsapp poll_vote_received hook failed synchronously",
+            );
+          }
+        }
+        continue;
+      }
 
       const receiveOrder = nextReceiveOrder++;
       if (

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -27,9 +28,11 @@ export type WhatsAppQaScenarioEnvironment = {
   driverAuthDir: string;
   gateway: FlowPreparationInput["gateway"];
   getDriver: () => WhatsAppQaDriverSession;
+  getProofOutputDir: () => string | undefined;
   observedMessages: WhatsAppObservedMessage[];
   replaceDriver: (driver: WhatsAppQaDriverSession) => Promise<void>;
   runtimeEnv: WhatsAppQaRuntimeEnv;
+  repoRoot?: string;
   scenario: { id: string; timeoutMs: number; title: string };
   sutAccountId: string;
   sutAuthDir: string;
@@ -53,13 +56,16 @@ export function createWhatsAppQaScenarioEnvironment(params: {
   driverAuthDir: string;
   explicitScenarioSelection: boolean;
   getDriver: () => WhatsAppQaDriverSession;
+  repoRoot?: string;
   replaceDriver: (driver: WhatsAppQaDriverSession) => Promise<void>;
   runtimeEnv: WhatsAppQaRuntimeEnv;
   sutAuthDir: string;
 }) {
   const observedMessages: WhatsAppObservedMessage[] = [];
+  let proofOutputDir: string | undefined;
 
   const prepareFlow = async (input: FlowPreparationInput) => {
+    proofOutputDir = input.outputDir;
     return {
       whatsappScenarioContext: {
         configureScenario: async (implementation: WhatsAppQaScenarioImplementation) => {
@@ -97,13 +103,25 @@ export function createWhatsAppQaScenarioEnvironment(params: {
                   ? "allowlist"
                   : "pairing";
           const snapshot = await readLiveQaGatewayConfig(input.gateway);
+          const configOverrides = implementation.configOverrides?.pollVoteHookProof
+            ? {
+                ...implementation.configOverrides,
+                pollVoteHookProof: {
+                  fixturePath: path.resolve(
+                    params.repoRoot ?? process.cwd(),
+                    implementation.configOverrides.pollVoteHookProof.fixturePath,
+                  ),
+                },
+              }
+            : implementation.configOverrides;
           const cfg = buildWhatsAppQaConfig(snapshot.config as OpenClawConfig, {
             allowFrom,
             authDir: params.sutAuthDir,
             dmPolicy,
             groupJid,
             ownerAllowFrom: [params.runtimeEnv.driverPhoneE164],
-            overrides: implementation.configOverrides,
+            proofOutputDir,
+            overrides: configOverrides,
             sutAccountId: params.accountId,
           });
           await patchLiveQaGatewayConfig({
@@ -119,9 +137,11 @@ export function createWhatsAppQaScenarioEnvironment(params: {
         driverAuthDir: params.driverAuthDir,
         gateway: input.gateway,
         getDriver: params.getDriver,
+        getProofOutputDir: () => proofOutputDir,
         observedMessages,
         replaceDriver: params.replaceDriver,
         runtimeEnv: params.runtimeEnv,
+        repoRoot: params.repoRoot,
         scenario: {
           id: input.scenarioId,
           timeoutMs: input.timeoutMs,
@@ -133,5 +153,5 @@ export function createWhatsAppQaScenarioEnvironment(params: {
     };
   };
 
-  return { prepareFlow };
+  return { getProofOutputDir: () => proofOutputDir, prepareFlow };
 }

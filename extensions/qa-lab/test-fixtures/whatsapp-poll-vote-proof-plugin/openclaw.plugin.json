@@ -1,0 +1,16 @@
+{
+  "id": "qa-whatsapp-poll-vote-proof",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "outputPath": {
+        "type": "string",
+        "description": "Redacted QA poll-vote hook output path."
+      }
+    }
+  }
+}

@@ -27,7 +27,7 @@ export const whatsAppChannelConfigUiHints = {
   },
   pluginHooks: {
     label: "WhatsApp Plugin Hooks",
-    help: "Opt in to broadcasting inbound WhatsApp events to plugins. Payloads carry personal content, so only enable it for plugins you trust.",
+    help: "Opt in to inbound WhatsApp events for trusted plugins; payloads may contain personal content.",
   },
   ...createChannelConfigUiHints({ channelLabel: "WhatsApp", configWrites: true }),
   "actions.calls": {

@@ -71,6 +71,12 @@ describe("watch-pr-ci", () => {
     );
   });
 
+  it.each(["unit", "clownfish/exact-merge"])("rejects --ignore-check %s", (name) => {
+    expect(() => parseArgs(["1", sha, "--ignore-check", name])).toThrow(
+      "Usage: node scripts/watch-pr-ci.mjs",
+    );
+  });
+
   it("builds a pull-request-only run attachment query", () => {
     expect(buildFindRunArgs("openclaw/openclaw", sha)).toEqual([
       "api",

@@ -93,6 +93,41 @@ describe("fireAndForgetBoundedHook", () => {
     });
   });
 
+  it("reports whether the hook was admitted so callers can gate dedupe state on it", async () => {
+    // Callers that record "this work is done" state (dedupe markers,
+    // cursors, tombstones) need to distinguish an admitted task from a
+    // dropped one — otherwise a full queue silently loses the event.
+    const logger = vi.fn();
+    let resolveFirst: (() => void) | undefined;
+    const first = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const limits = { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 };
+
+    const admittedRunning = fireAndForgetBoundedHook(
+      async () => {
+        await first;
+      },
+      "hook failed",
+      logger,
+      limits,
+    );
+    const admittedQueued = fireAndForgetBoundedHook(async () => {}, "hook failed", logger, limits);
+    const droppedFullQueue = fireAndForgetBoundedHook(
+      async () => {},
+      "hook failed",
+      logger,
+      limits,
+    );
+
+    expect(admittedRunning).toBe(true);
+    expect(admittedQueued).toBe(true);
+    expect(droppedFullQueue).toBe(false);
+    expect(logger).toHaveBeenCalledWith("hook failed: queue full; dropping hook");
+
+    resolveFirst?.();
+  });
+
   it("caps oversized hook timeout timers", async () => {
     vi.useFakeTimers();
     try {

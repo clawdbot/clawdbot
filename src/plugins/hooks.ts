@@ -1777,6 +1777,7 @@ export function createHookRunner(
     runInboundClaimForPluginOutcome,
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
     runMessageReceived: bindVoidHook("message_received"),
+    runPollVoteReceived: bindVoidHook("poll_vote_received"),
     runBeforeDispatch,
     runReplyDispatch,
     runReplyPayloadSending,

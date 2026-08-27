@@ -558,6 +558,25 @@ describe("processMessage group system prompt wiring", () => {
     expect(internalReceived).not.toHaveBeenCalled();
   });
 
+  it("honors a differently cased account-level message_received opt-out", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+
+    await callProcessMessage({
+      cfg: {
+        channels: {
+          whatsapp: {
+            pluginHooks: { messageReceived: true },
+            accounts: { DEFAULT: { pluginHooks: { messageReceived: false } } },
+          },
+        },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runMessageReceivedMock).not.toHaveBeenCalled();
+  });
+
   it("tracks session metadata writes as connection background tasks", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     buildContextMock.mockImplementationOnce(() => ({

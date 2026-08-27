@@ -35,6 +35,7 @@ export {
   whatsappQaOutboundPollScenario,
   whatsappQaOutboundSendSerializationScenario,
 } from "./whatsapp-live.scenario-implementations.capabilities.js";
+export { whatsappQaPollVoteHookProofScenario } from "./whatsapp-live.scenario-implementations.poll-vote-proof.js";
 export {
   whatsappQaBroadcastGroupFanoutScenario,
   whatsappQaCanaryScenario,
@@ -176,6 +177,8 @@ async function runWhatsAppScenarioAttempt(params: {
     driverPhoneE164: runtimeEnv.driverPhoneE164,
     gateway: params.environment.gateway as never,
     gatewayTarget: targets?.gatewayTarget ?? runtimeEnv.driverPhoneE164,
+    proofOutputDir: params.environment.getProofOutputDir(),
+    repoRoot: params.environment.repoRoot,
     gatewayWorkspaceDir: params.environment.gateway.workspaceDir,
     recordObservedMessage: (message) => {
       params.environment.observedMessages.push({

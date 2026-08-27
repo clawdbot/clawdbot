@@ -191,6 +191,23 @@ export type PluginHookMessageReceivedEvent = {
   metadata?: PluginHookInboundMessageMetadata;
 };
 
+/**
+ * Passive observation event for a decoded WhatsApp poll vote. Fires only when
+ * the channel's `pluginHooks.pollVoteReceived` opt-in is enabled (default
+ * off) — never triggers an agent run by itself.
+ */
+export type PluginHookPollVoteReceivedEvent = {
+  /** Id of the poll creation message this vote applies to. */
+  pollMessageId: string;
+  /** Chat jid the poll lives in. */
+  chatJid: string;
+  /** Jid of the voter. */
+  voter: string;
+  /** Decoded option text the voter selected. Empty array means the voter retracted their vote. */
+  selectedOptions: string[];
+  timestamp?: number;
+};
+
 export type PluginHookMessageSendingEvent = {
   to: string;
   content: string;

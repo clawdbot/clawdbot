@@ -253,6 +253,63 @@ Inbound WhatsApp messages can carry personal content, phone numbers, group ident
 
 Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHooks.messageReceived`. Only enable this for plugins you trust with inbound WhatsApp content and identifiers.
 
+Poll votes follow the same opt-in pattern, under a separate flag. When someone
+votes on a poll OpenClaw created (`message(action="poll", ...)`), WhatsApp
+does not broadcast the decoded vote to plugins unless you enable
+`pluginHooks.pollVoteReceived`:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      pluginHooks: {
+        pollVoteReceived: true,
+      },
+    },
+  },
+}
+```
+
+Same account-level scoping as above:
+`channels.whatsapp.accounts.<id>.pluginHooks.pollVoteReceived`. The
+`poll_vote_received` hook is passive observation only — it never triggers an
+agent run — and delivers `pollMessageId`, `chatJid`, `voter`, and
+`selectedOptions` (an empty array means the voter retracted their vote). See
+[Plugin hooks → Message hooks](/plugins/hooks#message-hooks) for the full
+payload reference.
+
+**Ownership.** A poll is only ever recorded as "this account created it" from
+the accepted-send result of a `message(action="poll", ...)` call this
+gateway itself made — never inferred from observing a `fromMe` poll-creation
+message on the inbound stream. `fromMe` also covers polls created manually
+from another device linked to the same WhatsApp account, which the gateway
+never sent; trusting that signal would let opted-in plugins receive votes on
+polls this gateway didn't create. Ownership is written exactly once, at
+accepted-send time, so replaying or delaying delivery of the corresponding
+inbound echo has no effect on stored state — there's nothing left for a
+delayed echo to do.
+
+**Retention.** The accepted-send ownership marker and the poll creation
+message (including its decryption key) stay only in bounded, process-local
+caches; OpenClaw never writes them to plugin state. A Gateway restart drops
+both caches. Votes for polls sent before that restart are therefore treated as
+unowned and are not decoded or dispatched, even if WhatsApp later redelivers
+their creation message: an inbound echo never recreates the ownership marker.
+
+While the Gateway remains running, a known-owned poll can lose only its cached
+creation message. That vote is not dispatched and produces one bounded,
+identifier-free warning; a redelivery can still decode if the creation message
+returns before the ownership marker expires. Votes for polls OpenClaw never
+created stay silent, including after a restart, to avoid exposing third-party
+vote data.
+
+**Known limitation: a restart ends hook observation for polls sent before
+it.** Since the restart clears the accepted-send ownership marker, no vote on
+an earlier poll is decoded or dispatched in the new process — whether that
+vote was cast while the Gateway was offline or after it reconnects. This is
+intentional: OpenClaw never infers ownership from a reobserved inbound echo.
+Send a new poll after reconnecting when the hook must observe its votes.
+
 ## Access control and activation
 
 <Tabs>

@@ -26,6 +26,10 @@
           "messageReceived": {
             "type": "boolean",
             "description": "Opt in to broadcasting inbound WhatsApp message_received hook payloads to loaded plugins."
+          },
+          "pollVoteReceived": {
+            "type": "boolean",
+            "description": "Opt in to broadcasting decoded votes on OpenClaw-created WhatsApp polls to loaded plugins."
           }
         }
       }

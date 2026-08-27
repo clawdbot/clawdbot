@@ -312,6 +312,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: conversation-binding inspection result and runtime inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
+      // +1: WhatsApp poll_vote_received plugin hook event contract.
       // +2: embedded foreground prompt context builder and its public context type.
       // +1: typed owner-declared approval-scope contract for plugin-authored approvals.
       // -5: approval display sanitizers moved to a non-public leaf module
@@ -320,7 +321,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: exact-session deletion parameters and synchronous companion mutation contract.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
       // +1: identifier authentication input type for external channel plugins.
-      4346,
+      4347,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

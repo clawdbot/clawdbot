@@ -303,14 +303,15 @@ contracts above; a modifying hook is not an observation hook.
 
 | Hook                        | Kind          | Purpose                                                                    |
 | --------------------------- | ------------- | -------------------------------------------------------------------------- |
-| `inbound_claim`             | Claim         | Claim an inbound message for the plugin that owns its conversation binding |
+| **`inbound_claim`**         | Claim         | Claim an inbound message for the plugin that owns its conversation binding |
 | `channel_pairing_requested` | Observe       | Observe newly created DM pairing requests                                  |
 | `message_received`          | Observe       | Observe inbound content, sender, thread, and metadata                      |
-| `message_sending`           | Modify / gate | Rewrite outbound content or cancel delivery                                |
-| `reply_payload_sending`     | Modify / gate | Mutate or cancel normalized reply payloads before delivery                 |
+| `poll_vote_received`        | Observe       | Observe a decoded WhatsApp poll vote (opt-in, passive)                     |
+| **`message_sending`**       | Modify / gate | Rewrite outbound content or cancel delivery                                |
+| **`reply_payload_sending`** | Modify / gate | Mutate or cancel normalized reply payloads before delivery                 |
 | `message_sent`              | Observe       | Observe outbound delivery success or failure                               |
-| `before_dispatch`           | Claim         | Handle an inbound message before the normal model dispatch                 |
-| `reply_dispatch`            | Claim         | Own reply generation and dispatch instead of the default model path        |
+| **`before_dispatch`**       | Claim         | Handle an inbound message before the normal model dispatch                 |
+| **`reply_dispatch`**        | Claim         | Own reply generation and dispatch instead of the default model path        |
 
 `inbound_claim` is not a global pre-routing broadcast. OpenClaw invokes it only
 for the plugin that owns the message's core-managed conversation binding. To
@@ -1025,6 +1026,12 @@ Use message hooks for channel-level routing and delivery policy:
   `messageId`, `senderId`, optional run/session correlation, ordered `media`,
   normalized `location`, stable `providerUpdate` identity when supplied by the
   channel, and metadata.
+- `poll_vote_received`: WhatsApp-only, observe a decoded poll vote —
+  `pollMessageId`, `chatJid`, `voter`, `selectedOptions` (empty array means
+  the voter retracted their vote), and `timestamp`. Opt-in and passive:
+  disabled by default (see
+  [WhatsApp plugin hooks and privacy](/channels/whatsapp#plugin-hooks-and-privacy))
+  and never triggers an agent run by itself.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return
