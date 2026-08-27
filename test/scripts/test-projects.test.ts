@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
+import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -42,6 +43,51 @@ const normalizeRepoPath = toRepoPath;
 const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 1;
+
+describe("test runtime prerequisites", () => {
+  it.each([
+    ["lifecycle file", ["extensions/qa-lab/src/suite-process-lifecycle.test.ts"], "private-qa"],
+    ["QA directory", ["extensions/qa-lab"], "private-qa"],
+    ["QA config", ["test/vitest/vitest.extension-qa.config.ts"], "private-qa"],
+    ["all plugins", ["extensions"], "private-qa"],
+    ["full local suite", [], "private-qa"],
+    ["root config", ["vitest.config.ts"], "private-qa"],
+    [
+      "runtime reader",
+      ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
+      "runtime",
+    ],
+    ["ordinary QA unit test", ["extensions/qa-lab/src/gateway-child-command.test.ts"], undefined],
+    [
+      "model reader",
+      ["src/agents/embedded-agent-runner/model-resolution-consistency.test.ts"],
+      undefined,
+    ],
+  ] as const)("prepares only the prerequisite selected by %s", (_name, args, expected) => {
+    const plans = args.length ? buildVitestRunPlans([...args]) : buildFullSuiteVitestRunPlans([]);
+    expect(
+      resolveVitestPretestBuildMode(
+        plans.map((plan) => ({
+          configs: [plan.config],
+          includePatterns: plan.includePatterns,
+        })),
+      ),
+    ).toBe(expected);
+  });
+
+  it("combines private QA and runtime readers into one private build", () => {
+    expect(
+      resolveVitestPretestBuildMode([
+        { includePatterns: ["test/e2e/qa-lab/runtime/**/*.test.ts"] },
+        { includePatterns: ["extensions/qa-lab/**/*.test.ts"] },
+      ]),
+    ).toBe("private-qa");
+    expect(resolveVitestPretestBuildMode([])).toBeUndefined();
+    expect(resolveVitestPretestBuildMode([{ configs: ["test/vitest/vitest.config.ts"] }])).toBe(
+      "private-qa",
+    );
+  });
+});
 
 function expectedCodexTestProcessCount() {
   const testFileCount = listExtensionTestFilesForRoots(["extensions/codex"]).length;
@@ -1581,6 +1627,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
+          "test/scripts/test-projects-build-admission.test.ts",
         ],
         watchMode: false,
       },
@@ -1768,6 +1815,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
+          "test/scripts/test-projects-build-admission.test.ts",
         ],
         watchMode: false,
       },

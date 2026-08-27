@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveQaGatewayChildCommand } from "./gateway-child-command.js";
 import { runQaSuite } from "./suite-launch.runtime.js";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -13,17 +12,12 @@ if (!outputDir || scenarioIds.length === 0) {
 }
 
 try {
-  const sutOpenClawCommand = {
-    ...resolveQaGatewayChildCommand(repoRoot),
-    usePackagedPlugins: false,
-  };
   const result = await runQaSuite({
     repoRoot,
     outputDir: path.relative(repoRoot, outputDir),
     providerMode: "mock-openai",
     scenarioIds,
     concurrency: 4,
-    sutOpenClawCommand,
   });
   const failed = result.result.scenarios.filter((scenario) => scenario.status !== "pass");
   if (failed.length > 0) {
