@@ -5,6 +5,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
+import { escapeHtml } from "../shared/html-escape.js";
 import { resolveUserPath } from "../utils.js";
 import { CANVAS_DOCUMENTS_PATH } from "./constants.js";
 
@@ -51,15 +52,6 @@ export type CanvasDocumentManifest = {
     contentType?: string;
   }>;
 };
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
 
 function isPdfPathLike(value: string): boolean {
   return /\.pdf(?:[?#].*)?$/i.test(value.trim());

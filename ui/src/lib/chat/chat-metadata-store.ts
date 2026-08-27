@@ -15,6 +15,7 @@ type ChatMetadataEntry = {
   loadPending?: Promise<ChatMetadataResult>;
   revalidationPending?: Promise<ChatMetadataResult>;
   latestRequest?: Promise<ChatMetadataResult>;
+  listeners: Set<() => void>;
 };
 
 const chatMetadataCache = new WeakMap<GatewayBrowserClient, Map<string, ChatMetadataEntry>>();
@@ -35,7 +36,7 @@ function metadataEntryFor(
   }
   let entry = cache.get(key);
   if (!entry) {
-    entry = {};
+    entry = { listeners: new Set() };
     cache.set(key, entry);
   }
   return entry;
@@ -45,6 +46,16 @@ function waitForMetadataRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, delayMs);
   });
+}
+
+function notifyChatMetadataListeners(entry: ChatMetadataEntry): void {
+  for (const listener of Array.from(entry.listeners)) {
+    try {
+      listener();
+    } catch (error) {
+      console.error("[chat-metadata] listener error:", error);
+    }
+  }
 }
 
 async function requestChatMetadata(
@@ -102,6 +113,7 @@ function beginChatMetadataRequest(
       // The newest request owns the snapshot even when an older load settles later.
       if (entry.latestRequest === pending) {
         entry.result = result;
+        notifyChatMetadataListeners(entry);
       }
       return result;
     })
@@ -120,6 +132,16 @@ export function peekChatMetadata(
   agentId: string | null | undefined,
 ): ChatMetadataResult | undefined {
   return chatMetadataCache.get(client)?.get(chatMetadataAgentKey(agentId))?.result;
+}
+
+export function subscribeChatMetadata(
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  listener: () => void,
+): () => void {
+  const entry = metadataEntryFor(client, agentId);
+  entry.listeners.add(listener);
+  return () => entry.listeners.delete(listener);
 }
 
 export function loadChatMetadata(
@@ -169,8 +191,22 @@ export function rememberChatMetadata(
   entry.loadPending = undefined;
   entry.revalidationPending = undefined;
   entry.latestRequest = undefined;
+  notifyChatMetadataListeners(entry);
 }
 
 export function invalidateChatMetadataStore(client: GatewayBrowserClient): void {
-  chatMetadataCache.delete(client);
+  const entries = chatMetadataCache.get(client)?.values();
+  if (!entries) {
+    return;
+  }
+  const invalidated = Array.from(entries);
+  for (const entry of invalidated) {
+    entry.result = undefined;
+    entry.loadPending = undefined;
+    entry.revalidationPending = undefined;
+    entry.latestRequest = undefined;
+  }
+  for (const entry of invalidated) {
+    notifyChatMetadataListeners(entry);
+  }
 }

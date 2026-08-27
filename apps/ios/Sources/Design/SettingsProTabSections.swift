@@ -544,13 +544,11 @@ extension SettingsProTab {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if self.directRoute == nil {
-                Button {
-                    self.openNotificationsRouteFromApprovals()
-                } label: {
-                    Label("Open Notifications", systemImage: "bell.badge")
-                        .font(OpenClawType.body)
-                }
+            Button {
+                self.openNotificationsRouteFromApprovals()
+            } label: {
+                Label("Open Notifications", systemImage: "bell.badge")
+                    .font(OpenClawType.body)
             }
         }
     }

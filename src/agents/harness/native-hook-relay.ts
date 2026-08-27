@@ -109,6 +109,7 @@ type RetainedNativeHookRelayParams = RegisterNativeHookRelayParams & {
 function readRelayLifetime(
   registration: ActiveNativeHookRelayRegistration,
 ): RelayLifetime | undefined {
+  // SAFETY: this private symbol-keyed expando is installed only by setRelayLifetime below.
   return (registration as ActiveNativeHookRelayRegistration & { [RELAY_LIFETIME]?: RelayLifetime })[
     RELAY_LIFETIME
   ];
@@ -217,6 +218,7 @@ function registerNativeHookRelayInternal(
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
+      // SAFETY: the literal supplies the complete mutable internal registration contract.
     } as ActiveNativeHookRelayRegistration;
     partialRegistration = registration;
     relays.set(relayId, registration);
@@ -328,6 +330,7 @@ function unregisterNativeHookRelay(
   }
   lifetime?.removeAbortListener?.();
   lifetime?.retained?.release();
+  // SAFETY: this deletes the same private expando installed by setRelayLifetime.
   delete (registration as ActiveNativeHookRelayRegistration & { [RELAY_LIFETIME]?: RelayLifetime })[
     RELAY_LIFETIME
   ];

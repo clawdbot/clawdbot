@@ -61,6 +61,7 @@ type BenchmarkReport = {
     deliveryQueueEntries: number;
     pluginStateEntries: number;
     stateRows: number;
+    transcriptEvents: number;
   };
   timingsMs: {
     checkpoint: number;
@@ -107,6 +108,9 @@ const PROFILES: Record<ProfileId, ProfileConfig> = {
     queryRuns: 40,
   },
 };
+
+const SQLITE_PERF_TRANSCRIPT_EVENTS = 128;
+const SQLITE_PERF_TRANSCRIPT_SESSION_ID = "perf-history";
 
 function applyScale(config: ProfileConfig): ProfileConfig {
   const scale = parseStrictIntegerOption({
@@ -191,51 +195,67 @@ function seedStateDatabase(db: DatabaseSync, config: ProfileConfig): void {
 function seedCronJobs(db: DatabaseSync, count: number): void {
   const insert = db.prepare(`
     INSERT INTO cron_jobs (
-      store_key, job_id, name, description, enabled, delete_after_run, created_at_ms,
-      agent_id, session_key, schedule_kind, schedule_expr, schedule_tz, every_ms,
-      anchor_ms, at, stagger_ms, session_target, wake_mode, payload_kind,
-      payload_message, payload_model, payload_fallbacks_json, payload_thinking,
-      payload_timeout_seconds, payload_allow_unsafe_external_content,
-      payload_external_content_source_json, payload_light_context, payload_tools_allow_json,
-      delivery_mode, delivery_channel, delivery_to, delivery_thread_id, delivery_account_id,
-      delivery_best_effort, delivery_completion_mode, delivery_completion_to,
-      failure_delivery_mode, failure_delivery_channel, failure_delivery_to,
-      failure_delivery_account_id, failure_alert_disabled, failure_alert_after,
-      failure_alert_channel, failure_alert_to, failure_alert_cooldown_ms,
-      failure_alert_include_skipped, failure_alert_mode, failure_alert_account_id,
-      next_run_at_ms, running_at_ms, last_run_at_ms, last_run_status, last_error,
-      last_duration_ms, consecutive_errors, consecutive_skipped, schedule_error_count,
-      last_delivery_status, last_delivery_error, last_delivered, last_failure_alert_at_ms,
+      store_key, job_id, name, enabled, agent_id, payload_kind,
       job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at
-    ) VALUES (
-      ?, ?, ?, NULL, ?, NULL, ?, ?, ?, 'every', NULL, NULL, ?, ?, NULL, NULL,
-      'isolated', 'now', 'agentTurn', ?, 'openai/gpt-5.6-luna', NULL, NULL, 60,
-      0, NULL, 1, NULL, 'announce', 'telegram', ?, NULL, 'bench-account',
-      1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-      NULL, NULL, NULL, ?, NULL, ?, 'completed', NULL, ?, 0, 0, 0, 'sent',
-      NULL, 1, NULL, ?, '{}', ?, ?, ?, ?
-    )
+    ) VALUES (?, ?, ?, ?, ?, 'agentTurn', ?, ?, ?, ?, ?, ?)
   `);
   for (let i = 0; i < count; i += 1) {
     const jobId = `job-${String(i).padStart(8, "0")}`;
     const storeKey = `/state/cron/jobs-${i % 8}.json`;
     const updatedAt = 1_700_000_000_000 + i;
+    const name = `Benchmark job ${i}`;
+    const enabled = i % 5 !== 0;
+    const agentId = `agent-${i % 16}`;
+    const job = {
+      id: jobId,
+      name,
+      enabled,
+      createdAtMs: updatedAt - 100_000,
+      agentId,
+      sessionKey: `agent:${agentId}:main`,
+      schedule: {
+        kind: "every",
+        everyMs: 60_000 + (i % 120) * 1_000,
+        anchorMs: updatedAt - 60_000,
+      },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: `Benchmark payload ${i}`,
+        model: "openai/gpt-5.6-luna",
+        timeoutSeconds: 60,
+        allowUnsafeExternalContent: false,
+        lightContext: true,
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: `chat-${i % 32}`,
+        accountId: "bench-account",
+        bestEffort: true,
+      },
+      state: {},
+    };
+    const state = {
+      nextRunAtMs: updatedAt + (i % 2_000) * 1_000,
+      lastRunAtMs: updatedAt - 1_000,
+      lastRunStatus: "completed",
+      lastDurationMs: 50 + (i % 500),
+      consecutiveErrors: 0,
+      consecutiveSkipped: 0,
+      scheduleErrorCount: 0,
+      lastDeliveryStatus: "sent",
+      lastDelivered: true,
+    };
     insert.run(
       storeKey,
       jobId,
-      `Benchmark job ${i}`,
-      i % 5 === 0 ? 0 : 1,
-      updatedAt - 100_000,
-      `agent-${i % 16}`,
-      `agent:agent-${i % 16}:main`,
-      60_000 + (i % 120) * 1_000,
-      updatedAt - 60_000,
-      `Benchmark payload ${i}`,
-      `chat-${i % 32}`,
-      updatedAt + (i % 2_000) * 1_000,
-      updatedAt - 1_000,
-      50 + (i % 500),
-      JSON.stringify({ id: jobId, seed: i }),
+      name,
+      enabled ? 1 : 0,
+      agentId,
+      JSON.stringify(job),
+      JSON.stringify(state),
       updatedAt,
       `schedule-${i % 512}`,
       i,
@@ -368,11 +388,60 @@ function seedAgentDatabase(db: DatabaseSync, count: number, agentIndex: number):
         1_700_000_000_000 + i,
       );
     }
+    if (agentIndex === 0) {
+      seedTranscriptHistory(db);
+    }
     db.exec("COMMIT;");
   } catch (err) {
     db.exec("ROLLBACK;");
     throw err;
   }
+}
+
+function seedTranscriptHistory(db: DatabaseSync): void {
+  const sessionKey = "agent:perf-agent-0:history";
+  db.prepare(
+    `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(sessionKey, SQLITE_PERF_TRANSCRIPT_SESSION_ID, "{}", 1_700_000_000_000);
+  db.prepare(
+    `INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, sessionKey, 1_700_000_000_000, 1_700_000_000_000);
+
+  const insertEvent = db.prepare(
+    `INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+     VALUES (?, ?, ?, ?)`,
+  );
+  const insertIdentity = db.prepare(
+    `INSERT INTO transcript_event_identities
+       (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
+     VALUES (?, ?, ?, 'message', NULL, NULL, ?)`,
+  );
+  const insertActive = db.prepare(
+    `INSERT INTO session_transcript_active_events
+       (session_id, active_position, event_seq, message_position)
+     VALUES (?, ?, ?, ?)`,
+  );
+  for (let seq = 1; seq <= SQLITE_PERF_TRANSCRIPT_EVENTS; seq += 1) {
+    const eventId = `history-${seq}`;
+    const message = { type: "message", id: eventId, message: { role: "user", content: eventId } };
+    insertEvent.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, seq, JSON.stringify(message), seq);
+    insertIdentity.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, eventId, seq, seq);
+    insertActive.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, seq - 1, seq, seq - 1);
+  }
+  db.prepare(
+    `INSERT INTO session_transcript_index_state
+       (session_id, indexed_seq, leaf_event_id, active_event_count, active_message_count, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    SQLITE_PERF_TRANSCRIPT_SESSION_ID,
+    SQLITE_PERF_TRANSCRIPT_EVENTS,
+    `history-${SQLITE_PERF_TRANSCRIPT_EVENTS}`,
+    SQLITE_PERF_TRANSCRIPT_EVENTS,
+    SQLITE_PERF_TRANSCRIPT_EVENTS,
+    1_700_000_000_000,
+  );
 }
 
 function readIntegrity(db: DatabaseSync): string {
@@ -415,6 +484,21 @@ function runTimedQuery(
   };
 }
 
+function runTimedTranscriptPage(db: DatabaseSync, start: number, runs: number): TimedQuery {
+  return runTimedQuery(
+    db,
+    `SELECT active.message_position, event.event_json
+       FROM session_transcript_active_events AS active
+       JOIN transcript_events AS event
+         ON event.session_id = active.session_id AND event.seq = active.event_seq
+      WHERE active.session_id = ?
+        AND active.message_position >= ? AND active.message_position < ?
+      ORDER BY active.message_position ASC`,
+    [SQLITE_PERF_TRANSCRIPT_SESSION_ID, start, start + 32],
+    runs,
+  );
+}
+
 function runHotQueries(params: {
   agentDb: DatabaseSync;
   config: ProfileConfig;
@@ -423,21 +507,10 @@ function runHotQueries(params: {
   return [
     runTimedQuery(
       params.stateDb,
-      `SELECT job_id, name, updated_at
+      `SELECT *
          FROM cron_jobs
         WHERE store_key = ?
-        ORDER BY sort_order ASC, updated_at ASC, job_id
-        LIMIT 50`,
-      ["/state/cron/jobs-0.json"],
-      params.config.queryRuns,
-    ),
-    runTimedQuery(
-      params.stateDb,
-      `SELECT job_id, next_run_at_ms
-         FROM cron_jobs
-        WHERE store_key = ? AND enabled = 1 AND next_run_at_ms IS NOT NULL
-        ORDER BY next_run_at_ms ASC, job_id
-        LIMIT 50`,
+        ORDER BY sort_order ASC, updated_at ASC, job_id ASC`,
       ["/state/cron/jobs-0.json"],
       params.config.queryRuns,
     ),
@@ -481,6 +554,16 @@ function runHotQueries(params: {
       ["session_entries"],
       params.config.queryRuns,
     ),
+    runTimedTranscriptPage(
+      params.agentDb,
+      SQLITE_PERF_TRANSCRIPT_EVENTS - 32,
+      params.config.queryRuns,
+    ),
+    runTimedTranscriptPage(
+      params.agentDb,
+      Math.floor(SQLITE_PERF_TRANSCRIPT_EVENTS / 2),
+      params.config.queryRuns,
+    ),
   ];
 }
 
@@ -489,6 +572,7 @@ function printProofLines(report: BenchmarkReport): void {
   console.log(`SQLITE_PERF_PROFILE=${report.profile}`);
   console.log(`SQLITE_PERF_STATE_ROWS=${report.rows.stateRows}`);
   console.log(`SQLITE_PERF_AGENT_ROWS=${report.rows.agentCacheEntries}`);
+  console.log(`SQLITE_PERF_TRANSCRIPT_ROWS=${report.rows.transcriptEvents}`);
   console.log(`SQLITE_PERF_INTEGRITY=${report.integrity.state}`);
   console.log(`SQLITE_PERF_WAL_BYTES_BEFORE=${report.walBytes.stateBefore}`);
   console.log(`SQLITE_PERF_WAL_BYTES_AFTER=${report.walBytes.stateAfter}`);
@@ -563,6 +647,7 @@ function main(): void {
         deliveryQueueEntries: config.deliveryQueueEntries,
         pluginStateEntries: config.pluginStateEntries,
         stateRows: stateRowCount(config),
+        transcriptEvents: SQLITE_PERF_TRANSCRIPT_EVENTS,
       },
       timingsMs: {
         checkpoint: Number(checkpointMs.toFixed(3)),

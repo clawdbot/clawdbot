@@ -22,6 +22,8 @@ import {
 
 const LEGACY_AUDIT_LOGICAL_PATHS = [
   { directory: "logs", basename: "config-audit.jsonl" },
+  // system-agent.jsonl never shipped in a stable, but beta installs that ran
+  // its import left backup artifacts this list must keep recognizing.
   { directory: "audit", basename: "system-agent.jsonl" },
   { directory: "audit", basename: "crestodian.jsonl" },
 ] as const;

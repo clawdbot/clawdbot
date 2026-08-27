@@ -42,6 +42,7 @@ import {
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
+import type { CodexEffectiveSessionPermissionPolicy } from "./session-permission-policy.js";
 import {
   CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
   CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
@@ -75,7 +76,7 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
 ] as const;
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 
-/** Keeps paired-device filesystem and process ownership on its native exec-server. */
+/** Keeps node filesystem and process ownership on its native exec-server. */
 export function resolveCodexNodePlacementToolConstructionPlan(
   sandbox: OpenClawSandboxContext | undefined,
   nativeToolSurfaceEnabled: boolean | undefined,
@@ -91,7 +92,7 @@ export function resolveCodexNodePlacementToolConstructionPlan(
   }
   if (!nativeToolSurfaceEnabled) {
     throw new Error(
-      "Codex paired-device remote execution requires its native exec-server tool surface; adjust the session tool policy and start a fresh attempt.",
+      "Codex node execution requires its native exec-server tool surface; adjust the session tool policy and start a fresh attempt.",
     );
   }
   return {
@@ -123,6 +124,7 @@ type DynamicToolBuildParams = {
   effectiveCwd?: string;
   sandboxSessionKey: string;
   sandbox: OpenClawSandboxContext;
+  sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
   nativeToolSurfaceEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   runAbortController: AbortController;
@@ -292,14 +294,14 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       ...buildEmbeddedAttemptToolRunContext(params),
       exec: {
         ...params.execOverrides,
+        ...(input.sessionPermissionPolicy ? { mode: input.sessionPermissionPolicy.execMode } : {}),
         ...resolveCodexNodeExecToolOverrides(nativeExecutionPolicy),
         config: params.config,
         elevated: params.bashElevated,
       },
-      sessionPermissionPolicy:
-        params.permissionMode && params.sessionRoot
-          ? { mode: params.permissionMode, root: params.sessionRoot }
-          : undefined,
+      sessionPermissionPolicy: input.sessionPermissionPolicy
+        ? { mode: input.sessionPermissionPolicy.mode, root: input.sessionPermissionPolicy.root }
+        : undefined,
       sandbox: input.sandbox,
       ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
       messageProvider: resolveCodexMessageToolProvider(params),
@@ -343,6 +345,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
               resolvedWorkspace: input.resolvedWorkspace,
             }),
       config: params.config,
+      githubPublicationAvailable: params.githubPublicationAvailable,
       authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
       abortSignal: input.runAbortController.signal,
       emitBeforeToolCallDiagnostics: false,
@@ -615,6 +618,7 @@ function addGatewayShellDynamicToolsIfAvailable(
     createExecAliasDynamicTool(execTool, {
       host: "gateway",
       processAliasAvailable,
+      ...(input.sessionPermissionPolicy?.mode === "guarded" ? { ask: "always" } : {}),
     }),
   ];
   if (processAliasAvailable && processTool) {

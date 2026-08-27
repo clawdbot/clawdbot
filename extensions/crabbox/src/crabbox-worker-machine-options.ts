@@ -1,7 +1,6 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
-import { runCrabboxCommand } from "./crabbox-worker-command.js";
 import {
   type CrabboxMachineShape,
   listCrabboxMachineOptions,
@@ -25,7 +24,11 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
   }
   return new Map(
     parsed.flatMap<[string, readonly CrabboxMachineShape[]]>((entry) => {
-      if (!isRecord(entry)) {
+      // An explicit unmapped disposition overrides even a stray legacy summary.
+      if (
+        !isRecord(entry) ||
+        (isRecord(entry.classCatalog) && entry.classCatalog.disposition === "unmapped")
+      ) {
         return [];
       }
       const rawClasses = Array.isArray(entry.classes) ? entry.classes : [];
@@ -55,11 +58,11 @@ export function createCrabboxMachineOptionsResolver(
   const machineShapesByBinary = new Map<string, Promise<CrabboxMachineShapes>>();
   const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
     try {
-      const result = await runCrabboxCommand({
-        action: "providers",
-        args: ["providers", "--json"],
-        binary,
-        runCommand: dependencies.runCommand,
+      // The full provider matrix exceeds the lifecycle command's 64 KiB log cap.
+      // Keep catalog JSON intact or every provider loses its machine shapes.
+      const result = await dependencies.runCommand([binary, "providers", "--json"], {
+        maxOutputBytes: 1024 * 1024,
+        killProcessTree: true,
         timeoutMs: CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
       });
       if (result.termination !== "exit" || result.code !== 0) {

@@ -12,7 +12,7 @@ function catalogCalls(request: ReturnType<typeof vi.fn>) {
 }
 
 describe("new-session CLI-agent model targets", () => {
-  it("retries failed discovery with model metadata when the picker reopens", async () => {
+  it("retries only failed discovery when the picker reopens", async () => {
     const { context, request } = contextWith(models, "openclaw", ["sessions.catalog.list"]);
     request.mockImplementation((method: string) => {
       if (method === "sessions.catalog.list") {
@@ -55,6 +55,7 @@ describe("new-session CLI-agent model targets", () => {
 
     await vi.waitFor(() => {
       expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
       expect(catalogCalls(request)).toHaveLength(2);
     });
     await vi.waitFor(() => {
@@ -72,7 +73,7 @@ describe("new-session CLI-agent model targets", () => {
     expect(catalogCalls(request)).toHaveLength(2);
   });
 
-  it("retries both catalogs from the visible discovery error action", async () => {
+  it("retries only failed discovery from its visible error action", async () => {
     const { context, request } = contextWith(models, "openclaw", ["sessions.catalog.list"]);
     request.mockImplementation((method: string) => {
       if (method === "sessions.catalog.list") {
@@ -96,7 +97,7 @@ describe("new-session CLI-agent model targets", () => {
     });
 
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(1);
       expect(catalogCalls(request)).toHaveLength(2);
     });
     expect(

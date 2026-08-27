@@ -30,27 +30,6 @@ import {
 import { registerWorkerInferenceSessionDrain } from "./worker-environments/inference-control-internal.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
-const sessionAuditGate = vi.hoisted(() => ({
-  entered: vi.fn(),
-  wait: undefined as Promise<void> | undefined,
-}));
-
-vi.mock("./server-methods/session-audit.js", async () => {
-  const actual = await vi.importActual<typeof import("./server-methods/session-audit.js")>(
-    "./server-methods/session-audit.js",
-  );
-  return {
-    ...actual,
-    appendSessionAudit: async (...args: Parameters<typeof actual.appendSessionAudit>) => {
-      if (sessionAuditGate.wait) {
-        sessionAuditGate.entered();
-        await sessionAuditGate.wait;
-      }
-      await actual.appendSessionAudit(...args);
-    },
-  };
-});
-
 const {
   createConfiguredGlobalAgentSessionStore,
   createSessionStoreDir,
@@ -419,28 +398,39 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     throw new Error("expected resolved sharing target");
   }
 
-  const releaseAudit = createDeferredCore();
-  sessionAuditGate.entered.mockClear();
-  sessionAuditGate.wait = releaseAudit.promise;
+  const sharingCommitted = createDeferredCore();
+  const releaseSharingMutation = createDeferredCore();
   let sharing: Promise<LifecycleHandlerResponse> | undefined;
   let archive: Promise<LifecycleHandlerResponse> | undefined;
 
   try {
     let sharingSettled = false;
-    sharing = invokeVisibilityHandler({
-      client: owner,
-      context: requestContext,
-      sessionKey,
-      visibility: "draft",
+    sharing = runExclusiveSessionLifecycleMutation({
+      scope: sharingTarget.storePath,
+      identities: [
+        sharingTarget.canonicalKey,
+        sharingTarget.storeKey,
+        ...sharingTarget.storeKeys,
+        sharingTarget.entry.sessionId,
+      ],
+      run: async () => {
+        const response = await invokeVisibilityHandler({
+          client: owner,
+          context: requestContext,
+          sessionKey,
+          visibility: "draft",
+        });
+        sharingCommitted.resolve();
+        await releaseSharingMutation.promise;
+        return response;
+      },
     }).finally(() => {
       sharingSettled = true;
     });
-    await vi.waitFor(() => {
-      expect(sessionAuditGate.entered).toHaveBeenCalledOnce();
-      expect(
-        isSessionLifecycleMutationActive(sharingTarget.storePath, [sessionKey, sessionId]),
-      ).toBe(true);
-    });
+    await sharingCommitted.promise;
+    expect(isSessionLifecycleMutationActive(sharingTarget.storePath, [sessionKey, sessionId])).toBe(
+      true,
+    );
     expect(sharingSettled).toBe(false);
     expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
 
@@ -462,7 +452,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     expect(reclaim).not.toHaveBeenCalled();
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 
-    releaseAudit.resolve();
+    releaseSharingMutation.resolve();
     expect(await sharing).toMatchObject({ ok: true });
     expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
 
@@ -473,10 +463,10 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     expect(interrupted).toBe(false);
     expect(active.controller.signal.aborted).toBe(false);
     expectNoSessionQueueCleanup();
+    expect(reclaim).not.toHaveBeenCalled();
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
   } finally {
-    sessionAuditGate.wait = undefined;
-    releaseAudit.resolve();
+    releaseSharingMutation.resolve();
     admission.release();
     await Promise.allSettled([...(sharing ? [sharing] : []), ...(archive ? [archive] : [])]);
     active.unsubscribe();

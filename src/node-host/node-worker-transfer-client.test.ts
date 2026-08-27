@@ -86,6 +86,168 @@ async function git(root: string, args: string[]): Promise<string> {
 }
 
 describe("node worker transfer client", () => {
+  it.runIf(process.platform === "win32")(
+    "preserves foreign executable modes through Windows workspace downloads and uploads",
+    async () => {
+      const root = tempDirs.make("node-worker-transfer-windows-executable-");
+      const workspaceDir = path.join(root, "workspace");
+      const original = Buffer.from("#!/bin/sh\necho before\n");
+      const sha256 = createHash("sha256").update(original).digest("hex");
+      const rawManifest = serializeWorkerWorkspaceManifest({
+        version: 1,
+        baseCommit: null,
+        entries: [
+          { path: "script.sh", type: "file", mode: 0o755, size: original.byteLength, sha256 },
+        ],
+      });
+      const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+      let uploadedRaw: string | undefined;
+      const server = createHttpServer((req, res) => {
+        void (async () => {
+          if (req.url?.endsWith("/manifest")) {
+            res.writeHead(200).end(rawManifest);
+            return;
+          }
+          if (req.url?.endsWith(`/blobs/${sha256}`)) {
+            res.writeHead(200).end(original);
+            return;
+          }
+          if (req.method === "POST" && req.url?.includes("/reconciliations/")) {
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            const body = Buffer.concat(chunks);
+            const baseBytes = body.readUInt32BE(0);
+            const currentOffset = 4 + baseBytes;
+            const currentBytes = body.readUInt32BE(currentOffset);
+            uploadedRaw = body
+              .subarray(currentOffset + 4, currentOffset + 4 + currentBytes)
+              .toString("utf8");
+            const currentRef = `sha256:${createHash("sha256").update(uploadedRaw).digest("hex")}`;
+            res.writeHead(200).end(JSON.stringify({ manifestRef: currentRef }));
+            return;
+          }
+          res.writeHead(404).end();
+        })().catch((error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        });
+      });
+      const gatewayUrl = await listen(server);
+      try {
+        await expect(
+          runNodeWorkerWorkspaceTransfer({
+            gatewayUrl,
+            environmentId: "environment-windows-executable",
+            workspaceDir,
+            manifestHome: root,
+            transfer: { direction: "download", token: "download-token", manifestRef },
+          }),
+        ).resolves.toBe(manifestRef);
+        await expect(
+          fs.readFile(
+            path.join(
+              root,
+              ".openclaw-worker",
+              "manifests",
+              `${manifestRef.slice("sha256:".length)}.json`,
+            ),
+            "utf8",
+          ),
+        ).resolves.toBe(rawManifest);
+
+        await fs.writeFile(path.join(workspaceDir, "script.sh"), "#!/bin/sh\necho changed\n");
+        await fs.writeFile(path.join(workspaceDir, "new.txt"), "new\n");
+        const currentRef = await runNodeWorkerWorkspaceTransfer({
+          gatewayUrl,
+          environmentId: "environment-windows-executable",
+          workspaceDir,
+          manifestHome: root,
+          transfer: { direction: "upload", token: "upload-token", baseManifestRef: manifestRef },
+        });
+        expect(currentRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
+        expect(JSON.parse(uploadedRaw!)).toMatchObject({
+          entries: [
+            expect.objectContaining({ path: "new.txt", mode: 0o644 }),
+            expect.objectContaining({ path: "script.sh", mode: 0o755 }),
+          ],
+        });
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "reuses foreign executable Git-base files without requesting an unavailable blob",
+    async () => {
+      const root = tempDirs.make("node-worker-transfer-windows-git-executable-");
+      const source = path.join(root, "source");
+      const workspaceDir = path.join(root, "workspace");
+      const content = Buffer.from("#!/bin/sh\necho tracked\n");
+      await fs.mkdir(source);
+      await git(source, ["init", "--quiet", "--object-format=sha1"]);
+      await git(source, ["config", "core.filemode", "false"]);
+      await fs.writeFile(path.join(source, "script.sh"), content);
+      const object = await git(source, ["hash-object", "-w", "script.sh"]);
+      await git(source, ["update-index", "--add", "--cacheinfo", `100755,${object},script.sh`]);
+      await git(source, ["commit", "--quiet", "-m", "POSIX executable base"]);
+      const commit = await git(source, ["rev-parse", "HEAD"]);
+      const rawManifest = serializeWorkerWorkspaceManifest({
+        version: 1,
+        baseCommit: commit,
+        entries: [
+          {
+            path: "script.sh",
+            type: "file",
+            mode: 0o755,
+            size: content.byteLength,
+            sha256: createHash("sha256").update(content).digest("hex"),
+          },
+        ],
+      });
+      const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+      const packed = await runCommandBuffered(
+        ["git", "-C", source, "pack-objects", "--stdout", "--revs"],
+        { input: `${commit}\n`, maxOutputBytes: 4 * 1024 * 1024 },
+      );
+      expect(packed.code).toBe(0);
+      let requestedBlobs = 0;
+      const server = createHttpServer((req, res) => {
+        if (req.url?.endsWith("/manifest")) {
+          res.writeHead(200).end(rawManifest);
+        } else if (req.url?.endsWith("/pack")) {
+          res.writeHead(200).end(packed.stdout);
+        } else {
+          requestedBlobs += 1;
+          res.writeHead(404).end();
+        }
+      });
+      const gatewayUrl = await listen(server);
+      try {
+        await expect(
+          runNodeWorkerWorkspaceTransfer({
+            gatewayUrl,
+            environmentId: "environment-windows-git-executable",
+            workspaceDir,
+            manifestHome: root,
+            transfer: { direction: "download", token: "download-token", manifestRef },
+          }),
+        ).resolves.toBe(manifestRef);
+        expect(requestedBlobs).toBe(0);
+        await expect(fs.readFile(path.join(workspaceDir, "script.sh"))).resolves.toEqual(content);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
+
   it("keeps the prior workspace intact when a pack transfer is cut short", async () => {
     const root = tempDirs.make("node-worker-transfer-cut-");
     const workspaceDir = path.join(root, "workspace");

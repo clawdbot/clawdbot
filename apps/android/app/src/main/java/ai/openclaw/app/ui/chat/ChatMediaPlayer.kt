@@ -160,7 +160,7 @@ private object ChatInlineMediaSessionCallback : MediaSession.Callback {
   ): MediaSession.ConnectionResult {
     if (!controller.isTrusted) return MediaSession.ConnectionResult.reject()
     return MediaSession.ConnectionResult
-      .AcceptedResultBuilder(session)
+      .AcceptedResultBuilder(session, controller)
       .setAvailablePlayerCommands(inlineMediaSessionPlayerCommands(session.player.availableCommands))
       .build()
   }

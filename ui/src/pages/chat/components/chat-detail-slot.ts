@@ -1,5 +1,6 @@
 import { html, type TemplateResult } from "lit";
 import type { ChatPageHost } from "../chat-state-host.ts";
+import { selectedChatSessionRow } from "../chat-state-route.ts";
 import type { ChatProps } from "../chat-view.ts";
 import { openSlot, type SidebarLayout } from "../sidebar-layout.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
@@ -55,6 +56,14 @@ export function renderChatDetailSlot(params: {
     html`<openclaw-chat-detail-panel
       class="chat-sidebar"
       .content=${content}
+      .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
+      .attachmentRuntime=${{
+        authToken: params.chat.assistantAttachmentAuthToken,
+        connectionEpoch: params.chat.connectionEpoch,
+        localMediaPreviewRoots: params.chat.localMediaPreviewRoots ?? [],
+        resourceBasePath: params.chat.resourceBasePath,
+        resolveArtifactDownload: params.chat.resolveArtifactDownload,
+      }}
       .basePath=${params.chat.basePath ?? ""}
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
       .embedSandboxMode=${host.embedSandboxMode}
@@ -69,7 +78,8 @@ export function renderChatDetailSlot(params: {
       .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
         host.handleOpenImage(item, host.beginImageOpen())}
       .embedded=${true}
-      @chat-detail-panel-close=${() => host.handleCloseSidebar()}
+      @chat-detail-panel-close=${() =>
+        host.handleCloseSidebar(content.kind === "attachment" ? "workspace" : "detail")}
     ></openclaw-chat-detail-panel>`
   );
 }

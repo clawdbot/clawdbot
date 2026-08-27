@@ -16,12 +16,12 @@ import type {
   WorkerEnvironmentStore,
   WorkerEnvironmentTransitionPatch,
 } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
+import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
-  resolveProvider: (providerId: string) => WorkerProvider<"internal"> | undefined;
+  resolveProvider: (providerId: string) => WorkerProvider | undefined;
   prepareInstallation: (
     install: WorkerInstallationArtifact["install"],
   ) => Promise<WorkerInstallationArtifact>;
@@ -33,7 +33,7 @@ export type WorkerProviderLifecycleInputOptions = {
     signal: AbortSignal;
   }) => Promise<WorkerAdmissionHandshake>;
   resolveSshIdentity?: (params: {
-    provider: WorkerProvider<"internal">;
+    provider: WorkerProvider;
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;
@@ -45,7 +45,13 @@ export type WorkerProviderLifecycleInputOptions = {
 };
 
 export type WorkerProviderLifecycleOptions = WorkerProviderLifecycleInputOptions & {
-  tunnelManager?: Pick<WorkerTunnelManager, "stop">;
+  tunnelManager?: {
+    stop(
+      environmentId: string,
+      ownerEpoch?: number,
+      reason?: WorkerTunnelStopReason,
+    ): Promise<void>;
+  };
   credentialBroker: WorkerCredentialBroker;
   callBootstrap: <T>(
     installation: WorkerInstallationArtifact,

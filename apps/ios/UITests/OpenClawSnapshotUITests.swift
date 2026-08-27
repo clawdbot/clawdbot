@@ -138,6 +138,37 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
+    func testLiveGatewayApprovalNotificationsFromOverview() async throws {
+        try await self.verifyApprovalNotificationsNavigation(fromOverview: true)
+    }
+
+    func testLiveGatewayApprovalNotificationsFromSettings() async throws {
+        try await self.verifyApprovalNotificationsNavigation(fromOverview: false)
+    }
+
+    func testTabletSidebarRootsRenderWithPersistentSidebar() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "Tablet split navigation only")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for target in [
+            Self.controlScreenshotTarget,
+            Self.chatScreenshotTarget,
+            Self.agentScreenshotTarget,
+            Self.settingsScreenshotTarget,
+        ] {
+            self.launchApp(for: target)
+            let app = try XCTUnwrap(self.app)
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            XCTAssertTrue(self.destinationAnchor(in: app, destination: target.initialDestination).exists)
+            self.tapSidebarReveal(in: app)
+            let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
+            XCTAssertTrue(hideSidebar.waitForExistence(timeout: 5))
+            self.attachScreenshot(named: "tablet-split-\(target.initialDestination)")
+            hideSidebar.tap()
+            XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5))
+        }
+    }
+
     func testSidebarMoreAgentsMenuShowsAvatarsAndKeepsFooterVisible() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
         self.launchApp(for: ScreenshotTarget(
@@ -1016,6 +1047,64 @@ final class OpenClawSnapshotUITests: XCTestCase {
 }
 
 extension OpenClawSnapshotUITests {
+    private func verifyApprovalNotificationsNavigation(fromOverview: Bool) async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_IOS_APPROVAL_FIXTURE_URL"] != nil,
+            "Requires a task-owned synthetic Gateway approval fixture")
+        let fixtureURL = try XCTUnwrap(
+            ProcessInfo.processInfo.environment["OPENCLAW_IOS_APPROVAL_FIXTURE_URL"]
+                .flatMap(URL.init(string:)),
+            "Provide a task-owned synthetic Gateway approval fixture")
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let (_, response) = try await URLSession.shared.data(from: fixtureURL.appendingPathComponent("approval"))
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        if app.buttons["Not Now"].waitForExistence(timeout: 8) {
+            app.buttons["Not Now"].tap()
+        }
+        let approvalDialog = app.descendants(matching: .any)["exec-approval-review-scroll"]
+        XCTAssertTrue(approvalDialog.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 8))
+        app.buttons["Cancel"].tap()
+
+        if fromOverview {
+            try self.selectSidebarDestination("Overview")
+            let approvals = app.buttons.containing(.staticText, identifier: "Pending approvals").firstMatch
+            XCTAssertTrue(approvals.waitForExistence(timeout: 8))
+            approvals.tap()
+        } else {
+            try self.selectSidebarDestination("Settings")
+            let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
+            XCTAssertTrue(approvals.waitForExistence(timeout: 8))
+            approvals.tap()
+        }
+
+        let origin = fromOverview ? "overview" : "settings"
+        let review = app.buttons["Review exec approval"].firstMatch
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        review.tap()
+        XCTAssertTrue(app.staticTexts["Reviewing"].waitForExistence(timeout: 5))
+        let notifications = app.buttons["Open Notifications"]
+        XCTAssertTrue(notifications.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "\(origin)-approvals-before-notifications")
+        notifications.tap()
+        let reachedNotifications = app.navigationBars["Notifications"].waitForExistence(timeout: 8)
+        self.attachScreenshot(named: "\(origin)-approvals-notifications-result")
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "\(origin)-approvals-notifications-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        XCTAssertTrue(reachedNotifications, "Open Notifications must push from \(origin) Approvals")
+        XCTAssertTrue(app.switches.firstMatch.exists, "Notifications must render its delivery control")
+        XCTAssertFalse(
+            approvalDialog.exists,
+            "The approval being reviewed must not cover Notifications")
+        let back = app.navigationBars.buttons.firstMatch
+        XCTAssertTrue(back.exists)
+        back.tap()
+        XCTAssertTrue(notifications.waitForExistence(timeout: 5), "Back must return to Approvals")
+        self.attachScreenshot(named: "\(origin)-approvals-after-back")
+    }
+
     private func agentIdentity(in app: XCUIApplication) -> XCUIElement {
         app.otherElements.matching(identifier: "chat-agent-identity").firstMatch
     }
@@ -1515,7 +1604,10 @@ extension OpenClawSnapshotUITests {
 
     private func attachScreenshot(named name: String) {
         guard let app else { return }
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let screenshot = UIDevice.current.userInterfaceIdiom == .pad
+            ? XCUIScreen.main.screenshot()
+            : app.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -1529,7 +1621,7 @@ extension OpenClawSnapshotUITests {
     /// delete-per-character `typeText` does not reliably empty a field. Re-send against
     /// whatever is actually left instead of assuming the first burst landed in full.
     private func clearTextField(_ element: XCUIElement, attempts: Int = 4) {
-        for _ in 0 ..< attempts {
+        for _ in 0..<attempts {
             let value = element.value as? String ?? ""
             if value.isEmpty {
                 return

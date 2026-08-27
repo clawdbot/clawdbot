@@ -612,54 +612,20 @@ function readSortedDirNames(dir: string): string[] {
 
 /** Find the best Chromium-family executable on macOS. */
 function findChromeExecutableMac(): BrowserExecutable | null {
-  const candidates: Array<BrowserExecutable> = [
-    {
-      kind: "chrome",
-      path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    },
-    {
-      kind: "chrome",
-      path: path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-    },
-    {
-      kind: "brave",
-      path: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-    },
-    {
-      kind: "brave",
-      path: path.join(os.homedir(), "Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
-    },
-    {
-      kind: "edge",
-      path: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    },
-    {
-      kind: "edge",
-      path: path.join(
-        os.homedir(),
-        "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-      ),
-    },
-    {
-      kind: "chromium",
-      path: "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    },
-    {
-      kind: "chromium",
-      path: path.join(os.homedir(), "Applications/Chromium.app/Contents/MacOS/Chromium"),
-    },
-    {
-      kind: "canary",
-      path: "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    },
-    {
-      kind: "canary",
-      path: path.join(
-        os.homedir(),
-        "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-      ),
-    },
+  const applications: Array<[BrowserExecutable["kind"], string]> = [
+    ["chrome", "Google Chrome"],
+    ["brave", "Brave Browser"],
+    ["edge", "Microsoft Edge"],
+    ["chromium", "Chromium"],
+    ["canary", "Google Chrome Canary"],
   ];
+  const roots = ["/Applications", path.join(os.homedir(), "Applications")];
+  const candidates = applications.flatMap(([kind, name]) =>
+    roots.map((root) => ({
+      kind,
+      path: path.join(root, `${name}.app`, "Contents", "MacOS", name),
+    })),
+  );
 
   return findFirstExecutable(candidates, "darwin");
 }
@@ -721,67 +687,25 @@ function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
 /** Find the best Chromium-family executable on Windows. */
 function findChromeExecutableWindows(): BrowserExecutable | null {
   const { localAppData, programFiles, programFilesX86 } = resolveWindowsBrowserInstallRoots();
-  const joinWin = path.win32.join;
-  const candidates: Array<BrowserExecutable> = [];
+  const browsers: Array<[BrowserExecutable["kind"], ...string[]]> = [
+    ["chrome", "Google", "Chrome", "Application", "chrome.exe"],
+    ["brave", "BraveSoftware", "Brave-Browser", "Application", "brave.exe"],
+    ["edge", "Microsoft", "Edge", "Application", "msedge.exe"],
+    ["chromium", "Chromium", "Application", "chrome.exe"],
+    ["canary", "Google", "Chrome SxS", "Application", "chrome.exe"],
+  ];
+  const candidates: BrowserExecutable[] = localAppData
+    ? browsers.map(([kind, ...segments]) => ({
+        kind,
+        path: path.win32.join(localAppData, ...segments),
+      }))
+    : [];
 
-  if (localAppData) {
-    // Chrome (user install)
-    candidates.push({
-      kind: "chrome",
-      path: joinWin(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
-    });
-    // Brave (user install)
-    candidates.push({
-      kind: "brave",
-      path: joinWin(localAppData, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
-    });
-    // Edge (user install)
-    candidates.push({
-      kind: "edge",
-      path: joinWin(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
-    });
-    // Chromium (user install)
-    candidates.push({
-      kind: "chromium",
-      path: joinWin(localAppData, "Chromium", "Application", "chrome.exe"),
-    });
-    // Chrome Canary (user install)
-    candidates.push({
-      kind: "canary",
-      path: joinWin(localAppData, "Google", "Chrome SxS", "Application", "chrome.exe"),
-    });
+  for (const [kind, ...segments] of browsers.slice(0, 3)) {
+    for (const root of [programFiles, programFilesX86]) {
+      candidates.push({ kind, path: path.win32.join(root, ...segments) });
+    }
   }
-
-  // Chrome (system install, 64-bit)
-  candidates.push({
-    kind: "chrome",
-    path: joinWin(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
-  });
-  // Chrome (system install, 32-bit on 64-bit Windows)
-  candidates.push({
-    kind: "chrome",
-    path: joinWin(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
-  });
-  // Brave (system install, 64-bit)
-  candidates.push({
-    kind: "brave",
-    path: joinWin(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
-  });
-  // Brave (system install, 32-bit on 64-bit Windows)
-  candidates.push({
-    kind: "brave",
-    path: joinWin(programFilesX86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
-  });
-  // Edge (system install, 64-bit)
-  candidates.push({
-    kind: "edge",
-    path: joinWin(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-  });
-  // Edge (system install, 32-bit on 64-bit Windows)
-  candidates.push({
-    kind: "edge",
-    path: joinWin(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-  });
 
   return findFirstExecutable(candidates, "win32");
 }

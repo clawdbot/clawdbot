@@ -1,4 +1,5 @@
 import type { Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type { OpenAIResponsesCompactionRejection } from "../provider-options.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
@@ -27,13 +28,16 @@ export function isInvalidEncryptedContentError(error: unknown): boolean {
   if (record.code === "invalid_encrypted_content" || record.code === "thinking_signature_invalid") {
     return true;
   }
-  const message = typeof record.message === "string" ? record.message : "";
+  const message = typeof record.message === "string" ? record.message.toLowerCase() : "";
   return (
     message.includes("invalid_encrypted_content") ||
     message.includes("thinking_signature_invalid") ||
-    // xAI reports this exact prose contract without an error code.
-    (record.status === 400 &&
-      message.toLowerCase().includes("could not decrypt the provided encrypted_content"))
+    ((record.status === 400 ||
+      (record.status == null && /(?:^|[\s(])400(?:[\s):]|$)/.test(message))) &&
+      (message.includes("could not decrypt the provided encrypted_content") ||
+        (message.includes("encrypted content") &&
+          (message.includes("could not be verified") ||
+            message.includes("could not be decrypted or parsed")))))
   );
 }
 
@@ -166,12 +170,18 @@ export async function resolveNextResponsesEncryptedContentAttempt<
 export async function createResponsesStreamWithEncryptedContentRetry(params: {
   client: ResponsesClientLike;
   request: OpenAIResponsesRequestParams;
-  requestOptions: unknown;
+  requestOptions: { signal?: AbortSignal } | undefined;
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
   initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
   onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  canRetryStream?: () => boolean;
+  wrapStream?: (result: {
+    stream: AsyncIterable<unknown>;
+    response: Response;
+    attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
+  }) => AsyncIterable<unknown>;
   buildFullHistoryRequest?: () =>
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
@@ -210,7 +220,67 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       payloadVariant: attempt.kind,
     });
     try {
-      return await sendAttempt(attempt);
+      const result = await sendAttempt(attempt);
+      return {
+        ...result,
+        stream: {
+          async *[Symbol.asyncIterator]() {
+            let rejectedEvent: unknown;
+            try {
+              for await (const event of params.wrapStream?.(result) ?? result.stream) {
+                if (isRecord(event)) {
+                  const failure =
+                    event.type === "response.failed" && isRecord(event.response)
+                      ? event.response.error
+                      : event.type === "error"
+                        ? (event.error ?? event)
+                        : undefined;
+                  if (
+                    isRecord(failure) &&
+                    params.canRetryStream?.() === true &&
+                    isInvalidEncryptedContentError(failure)
+                  ) {
+                    rejectedEvent = event;
+                    const message = typeof failure.message === "string" ? failure.message : "";
+                    throw Object.assign(new Error(message), {
+                      code: failure.code,
+                      status: failure.status,
+                    });
+                  }
+                }
+                yield event;
+              }
+            } catch (error) {
+              // Response hooks can abort the request before any output exists; retrying their
+              // failures would reissue an already-canceled request as provider recovery.
+              const nextAttempt =
+                params.canRetryStream?.() === true && !params.requestOptions?.signal?.aborted
+                  ? await resolveNextResponsesEncryptedContentAttempt(result.attempt, error, {
+                      buildFullHistoryRequest: params.buildFullHistoryRequest,
+                    })
+                  : undefined;
+              if (!nextAttempt) {
+                if (rejectedEvent !== undefined) {
+                  yield rejectedEvent;
+                  return;
+                }
+                throw error;
+              }
+              log.warn(
+                `[responses] retrying streamed encrypted content provider=${params.model.provider} ` +
+                  `api=${params.model.api} model=${params.model.id}`,
+              );
+              const recovered = await createResponsesStreamWithEncryptedContentRetry({
+                ...params,
+                request: nextAttempt.request,
+                initialAttemptKind: nextAttempt.kind,
+                initialRejectedCompaction: nextAttempt.rejectedCompaction,
+              });
+              yield* recovered.stream;
+            }
+          },
+        },
+      };
     } catch (error) {
       let nextAttempt = await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
         buildFullHistoryRequest: params.buildFullHistoryRequest,

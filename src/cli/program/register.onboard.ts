@@ -6,6 +6,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
+import { rejectOnboardingOption } from "../../commands/onboard-options.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -23,7 +24,7 @@ import { formatCliCommand } from "../command-format.js";
 import { listExplicitOptionFlagsExcept } from "../command-options.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 
-export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
+function resolveInstallDaemonFlag(command: Command): boolean | undefined {
   // Commander doesn't support option conflicts natively; keep original behavior.
   // If --skip-daemon is explicitly passed, it wins.
   if (command.getOptionValueSource("skipDaemon") === "cli") {
@@ -47,20 +48,20 @@ const MODERN_ONBOARD_OPTION_KEYS = new Set([
 function validateRecommendationParentOptions(
   command: Command,
   runtime: RuntimeEnv,
-  allowJson = false,
+  json = false,
 ): boolean {
   const unsupported = listExplicitOptionFlagsExcept(
     command,
-    allowJson ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
+    json ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
   );
   if (unsupported.length === 0) {
     return true;
   }
-  runtime.error(
+  return rejectOnboardingOption(
+    { json },
+    runtime,
     `This recommendations command does not support parent option(s): ${unsupported.join(", ")}.`,
   );
-  runtime.exit(1);
-  return false;
 }
 
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
@@ -147,9 +148,61 @@ export function registerOnboardAuthOptions(command: Command): Command {
     .option("--custom-text-input", "Mark the custom provider model as text-only");
 }
 
-export function pickOnboardAuthOptionValues(
-  opts: Record<string, unknown>,
-): Partial<OnboardOptions> {
+export function registerOnboardGatewayOptions(command: Command): Command {
+  return command
+    .option("--gateway-port <port>", "Gateway port")
+    .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
+    .option("--gateway-auth <mode>", "Gateway auth: token|password")
+    .option("--gateway-token <token>", "Gateway token (token auth)")
+    .option(
+      "--gateway-token-ref-env <name>",
+      "Gateway token SecretRef env var name (token auth; e.g. OPENCLAW_GATEWAY_TOKEN)",
+    )
+    .option("--gateway-password <password>", "Gateway password (password auth)");
+}
+
+export function registerOnboardRemoteOptions(command: Command): Command {
+  return command
+    .option("--remote-url <url>", "Remote Gateway WebSocket URL")
+    .option("--remote-token <token>", "Remote Gateway token (optional)")
+    .option("--remote-password <password>", "Remote Gateway password (optional)");
+}
+
+export function registerOnboardRuntimeOptions(
+  command: Command,
+  variant: "onboard" | "setup",
+): Command {
+  return command
+    .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
+    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
+    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
+    .option("--install-daemon", "Install gateway service")
+    .option("--no-install-daemon", "Skip gateway service install")
+    .option("--skip-daemon", "Skip gateway service install")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun (default: node)")
+    .option("--skip-channels", "Skip channel setup")
+    .option("--skip-skills", "Skip skills setup")
+    .option("--skip-bootstrap", "Skip creating default agent workspace files")
+    .option("--skip-search", "Skip search provider setup")
+    .option("--skip-health", "Skip health check")
+    .option(
+      "--skip-ui",
+      variant === "setup" ? "Skip Control UI/TUI launch" : "Skip Control UI/TUI prompts",
+    )
+    .option("--suppress-gateway-token-output", "Disable the guided Control UI handoff")
+    .option(
+      "--skip-hooks",
+      variant === "setup"
+        ? "Accepted for onboard compatibility; hooks setup is skipped"
+        : "Skip hook setup",
+    )
+    .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
+    .option("--import-from <provider>", "Migration provider to run during onboarding")
+    .option("--import-source <path>", "Source agent home for --import-from")
+    .option("--import-secrets", "Import supported secrets during onboarding migration", false);
+}
+
+function pickOnboardAuthOptionValues(opts: Record<string, unknown>): Partial<OnboardOptions> {
   const customTextInput = opts.customTextInput === true;
   return {
     authChoice: opts.authChoice as AuthChoice | undefined,
@@ -174,16 +227,53 @@ export function pickOnboardAuthOptionValues(
   };
 }
 
-export function validateOnboardAuthOptionValues(
+export function resolveOnboardCommandOptions(
   opts: Record<string, unknown>,
+  command: Command,
   runtime: RuntimeEnv,
-): boolean {
+): OnboardOptions | false {
   if (opts.customImageInput === true && opts.customTextInput === true) {
-    runtime.error("Use either --custom-image-input or --custom-text-input, not both.");
-    runtime.exit(1);
-    return false;
+    const message = "Use either --custom-image-input or --custom-text-input, not both.";
+    return rejectOnboardingOption({ json: opts.json === true }, runtime, message);
   }
-  return true;
+  return {
+    workspace: readStringValue(opts.workspace),
+    agentName: readStringValue(opts.agentName),
+    nonInteractive: Boolean(opts.nonInteractive),
+    acceptRisk: Boolean(opts.acceptRisk),
+    classic: Boolean(opts.classic),
+    tui: Boolean(opts.tui),
+    flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
+    mode: opts.mode as "local" | "remote" | undefined,
+    ...pickOnboardAuthOptionValues(opts),
+    gatewayPort: parseGatewayPortOption(opts.gatewayPort, "--gateway-port"),
+    gatewayBind: opts.gatewayBind as GatewayBind | undefined,
+    gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
+    gatewayToken: readStringValue(opts.gatewayToken),
+    gatewayTokenRefEnv: readStringValue(opts.gatewayTokenRefEnv),
+    gatewayPassword: readStringValue(opts.gatewayPassword),
+    remoteUrl: readStringValue(opts.remoteUrl),
+    remoteToken: readStringValue(opts.remoteToken),
+    remotePassword: readStringValue(opts.remotePassword),
+    tailscale: opts.tailscale as TailscaleMode | undefined,
+    reset: Boolean(opts.reset),
+    resetScope: opts.resetScope as ResetScope | undefined,
+    installDaemon: resolveInstallDaemonFlag(command),
+    daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
+    skipChannels: Boolean(opts.skipChannels),
+    skipSkills: Boolean(opts.skipSkills),
+    skipBootstrap: Boolean(opts.skipBootstrap),
+    skipSearch: Boolean(opts.skipSearch),
+    skipHealth: Boolean(opts.skipHealth),
+    skipUi: Boolean(opts.skipUi),
+    suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
+    skipHooks: Boolean(opts.skipHooks),
+    nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
+    importFrom: readStringValue(opts.importFrom),
+    importSource: readStringValue(opts.importSource),
+    importSecrets: Boolean(opts.importSecrets),
+    json: Boolean(opts.json),
+  };
 }
 
 export function registerOnboardCommand(program: Command): void {
@@ -218,40 +308,10 @@ export function registerOnboardCommand(program: Command): void {
     .option("--mode <mode>", "Onboard mode: local|remote");
 
   registerOnboardAuthOptions(command);
-
-  command
-    .option("--gateway-port <port>", "Gateway port")
-    .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
-    .option("--gateway-auth <mode>", "Gateway auth: token|password")
-    .option("--gateway-token <token>", "Gateway token (token auth)")
-    .option(
-      "--gateway-token-ref-env <name>",
-      "Gateway token SecretRef env var name (token auth; e.g. OPENCLAW_GATEWAY_TOKEN)",
-    )
-    .option("--gateway-password <password>", "Gateway password (password auth)")
-    .option("--remote-url <url>", "Remote Gateway WebSocket URL")
-    .option("--remote-token <token>", "Remote Gateway token (optional)")
-    .option("--remote-password <password>", "Remote Gateway password (optional)")
-    .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
-    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
-    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
-    .option("--install-daemon", "Install gateway service")
-    .option("--no-install-daemon", "Skip gateway service install")
-    .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node")
-    .option("--skip-channels", "Skip channel setup")
-    .option("--skip-skills", "Skip skills setup")
-    .option("--skip-bootstrap", "Skip creating default agent workspace files")
-    .option("--skip-search", "Skip search provider setup")
-    .option("--skip-health", "Skip health check")
-    .option("--skip-ui", "Skip Control UI/TUI prompts")
-    .option("--suppress-gateway-token-output", "Disable the guided Control UI handoff")
-    .option("--skip-hooks", "Skip hook setup")
-    .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
-    .option("--import-from <provider>", "Migration provider to run during onboarding")
-    .option("--import-source <path>", "Source agent home for --import-from")
-    .option("--import-secrets", "Import supported secrets during onboarding migration", false)
-    .option("--json", "Output JSON summary", false);
+  registerOnboardGatewayOptions(command);
+  registerOnboardRemoteOptions(command);
+  registerOnboardRuntimeOptions(command, "onboard");
+  command.option("--json", "Output JSON summary", false);
 
   const recommendations = command
     .command("recommendations")
@@ -260,17 +320,13 @@ export function registerOnboardCommand(program: Command): void {
     .action(async (opts, recommendationsCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
-        if (!validateRecommendationParentOptions(command, defaultRuntime, true)) {
+        const json = Boolean(opts.json || recommendationsCommand.parent?.opts().json);
+        if (!validateRecommendationParentOptions(command, defaultRuntime, json)) {
           return;
         }
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        onboardRecommendationsCommand(
-          {
-            json: Boolean(opts.json || recommendationsCommand.parent?.opts().json),
-          },
-          defaultRuntime,
-        );
+        onboardRecommendationsCommand({ json }, defaultRuntime);
       });
     });
 
@@ -314,30 +370,30 @@ export function registerOnboardCommand(program: Command): void {
   command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
+      const rejectOption = (message: string) =>
+        rejectOnboardingOption({ json: Boolean(opts.json) }, defaultRuntime, message);
       if (opts.modern) {
         const unsupportedOptions = listExplicitOptionFlagsExcept(
           commandRuntime,
           MODERN_ONBOARD_OPTION_KEYS,
         );
         if (unsupportedOptions.length > 0) {
-          defaultRuntime.error(
+          rejectOption(
             [
               `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
               "Run those setup options without --modern, or remove them to open OpenClaw.",
             ].join("\n"),
           );
-          defaultRuntime.exit(1);
           return;
         }
         if (opts.nonInteractive && opts.acceptRisk !== true) {
-          defaultRuntime.error(
+          rejectOption(
             [
               "Non-interactive setup requires explicit risk acknowledgement.",
               "Read: https://docs.openclaw.ai/security",
               `Re-run with: ${formatCliCommand("openclaw onboard --modern --non-interactive --accept-risk ...")}`,
             ].join("\n"),
           );
-          defaultRuntime.exit(1);
           return;
         }
         const { runSystemAgentWithInference } =
@@ -360,53 +416,16 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      if (!validateOnboardAuthOptionValues(opts as Record<string, unknown>, defaultRuntime)) {
-        return;
-      }
-      const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-      const gatewayPort = parseGatewayPortOption(opts.gatewayPort, "--gateway-port");
-      const { setupWizardCommand } = await import("../../commands/onboard.js");
-      await setupWizardCommand(
-        {
-          workspace: opts.workspace as string | undefined,
-          agentName: opts.agentName as string | undefined,
-          nonInteractive: Boolean(opts.nonInteractive),
-          acceptRisk: Boolean(opts.acceptRisk),
-          classic: Boolean(opts.classic),
-          tui: Boolean(opts.tui),
-          flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
-          mode: opts.mode as "local" | "remote" | undefined,
-          ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),
-          gatewayPort,
-          gatewayBind: opts.gatewayBind as GatewayBind | undefined,
-          gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
-          gatewayToken: opts.gatewayToken as string | undefined,
-          gatewayTokenRefEnv: opts.gatewayTokenRefEnv as string | undefined,
-          gatewayPassword: opts.gatewayPassword as string | undefined,
-          remoteUrl: opts.remoteUrl as string | undefined,
-          remoteToken: opts.remoteToken as string | undefined,
-          remotePassword: readStringValue(opts.remotePassword),
-          tailscale: opts.tailscale as TailscaleMode | undefined,
-          reset: Boolean(opts.reset),
-          resetScope: opts.resetScope as ResetScope | undefined,
-          installDaemon,
-          daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
-          skipChannels: Boolean(opts.skipChannels),
-          skipSkills: Boolean(opts.skipSkills),
-          skipBootstrap: Boolean(opts.skipBootstrap),
-          skipSearch: Boolean(opts.skipSearch),
-          skipHealth: Boolean(opts.skipHealth),
-          skipUi: Boolean(opts.skipUi),
-          suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
-          skipHooks: Boolean(opts.skipHooks),
-          nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
-          importFrom: opts.importFrom as string | undefined,
-          importSource: opts.importSource as string | undefined,
-          importSecrets: Boolean(opts.importSecrets),
-          json: Boolean(opts.json),
-        },
+      const onboardingOptions = resolveOnboardCommandOptions(
+        opts as Record<string, unknown>,
+        commandRuntime,
         defaultRuntime,
       );
+      if (!onboardingOptions) {
+        return;
+      }
+      const { setupWizardCommand } = await import("../../commands/onboard.js");
+      await setupWizardCommand(onboardingOptions, defaultRuntime);
     });
   });
 }

@@ -224,7 +224,7 @@ export async function executeConfigExternalMutation<T>(
 
 export async function loadConfig(
   state: RuntimeConfigState,
-  options: LoadConfigOptions = {},
+  options: LoadConfigOptions & { background?: boolean } = {},
   isCurrentLoad: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
@@ -233,7 +233,9 @@ export async function loadConfig(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const version = nextRequestVersion(state, "config");
-  state.configLoading = true;
+  if (!options.background) {
+    state.configLoading = true;
+  }
   state.lastError = null;
   state.chatError = null;
   try {
@@ -249,7 +251,10 @@ export async function loadConfig(
     }
     return false;
   } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (
+      !options.background &&
+      isCurrentRequest(state, "config", version, client, connectionEpoch)
+    ) {
       state.configLoading = false;
     }
   }

@@ -10,8 +10,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
-import { withBundledPluginEnablementCompat } from "../plugins/bundled-compat.js";
-import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   discoverAuthStorage,
@@ -25,17 +23,6 @@ import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import { isRateLimitErrorMessage } from "./failover/classify.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
-import {
-  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
-  isHighSignalLiveModelRef,
-  isPrioritizedHighSignalLiveModelRef,
-  isSmallLiveModelRef,
-  listPrioritizedSmallLiveModelRefs,
-  resolveHighSignalLiveModelLimit,
-  selectHighSignalLiveItems,
-  selectSmallLiveItems,
-  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
-} from "./live-model-filter.js";
 import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
@@ -56,7 +43,20 @@ import {
 import { shouldSuppressBuiltInModelCore } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
-import { appendPrioritizedDynamicLiveModels } from "./test-helpers/live-model-dynamic-candidates.js";
+import {
+  appendPrioritizedDynamicLiveModels,
+  applyLiveProviderPluginDiscoveryCompat,
+  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
+  isHighSignalLiveModelRef,
+  isPrioritizedHighSignalLiveModelRef,
+  isSmallLiveModelRef,
+  listPrioritizedSmallLiveModelRefs,
+  resolveHighSignalLiveModelLimit,
+  selectHighSignalLiveItems,
+  selectSmallLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
+  resolveLiveProviderDiscoveryProviderIds,
+} from "./test-helpers/live-model-dynamic-candidates.js";
 import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
@@ -200,93 +200,16 @@ function findUnmatchedExplicitLiveModelRefs(params: {
   return unmatched;
 }
 
-function resolveLiveProviderDiscoveryProviderIds(params: {
-  providerFilter: Set<string> | null;
-  explicitRefs: readonly { provider: string; id: string }[];
-  priorityRefs?: readonly { provider: string; id: string }[];
-}): string[] | undefined {
-  // Narrow startup discovery to providers that can affect the requested live target set.
-  const providers = new Set<string>();
-  for (const provider of params.providerFilter ?? []) {
-    const normalized = normalizeProviderId(provider);
-    if (normalized) {
-      providers.add(normalized);
-    }
-  }
-  for (const ref of params.explicitRefs) {
-    providers.add(ref.provider);
-  }
-  for (const ref of params.priorityRefs ?? []) {
-    providers.add(ref.provider);
-  }
-  return providers.size > 0
-    ? [...providers].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-}
-
-function resolveLiveProviderDiscoveryPluginIds(params: {
-  config?: OpenClawConfig;
-  providers: readonly string[] | undefined;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const pluginIds = new Set<string>();
-  for (const provider of params.providers ?? []) {
-    const owners =
-      resolveOwningPluginIdsForProviderRef({
-        provider,
-        config: params.config,
-        env: params.env,
-      }) ?? [];
-    if (owners.length === 0) {
-      pluginIds.add(provider);
-      continue;
-    }
-    for (const owner of owners) {
-      pluginIds.add(owner);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
-}
-
 function applyLiveProviderDiscoveryPluginCompat(params: {
   config: OpenClawConfig;
   providers: readonly string[] | undefined;
   env?: NodeJS.ProcessEnv;
 }): OpenClawConfig {
-  const pluginIds = resolveLiveProviderDiscoveryPluginIds(params);
-  const pluginConfig =
-    pluginIds.length > 0 ? enableLiveProviderPlugins(params.config, pluginIds) : params.config;
   return applyLiveOllamaProviderEnvCompat({
-    config: pluginConfig,
+    config: applyLiveProviderPluginDiscoveryCompat(params),
     providers: params.providers,
     env: params.env,
   });
-}
-
-function enableLiveProviderPlugins(
-  config: OpenClawConfig,
-  pluginIds: readonly string[],
-): OpenClawConfig {
-  const compatConfig =
-    withBundledPluginEnablementCompat({
-      config,
-      pluginIds,
-    }) ?? config;
-  const entries = { ...compatConfig.plugins?.entries };
-  const allow = new Set(compatConfig.plugins?.allow ?? []);
-  for (const pluginId of pluginIds) {
-    allow.add(pluginId);
-    entries[pluginId] ??= { enabled: true };
-  }
-  return {
-    ...compatConfig,
-    plugins: {
-      ...compatConfig.plugins,
-      enabled: true,
-      allow: [...allow].toSorted((left, right) => left.localeCompare(right)),
-      entries,
-    },
-  };
 }
 
 function applyLiveOllamaProviderEnvCompat(params: {

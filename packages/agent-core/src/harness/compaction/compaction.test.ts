@@ -283,24 +283,44 @@ describe("calculateContextTokens", () => {
 });
 
 describe("session-entry compaction budgeting", () => {
-  it("counts visible shell output while ignoring private output after provider usage", () => {
-    const hidden = createBashMessage("x".repeat(80_000), 2, true);
-    const visible = createBashMessage("x".repeat(80_000), 2, false);
-    const assistant = createAssistant("done", createUsage(42), 1);
-    const latest: AgentMessage = { role: "user", content: "continue", timestamp: 3 };
+  it.each([
+    {
+      kind: "shell",
+      createMessage: (excludeFromContext: boolean) =>
+        createBashMessage("x".repeat(80_000), 2, excludeFromContext),
+    },
+    {
+      kind: "custom",
+      createMessage: (excludeFromContext: boolean): AgentMessage => ({
+        role: "custom",
+        customType: "openclaw.operator-activity",
+        content: "x".repeat(80_004),
+        display: excludeFromContext,
+        excludeFromContext,
+        timestamp: 2,
+      }),
+    },
+  ])(
+    "counts visible $kind activity while ignoring excluded activity after provider usage",
+    ({ createMessage }) => {
+      const hidden = createMessage(true);
+      const visible = createMessage(false);
+      const assistant = createAssistant("done", createUsage(42), 1);
+      const latest: AgentMessage = { role: "user", content: "continue", timestamp: 3 };
 
-    expect(estimateTokens(hidden)).toBe(0);
-    expect(estimateTokens(visible)).toBeGreaterThan(20_000);
-    expect(estimateContextTokens([assistant, hidden, latest])).toMatchObject({
-      tokens: 44,
-      usageTokens: 42,
-      trailingTokens: 2,
-      lastUsageIndex: 0,
-    });
-    expect(estimateContextTokens([assistant, visible, latest]).trailingTokens).toBeGreaterThan(
-      20_000,
-    );
-  });
+      expect(estimateTokens(hidden)).toBe(0);
+      expect(estimateTokens(visible)).toBeGreaterThan(20_000);
+      expect(estimateContextTokens([assistant, hidden, latest])).toMatchObject({
+        tokens: 44,
+        usageTokens: 42,
+        trailingTokens: 2,
+        lastUsageIndex: 0,
+      });
+      expect(estimateContextTokens([assistant, visible, latest]).trailingTokens).toBeGreaterThan(
+        20_000,
+      );
+    },
+  );
 
   it("never rewinds a retained visible turn onto an excluded shell-history row", () => {
     const entries: SessionTreeEntry[] = [
@@ -345,11 +365,36 @@ describe("session-entry compaction budgeting", () => {
     expect(preparation.value).toMatchObject({
       firstKeptEntryId: "entry-3",
       isSplitTurn: true,
+      splitTurnCompleted: true,
       tokensBefore: 10,
       turnPrefixMessages: [{ role: "user" }, { role: "assistant" }],
     });
     expect(JSON.stringify(preparation.value)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
+  });
+
+  it("binds split-turn completion to the cut turn instead of a newer retained turn", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "boundary request", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("boundary complete", createUsage(10), 2), 1),
+      createMessageEntry({ role: "user", content: "newer unresolved request", timestamp: 3 }, 2),
+    ];
+
+    const preparation = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 8,
+    });
+
+    expect(preparation.ok).toBe(true);
+    if (!preparation.ok || !preparation.value) {
+      throw new Error("expected the boundary turn to be split");
+    }
+    expect(preparation.value).toMatchObject({
+      firstKeptEntryId: "entry-1",
+      isSplitTurn: true,
+      splitTurnCompleted: true,
+    });
   });
 
   it("applies the shared common-CJK budget heuristic", () => {

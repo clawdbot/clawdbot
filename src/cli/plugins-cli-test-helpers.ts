@@ -143,7 +143,7 @@ export const buildPluginRegistrySnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginInspectReportMock: UnknownMock = vi.fn();
 const buildAllPluginInspectReports: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
-const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
+export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
 export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const notifyGatewayPluginMetadataChangedMock: AsyncUnknownMock = vi.fn();
@@ -486,7 +486,7 @@ vi.mock("../plugins/status.js", () => ({
       Parameters<(typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"]>,
       ReturnType<(typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"]>
     >(
-      buildPluginCompatibilityNotices,
+      buildPluginCompatibilityNoticesMock,
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"],
   formatPluginCompatibilityNotice: (entry: { message: string }) => entry.message,
@@ -647,6 +647,7 @@ vi.mock("./prompt.js", () => ({
 vi.mock("../plugins/install.js", () => ({
   PLUGIN_INSTALL_ERROR_CODE: {
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+    RELEASE_COHORT_UNAVAILABLE: "release_cohort_unavailable",
     SECURITY_SCAN_BLOCKED: "security_scan_blocked",
     SECURITY_SCAN_FAILED: "security_scan_failed",
     UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
@@ -853,7 +854,7 @@ export function resetPluginsCliTestState() {
   buildPluginRegistrySnapshotReportMock.mockReset();
   buildPluginInspectReportMock.mockReset();
   buildPluginDiagnosticsReportMock.mockReset();
-  buildPluginCompatibilityNotices.mockReset();
+  buildPluginCompatibilityNoticesMock.mockReset();
   inspectPluginRegistryMock.mockReset();
   refreshPluginRegistryMock.mockReset();
   notifyGatewayPluginMetadataChangedMock.mockReset();
@@ -993,7 +994,7 @@ export function resetPluginsCliTestState() {
     registryDiagnostics: [],
   });
   buildPluginDiagnosticsReportMock.mockReturnValue(defaultPluginReport);
-  buildPluginCompatibilityNotices.mockReturnValue([]);
+  buildPluginCompatibilityNoticesMock.mockReturnValue([]);
   const defaultRegistryIndex = {
     version: 1,
     hostContractVersion: "2026.4.25",

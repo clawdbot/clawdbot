@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -101,6 +102,8 @@ type OrphanAgentDir = {
   agentId: string;
 };
 
+type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
+
 export type StateIntegrityHealthIssue =
   | {
       kind: "mac-cloud-state-dir";
@@ -141,12 +144,12 @@ export type StateIntegrityHealthIssue =
     }
   | {
       kind: "missing-runtime-dir";
-      label: "Sessions dir" | "Session store dir" | "OAuth dir";
+      label: "OAuth dir";
       path: string;
     }
   | {
       kind: "runtime-dir-not-writable";
-      label: "Sessions dir" | "Session store dir" | "OAuth dir";
+      label: RuntimeDirLabel;
       path: string;
       hint?: string;
     };
@@ -398,12 +401,6 @@ function resolvePathThroughExistingAncestor(
     missingSegments.unshift(pathOps.basename(candidate));
     candidate = parent;
   }
-}
-
-function decodeMountInfoPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
 }
 
 function escapeControlCharsForTerminal(value: string): string {
@@ -702,16 +699,14 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
-  // Prefer the resolved target path when available so symlink prefixes do not
-  // misclassify local state dirs as cloud-synced.
-  const candidates = realPath ? [path.resolve(realPath)] : [path.resolve(stateDir)];
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
 
-  for (const candidate of candidates) {
-    for (const { storage, root } of roots) {
-      if (isPathUnderRoot(candidate, root)) {
-        return { path: candidate, storage };
-      }
+  for (const { storage, root } of roots) {
+    if (isPathUnderRoot(resolvedStatePath, root)) {
+      return { path: resolvedStatePath, storage };
     }
   }
 
@@ -888,7 +883,7 @@ export function detectStateIntegrityHealthIssues(
   }
 
   if (stateDirExists) {
-    const dirCandidates = new Map<string, "Sessions dir" | "Session store dir" | "OAuth dir">();
+    const dirCandidates = new Map<string, RuntimeDirLabel>();
     if (sessionsDir) {
       dirCandidates.set(sessionsDir, "Sessions dir");
     }
@@ -900,7 +895,12 @@ export function detectStateIntegrityHealthIssues(
     }
     for (const [dir, label] of dirCandidates) {
       if (!existsDir(dir)) {
-        issues.push({ kind: "missing-runtime-dir", label, path: dir });
+        if (label === "OAuth dir") {
+          issues.push({ kind: "missing-runtime-dir", label, path: dir });
+          continue;
+        }
+        // Transcript-archive writers create session dirs lazily (session-accessor.sqlite-archive.ts),
+        // and readers tolerate ENOENT, so absence is healthy on fresh profiles.
         continue;
       }
       if (!canWriteDir(dir)) {
@@ -1091,7 +1091,6 @@ export async function noteStateIntegrity(
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
   const displaySessionsDir = sessionsDir ? shortenHomePath(sessionsDir) : undefined;
-  const displayStoreDir = storeDir ? shortenHomePath(storeDir) : undefined;
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
@@ -1224,7 +1223,7 @@ export async function noteStateIntegrity(
   }
 
   if (stateDirExists) {
-    const dirCandidates = new Map<string, string>();
+    const dirCandidates = new Map<string, RuntimeDirLabel>();
     if (sessionsDir) {
       dirCandidates.set(sessionsDir, "Sessions dir");
     }
@@ -1238,22 +1237,12 @@ export async function noteStateIntegrity(
         `- OAuth dir not present (${displayOauthDir}). Skipping create because no WhatsApp/pairing channel config is active.`,
       );
     }
-    const displayDirFor = (dir: string) => {
-      if (dir === sessionsDir) {
-        return displaySessionsDir;
-      }
-      if (dir === storeDir) {
-        return displayStoreDir;
-      }
-      if (dir === oauthDir) {
-        return displayOauthDir;
-      }
-      return shortenHomePath(dir);
-    };
-
     for (const [dir, label] of dirCandidates) {
-      const displayDir = displayDirFor(dir);
+      const displayDir = shortenHomePath(dir);
       if (!existsDir(dir)) {
+        if (label !== "OAuth dir") {
+          continue;
+        }
         warnings.push(`- CRITICAL: ${label} missing (${displayDir}).`);
         const create = await prompter.confirmRuntimeRepair({
           message: `Create ${label} at ${displayDir}?`,

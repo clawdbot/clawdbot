@@ -26,6 +26,7 @@ import {
   registerSecretEgressProxyRun,
 } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -42,6 +43,7 @@ import {
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
+  ExecProcessPreflightError,
   type ExecProcessHandle,
   type ExecProcessOutcome,
   normalizePathPrepend,
@@ -56,6 +58,7 @@ import {
   validateScriptFileForShellBleed,
 } from "./bash-tools.exec-script-preflight.js";
 import {
+  attachExecApprovalReview,
   buildExecForegroundResult,
   createExecHostResolver,
   resolveExecReviewerDefaults,
@@ -65,15 +68,35 @@ import {
   createBackgroundExecTask,
   finalizeBackgroundExecTask,
 } from "./bash-tools.exec-task-tracking.js";
-import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type {
+  ExecToolApprovalReview,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
-import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
+import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
-type GatewayApprovalRevalidator = () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
+
+function createExecProcessSettlement() {
+  const settlement: {
+    outcome: ExecProcessOutcome | null;
+    backgroundTask: BackgroundExecTaskHandle | null;
+    settle: (outcome: ExecProcessOutcome) => void;
+  } = {
+    outcome: null,
+    backgroundTask: null,
+    settle(outcome: ExecProcessOutcome) {
+      settlement.outcome = outcome;
+      finalizeBackgroundExecTask({ handle: settlement.backgroundTask, outcome });
+    },
+  };
+  return settlement;
+}
 
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
@@ -205,7 +228,8 @@ export function createExecTool(
       }
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
-      let revalidateGatewayApproval: GatewayApprovalRevalidator | undefined;
+      let revalidateGatewayApproval: GatewayApprovalResult["revalidateBeforeExecution"];
+      let approvalReview: ExecToolApprovalReview | undefined;
       const foregroundFallbackWarning =
         !allowBackground && (params.background === true || typeof params.yieldMs === "number")
           ? "Warning: continuation options are unavailable; running synchronously."
@@ -230,7 +254,8 @@ export function createExecTool(
             : elevatedDefaults?.defaultLevel === "on"
               ? "ask"
               : "off";
-      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+      const effectiveDefaultMode =
+        elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
       const elevatedMode =
         typeof params.elevated === "boolean"
           ? params.elevated
@@ -284,6 +309,7 @@ export function createExecTool(
         requestedTarget,
         elevatedRequested,
         sandboxAvailable: Boolean(defaults?.sandbox),
+        sandboxRequired: defaults?.sandboxRequired,
       });
       const host: ExecHost = target.effectiveHost;
 
@@ -391,8 +417,7 @@ export function createExecTool(
         });
       }
       let run: ExecProcessHandle;
-      let backgroundTask: BackgroundExecTaskHandle | null = null;
-      let settledOutcome: ExecProcessOutcome | null = null;
+      const settlement = createExecProcessSettlement();
       let effectiveTimeout: number;
       try {
         if (elevatedRequested) {
@@ -504,6 +529,7 @@ export function createExecTool(
             sessionKey: defaults?.sessionKey,
             runId: defaults?.runId,
             toolCallId,
+            onApprovalReview: (review) => (approvalReview = review),
             sessionId: defaults?.sessionId,
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
@@ -525,11 +551,9 @@ export function createExecTool(
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
           });
-          if (gatewayResult.pendingResult) {
-            return gatewayResult.pendingResult;
-          }
-          if (gatewayResult.deniedResult) {
-            return gatewayResult.deniedResult;
+          const immediateResult = gatewayResult.pendingResult ?? gatewayResult.deniedResult;
+          if (immediateResult) {
+            return attachExecApprovalReview(immediateResult, approvalReview);
           }
           signal?.throwIfAborted();
           revalidateGatewayApproval = gatewayResult.revalidateBeforeExecution;
@@ -556,10 +580,6 @@ export function createExecTool(
           });
         }
 
-        const gatewayApprovalDenied = await revalidateGatewayApproval?.();
-        if (gatewayApprovalDenied) {
-          return gatewayApprovalDenied;
-        }
         signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
@@ -585,15 +605,18 @@ export function createExecTool(
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           onUpdate,
-          onSettledBeforeNotify: (outcome) => {
-            settledOutcome = outcome;
-            finalizeBackgroundExecTask({ handle: backgroundTask, outcome });
+          beforeSpawn: async () => {
+            signal?.throwIfAborted();
+            const denied = await revalidateGatewayApproval?.();
+            signal?.throwIfAborted();
+            return denied;
           },
+          onSettledBeforeNotify: settlement.settle,
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         discardPreparedSandboxWorkdir?.();
-        throw error;
+        return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }
 
       let yielded = false;
@@ -625,6 +648,7 @@ export function createExecTool(
       };
 
       const cleanupToolRunListeners = () => {
+        run.disableUpdates();
         if (registeredAbortSignal) {
           registeredAbortSignal.removeEventListener("abort", onAbortSignal);
           registeredAbortSignal = null;
@@ -642,101 +666,84 @@ export function createExecTool(
         registeredAbortSignal = signal;
       }
 
-      return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const rejectIfAborted = () => {
-          if (!toolAborted) {
-            return false;
-          }
-          reject(createAbortError("Tool execution was aborted", { cause: signal?.reason }));
-          return true;
-        };
+      // Neither the race nor its losing process promise may retain this turn's
+      // caller context after a background result has returned.
+      const backgrounded = withoutGatewayToolCallerIdentity(() =>
+        createDeferredCore<{ status: "backgrounded" }>(),
+      );
+      const result = withoutGatewayToolCallerIdentity(() =>
+        Promise.race([
+          run.promise.then((outcome) => ({ status: "settled" as const, outcome })),
+          backgrounded.promise,
+        ]),
+      );
+      const onYieldNow = () => {
+        if (yielded || toolAborted || run.session.finalizing || settlement.outcome) {
+          return;
+        }
+        yielded = true;
+        run.disableUpdates();
+        markBackgrounded(run.session);
+        // Only the guarded yield transition owns task registration. A process
+        // that settles before this timer fires must stay out of the task ledger.
+        settlement.backgroundTask = createBackgroundExecTask({
+          processSessionId: run.session.id,
+          sessionKey: notifySessionKey,
+          agentId,
+          startedAt: run.startedAt,
+        });
+        backgrounded.resolve({ status: "backgrounded" });
+      };
 
-        const resolveRunning = () => {
-          cleanupToolRunListeners();
-          resolve({
-            content: [
-              {
-                type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
-              },
-            ],
-            details: {
-              status: "running",
-              sessionId: run.session.id,
-              pid: run.session.pid ?? undefined,
-              startedAt: run.startedAt,
-              cwd: run.session.cwd,
-              tail: run.session.tail,
-            },
-          });
-        };
-
-        const onYieldNow = () => {
-          if (yielded || toolAborted || run.session.finalizing) {
-            return;
-          }
-          if (settledOutcome) {
-            cleanupToolRunListeners();
-            resolve(
-              buildExecForegroundResult({
-                outcome: settledOutcome,
-                cwd: run.session.cwd,
-                warningText: getWarningText(),
-                aggregateOutputDropped:
-                  run.session.totalOutputChars > run.session.aggregated.length,
-              }),
-            );
-            return;
-          }
-          yielded = true;
-          markBackgrounded(run.session);
-          // Only the guarded yield transition owns task registration. A process
-          // that settles before this timer fires must stay out of the task ledger.
-          backgroundTask = createBackgroundExecTask({
-            processSessionId: run.session.id,
-            sessionKey: notifySessionKey,
-            agentId,
-            startedAt: run.startedAt,
-          });
-          resolveRunning();
-        };
-
+      try {
         if (!toolAborted && allowBackground && yieldWindow !== null) {
           if (yieldWindow === 0) {
             onYieldNow();
           } else {
-            yieldTimer = setTimeout(() => {
-              onYieldNow();
-            }, yieldWindow);
+            yieldTimer = setTimeout(onYieldNow, yieldWindow);
           }
         }
-
-        run.promise
-          .then((outcome) => {
-            cleanupToolRunListeners();
-            if (rejectIfAborted() || yielded || run.session.backgrounded) {
-              return;
-            }
-            resolve(
-              buildExecForegroundResult({
-                outcome,
+        const completed = await result;
+        if (toolAborted) {
+          throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
+        }
+        return attachExecApprovalReview(
+          completed.status === "settled"
+            ? buildExecForegroundResult({
+                outcome: completed.outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
                 aggregateOutputDropped:
                   run.session.totalOutputChars > run.session.aggregated.length,
-              }),
-            );
-          })
-          .catch((err: unknown) => {
-            cleanupToolRunListeners();
-            if (rejectIfAborted() || yielded || run.session.backgrounded) {
-              return;
-            }
-            reject(err as Error);
-          });
-      });
+              })
+            : {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
+                      run.session.pid ?? "n/a"
+                    }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+                  },
+                ],
+                details: {
+                  status: "running",
+                  sessionId: run.session.id,
+                  pid: run.session.pid ?? undefined,
+                  startedAt: run.startedAt,
+                  cwd: run.session.cwd,
+                  tail: run.session.tail,
+                },
+              },
+          approvalReview,
+        );
+      } catch (error) {
+        if (toolAborted) {
+          throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
+        }
+        throw error;
+      } finally {
+        cleanupToolRunListeners();
+      }
     },
   };
 }

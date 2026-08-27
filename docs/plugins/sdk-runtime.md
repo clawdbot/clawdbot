@@ -9,7 +9,7 @@ read_when:
   - You are implementing model-picker persistence in a channel plugin
 ---
 
-Reference for the `api.runtime` object injected into every plugin during registration. Use these helpers instead of importing host internals directly.
+Reference for the live `api.runtime` object available during `"full"`, `"discovery"`, `"tool-discovery"`, and `"setup-runtime"` registration. During `"cli-metadata"` and `"setup-only"` registration, runtime capabilities are intentionally unavailable: accessing one throws an error naming the plugin and mode. Defer runtime access out of `register()` or, for root CLI commands, declare `cliCommands` in the plugin manifest. Use runtime helpers instead of importing host internals directly.
 
 <CardGroup cols={2}>
   <Card title="Channel plugins" href="/plugins/sdk-channel-plugins">
@@ -54,6 +54,12 @@ Internal OpenClaw runtime code follows the same direction: load config once at t
 Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials.
 
 ## Reusable runtime utilities
+
+Channel plugins must admit authenticated agent turns through their injected
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
+accepts owner authority only from the exact active, trusted plugin registered for
+`options.messageChannel`; guest turns retain their non-owner identity. The public
+`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from
@@ -405,6 +411,42 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
+
+  </Accordion>
+  <Accordion title="api.runtime.hooks">
+    Dispatch isolated agent turns for untrusted external-content triggers, such
+    as an email watcher. Unlike `api.runtime.subagent.run(...)`, hook dispatch
+    wraps external content, serializes runs for the same session, and uses the
+    Gateway hook execution lane and completion reporting.
+
+    ```typescript
+    const result = await api.runtime.hooks.dispatchHookAgentTurn({
+      name: "IMAP inbox",
+      agentId: "mail",
+      sessionKey: "hook:imap:account:123:456",
+      message: "Summarize the new email and identify any requested actions.",
+      externalContentSource: "email",
+      deliver: true,
+      thinking: "low", // optional
+      timeoutSeconds: 60, // optional
+      idempotencyKey: "account:123:456", // optional
+    });
+
+    if (!result.ok) {
+      api.logger.warn(`Hook agent turn was rejected: ${result.reason}`);
+    }
+    ```
+
+    `agentId` is required, and `sessionKey` must begin with `hook:` and contain
+    no whitespace or control characters. `externalContentSource` currently
+    accepts only `"email"`; external-content wrapping cannot be disabled. Set
+    `deliver` to `false` to record completion without announcing it. Successful
+    admission returns `{ ok: true, runId }`; rejected admission returns
+    `{ ok: false, reason }`.
+
+    This capability is available only to bundled plugins and trusted official
+    plugin installations. It does not require enabling or configuring the HTTP
+    hooks endpoint.
 
   </Accordion>
   <Accordion title="api.runtime.subagent">
@@ -949,7 +991,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     const blob = await blobs.lookup("artifact-1");
     ```
 
-    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `deleteIf(...)` when cleanup must remove only the value previously observed; its synchronous predicate and deletion run in one SQLite transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `deleteIf(...)` when cleanup must remove only the value previously observed; its synchronous predicate and deletion run in one SQLite transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values up to 1 MiB of UTF-8 encoded JSON, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
 
     `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `deleteIf`, `lookup`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
 

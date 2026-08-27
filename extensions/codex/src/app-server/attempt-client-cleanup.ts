@@ -144,12 +144,19 @@ export async function unsubscribeCodexThreadBestEffort(
   params: {
     threadId: string;
     timeoutMs: number;
+    assertCurrent?: () => void;
   },
 ): Promise<boolean> {
   try {
-    await unsubscribeCodexAppServerLiveThread(client, params.threadId, params.timeoutMs);
+    await unsubscribeCodexAppServerLiveThread(
+      client,
+      params.threadId,
+      params.timeoutMs,
+      params.assertCurrent,
+    );
     return true;
   } catch (error) {
+    params.assertCurrent?.();
     embeddedAgentLog.debug("codex app-server thread unsubscribe cleanup failed", {
       threadId: params.threadId,
       error,

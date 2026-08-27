@@ -46,8 +46,7 @@ describe("openai completions params", () => {
         id: "qwen3.6-plus",
         name: "Qwen 3.6 Plus",
         provider: "qwen",
-        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        compat: { supportsUsageInStreaming: true },
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       }),
       emptyContext(),
       undefined,
@@ -66,8 +65,7 @@ describe("openai completions params", () => {
         id: "glm-5",
         name: "GLM-5",
         provider: "generic",
-        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-        compat: { supportsUsageInStreaming: true },
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       }),
       emptyContext(),
       undefined,
@@ -76,6 +74,20 @@ describe("openai completions params", () => {
     };
 
     expect(params.stream_options?.include_usage).toBe(true);
+  });
+
+  it("honors an explicit streaming usage opt-out on a native provider", () => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        provider: "moonshot",
+        baseUrl: "https://api.moonshot.ai/v1",
+        compat: { supportsUsageInStreaming: false },
+      }),
+      emptyContext(),
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("stream_options");
   });
 
   it("honors explicit streaming usage compat for configured custom providers", () => {

@@ -264,6 +264,35 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
   }
 }
 
+function assertConfig(params: {
+  acceptedIntents: string[];
+  config: unknown;
+  scenario: string;
+}): void {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-config-"));
+  try {
+    const configPath = join(root, "openclaw.json");
+    const coveragePath = join(root, "coverage.json");
+    writeJson(configPath, params.config);
+    writeJson(coveragePath, {
+      acceptedIntents: params.acceptedIntents,
+      skippedIntents: [],
+    });
+
+    execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-config"], {
+      env: {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
+      },
+      stdio: "pipe",
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 function createUpdateRunSelfUpgradeSummary() {
   const sourceVersion = "2026.4.26";
   const targetVersion = "2026.7.2";
@@ -367,9 +396,27 @@ describe("upgrade survivor assertions", () => {
 
     expect(scenarios).toContain("base");
     expect(scenarios).toContain("acpx-openclaw-tools-bridge");
+    expect(scenarios).toContain("prerelease-plugin-registry");
     expect(scenarios).toContain("sqlite-volume");
     expect(new Set(scenarios).size).toBe(scenarios.length);
   });
+
+  it.each([
+    ["base", "stable", "beta"],
+    ["prerelease-plugin-registry", "beta", "stable"],
+  ])(
+    "requires the %s scenario to preserve the %s update channel",
+    (scenario, expectedChannel, wrongChannel) => {
+      const run = (channel: string) =>
+        assertConfig({
+          acceptedIntents: ["update"],
+          config: { update: { channel } },
+          scenario,
+        });
+      expect(() => run(expectedChannel)).not.toThrow();
+      expect(() => run(wrongChannel)).toThrow(/update.channel/);
+    },
+  );
 
   it("seeds recent ordered legacy session timestamps", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
@@ -459,40 +506,25 @@ describe("upgrade survivor assertions", () => {
   });
 
   it("asserts the ACPX OpenClaw tools bridge config survived", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-config-"));
-    try {
-      const configPath = join(root, "openclaw.json");
-      const coveragePath = join(root, "coverage.json");
-      writeJson(configPath, {
-        plugins: {
-          allow: ["acpx"],
-          entries: {
-            acpx: {
-              enabled: true,
-              config: {
-                openClawToolsMcpBridge: true,
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["acpx-openclaw-tools-bridge"],
+        config: {
+          plugins: {
+            allow: ["acpx"],
+            entries: {
+              acpx: {
+                enabled: true,
+                config: {
+                  openClawToolsMcpBridge: true,
+                },
               },
             },
           },
         },
-      });
-      writeJson(coveragePath, {
-        acceptedIntents: ["acpx-openclaw-tools-bridge"],
-        skippedIntents: [],
-      });
-
-      execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-config"], {
-        env: {
-          ...process.env,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
-        },
-        stdio: "pipe",
-      });
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+        scenario: "acpx-openclaw-tools-bridge",
+      }),
+    ).not.toThrow();
   });
 
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {

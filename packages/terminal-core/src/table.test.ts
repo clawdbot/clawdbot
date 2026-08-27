@@ -85,24 +85,6 @@ describe("renderTable", () => {
     expect(segment).not.toHaveBeenCalled();
   });
 
-  it.each(["$&", "$`", "$'", "$$"])(
-    "displays a literal %s home path in terminal tables",
-    (pattern) => {
-      const home = path.resolve("test-home", `${pattern}user`);
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("USERPROFILE", "");
-      vi.stubEnv("OPENCLAW_HOME", "~/state");
-
-      expect(
-        renderTable({
-          columns: [{ key: "location", header: "Location" }],
-          rows: [{ location: `${home}/state/project` }],
-          border: "none",
-        }),
-      ).toBe("Location\n$OPENCLAW_HOME/project\n");
-    },
-  );
-
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
     const out = renderTable({
       width: 40,

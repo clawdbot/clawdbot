@@ -23,7 +23,7 @@ function createArtifactFixture(
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cua-artifacts-"));
   temporaryDirectories.push(root);
   const platformKey = options.platformKey ?? "linux-x64-gnu";
-  const acceptedVersion = "0.19.3";
+  const acceptedVersion = "0.20.0";
   const nativeFile = platformKey.startsWith("linux")
     ? "libcua_driver_sdk.so"
     : "cua_driver_sdk.dll";
@@ -80,7 +80,7 @@ describe("CUA Driver artifact verification", () => {
     ).toEqual({
       ok: true,
       applicable: true,
-      version: "0.19.3",
+      version: "0.20.0",
       platformPackage: "@trycua/cua-driver-linux-x64-gnu",
     });
   });
@@ -100,7 +100,7 @@ describe("CUA Driver artifact verification", () => {
   });
 
   it("refuses SDK and platform package version skew", () => {
-    const fixture = createArtifactFixture({ platformVersion: "0.19.2" });
+    const fixture = createArtifactFixture({ platformVersion: "0.19.3" });
 
     const result = inspectCuaDriverArtifacts({
       platform: "linux",
@@ -110,7 +110,7 @@ describe("CUA Driver artifact verification", () => {
     });
 
     expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_VERSION_MISMATCH" });
-    expect(result.ok ? "" : result.diagnostic).toContain("resolved @trycua/cua-driver@0.19.3");
+    expect(result.ok ? "" : result.diagnostic).toContain("resolved @trycua/cua-driver@0.20.0");
   });
 
   it("refuses a native file that does not match the accepted digest", () => {

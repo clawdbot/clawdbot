@@ -41,6 +41,7 @@ import {
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import type { SessionResetBoundaryRequest } from "../../config/sessions/session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
@@ -113,8 +114,7 @@ import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
-  resolveLastChannelRaw,
-  resolveLastToRaw,
+  resolveSessionDeliveryRoute,
 } from "./session-delivery.js";
 import {
   createReplySessionEntryHandle,
@@ -141,7 +141,9 @@ type ReplySessionEndReason = Extract<
   "new" | "reset" | "idle" | "daily" | "unknown"
 >;
 
-function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
+function resolveExplicitSessionEndReason(
+  matchedResetTriggerLower?: string,
+): Extract<ReplySessionEndReason, "new" | "reset"> {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
 }
 
@@ -414,6 +416,7 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     createdVia: entry.createdVia,
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
+    ...(entry.sandbox === "required" ? { sandbox: "required" } : {}),
     spawnDepth: entry.spawnDepth,
     subagentRole: entry.subagentRole,
     subagentControlScope: entry.subagentControlScope,
@@ -824,17 +827,9 @@ async function initSessionStateAttemptLocked(
   const baseDeliveryContext = deliveryContextFromSession(baseEntry);
   const baseDeliveryRoute = sessionDeliveryRoute(baseEntry);
   const baseDeliveryOrigin = sessionDeliveryOrigin(baseEntry);
-  const lastChannelRaw = isSystemEvent
-    ? baseDeliveryContext?.channel
-    : resolveLastChannelRaw({
-        originatingChannelRaw,
-        persistedLastChannel: baseDeliveryContext?.channel,
-        sessionKey,
-        isInterSession,
-      });
-  const lastToRaw = isSystemEvent
-    ? baseDeliveryContext?.to
-    : resolveLastToRaw({
+  const deliveryRoute = isSystemEvent
+    ? { channel: baseDeliveryContext?.channel, to: baseDeliveryContext?.to }
+    : resolveSessionDeliveryRoute({
         originatingChannelRaw,
         originatingToRaw: ctx.OriginatingTo,
         toRaw: ctx.To,
@@ -843,6 +838,7 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         isInterSession,
       });
+  const { channel: lastChannelRaw, to: lastToRaw } = deliveryRoute;
   const lastAccountIdRaw = isSystemEvent
     ? baseDeliveryContext?.accountId
     : resolveSessionDefaultAccountId({
@@ -980,14 +976,16 @@ async function initSessionStateAttemptLocked(
     // snapshot through /new; the next turn must rebuild the visible skill list.
     sessionEntry.skillsSnapshot = undefined;
   }
-  const resetReason =
-    previousSessionEndReason === "new" ||
-    previousSessionEndReason === "reset" ||
-    previousSessionEndReason === "idle" ||
-    previousSessionEndReason === "daily"
+  const continuityReason =
+    previousSessionEndReason === "idle" || previousSessionEndReason === "daily"
       ? previousSessionEndReason
       : "reset";
-  const resetBoundaryAppended = previousSessionEntry !== undefined;
+  const resetBoundary: SessionResetBoundaryRequest | undefined = previousSessionEntry
+    ? resetTriggered
+      ? { context: "clear", reason: resolveExplicitSessionEndReason(matchedResetTriggerLower) }
+      : { context: "preserve-tail", reason: continuityReason }
+    : undefined;
+  const resetBoundaryAppended = resetBoundary !== undefined;
   const committed = await commitReplySessionInitialization({
     activeSessionKey: sessionKey,
     agentId,
@@ -1022,7 +1020,7 @@ async function initSessionStateAttemptLocked(
         warn: (message) => log.warn(message),
       });
     },
-    ...(previousSessionEntry ? { resetBoundaryReason: resetReason } : {}),
+    ...(resetBoundary ? { resetBoundary } : {}),
     beforeEntryMutation: ({ currentEntry, sessionEntry: entryToCommit }) => {
       if (!previousSessionEntry || !currentEntry) {
         return;

@@ -3,7 +3,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: vi.fn(
     (params: { provider: string; context?: { providerConfig?: { baseUrl?: string } } }) => {
       const providerConfig = params.context?.providerConfig;

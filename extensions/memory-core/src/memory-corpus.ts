@@ -103,15 +103,13 @@ export function composeMemoryCorpusMetadata(
     (left, right) => Number(left.corpus === "wiki") - Number(right.corpus === "wiki"),
   );
   const warnings = ordered.flatMap((attempt) => {
-    if (attempt.outcome === "ok") {
-      return [];
-    }
     const label = attempt.corpus === "memory" ? "Memory" : "Wiki";
-    return [
-      attempt.outcome === "not-registered"
-        ? `${label} corpus is not registered; results do not cover that requested corpus.`
-        : `${label} corpus unavailable: ${attempt.error}`,
-    ];
+    if (attempt.outcome === "unavailable") {
+      return [`${label} corpus unavailable: ${attempt.error}`];
+    }
+    return attempt.outcome === "not-registered" && ordered.length === 1
+      ? [`${label} corpus is not registered; results do not cover that requested corpus.`]
+      : [];
   });
   warnings.push(...extraWarnings);
   const errors = ordered.flatMap((attempt) =>

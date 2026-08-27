@@ -3,7 +3,6 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-aut
 import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   isQwenCodingPlanBaseUrl,
@@ -259,8 +258,6 @@ export default defineSingleProviderPluginEntry({
       },
       staticRun: async () => ({ provider: buildQwenProvider() }),
     },
-    applyNativeStreamingUsageCompat: ({ providerConfig }) =>
-      applyQwenNativeStreamingUsageCompat(providerConfig),
     wrapStreamFn: wrapQwenProviderStream,
     normalizeConfig: ({ providerConfig }) => {
       if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
@@ -303,8 +300,6 @@ export default defineSingleProviderPluginEntry({
           provider: buildQwenTokenPlanProvider(),
         }),
       },
-      applyNativeStreamingUsageCompat: ({ providerConfig }) =>
-        applyQwenNativeStreamingUsageCompat(providerConfig),
       wrapStreamFn: wrapQwenProviderStream,
       resolveThinkingProfile: ({ modelId }) => resolveQwenTokenPlanThinkingProfile(modelId),
     });
@@ -313,8 +308,6 @@ export default defineSingleProviderPluginEntry({
       label: "Alibaba Token Plan (legacy custom config)",
       docsPath: "/providers/qwen",
       auth: [],
-      applyNativeStreamingUsageCompat: ({ providerConfig }) =>
-        applyQwenNativeStreamingUsageCompat(providerConfig),
       wrapStreamFn: wrapQwenProviderStream,
     });
     api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());

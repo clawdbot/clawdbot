@@ -247,11 +247,30 @@ describe("diagnostic stability bundles", () => {
   it("sanitizes imported bundles before returning them", () => {
     const file = path.join(tempDir, "imported.json");
     const bundle = createImportedBundle();
+    const retainedRuntimeEvidence = {
+      heapStatistics: { heapSizeLimitBytes: 8192, usedHeapSizeBytes: 1536 },
+      heapSpaces: [
+        {
+          spaceName: "old_space",
+          spaceSizeBytes: 2048,
+          spaceUsedBytes: 1536,
+          spaceAvailableBytes: 512,
+          physicalSpaceSizeBytes: 2048,
+        },
+      ],
+      cgroup: {
+        version: "v2",
+        values: { current: 4096, max: "max" },
+        events: { high: 2, "events.local.oom": 1 },
+      },
+      activeResources: { total: 3, byType: { Timeout: 2, PipeWrap: 1 } },
+    };
     Object.assign(bundle, {
       reason: "private reason token=secret",
       privateTopLevel: "top-level-secret",
       evidence: {
         memoryPressure: {
+          ...retainedRuntimeEvidence,
           level: "critical",
           reason: "rss_threshold",
           memory: {
@@ -331,6 +350,7 @@ describe("diagnostic stability bundles", () => {
     expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
       "agents/<agent>/sessions/<session>.jsonl",
     );
+    expect(result.bundle.evidence?.memoryPressure).toMatchObject(retainedRuntimeEvidence);
     expect(result.bundle.snapshot.events[0]).toEqual({
       seq: 1,
       ts: 1,

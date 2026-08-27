@@ -41,12 +41,13 @@ import {
   renderAssistantMessageMarkdown,
   renderMarkdownText,
   renderUserMessageMarkdown,
-  resolveNormalizedMessageMarkdown,
+  resolveMessageDisplayMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-markdown.ts";
 import {
   extractImages,
   extractPairingQrExpiryNotices,
+  extractStructuredSvgAttachments,
   extractTranscriptAttachments,
   schedulePairingQrExpiryRefresh,
   type AttachmentItem,
@@ -233,11 +234,12 @@ export function renderGroupedMessage(
     canvasPluginSurfaceUrl?: string | null;
     resourceBasePath?: string;
     localMediaPreviewRoots?: readonly string[];
+    connectionEpoch?: number;
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
-    onAssistantAttachmentLoaded?: () => void;
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+    onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     fetchLinkFavicon?: LinkFaviconFetcher;
@@ -267,6 +269,7 @@ export function renderGroupedMessage(
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
   const imageRenderOptions = {
+    connectionEpoch: opts.connectionEpoch,
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
@@ -281,19 +284,30 @@ export function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
-  const actionText = opts.actionMarkdown ?? extractedText;
+  const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
+  const actionText = opts.actionMarkdown ?? displayMarkdown;
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
-  const visibleAttachments = [...assistantAttachments, ...extractTranscriptAttachments(message)];
+  const attachmentUrls = new Set<string>();
+  const visibleAttachments = [
+    ...assistantAttachments,
+    ...extractStructuredSvgAttachments(message),
+    ...extractTranscriptAttachments(message),
+  ].filter(({ attachment }) => {
+    if (attachmentUrls.has(attachment.url)) {
+      return false;
+    }
+    attachmentUrls.add(attachment.url);
+    return true;
+  });
   const assistantViewBlocks = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
   );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = extractedText?.trim() ? extractedText : null;
+  const markdown = displayMarkdown ? displayMarkdown : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
@@ -437,10 +451,8 @@ export function renderGroupedMessage(
             : undefined,
           opts.onOpenReply,
           opts.onResolveReply,
-          opts.replyNavigationId ===
-            (normalizedMessage.replyTarget?.kind === "id"
-              ? normalizedMessage.replyTarget.id
-              : null),
+          normalizedMessage.replyTarget?.kind === "id" &&
+            opts.replyNavigationId === normalizedMessage.replyTarget.id,
         )}
         ${renderInlineToolCards(toolCards, {
           messageKey,
@@ -484,8 +496,8 @@ export function renderGroupedMessage(
           : undefined,
         opts.onOpenReply,
         opts.onResolveReply,
-        opts.replyNavigationId ===
-          (normalizedMessage.replyTarget?.kind === "id" ? normalizedMessage.replyTarget.id : null),
+        normalizedMessage.replyTarget?.kind === "id" &&
+          opts.replyNavigationId === normalizedMessage.replyTarget.id,
       )}
       ${isStandaloneToolMessage
         ? html`
@@ -528,6 +540,7 @@ export function renderGroupedMessage(
                       ${renderAssistantAttachments(
                         visibleAttachments,
                         imageRenderOptions,
+                        onOpenSidebar,
                         opts.onAssistantAttachmentLoaded,
                       )}
                       ${assistantViewContent}
@@ -603,6 +616,7 @@ export function renderGroupedMessage(
             ${renderAssistantAttachments(
               visibleAttachments,
               imageRenderOptions,
+              onOpenSidebar,
               opts.onAssistantAttachmentLoaded,
             )}
             ${reasoningMarkdown

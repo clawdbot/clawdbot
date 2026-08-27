@@ -27,6 +27,11 @@ describe("openshell plugin config", () => {
   });
 
   it("rejects relative remote paths", () => {
+    expect(
+      createOpenShellPluginConfigSchema().safeParse?.({
+        remoteWorkspaceDir: "sandbox",
+      }).success,
+    ).toBe(false);
     expect(() =>
       resolveOpenShellPluginConfig({
         remoteWorkspaceDir: "sandbox",
@@ -35,12 +40,38 @@ describe("openshell plugin config", () => {
   });
 
   it("rejects remote paths outside managed sandbox roots", () => {
+    expect(
+      createOpenShellPluginConfigSchema().safeParse?.({
+        remoteWorkspaceDir: "/tmp/victim",
+      }).success,
+    ).toBe(false);
     expect(() =>
       resolveOpenShellPluginConfig({
         remoteWorkspaceDir: "/tmp/victim",
       }),
     ).toThrow("OpenShell remoteWorkspaceDir must stay under /sandbox or /agent");
   });
+
+  it("rejects normalized paths that escape managed sandbox roots during config validation", () => {
+    expect(
+      createOpenShellPluginConfigSchema().safeParse?.({
+        remoteAgentWorkspaceDir: "/agent/../../etc",
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["/sandbox/project", "/sandbox/project"],
+    ["/sandbox/project", "/sandbox/project/agent"],
+    ["/agent/worker/project", "/agent/worker"],
+  ])(
+    "preserves shipped overlapping workspace roots %s and %s",
+    (remoteWorkspaceDir, remoteAgentWorkspaceDir) => {
+      const config = { remoteWorkspaceDir, remoteAgentWorkspaceDir };
+      expect(createOpenShellPluginConfigSchema().safeParse?.(config).success).toBe(true);
+      expect(resolveOpenShellPluginConfig(config)).toMatchObject(config);
+    },
+  );
 
   it("normalizes managed sandbox subpaths", () => {
     expect(

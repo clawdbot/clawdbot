@@ -10,11 +10,11 @@ import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
   PreparedModelRuntimePublicationSupersededError,
+  advancePreparedModelRuntimeOwnerConfig,
   createPreparedModelRuntimeOwner,
   createPreparedModelRuntimeReplacement,
   effectiveEnvironmentFingerprint,
   hasSameLifecycleInput,
-  listConfiguredOwnerInputs,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
   ownerKey,
@@ -36,6 +36,12 @@ import {
   notifyPreparedModelRuntimePublication,
   resetPreparedModelRuntimePublicationListenersForTest,
 } from "./prepared-model-runtime.publication-events.js";
+import {
+  isPreparedModelRuntimeOwnerInRefreshScope,
+  listConfiguredRefreshInputs,
+  resolveSafeRefreshAgentIds,
+  updateOwnersForScopedRefresh,
+} from "./prepared-model-runtime.refresh-scope.js";
 import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 export {
@@ -78,6 +84,18 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
 
+/** Advances model-neutral config identity without rebuilding prepared generation artifacts. */
+export function advancePreparedModelRuntimeConfig(config: OpenClawConfig): void {
+  for (const owner of owners.values()) {
+    // Read-only owners include the config hash in their map key and remain bound to their lease.
+    if (owner.input.readOnly) {
+      continue;
+    }
+    advancePreparedModelRuntimeOwnerConfig(owner, config);
+  }
+  replyDispatchPublication.advanceConfig(config);
+}
+
 /** Resolves a published owner or activates a standalone lifecycle owner. */
 export async function loadPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
@@ -104,23 +122,11 @@ export async function loadPreparedModelRuntimeSnapshot(
         throw error;
       }
     }
-    const activationGate = pendingModelRuntimeReplacement;
-    if (activationGate) {
-      await activationGate.promise;
-      if (pendingModelRuntimeReplacement) {
-        continue;
-      }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
+    if (pendingModelRuntimeReplacement) {
       continue;
     }
     const activated = await activateStandalonePreparedModelRuntime(input);
-    const replacementAfterActivation = pendingModelRuntimeReplacement;
-    if (replacementAfterActivation) {
-      await replacementAfterActivation.promise;
-      if (pendingModelRuntimeReplacement) {
-        continue;
-      }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
+    if (pendingModelRuntimeReplacement) {
       continue;
     }
     if (!activated) {
@@ -172,29 +178,21 @@ export async function publishPreparedModelRuntimeSnapshot(
     if (!options.force && hasSameLifecycleInput(existing.input, input)) {
       return await existing.pending;
     }
-    return await publishModelRuntimeSnapshot(
-      input,
-      owners,
-      agentBuildCompletions,
-      modelRuntimeBuildTimeoutMs,
-      existing,
-      options.provenance,
-      options.catalogMode,
-    );
-  }
-  if (existing?.buildCompletion) {
-    throw (
-      existing.refreshError ??
-      new Error(`prepared model runtime build is still settling for ${input.agentDir}`)
-    );
-  }
-  if (
-    existing?.snapshot &&
-    !existing.needsRefresh &&
-    !options.force &&
-    hasSameLifecycleInput(existing.input, input)
-  ) {
-    return existing.snapshot;
+  } else {
+    if (existing?.buildCompletion) {
+      throw (
+        existing.refreshError ??
+        new Error(`prepared model runtime build is still settling for ${input.agentDir}`)
+      );
+    }
+    if (
+      existing?.snapshot &&
+      !existing.needsRefresh &&
+      !options.force &&
+      hasSameLifecycleInput(existing.input, input)
+    ) {
+      return existing.snapshot;
+    }
   }
   return await publishModelRuntimeSnapshot(
     input,
@@ -360,7 +358,11 @@ export async function prepareModelRuntimeSnapshot(
 /** Invalidates every published generation before config/plugin runtime replacement. */
 export function markPreparedModelRuntimeSnapshotsStale(
   reason = "prepared model runtime owner is stale after config publication",
-  options: { waitForReplacement?: boolean; preserveReplacementWait?: boolean } = {},
+  options: {
+    waitForReplacement?: boolean;
+    preserveReplacementWait?: boolean;
+    agentIds?: ReadonlySet<string>;
+  } = {},
 ): PreparedModelRuntimeReplacementGateId | undefined {
   replyDispatchPublication.clear();
   if (options.waitForReplacement) {
@@ -375,19 +377,10 @@ export function markPreparedModelRuntimeSnapshotsStale(
   }
   refreshRequestEpoch += 1;
   const staleError = new Error(reason);
-  for (const [key, owner] of owners) {
-    // Standalone owners have no publication controller to rebuild them. Retire them so the next
-    // standalone lifecycle boundary can activate a fresh generation after publication changes.
-    if (owner.provenance === "standalone") {
-      owner.generation += 1;
-      owners.delete(key);
-      continue;
-    }
-    owner.generation += 1;
-    owner.needsRefresh = true;
-    owner.refreshError = staleError;
-    owner.pluginGeneration = undefined;
-  }
+  updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
+    retireStandalone: true,
+    resetPluginGeneration: true,
+  });
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   if (!pendingModelRuntimeReplacement) {
     notifyPreparedModelRuntimePublication({ phase: "failed", error: staleError });
@@ -414,39 +407,21 @@ export function rejectPendingPreparedModelRuntimeReplacement(
 async function refreshPreparedModelRuntimeSnapshotsNow(
   config: OpenClawConfig,
   options: PreparedModelRuntimeRefreshOptions,
-  publicationEpoch: number,
+  isPublicationCurrent: () => boolean,
 ): Promise<void> {
   retainedGatewayRunOwners.clear(owners);
-  const { defaultWorkspaceDir: workspace, allowGatewaySubagentBinding: bindings } = options;
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
-  for (const owner of owners.values()) {
-    // Invalidate every prior generation before starting any replacement. A failed reload must
-    // never leave an old-config snapshot available beside partially published new owners.
-    owner.generation += 1;
-    owner.needsRefresh = true;
-    owner.refreshError = staleError;
-  }
+  updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
+    retainedConfig: config,
+  });
   const entries: Array<{ owner?: PreparedModelRuntimeOwner; input: PreparedModelRuntimeInput }> =
     [];
   const knownKeys = new Set<string>();
-  for (const rawInput of listConfiguredOwnerInputs(config, workspace, bindings)) {
-    let input = normalizePreparedModelRuntimeInput(rawInput);
-    const preservedOwner = [...owners.values()].find(
-      (owner) =>
-        owner.provenance === "configured" &&
-        owner.input.agentId === input.agentId &&
-        owner.input.agentDir === input.agentDir &&
-        owner.input.preserveWorkspaceDirOnRefresh &&
-        owner.input.workspaceDir,
-    );
-    if (preservedOwner?.input.workspaceDir) {
-      input = {
-        ...input,
-        workspaceDir: preservedOwner.input.workspaceDir,
-        preserveWorkspaceDirOnRefresh: true,
-      };
+  for (const input of listConfiguredRefreshInputs(config, options, owners)) {
+    if (options.agentIds && input.agentId && !options.agentIds.has(input.agentId)) {
+      continue;
     }
     const key = ownerKey(input);
     if (knownKeys.has(key)) {
@@ -457,6 +432,9 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     entries.push({ owner, input });
   }
   for (const [key, owner] of owners) {
+    if (!isPreparedModelRuntimeOwnerInRefreshScope(owner, options.agentIds)) {
+      continue;
+    }
     if (!knownKeys.has(key) && (gatewayLifecycleActive || owner.provenance === "configured")) {
       owners.delete(key);
     }
@@ -479,10 +457,10 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     owners,
     agentBuildCompletions,
     buildTimeoutMs: modelRuntimeBuildTimeoutMs,
-    isPublicationCurrent: () => publicationEpoch === refreshRequestEpoch,
+    isPublicationCurrent,
     // Config replacement is one transaction. Per-owner auth supersession may retire individual
     // candidates, while a newer config epoch stops every remaining build in this publication.
-    isBuildCurrent: () => publicationEpoch === refreshRequestEpoch,
+    isBuildCurrent: isPublicationCurrent,
     onBuildStats: options.onBuildStats,
     pluginMetadataSnapshot: options.pluginMetadataSnapshot,
     registerEntriesAfterBuildStart: true,
@@ -491,33 +469,53 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
-  config: OpenClawConfig,
+  config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
   options: PreparedModelRuntimeRefreshOptions = {},
 ): Promise<void> {
+  if (options.isPublicationCurrent?.() === false) {
+    return Promise.resolve();
+  }
+  const requestedScopedRefresh = options.agentIds !== undefined;
+  const initialAgentIds =
+    typeof config === "function" ? undefined : resolveSafeRefreshAgentIds(config, options, owners);
+  const forceFullRefresh = requestedScopedRefresh && initialAgentIds === undefined;
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
-  markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
+  markPreparedModelRuntimeSnapshotsStale(undefined, {
+    waitForReplacement: true,
+    agentIds: initialAgentIds,
+  });
   const requestEpoch = refreshRequestEpoch;
   const replacement = pendingModelRuntimeReplacement;
+  let publicationAgentIds = initialAgentIds;
+  const isPublicationCurrent = () =>
+    requestEpoch === refreshRequestEpoch && options.isPublicationCurrent?.() !== false;
   return enqueuePreparedModelRuntimePublication(async () => {
-    if (requestEpoch !== refreshRequestEpoch) {
+    if (!isPublicationCurrent()) {
       return;
     }
-    await refreshPreparedModelRuntimeSnapshotsNow(config, options, requestEpoch);
-    if (requestEpoch !== refreshRequestEpoch) {
+    const currentConfig = typeof config === "function" ? await config() : config;
+    if (!isPublicationCurrent()) {
+      return;
+    }
+    publicationAgentIds = forceFullRefresh
+      ? undefined
+      : resolveSafeRefreshAgentIds(currentConfig, options, owners);
+    await refreshPreparedModelRuntimeSnapshotsNow(
+      currentConfig,
+      { ...options, agentIds: publicationAgentIds },
+      isPublicationCurrent,
+    );
+    if (!isPublicationCurrent()) {
       return;
     }
     await drainPendingAuthMutations();
-    if (requestEpoch !== refreshRequestEpoch) {
+    if (!isPublicationCurrent()) {
       return;
     }
     replyDispatchPublication.rebuild(owners.values());
   }).then(
     () => {
-      if (
-        requestEpoch === refreshRequestEpoch &&
-        replacement &&
-        pendingModelRuntimeReplacement === replacement
-      ) {
+      if (isPublicationCurrent() && replacement && pendingModelRuntimeReplacement === replacement) {
         pendingModelRuntimeReplacement = undefined;
         replacement.resolve();
         // Publication listeners may synchronously read the committed owner. Clear the lifecycle
@@ -527,22 +525,15 @@ export function refreshPreparedModelRuntimeSnapshots(
     },
     (error: unknown) => {
       const refreshError = toStringifiedError(error);
-      if (requestEpoch === refreshRequestEpoch) {
+      if (isPublicationCurrent()) {
         // Candidate and queued auth builds may finish independently. A failed transaction must
         // leave no owner from its partially published generation request-visible.
-        for (const owner of owners.values()) {
-          owner.generation += 1;
-          owner.pending = undefined;
-          owner.needsRefresh = true;
-          owner.refreshError = refreshError;
-          owner.pluginGeneration = undefined;
-        }
+        updateOwnersForScopedRefresh(owners, publicationAgentIds, refreshError, {
+          clearPending: true,
+          resetPluginGeneration: true,
+        });
       }
-      if (
-        requestEpoch === refreshRequestEpoch &&
-        replacement &&
-        pendingModelRuntimeReplacement === replacement
-      ) {
+      if (isPublicationCurrent() && replacement && pendingModelRuntimeReplacement === replacement) {
         pendingModelRuntimeReplacement = undefined;
         replacement.reject(refreshError);
         notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });

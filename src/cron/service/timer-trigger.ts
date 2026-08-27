@@ -5,6 +5,7 @@ import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.j
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
   CronJob,
+  CronDeliveryTrace,
   CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
@@ -291,9 +292,11 @@ export function isScheduledTerminalOneShotRetry(
 export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
+  delivery?: CronDeliveryTrace;
   delivered?: boolean;
   deliveryAttempted?: boolean;
   error?: string;
+  deliverySuppressionReason?: CronResolvedDeliveryState["deliverySuppressionReason"];
 }): CronResolvedDeliveryState {
   const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
   const primaryDeliveryRequested = primaryDeliveryPlan.requested;
@@ -321,20 +324,16 @@ export function resolveDeliveryState(params: {
       failureNotification: noFailureNotification,
     };
   }
-  if (params.runStatus === "error") {
-    if (params.delivered === true) {
+  if (
+    params.runStatus === "error" &&
+    !(params.delivered === true && params.delivery?.delivered === true)
+  ) {
+    if (params.delivered !== undefined) {
       return {
         delivered: false,
         status: "not-delivered",
         error: params.error,
-        failureNotification: noFailureNotification,
-      };
-    }
-    if (params.delivered === false) {
-      return {
-        delivered: false,
-        status: "not-delivered",
-        error: params.error,
+        deliverySuppressionReason: params.deliverySuppressionReason,
         failureNotification: noFailureNotification,
       };
     }
@@ -356,6 +355,7 @@ export function resolveDeliveryState(params: {
       delivered: false,
       status: "not-delivered",
       error: params.error,
+      deliverySuppressionReason: params.deliverySuppressionReason,
       failureNotification: { status: "not-requested" },
     };
   }

@@ -161,6 +161,16 @@ account, thread, and local-media policy; plugins cannot retarget this helper,
 and retained copies stop working after the turn closes. The helper is unavailable
 for channels whose delivery is owned by a Gateway transport.
 
+A factory may return a core `AgentTool`, an array of them, or `null` or
+`undefined` to opt out, as the example above does. When it returns a concrete
+tool, that tool uses the core runtime signature
+`execute(toolCallId, params, signal?, onUpdate?)` with the tool call ID first.
+That is the opposite argument order from the declarative
+`execute(params, config, context)` shown above, and it matches the
+`api.registerTool` examples in [Building Plugins](/plugins/building-plugins).
+Reading `params` from the first argument of a factory tool returns the tool
+call ID string instead.
+
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools
 with hooks, services, providers, or commands.

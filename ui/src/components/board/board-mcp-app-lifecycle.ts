@@ -70,6 +70,7 @@ class NearViewportObserver {
 }
 
 type AppViewCallbacks = {
+  appViewGeneration: () => number;
   widgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
   refreshWidgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
 };
@@ -87,6 +88,7 @@ export class BoardMcpAppLifecycle {
   loading = false;
 
   private callbacks?: AppViewCallbacks;
+  private appViewGeneration = 0;
   private key = "";
   private generation = 0;
   private renewalTimer?: number;
@@ -106,11 +108,13 @@ export class BoardMcpAppLifecycle {
       return;
     }
     const key = appViewKey(this.host.sessionKey(), widget);
-    if (key !== this.key) {
+    const appViewGeneration = callbacks.appViewGeneration();
+    if (key !== this.key || appViewGeneration !== this.appViewGeneration) {
       this.clearTimers();
       this.generation += 1;
       this.loading = false;
       this.key = key;
+      this.appViewGeneration = appViewGeneration;
       this.state = undefined;
     }
   }
@@ -187,6 +191,7 @@ export class BoardMcpAppLifecycle {
     this.clearTimers();
     this.generation += 1;
     this.key = "";
+    this.appViewGeneration = 0;
     this.state = undefined;
     this.loading = false;
   }

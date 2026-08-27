@@ -277,6 +277,7 @@ type TestSocket = {
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code: number, reason: string) => void;
+  terminate: () => void;
 };
 
 type EventFrame = {
@@ -299,6 +300,7 @@ function makeRecordingSocket(): RecordingSocket {
       sent.push(JSON.parse(payload) as EventFrame);
     }),
     close: vi.fn(),
+    terminate: vi.fn(),
     sent,
   };
 }
@@ -365,10 +367,11 @@ function makeScopedBroadcastClients() {
 
 function makeScopedBroadcastContext() {
   const scoped = makeScopedBroadcastClients();
-  return {
-    ...scoped,
-    ...createGatewayBroadcaster({ clients: scoped.clients }),
-  };
+  const broadcaster = createGatewayBroadcaster({
+    clients: scoped.clients,
+    preparePresenceProjection: (presence) => () => presence,
+  });
+  return { ...scoped, ...broadcaster };
 }
 
 function sentEvents(socket: RecordingSocket) {
@@ -435,6 +438,7 @@ describe("gateway broadcaster", () => {
     broadcastToConnIds("session.message", payload, new Set(["slow-session", "healthy-session"]));
 
     expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    expect(slowSocket.terminate).toHaveBeenCalledOnce();
     expect(slowSocket.send).not.toHaveBeenCalled();
     expect(healthySocket.sent).toEqual([
       { type: "event", event: "session.message", payload, seq: 1 },
@@ -453,6 +457,8 @@ describe("gateway broadcaster", () => {
     // number: the next delivered frame exposes the loss to gap detection.
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
     broadcastToConnIds("tick", { ts: 3 }, new Set(["c-seq"]), { dropIfSlow: true });
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(socket.terminate).not.toHaveBeenCalled();
     socket.bufferedAmount = 0;
     broadcastToConnIds("tick", { ts: 4 }, new Set(["c-seq"]));
 

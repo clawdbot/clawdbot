@@ -417,6 +417,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
       }),
     );
+    expect(fixture.sessionManager.appendMessage.mock.calls[0]?.[0]).not.toHaveProperty(
+      "excludeFromContext",
+    );
     expect(mocks.completeResult).toHaveBeenCalledWith(
       expect.objectContaining({
         state: expect.objectContaining({

@@ -155,44 +155,59 @@ describe("deliverDiscordInteractionReply", () => {
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
-  it("sends the detected WebP media type across a real interaction multipart request", async () => {
-    const loopback = await createDiscordLoopbackRest();
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("webp"),
-      fileName: "sticker.webp",
-      contentType: "image/webp",
-      kind: "image",
-    });
-    const interaction = {
-      reply: vi.fn(async (data: unknown) =>
-        loopback.rest.post("/interactions/123/token/callback", {
-          body: { type: 4, data },
-        }),
-      ),
-      followUp: vi.fn(),
-    };
-
-    try {
-      await deliverDiscordInteractionReply({
-        interaction: interaction as never,
-        payload: {
-          text: "sticker",
-          mediaUrls: ["file:///tmp/sticker.webp"],
-        },
-        textLimit: 2000,
-        preferFollowUp: false,
-        chunkMode: "length",
+  it.each([
+    {
+      name: "plural media URLs",
+      media: { mediaUrls: ["file:///tmp/sticker.webp"] },
+    },
+    {
+      name: "singular media URL after blank plural URLs",
+      media: { mediaUrls: ["   "], mediaUrl: "file:///tmp/sticker.webp" },
+    },
+  ])(
+    "sends detected WebP media across a real interaction multipart request ($name)",
+    async ({ media }) => {
+      const loopback = await createDiscordLoopbackRest();
+      loadWebMediaMock.mockResolvedValue({
+        buffer: Buffer.from("webp"),
+        fileName: "sticker.webp",
+        contentType: "image/webp",
+        kind: "image",
       });
+      const interaction = {
+        reply: vi.fn(async (data: unknown) =>
+          loopback.rest.post("/interactions/123/token/callback", {
+            body: { type: 4, data },
+          }),
+        ),
+        followUp: vi.fn(),
+      };
 
-      const upload = loopback.requests.find((request) => request.method === "POST");
-      expect(upload?.path).toContain("/interactions/123/token/callback");
-      expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
-      expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
-      expect(upload?.body).toContain("Content-Type: image/webp");
-    } finally {
-      await loopback.close();
-    }
-  });
+      try {
+        const payload = { text: "sticker", ...media };
+        expect(hasRenderableReplyPayload(payload)).toBe(true);
+
+        await deliverDiscordInteractionReply({
+          interaction: interaction as never,
+          payload,
+          textLimit: 2000,
+          preferFollowUp: false,
+          chunkMode: "length",
+        });
+
+        expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/sticker.webp", {
+          localRoots: undefined,
+        });
+        const upload = loopback.requests.find((request) => request.method === "POST");
+        expect(upload?.path).toContain("/interactions/123/token/callback");
+        expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+        expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
+        expect(upload?.body).toContain("Content-Type: image/webp");
+      } finally {
+        await loopback.close();
+      }
+    },
+  );
 });
 
 describe("settleDiscordInteractionWithoutVisibleReply", () => {

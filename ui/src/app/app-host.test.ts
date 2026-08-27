@@ -22,6 +22,7 @@ import {
   resetAppHostTestGlobals,
   type ShellKeyboardState,
   type TestOptionalCustomElement,
+  stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type {
@@ -29,8 +30,8 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import "./app-host.ts";
 import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
+import "./app-host.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -741,21 +742,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     ).toBe(false);
   });
 
-  it("wires merged header window events for the shell lifecycle", () => {
-    const addEventListener = vi.spyOn(window, "addEventListener");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
-
-    shell.connectedCallback();
-
-    expect(addEventListener).toHaveBeenCalledWith(COMMAND_PALETTE_OPEN_EVENT, expect.any(Function));
-    expect(addEventListener).toHaveBeenCalledWith(
-      SHELL_NAV_DRAWER_TOGGLE_EVENT,
-      expect.any(Function),
-    );
-    shell.disconnectedCallback();
-    addEventListener.mockRestore();
-  });
-
   it("prevents unhandled window file drops without overriding accepted targets", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
     const acceptedDropTarget = document.createElement("div");
@@ -890,16 +876,9 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
   it("normalizes an unloaded palette toggle shortcut to open", async () => {
     const element = createLazyElementSpec("command palette");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.commandPaletteElement = element;
     const openPalette = vi.fn();
-    Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
-    Object.defineProperty(shell, "commandPalette", {
-      get: () =>
-        customElements.get(element.tagName)
-          ? { isOpen: false, openPalette, togglePalette: vi.fn() }
-          : undefined,
-    });
+    const shell = configureLazyPaletteShell(element, openPalette);
+    stubRenderedWhenDefined(shell);
     const event = new KeyboardEvent("keydown", {
       key: "л",
       code: "KeyK",

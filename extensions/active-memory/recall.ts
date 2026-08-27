@@ -194,7 +194,7 @@ async function resolveActiveRecall(
   const recordRecallTimeout = () => {
     if (!circuitBreakerTimeoutRecorded) {
       circuitBreakerTimeoutRecorded = true;
-      recordCircuitBreakerTimeout(cbKey);
+      recordCircuitBreakerTimeout(cbKey, params.config.circuitBreakerCooldownMs);
     }
     scheduleTimeoutCleanup();
   };

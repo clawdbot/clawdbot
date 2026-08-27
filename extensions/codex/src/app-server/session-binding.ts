@@ -1,9 +1,11 @@
 /** SQLite-backed Codex app-server thread bindings. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,
+  type AgentHarnessSessionDeletionMutation,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
@@ -220,6 +222,9 @@ const threadBindingSchema = z
     // Continue creates the OpenClaw Chat before native execution. This closed
     // snapshot state is materialized only inside the fully configured harness.
     pendingSupervisionBranch: pendingSupervisionBranchSchema.optional(),
+    // Manual attachment records intent; only the harness can attest its native
+    // tool catalog and observe a configured reload before admitting a turn.
+    pendingResumeConfiguration: z.literal(true).optional(),
     modelProvider: z
       .string()
       .transform((value) => value.trim())
@@ -550,12 +555,14 @@ export function createStoredCodexAppServerBinding(
 
 type BindingStateStore = Pick<
   PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-  "entries" | "lookup" | "update"
+  "deleteIf" | "entries" | "lookup" | "registerIfAbsent" | "update"
 >;
 
 type BindingLeaseOwner = {
   token: string;
+  phase: "held" | "deleted" | "closed";
   failure?: Error;
+  assertCurrent?: () => void;
 };
 
 function bindingLeaseLostError(key: string, cause?: unknown): Error {
@@ -573,6 +580,7 @@ export type CodexAppServerBindingStore = {
   mutate(
     identity: CodexAppServerBindingIdentity,
     mutation: CodexAppServerBindingMutation,
+    assertCurrent?: () => void,
   ): Promise<boolean>;
   prepareSessionGenerationReclaim(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
@@ -587,6 +595,14 @@ export type CodexAppServerBindingStore = {
   retireSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
   ): Promise<CodexSessionGenerationRetirementResult>;
+  withSessionDeletion<T>(
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+    assertCurrent: () => void,
+    run: (
+      binding: CodexAppServerThreadBinding | undefined,
+      mutation: AgentHarnessSessionDeletionMutation,
+    ) => Promise<T>,
+  ): Promise<T>;
   withThreadArchiveFence<T>(run: () => Promise<T>): Promise<T>;
   withLease<T>(identity: CodexAppServerBindingIdentity, run: () => Promise<T>): Promise<T>;
 };
@@ -615,7 +631,8 @@ export function scopeCodexRunBindingStore(params: {
         threadId,
         identity ? mapIdentity(identity) : undefined,
       ),
-    mutate: (identity, mutation) => params.bindingStore.mutate(mapIdentity(identity), mutation),
+    mutate: (identity, mutation, assertCurrent) =>
+      params.bindingStore.mutate(mapIdentity(identity), mutation, assertCurrent),
     prepareSessionGenerationReclaim: (identity) =>
       params.bindingStore.prepareSessionGenerationReclaim(mapSessionIdentity(identity)),
     adoptSessionGeneration: (identity, expectedPreviousSessionId) =>
@@ -627,6 +644,8 @@ export function scopeCodexRunBindingStore(params: {
       params.bindingStore.resetSessionGeneration(mapSessionIdentity(identity)),
     retireSessionGeneration: (identity) =>
       params.bindingStore.retireSessionGeneration(mapSessionIdentity(identity)),
+    withSessionDeletion: (identity, assertCurrent, run) =>
+      params.bindingStore.withSessionDeletion(mapSessionIdentity(identity), assertCurrent, run),
     withThreadArchiveFence: (run) => params.bindingStore.withThreadArchiveFence(run),
     withLease: (identity, run) => params.bindingStore.withLease(mapIdentity(identity), run),
   };
@@ -724,11 +743,12 @@ export function createCodexAppServerBindingStore(
   };
 
   const renewLease = (key: string, owner: BindingLeaseOwner): void => {
-    if (owner.failure) {
+    if (owner.failure || owner.phase !== "held") {
       return;
     }
     try {
       let renewed = false;
+      owner.assertCurrent?.();
       const stored = update(key, (raw) => {
         const current = readStoredCodexAppServerBinding(raw);
         if (raw !== undefined && !current) {
@@ -763,6 +783,7 @@ export function createCodexAppServerBindingStore(
       result: T;
     },
     ttlMs?: number,
+    assertCurrent?: () => void,
   ): Promise<T> => {
     const deadline = Date.now() + BINDING_LEASE_WAIT_MS;
     while (true) {
@@ -770,10 +791,15 @@ export function createCodexAppServerBindingStore(
       let leaseLost = false;
       let result!: T;
       const ownedLease = leaseContext.getStore()?.get(key);
+      if (ownedLease && ownedLease.phase !== "held") {
+        throw bindingLeaseLostError(key);
+      }
       if (ownedLease?.failure) {
         throw ownedLease.failure;
       }
       const ownedToken = ownedLease?.token;
+      assertCurrent?.();
+      ownedLease?.assertCurrent?.();
       update(
         key,
         (raw) => {
@@ -814,6 +840,119 @@ export function createCodexAppServerBindingStore(
         throw new Error(`Timed out waiting for Codex binding lease: ${key}`);
       }
       await sleep(BINDING_LEASE_RETRY_INTERVAL_MS);
+    }
+  };
+
+  const withBindingLease = async <T>(
+    identity: CodexAppServerBindingIdentity,
+    run: () => Promise<T>,
+    options: { allowRetired?: boolean; assertCurrent?: () => void } = {},
+  ): Promise<T> => {
+    options.assertCurrent?.();
+    const key = bindingStoreKey(identity);
+    const owned = leaseContext.getStore();
+    const existingOwner = owned?.get(key);
+    if (existingOwner) {
+      if (existingOwner.phase !== "held") {
+        throw bindingLeaseLostError(key);
+      }
+      const failureBeforeRun = existingOwner.failure;
+      if (failureBeforeRun) {
+        throw failureBeforeRun;
+      }
+      const result = await run();
+      options.assertCurrent?.();
+      const failureAfterRun = existingOwner.failure;
+      if (failureAfterRun) {
+        throw failureAfterRun;
+      }
+      return result;
+    }
+    const token = randomUUID();
+    const acquired = await transactKey(
+      key,
+      (current) => {
+        if (
+          current?.state === "cleared" &&
+          current.retired === true &&
+          ownsStoredSessionGeneration(identity, current) &&
+          !options.allowRetired
+        ) {
+          return { result: false };
+        }
+        const lease = { token, expiresAt: Date.now() + BINDING_LEASE_STALE_MS };
+        if (current?.state === "active") {
+          return {
+            result: true,
+            next: { ...current, ...preservedSessionGeneration(identity, current), lease },
+          };
+        }
+        if (current?.state === "cleared" && current.retired === true) {
+          return { result: true, next: { ...current, lease } };
+        }
+        return {
+          result: true,
+          next: {
+            version: 1,
+            state: "cleared",
+            ...preservedSessionGeneration(identity, current),
+            lease,
+          },
+        };
+      },
+      undefined,
+      options.assertCurrent,
+    );
+    options.assertCurrent?.();
+    if (!acquired) {
+      throw new Error(`Codex binding generation was retired: ${key}`);
+    }
+    const owner: BindingLeaseOwner = { token, phase: "held", assertCurrent: options.assertCurrent };
+    const nested = new Map(owned);
+    nested.set(key, owner);
+    // Long app-server RPCs can outlive the stale-owner window. Renew with an
+    // exact-token CAS so live work stays serialized while a replaced owner remains fenced.
+    const heartbeat = setInterval(() => renewLease(key, owner), BINDING_LEASE_RENEW_INTERVAL_MS);
+    heartbeat.unref();
+    try {
+      const result = await leaseContext.run(nested, run);
+      options.assertCurrent?.();
+      if (owner.failure) {
+        throw owner.failure;
+      }
+      return result;
+    } finally {
+      clearInterval(heartbeat);
+      owner.phase = "closed";
+      options.assertCurrent?.();
+      try {
+        const current = readStoredCodexAppServerBinding(state.lookup(key));
+        if (current?.lease?.token === token) {
+          const ttlMs =
+            current.state === "active" || (current.retired === true && !key.startsWith("session:"))
+              ? undefined
+              : current.retired === true
+                ? PHYSICAL_SESSION_RETIRE_TTL_MS
+                : 1;
+          options.assertCurrent?.();
+          update(
+            key,
+            (raw) => {
+              const stored = readStoredCodexAppServerBinding(raw);
+              if (stored?.lease?.token !== token) {
+                return undefined;
+              }
+              const { lease: _lease, ...released } = stored;
+              return released;
+            },
+            ttlMs === undefined ? undefined : { ttlMs },
+          );
+        }
+      } catch (error) {
+        options.assertCurrent?.();
+        // A crashed owner leaves only its bounded lease for recovery.
+        embeddedAgentLog.warn("failed to release codex app-server binding lease", { key, error });
+      }
     }
   };
 
@@ -874,7 +1013,7 @@ export function createCodexAppServerBindingStore(
       return { kind: "verify", expectedPreviousSessionId: currentSessionId };
     },
 
-    async mutate(identity, mutation) {
+    async mutate(identity, mutation, assertCurrent) {
       return await runBindingMutation(async () => {
         const key = bindingStoreKey(identity);
         // A retained legacy sidecar may be revisited by doctor after runtime
@@ -1033,6 +1172,7 @@ export function createCodexAppServerBindingStore(
           mutation.kind === "clear" && !retainLegacyClear && !leaseContext.getStore()?.has(key)
             ? 1
             : undefined,
+          assertCurrent,
         );
       });
     },
@@ -1150,111 +1290,101 @@ export function createCodexAppServerBindingStore(
       }
     },
 
-    async withLease(identity, run) {
+    async withSessionDeletion(identity, assertCurrent, run) {
       const key = bindingStoreKey(identity);
-      const owned = leaseContext.getStore();
-      const existingOwner = owned?.get(key);
-      if (existingOwner) {
-        const failureBeforeRun = existingOwner.failure;
-        if (failureBeforeRun) {
-          throw failureBeforeRun;
-        }
-        const result = await run();
-        const failureAfterRun = existingOwner.failure;
-        if (failureAfterRun) {
-          throw failureAfterRun;
-        }
-        return result;
+      const deleteIf = state.deleteIf?.bind(state);
+      if (!deleteIf) {
+        throw new Error("Codex session deletion requires conditional plugin-state deletion");
       }
-      const token = randomUUID();
-      const acquired = await transactKey(key, (current) => {
-        if (
-          current?.state === "cleared" &&
-          current.retired === true &&
-          ownsStoredSessionGeneration(identity, current)
-        ) {
-          return { result: false };
-        }
-        const lease = { token, expiresAt: Date.now() + BINDING_LEASE_STALE_MS };
-        if (current?.state === "active") {
-          return {
-            result: true,
-            next: { ...current, ...preservedSessionGeneration(identity, current), lease },
-          };
-        }
-        if (current?.state === "cleared" && current.retired === true) {
-          return { result: true, next: { ...current, lease } };
-        }
-        return {
-          result: true,
-          next: {
-            version: 1,
-            state: "cleared",
-            ...preservedSessionGeneration(identity, current),
-            lease,
-          },
-        };
-      });
-      if (!acquired) {
-        throw new Error(`Codex binding generation was retired: ${key}`);
-      }
-      const owner: BindingLeaseOwner = { token };
-      const nested = new Map(owned);
-      nested.set(key, owner);
-      // Long app-server RPCs can outlive the stale-owner window. Renew with an
-      // exact-token CAS so live work stays serialized while a replaced owner remains fenced.
-      const heartbeat = setInterval(() => renewLease(key, owner), BINDING_LEASE_RENEW_INTERVAL_MS);
-      heartbeat.unref();
-      try {
-        const result = await leaseContext.run(nested, run);
-        if (owner.failure) {
-          throw owner.failure;
-        }
-        return result;
-      } finally {
-        clearInterval(heartbeat);
-        try {
-          const removeOwnedLease = (
-            raw: unknown,
-            matches: (current: StoredCodexAppServerBinding) => boolean,
-          ) => {
-            const current = readStoredCodexAppServerBinding(raw);
-            if (!current || !matches(current) || current.lease?.token !== token) {
-              return undefined;
-            }
-            const { lease: _lease, ...released } = current;
-            return released;
-          };
-          const releasedActive = update(key, (raw) =>
-            removeOwnedLease(raw, (current) => current.state === "active"),
-          );
-          if (!releasedActive) {
-            const releasedRetired = update(
-              key,
-              (raw) =>
-                removeOwnedLease(
-                  raw,
-                  (current) => current.state === "cleared" && current.retired === true,
-                ),
-              key.startsWith("session:") ? { ttlMs: PHYSICAL_SESSION_RETIRE_TTL_MS } : undefined,
-            );
-            if (!releasedRetired) {
-              update(
-                key,
-                (raw) => removeOwnedLease(raw, (current) => current.state === "cleared"),
-                { ttlMs: 1 },
-              );
-            }
+      return await runBindingMutation(async () => {
+        assertCurrent();
+        if (state.lookup(key) === undefined) {
+          let active = true;
+          try {
+            return await run(undefined, {
+              commit() {
+                assertCurrent();
+                if (!active || state.lookup(key) !== undefined) {
+                  throw new Error("Codex binding changed before session deletion");
+                }
+              },
+              rollback() {},
+            });
+          } finally {
+            active = false;
           }
-        } catch (error) {
-          // The bounded lease expires after a crashed or disconnected owner.
-          embeddedAgentLog.warn("failed to release codex app-server binding lease", {
-            key,
-            error,
-          });
         }
-      }
+        return await withBindingLease(
+          identity,
+          async () => {
+            const owner = leaseContext.getStore()!.get(key)!;
+            const expected = state.lookup(key);
+            const stored = readStoredCodexAppServerBinding(expected);
+            if (!stored || !ownsStoredSessionGeneration(identity, stored)) {
+              throw new Error("Codex binding generation changed before session deletion");
+            }
+            const { lease: _lease, ...expectedValue } = stored;
+            let deleted: StoredCodexAppServerBinding | undefined;
+            let active = true;
+            const assertActive = () => {
+              assertCurrent();
+              if (!active || owner.phase === "closed" || owner.failure) {
+                throw owner.failure ?? bindingLeaseLostError(key);
+              }
+            };
+            try {
+              return await run(stored.state === "active" ? stored.binding : undefined, {
+                commit() {
+                  assertActive();
+                  if (deleted) {
+                    return;
+                  }
+                  const current = state.lookup(key);
+                  const parsed = readStoredCodexAppServerBinding(current);
+                  const { lease, ...value } = parsed ?? {};
+                  if (
+                    !current ||
+                    lease?.token !== owner.token ||
+                    lease.expiresAt <= Date.now() ||
+                    !isDeepStrictEqual(value, expectedValue) ||
+                    !deleteIf(key, (raw) => isDeepStrictEqual(raw, current))
+                  ) {
+                    throw new Error("Codex binding changed before session deletion");
+                  }
+                  deleted = current;
+                  // The agent transaction commits synchronously after this removal. No
+                  // heartbeat may recreate the deleted row while artifacts are published.
+                  owner.phase = "deleted";
+                },
+                rollback() {
+                  assertActive();
+                  if (!deleted) {
+                    return;
+                  }
+                  const restored = {
+                    ...deleted,
+                    lease: {
+                      token: owner.token,
+                      expiresAt: Date.now() + BINDING_LEASE_STALE_MS,
+                    },
+                  };
+                  if (!state.registerIfAbsent(key, restored)) {
+                    throw new Error("Codex binding changed before session deletion rollback");
+                  }
+                  deleted = undefined;
+                  owner.phase = "held";
+                },
+              });
+            } finally {
+              active = false;
+            }
+          },
+          { allowRetired: true, assertCurrent },
+        );
+      });
     },
+
+    withLease: withBindingLease,
   };
 }
 

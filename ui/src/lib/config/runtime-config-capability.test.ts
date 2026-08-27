@@ -344,9 +344,12 @@ describe("runtime config capability", () => {
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
     );
-    await runtimeConfig.ensureLoaded();
+    const initialLoad = runtimeConfig.ensureLoaded();
+    expect(runtimeConfig.state.configLoading).toBe(true);
+    await initialLoad;
 
     await vi.advanceTimersByTimeAsync(250);
+    expect(runtimeConfig.state.configLoading).toBe(false);
     runtimeConfig.patchForm(["count"], 2);
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");

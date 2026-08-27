@@ -3,6 +3,7 @@ import type {
   MessagePresentationAction,
   MessagePresentationButton,
 } from "../interactive/payload.js";
+import type { ApprovalScope } from "./approval-scope.js";
 import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalDecision, ExecApprovalResolved } from "./exec-approvals.js";
@@ -49,6 +50,7 @@ export type ExecApprovalViewBase = ApprovalViewBase & {
   envKeys?: readonly string[];
   host?: string | null;
   nodeId?: string | null;
+  scope?: ApprovalScope | null;
   sessionKey?: string | null;
 };
 
@@ -76,6 +78,7 @@ export type PluginApprovalViewBase = ApprovalViewBase & {
   approvalKind: "plugin";
   agentId?: string | null;
   pluginId?: string | null;
+  scope?: ApprovalScope | null;
   toolName?: string | null;
   severity: "info" | "warning" | "critical";
 };
