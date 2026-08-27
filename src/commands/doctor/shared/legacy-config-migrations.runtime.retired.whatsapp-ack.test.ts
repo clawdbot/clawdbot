@@ -93,6 +93,42 @@ describe("retired WhatsApp ack reaction migration", () => {
     );
   });
 
+  it("reports when an earlier legacy entry wins over a different representable scope", () => {
+    const result = applyRetired({
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "👀", direct: false, group: "always" },
+          accounts: {
+            work: { ackReaction: { emoji: "👀", direct: true, group: "never" } },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("messages.ackReactionScope", "group-all");
+    expect(result.changes.join("\n")).toEqual(
+      expect.stringContaining(
+        'channels.whatsapp.accounts.work.ackReaction requested the "direct" scope, but the final messages.ackReactionScope is "group-all"',
+      ),
+    );
+  });
+
+  it("reports when a canonical scope wins over a different representable legacy scope", () => {
+    const result = applyRetired({
+      messages: { ackReactionScope: "group-mentions" },
+      channels: {
+        whatsapp: { ackReaction: { emoji: "👀", direct: true, group: "never" } },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("messages.ackReactionScope", "group-mentions");
+    expect(result.changes.join("\n")).toEqual(
+      expect.stringContaining(
+        'channels.whatsapp.ackReaction requested the "direct" scope, but the final messages.ackReactionScope is "group-mentions"',
+      ),
+    );
+  });
+
   it("migrates representable legacy scopes without an extra note", () => {
     const result = applyRetired({
       channels: {
