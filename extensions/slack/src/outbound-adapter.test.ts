@@ -1,5 +1,6 @@
 // Slack tests cover outbound adapter plugin behavior.
 import { presentationToInteractiveControlsReply } from "openclaw/plugin-sdk/interactive-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -696,7 +697,7 @@ describe("slackOutbound", () => {
       presentation: {
         blocks: [{ type: "text", text: "Block body that must accompany the voice note" }],
       },
-    };
+    } satisfies ReplyPayload;
     const rendered = await slackOutbound.renderPresentation!({
       payload,
       presentation: payload.presentation,
