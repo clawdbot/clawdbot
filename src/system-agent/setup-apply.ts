@@ -22,6 +22,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import {
   projectDefaultInferenceRoute,
   type DefaultInferenceRouteProjection,
@@ -248,9 +249,7 @@ export async function applySystemAgentSetup(
       verifiedSnapshot.path === setupSnapshot.path &&
       verifiedSnapshot.hash === setupSnapshot.hash &&
       isDeepStrictEqual(verifiedSource, setupSource)
-        ? await projectDefaultInferenceRoute(
-            verifiedSnapshot.runtimeConfig ?? verifiedSnapshot.config,
-          )
+        ? await projectDefaultInferenceRoute(resolveAppliedSnapshotConfig(verifiedSnapshot))
         : null;
     if (
       !currentRoute ||

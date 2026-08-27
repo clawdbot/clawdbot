@@ -24,6 +24,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import {
   type ActivateSetupInferenceDeps,
   SETUP_INFERENCE_TEST_PROMPT,
@@ -181,7 +182,7 @@ export async function reloadCodexRegistryAfterActivation(params: {
   }
   const runtimeConfig =
     snapshot.exists && snapshot.valid
-      ? (snapshot.runtimeConfig ?? snapshot.config)
+      ? resolveAppliedSnapshotConfig(snapshot)
       : ({} satisfies OpenClawConfig);
   const sourceConfig =
     snapshot.exists && snapshot.valid

@@ -124,7 +124,7 @@ export async function resolveChannelSetupState(deps: SystemAgentCommandDeps | un
     (await import("../config/channel-configured-shared.js")).isStaticallyChannelConfigured;
   const { shouldShowChannelInSetup } = await import("../commands/channel-setup/discovery.js");
   const snapshot = await readConfigFileSnapshotLazy();
-  const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const cfg = snapshot.valid ? resolveAppliedSnapshotConfig(snapshot) : {};
   const installedPlugins = listPlugins();
   const resolved = resolveEntries({ cfg, installedPlugins });
   return {

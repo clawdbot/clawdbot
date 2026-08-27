@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -232,7 +233,7 @@ export async function persistActivatedSetupInference(input: {
       // The install-record owner adds a restart follow-up when this commit adopts
       // a new plugin source. Preserve that intent for structured setup clients.
       transform: async (current, context) => {
-        const latestRuntime = context.snapshot.runtimeConfig ?? context.snapshot.config;
+        const latestRuntime = resolveAppliedSnapshotConfig(context.snapshot);
         // Validate that the candidate is still admissible before reporting
         // broader route drift, so policy revocations retain their actionable error.
         const stagedRuntime = stageCandidate(latestRuntime, "runtime");
@@ -335,7 +336,7 @@ export async function persistActivatedSetupInference(input: {
     const reconciledSnapshot = await readSnapshot().catch(() => null);
     const reconciledRuntime =
       reconciledSnapshot?.exists && reconciledSnapshot.valid
-        ? (reconciledSnapshot.runtimeConfig ?? reconciledSnapshot.config)
+        ? resolveAppliedSnapshotConfig(reconciledSnapshot)
         : undefined;
     const reconciledRoute = reconciledRuntime ? await projectRoute(reconciledRuntime) : undefined;
     const codexInstallPersisted = pendingCodexInstall

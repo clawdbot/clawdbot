@@ -14,6 +14,7 @@ import {
 } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import { probeLocalCommand } from "./probes.js";
 import {
   listSetupInferenceAuthOptions,
@@ -79,7 +80,7 @@ export async function listManualSetupInferenceOptions(
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
   }
-  const cfg = snapshot.runtimeConfig ?? snapshot.config;
+  const cfg = resolveAppliedSnapshotConfig(snapshot);
   const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
@@ -115,7 +116,7 @@ export async function detectSetupInference(
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
   }
-  const cfg = snapshot.runtimeConfig ?? snapshot.config;
+  const cfg = resolveAppliedSnapshotConfig(snapshot);
   const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
   const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({
     config: cfg,
