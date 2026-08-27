@@ -55,9 +55,13 @@ describe("managed plugin install transactions", () => {
       await fs.writeFile(path.join(targetDir, "version"), "1.0.0");
       const conflict = new Error(failure);
       mocks.persist.mockImplementation(async (params: { onCommitted?: () => void }) => {
-        if (failure === "before-commit") throw conflict;
+        if (failure === "before-commit") {
+          throw conflict;
+        }
         params.onCommitted?.();
-        if (failure === "after-commit") throw conflict;
+        if (failure === "after-commit") {
+          throw conflict;
+        }
         return {};
       });
       mocks.install.mockImplementation(async (params: object) => {
@@ -73,7 +77,9 @@ describe("managed plugin install transactions", () => {
         const copied = await installPackageDir(
           isPluginInstallCommitDeferred(params) ? requestDeferredPackageDirInstall(copy) : copy,
         );
-        if (!copied.ok) throw new Error(copied.error);
+        if (!copied.ok) {
+          throw new Error(copied.error);
+        }
         const result = {
           ok: true,
           pluginId: "demo",
@@ -93,8 +99,11 @@ describe("managed plugin install transactions", () => {
         return transaction ? attachPluginInstallTransaction(result, transaction) : result;
       });
       const installed = installManagedPluginSource({ request, snapshot, env: { HOME: home } });
-      if (failure === "none") await expect(installed).resolves.toMatchObject({ ok: true });
-      else await expect(installed).rejects.toBe(conflict);
+      if (failure === "none") {
+        await expect(installed).resolves.toMatchObject({ ok: true });
+      } else {
+        await expect(installed).rejects.toBe(conflict);
+      }
       expect(await fs.readFile(path.join(targetDir, "version"), "utf8"), failure).toBe(
         failure === "before-commit" ? "1.0.0" : "2.0.0",
       );
@@ -142,7 +151,9 @@ describe("managed plugin install transactions", () => {
         ),
       );
       mocks.persist.mockImplementation(async (params: { onCommitted?: () => void }) => {
-        if (settlement === "rollback") throw conflict;
+        if (settlement === "rollback") {
+          throw conflict;
+        }
         params.onCommitted?.();
         return {};
       });
@@ -153,7 +164,10 @@ describe("managed plugin install transactions", () => {
         runtime,
       });
       if (settlement === "rollback") {
-        await expect(installed).rejects.toMatchObject({ errors: [conflict, settlementError] });
+        await expect(installed).rejects.toMatchObject({
+          cause: settlementError,
+          errors: [conflict, settlementError],
+        });
         expect(transaction.commit).not.toHaveBeenCalled();
       } else {
         const warning = "Plugin install committed, but backup cleanup failed. Restart is required.";
