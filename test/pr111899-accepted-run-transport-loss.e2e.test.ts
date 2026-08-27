@@ -59,7 +59,10 @@ async function startAcceptedThenCloseProxy(targetUrl: string): Promise<{
 
           if (destinationName === "client" && !acceptedSeen) {
             try {
-              const text = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8");
+              const text =
+                typeof raw === "string"
+                  ? raw
+                  : new TextDecoder().decode(Array.isArray(raw) ? Buffer.concat(raw) : raw);
               const message = JSON.parse(text) as {
                 type?: unknown;
                 payload?: { status?: unknown } | null;
