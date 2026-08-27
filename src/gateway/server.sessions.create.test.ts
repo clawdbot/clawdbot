@@ -4110,7 +4110,7 @@ test("sessions.create persists declared spawn lineage for spawn-owned creations"
 });
 
 test.each([false, true])(
-  "sessions.create atomically persists trusted visible-spawn tool policy with required parent=%s",
+  "sessions.create persists trusted visible-spawn policy and category inheritance with required parent=%s",
   async (required) => {
     const { storePath } = await createSessionStoreDir();
     const parentSessionKey = "agent:main:main";
@@ -4118,7 +4118,7 @@ test.each([false, true])(
     await writeSessionStore({
       entries: {
         [parentSessionKey]: {
-          ...sessionStoreEntry("sess-visible-spawn-parent"),
+          ...sessionStoreEntry("sess-visible-spawn-parent", { category: "Projects" }),
           createdVia: "operator",
           createdActor: actor,
           ...(required ? { sandbox: "required" } : {}),
@@ -4129,6 +4129,7 @@ test.each([false, true])(
     const created = await directSessionReq<{
       key?: string;
       entry?: {
+        category?: string;
         label?: string;
         spawnedBy?: string;
         completionOwnerSessionKey?: string;
@@ -4171,6 +4172,7 @@ test.each([false, true])(
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry).toMatchObject({
+      category: "Projects",
       label: "Restricted visible child",
       spawnedBy: parentSessionKey,
       completionOwnerSessionKey: "agent:main:discord:direct:alice",
@@ -4183,6 +4185,7 @@ test.each([false, true])(
     const key = requireNonEmptyString(created.payload?.key, "visible child key");
     const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
     expect(child).toMatchObject({
+      category: "Projects",
       spawnedBy: parentSessionKey,
       completionOwnerSessionKey: "agent:main:discord:direct:alice",
       inheritedToolPolicyVersion: 1,
@@ -4191,6 +4194,31 @@ test.each([false, true])(
       createdActor: required ? actor : { type: "agent", id: "main" },
     });
     expect(child?.sandbox).toBe(required ? "required" : undefined);
+
+    const operatorChild = await directSessionReq<{ entry?: { category?: string } }>(
+      "sessions.create",
+      { agentId: "main", parentSessionKey },
+    );
+    expect(operatorChild.payload?.entry).not.toHaveProperty("category");
+
+    const explicitCategoryChild = await directSessionReq<{ entry?: { category?: string } }>(
+      "sessions.create",
+      { agentId: "main", category: "Research", parentSessionKey },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true,
+            sessionCreation: {
+              via: "spawn",
+              actor: { type: "agent", id: "main" },
+              requesterSessionKey: parentSessionKey,
+            },
+          },
+        } as never,
+      },
+    );
+    expect(explicitCategoryChild.payload?.entry?.category).toBe("Research");
   },
 );
 
@@ -6002,6 +6030,7 @@ test("sessions.create loads selected global parent from the requested agent stor
       storePath: mainStorePath,
       entries: {
         global: sessionStoreEntry("sess-main-parent", {
+          category: "Main work",
           providerOverride: "codex",
           modelOverride: "main-model",
         }),
@@ -6012,6 +6041,7 @@ test("sessions.create loads selected global parent from the requested agent stor
       agentId: "work",
       entries: {
         global: sessionStoreEntry("sess-work-parent", {
+          category: "Work projects",
           providerOverride: "openai",
           modelOverride: "work-model",
           thinkingLevel: "high",
@@ -6022,19 +6052,37 @@ test("sessions.create loads selected global parent from the requested agent stor
     const created = await directSessionReq<{
       key?: string;
       entry?: {
+        category?: string;
         parentSessionKey?: string;
         providerOverride?: string;
         modelOverride?: string;
         thinkingLevel?: string;
       };
-    }>("sessions.create", {
-      agentId: "work",
-      parentSessionKey: "global",
-      emitCommandHooks: true,
-    });
+    }>(
+      "sessions.create",
+      {
+        agentId: "work",
+        parentSessionKey: "global",
+        emitCommandHooks: true,
+      },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true,
+            sessionCreation: {
+              via: "spawn",
+              actor: { type: "agent", id: "main" },
+              requesterSessionKey: "global",
+            },
+          },
+        } as never,
+      },
+    );
 
     expect(created.ok).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:work:dashboard:/);
+    expect(created.payload?.entry?.category).toBe("Work projects");
     expect(created.payload?.entry?.parentSessionKey).toBe("global");
     expect(created.payload?.entry?.providerOverride).toBe("openai");
     expect(created.payload?.entry?.modelOverride).toBe("work-model");
