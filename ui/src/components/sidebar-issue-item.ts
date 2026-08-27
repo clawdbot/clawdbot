@@ -173,9 +173,7 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
 }
 
 function scopeUpgradeSummaryText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  return state.phase === "guidance" || state.phase === "available"
-    ? t("connection.scopeUpgrade.inboxState")
-    : scopeUpgradeText(state);
+  return t("connection.scopeUpgrade.inboxState");
 }
 
 export function renderSidebarScopeUpgradeItem(params: {

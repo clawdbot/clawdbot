@@ -292,6 +292,28 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await expect.poll(() => page.locator(".sidebar-issues-button__count").count()).toBe(0);
   });
 
+  it("shows an administrator access request error once", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      operatorScopes: LIMITED_SCOPES,
+      methodResponses: {
+        "device.scopes.requestUpgrade": {
+          __mockError: { code: "INVALID_REQUEST", message: "missing scope: operator.read" },
+        },
+      },
+    });
+    await page.goto(`${server.baseUrl}activity`);
+
+    const item = await openLimitedAccessItem(await openInbox(page));
+    await item.getByRole("button", { name: "Request admin" }).click();
+    const message = "Administrator access request failed: missing scope: operator.read";
+    await item.locator(".sidebar-issues-panel__body").getByText(message, { exact: true }).waitFor();
+
+    expect(await item.getByText(message, { exact: true }).count()).toBe(1);
+    await captureProof(page, "desktop-inbox-upgrade-error.png");
+  });
+
   it.each(SCOPE_UPGRADE_METHODS)(
     "keeps role denials non-retryable at %s while transient errors can retry",
     async (method) => {
