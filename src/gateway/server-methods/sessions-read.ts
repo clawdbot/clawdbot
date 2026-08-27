@@ -6,7 +6,6 @@ import {
   errorShape,
   type SessionsListParams,
   validateSessionsCleanupParams,
-  validateSessionsDescribeParams,
   validateSessionsListParams,
   validateSessionsPreviewParams,
   validateSessionsResolveParams,
@@ -57,7 +56,6 @@ import {
   type GatewaySessionStoreCache,
 } from "../session-utils-store-lookup.js";
 import {
-  buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -75,10 +73,8 @@ import {
 } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
-import {
-  createSessionPlacementBatchProjector,
-  readSessionPlacementFields,
-} from "./session-placement-read-projection.js";
+import { createSessionPlacementBatchProjector } from "./session-placement-read-projection.js";
+import { handleSessionsDescribe } from "./sessions-describe.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
@@ -608,44 +604,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
 
     respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
   },
-  "sessions.describe": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
-      return;
-    }
-    const key = requireSessionKey(params.key, respond);
-    if (!key) {
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
-    if (!requestedAgent.ok) {
-      return respond(false, undefined, requestedAgent.error);
-    }
-    const { target, storePath, store, entry } = loadSessionEntriesForTarget({
-      key,
-      cfg,
-      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
-    });
-    if (!entry) {
-      return respond(true, { session: null }, undefined);
-    }
-    const modelCatalog = await context
-      .loadGatewayModelCatalog({ agentId: target.agentId })
-      .catch(() => undefined);
-    const row = buildGatewaySessionRow({
-      cfg,
-      storePath,
-      store,
-      key: target.canonicalKey,
-      entry,
-      agentId: target.agentId,
-      ...(modelCatalog !== undefined ? { modelCatalog } : {}),
-      includeDerivedTitles: params.includeDerivedTitles,
-      includeLastMessage: params.includeLastMessage,
-      transcriptUsageMaxBytes: 64 * 1024,
-    });
-    respond(true, { session: { ...row, ...readSessionPlacementFields(context, row.sessionId) } });
-  },
+  "sessions.describe": handleSessionsDescribe,
   "sessions.resolve": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;

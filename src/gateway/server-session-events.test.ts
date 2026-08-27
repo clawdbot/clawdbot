@@ -1012,7 +1012,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       chatAbortControllers: new Map(),
     });
 
-    handler({ sessionKey: "global", reason: "updated" });
+    void handler({ sessionKey: "global", reason: "updated" });
 
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledWith(

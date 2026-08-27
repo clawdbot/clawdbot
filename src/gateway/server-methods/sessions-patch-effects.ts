@@ -45,10 +45,9 @@ export async function publishSessionPatchEffects(params: {
       sessionKey: target.canonicalKey,
       targetAgentId: target.targetAgentId,
     });
-    const modelCatalogPromise = params.modelCatalogByAgent.get(target.targetAgentId);
-    const modelCatalog = modelCatalogPromise
-      ? await modelCatalogPromise.catch(() => undefined)
-      : undefined;
+    const modelCatalog = await params.modelCatalogByAgent
+      .get(target.targetAgentId)
+      ?.catch(() => undefined);
     emitSessionsChanged(params.context, {
       sessionKey: target.canonicalKey,
       ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),

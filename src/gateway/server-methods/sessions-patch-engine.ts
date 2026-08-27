@@ -252,14 +252,9 @@ async function executeSessionPatchMutations(params: {
 
   const modelCatalogByAgent = new Map<string, Promise<ModelCatalog>>();
   const loadModelCatalog = (agentId: string) => {
-    let promise = modelCatalogByAgent.get(agentId);
-    if (!promise) {
-      promise =
-        typeof params.context.loadGatewayModelCatalog === "function"
-          ? params.context.loadGatewayModelCatalog({ agentId })
-          : Promise.resolve([]);
-      modelCatalogByAgent.set(agentId, promise);
-    }
+    const promise =
+      modelCatalogByAgent.get(agentId) ?? params.context.loadGatewayModelCatalog({ agentId });
+    modelCatalogByAgent.set(agentId, promise);
     return promise;
   };
   if (prepared.length > 0) {
