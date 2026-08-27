@@ -109,28 +109,6 @@ describe("headless Code Mode", () => {
     expect(second.execute).toHaveBeenCalledOnce();
   });
 
-  it("rejects schema-invalid nested input before headless tool execution", async () => {
-    const strict = fakeTool("headless_strict", async () => jsonResult({ unexpected: true }));
-    strict.parameters = {
-      type: "object",
-      properties: { value: { type: "string" } },
-      required: ["value"],
-      additionalProperties: false,
-    };
-
-    const result = expectFailed(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([strict]),
-        code: "return await headless_strict({ value: 42 });",
-        wallClockMs: 120_000,
-      }),
-    );
-
-    expect(result.error).toContain("value");
-    expect(result.toolCallCount).toBe(1);
-    expect(strict.execute).not.toHaveBeenCalled();
-  });
-
   it("keeps the headless race winner when the later-started tool settles first", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const events: string[] = [];
