@@ -1,5 +1,6 @@
 // Covers TUI event handler routing for keyboard and backend events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as failoverClassifier from "../agents/failover/classify.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -2721,6 +2722,25 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     await vi.waitFor(() => expect(chatLog.addSystem).toHaveBeenCalledTimes(2));
     expect(loadHistory).toHaveBeenCalledTimes(1);
     expect(chatLog.addSystem).toHaveBeenLastCalledWith("run error: provider exploded");
+  });
+
+  it("renders non-auth failures without invoking provider classification", () => {
+    const classify = vi
+      .spyOn(failoverClassifier, "classifyFailoverReason")
+      .mockImplementation(() => {
+        throw new Error("provider classification must not block non-auth error rendering");
+      });
+    try {
+      const { chatLog, handleChatEvent } = createHandlersHarness({ localMode: true });
+      handleChatEvent({
+        runId: "run-provider-error",
+        state: "error",
+        errorMessage: "fixture provider failed",
+      });
+      expect(chatLog.addSystem).toHaveBeenCalledWith("run error: fixture provider failed");
+    } finally {
+      classify.mockRestore();
+    }
   });
 
   it("shows a concise /auth hint for local auth failures", () => {
