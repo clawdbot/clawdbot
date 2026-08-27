@@ -374,6 +374,36 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
+  it("does not replay running evidence after a shallow foreground turn", async () => {
+    vi.useFakeTimers();
+    let finishReview: (() => void) | undefined;
+    const runReview = vi
+      .fn()
+      .mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishReview = resolve;
+        }),
+      )
+      .mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ runId: "deep-turn" }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).toHaveBeenCalledOnce();
+
+    scheduler.schedule(completedRun({ runId: "shallow-turn", modelIterations: 1 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    finishReview?.();
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).toHaveBeenCalledOnce();
+    scheduler.clear();
+  });
+
   it("serializes reviews across sessions", async () => {
     vi.useFakeTimers();
     let finishFirst: (() => void) | undefined;

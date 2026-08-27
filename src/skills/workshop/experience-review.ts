@@ -232,10 +232,8 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
               return;
             }
+            pendingBySession.delete(sessionKey);
             await deps.runReview(candidate);
-            if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
-              pendingBySession.delete(sessionKey);
-            }
           } finally {
             reviewInFlight = false;
           }
