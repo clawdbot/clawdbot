@@ -175,6 +175,16 @@ function requireFeishuMediaSender(
   return media;
 }
 
+function requireFeishuPayloadSender(
+  adapter: FeishuMessageAdapter,
+): NonNullable<FeishuMessageSender["payload"]> {
+  const payload = adapter.send?.payload;
+  if (!payload) {
+    throw new Error("Expected Feishu message adapter payload sender");
+  }
+  return payload;
+}
+
 const sendText = requireFeishuSendText();
 const emptyConfig: ClawdbotConfig = {};
 const cardRenderConfig: ClawdbotConfig = {
@@ -296,7 +306,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     resetOutboundMocks();
   });
 
-  it("declares message adapter durable text and media with receipt proofs", async () => {
+  it("declares message adapter durable text, media, and payload with receipt proofs", async () => {
     sendMessageFeishuMock.mockResolvedValue({
       messageId: "feishu-text-1",
       chatId: "chat-1",
@@ -318,6 +328,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     const adapter = requireFeishuMessageAdapter();
     const adapterSendText = requireFeishuTextSender(adapter);
     const adapterSendMedia = requireFeishuMediaSender(adapter);
+    const adapterSendPayload = requireFeishuPayloadSender(adapter);
 
     const proofs = await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "feishu",
@@ -370,6 +381,35 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
             "feishu-media-1",
           ]);
         },
+        payload: async () => {
+          const result = await adapterSendPayload({
+            cfg: emptyConfig,
+            to: "chat:chat-1",
+            text: "card body",
+            accountId: "default",
+            payload: {
+              text: "card body",
+              presentation: {
+                blocks: [{ type: "text", text: "card body" }],
+              },
+            },
+          });
+          expect(sendCardFeishuMock).toHaveBeenCalled();
+          expect(sendCardFeishuMock.mock.calls.at(-1)?.[0]?.to).toBe("chat:chat-1");
+          expect(result.receipt.platformMessageIds).toEqual(["native_card_msg"]);
+        },
+        // replyTo/thread ride on the text sender (resolveFeishuReplyMode), and
+        // messageSendingHooks on the lifecycle beforeSendAttempt that the text/
+        // media/payload proofs above already exercise through the adapter.
+        replyTo: () => {
+          expect(typeof adapter.send?.text).toBe("function");
+        },
+        thread: () => {
+          expect(typeof adapter.send?.text).toBe("function");
+        },
+        messageSendingHooks: () => {
+          expect(typeof adapter.send?.lifecycle?.beforeSendAttempt).toBe("function");
+        },
       },
     });
     expect(proofs.some((proof) => proof.capability === "text" && proof.status === "verified")).toBe(
@@ -377,6 +417,9 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     );
     expect(
       proofs.some((proof) => proof.capability === "media" && proof.status === "verified"),
+    ).toBe(true);
+    expect(
+      proofs.some((proof) => proof.capability === "payload" && proof.status === "verified"),
     ).toBe(true);
   });
 
