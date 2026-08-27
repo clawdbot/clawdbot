@@ -10,7 +10,6 @@ import * as webMedia from "../../media/web-media.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
-import * as preparedModelRuntime from "../prepared-model-runtime.js";
 import { createContainerWorkspaceSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
@@ -18,7 +17,6 @@ import {
   createPdfToolInfraStub,
   FAKE_PDF_MEDIA,
   resetPdfToolAuthEnv,
-  withPreparedRuntimeFacts,
   withTempPdfAgentDir,
 } from "./pdf-tool.test-support.js";
 
@@ -37,7 +35,7 @@ vi.mock("../provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
-const { createPdfModelRegistry, stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
+const { stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
@@ -50,7 +48,6 @@ async function loadCreatePdfTool() {
 }
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
-const GOOGLE_PDF_MODEL = "google/gemini-2.5-pro";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
 const CODEX_PDF_MODEL = "openai/gpt-5.4";
 

@@ -30,12 +30,23 @@ const { createPdfModelRegistry, stubPdfToolInfra } = createPdfToolInfraStub(comp
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
 const GOOGLE_PDF_MODEL = "google/gemini-2.5-pro";
 
+type PdfToolModule = typeof import("./pdf-tool.js");
+let createPdfTool: PdfToolModule["createPdfTool"];
+
 async function loadCreatePdfTool() {
-  return (await import("./pdf-tool.js")).createPdfTool;
+  if (!createPdfTool) {
+    ({ createPdfTool } = await import("./pdf-tool.js"));
+  }
+  return createPdfTool;
 }
 
-function requirePdfTool(tool: Awaited<ReturnType<typeof loadCreatePdfTool>>) {
-  if (!tool || typeof tool.execute !== "function") {
+function requirePdfTool(
+  tool: Awaited<ReturnType<typeof loadCreatePdfTool>> extends (...args: any[]) => infer R
+    ? R
+    : never,
+) {
+  expect(typeof tool?.execute).toBe("function");
+  if (!tool) {
     throw new Error("expected pdf tool");
   }
   return tool;
