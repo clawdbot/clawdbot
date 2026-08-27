@@ -722,6 +722,12 @@ describe("plugin authoring commands", () => {
       },
       openclaw: {
         extensions: ["./dist/index.js"],
+        compat: {
+          pluginApi: ">=2026.5.17",
+        },
+        build: {
+          openclawVersion: VERSION,
+        },
       },
     });
     expect(

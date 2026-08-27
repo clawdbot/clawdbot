@@ -392,8 +392,10 @@ reacts with 👀 when it accepts the request, then posts the active run link in
 its evidence comment and replaces that same comment with the result. ClawSweeper's
 `mantis: telegram-visible-proof` label starts the proof automatically for
 branches in `openclaw/openclaw`; fork PRs still require an explicit maintainer
-comment. Manual runs first inspect the diff and stop before desktop setup when
-there is no Telegram-visible behavior to test.
+comment. Proof requests queue serially because they share one Telegram user;
+queued runs do not allocate a runner or start their proof timeout. Manual runs
+first inspect the diff and stop before desktop setup when there is no
+Telegram-visible behavior to test.
 
 The other scenario workflows remain available through manual Actions dispatch.
 

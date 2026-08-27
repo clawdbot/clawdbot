@@ -311,6 +311,7 @@ export async function prepareCronRunContext(params: {
     const persistSessionEntry = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey,
+      createdActor: input.job.createdActor,
       persistSessionEntry: persistCronSessionRow,
     });
     const withRunSession: WithRunSession = (result) => ({
@@ -641,6 +642,9 @@ export async function prepareCronRunContext(params: {
       config: cfgWithAgentDefaults,
       workspaceDir,
       allowGatewaySubagentBinding: true,
+      // The published owner already selected this run's metadata generation.
+      // Reloading it here re-hashes every installed plugin on each hook/cron run.
+      ...(modelOwner.metadataSnapshot ? { metadataSnapshot: modelOwner.metadataSnapshot } : {}),
       selections: runtimePluginCandidates.map((candidate) => {
         const runtime = resolveSessionRuntimeOverrideForProvider({
           provider: candidate.provider,
@@ -656,6 +660,7 @@ export async function prepareCronRunContext(params: {
       ? createCronRunContinuationSession({
           cronSession,
           runSessionKey,
+          createdActor: input.job.createdActor,
           thinkingLevel: requestedThinkLevel,
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,

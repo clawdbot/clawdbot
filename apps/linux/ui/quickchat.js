@@ -346,6 +346,11 @@ function setGatewayState(payload) {
   const wasUp = gatewayState === "up";
   gatewayState = payload?.state || "down";
   gatewayNotice = typeof payload?.notice === "string" ? payload.notice : "";
+  if (typeof payload?.accent === "string") {
+    document.documentElement.style.setProperty("--accent", payload.accent);
+  } else {
+    document.documentElement.style.removeProperty("--accent");
+  }
   const nextCanvasSurfaceUrl =
     gatewayState === "up" && typeof payload?.canvasSurfaceUrl === "string"
       ? payload.canvasSurfaceUrl

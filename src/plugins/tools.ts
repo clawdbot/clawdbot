@@ -76,6 +76,7 @@ export type PluginToolMcpMeta = {
 /** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
 type PluginToolMeta = {
   pluginId: string;
+  kind?: PluginManifestRecord["kind"];
   optional: boolean;
   replaySafe?: boolean;
   sideEffecting?: boolean;
@@ -904,6 +905,7 @@ function createCachedDescriptorPluginTool(params: {
   }
   setPluginToolMeta(tool, {
     pluginId,
+    ...(params.plugin.kind ? { kind: params.plugin.kind } : {}),
     optional: params.descriptor.optional,
     replaySafe: isManifestToolReplaySafe({
       manifestPlugin: params.plugin,
@@ -1555,6 +1557,7 @@ export function resolvePluginTools(params: {
       });
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
+        ...(manifestPlugin?.kind ? { kind: manifestPlugin.kind } : {}),
         optional,
         replaySafe: isManifestToolReplaySafe({
           manifestPlugin,

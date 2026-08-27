@@ -10,6 +10,13 @@ import {
 } from "./child-output.js";
 
 describe("qa child output", () => {
+  it("does not mark an exactly full first stderr chunk as truncated", () => {
+    const tail = createQaChildOutputTail(4);
+    appendQaChildOutputTail(tail, Buffer.from("tail"));
+    expect(tail.truncated).toBe(false);
+    expect(formatQaChildOutputTail(tail, "stderr")).toBe("tail");
+  });
+
   it("keeps capped stdout UTF-8 safe when the byte cap splits a code point", () => {
     const text = "ok \u{1f600} done";
     const capture = createQaChildOutputCapture(Buffer.byteLength("ok \u{1f600}", "utf8") - 1);

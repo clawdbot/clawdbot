@@ -79,6 +79,12 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [{ id: "claude-cli", modelProvider: "anthropic" }] as never,
+      resolvePluginSetupCliBackend: () => {
+        throw new Error("native command attempted synchronous CLI setup discovery");
+      },
+    });
     vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue({
       entries: [
         {
@@ -429,15 +435,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         ("targetAgentId" in testCase ? testCase.targetAgentId : undefined) ?? "main";
       const resolvedModel = "resolvedModel" in testCase ? testCase.resolvedModel : undefined;
       const targetSessionKey = `agent:${targetAgentId}:main`;
-      if ("hasBoundCli" in testCase) {
-        cliBackendsTesting.setDepsForTest({
-          resolveRuntimeCliBackends: () =>
-            [{ id: "claude-cli", modelProvider: "anthropic" }] as never,
-          resolvePluginSetupCliBackend: () => {
-            throw new Error("approved bound CLI attempted synchronous setup discovery");
-          },
-        });
-      }
       const storePath = path.join(tempDirs.make("openclaw-native-source-"), "sessions.json");
       await replaceSessionEntry(
         { agentId: targetAgentId, sessionKey: targetSessionKey, storePath },

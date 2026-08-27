@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { useWorkspaceMigrationTestFixture } from "./state-migrations.workspace-setup.test-support.js";
 

@@ -51,6 +51,7 @@ import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
+import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
@@ -337,6 +338,16 @@ export async function getReplyFromConfig(
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
+  // Resolve legacy text-slash source lanes before any session-scoped work.
+  // The explicit steer command itself still flows through normal command and
+  // prepared-reply handling; this only gives that path the active owner's key.
+  const explicitSteerTargetSessionKey = resolverTiming.measureSync(
+    "reply.resolve_explicit_steer_target",
+    () => resolveActiveExplicitSteerSessionKey({ cfg, ctx: finalized }),
+  );
+  if (explicitSteerTargetSessionKey) {
+    finalized.CommandTargetSessionKey = explicitSteerTargetSessionKey;
+  }
   const initialAgentScope = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
     const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
     const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;
@@ -501,6 +512,9 @@ export async function getReplyFromConfig(
     logResolverTiming("completed", "native_slash_command_fast_path");
     return nativeSlashCommandFastReply.reply;
   }
+  const optsWithCommandQueueOverride = nativeSlashCommandFastReply.queueModeOverride
+    ? { ...optsWithSkillFilter, queueModeOverride: nativeSlashCommandFastReply.queueModeOverride }
+    : optsWithSkillFilter;
 
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
     useFastTestBootstrap
@@ -670,8 +684,8 @@ export async function getReplyFromConfig(
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
   const optsWithSessionSkillOverrides = sessionEntry.toolOverrides?.skills
-    ? { ...optsWithSkillFilter, skillOverrides: sessionEntry.toolOverrides.skills }
-    : optsWithSkillFilter;
+    ? { ...optsWithCommandQueueOverride, skillOverrides: sessionEntry.toolOverrides.skills }
+    : optsWithCommandQueueOverride;
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
@@ -1112,6 +1126,8 @@ export async function getReplyFromConfig(
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
+  const queueModeOverride = inlineActionResult.queueModeOverride;
+  const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
@@ -1275,7 +1291,7 @@ export async function getReplyFromConfig(
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,
-      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+      opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
       defaultModel,
       timeoutMs,
       isNewSession,

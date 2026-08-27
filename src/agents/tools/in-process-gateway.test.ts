@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
   hasContext: true,
@@ -15,12 +16,14 @@ vi.mock("../../gateway/method-scopes.js", () => ({
 vi.mock("../../gateway/server-plugins.js", () => ({
   dispatchGatewayMethodInProcess: mocks.dispatch,
   getInProcessGatewayRequestContext: vi.fn(),
-  hasInProcessGatewayContext: () => mocks.hasContext,
+  hasInProcessGatewayContext: (resolveGatewayContext?: () => GatewayRequestContext | undefined) =>
+    Boolean(resolveGatewayContext?.() ?? mocks.hasContext),
 }));
 
 vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
 vi.mock("../../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
 
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import {
   callAgentToolGatewayRequest,
@@ -220,6 +223,47 @@ describe("request-shaped in-process Gateway dispatch", () => {
       mocks.dispatch.mock.calls.filter(([method]) => method === "conversations.turn.cancel"),
     ).toHaveLength(1);
     expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not route abort cleanup through a replacement Gateway", async () => {
+    const admitted = {} as GatewayRequestContext;
+    const replacement = {} as GatewayRequestContext;
+    let current = admitted;
+    let cancelDispatches = 0;
+    mocks.dispatch.mockImplementation(
+      async (
+        method: string,
+        _params: unknown,
+        options?: { onSignalAbort?: () => Promise<void> },
+      ) => {
+        if (method === "conversations.turn.cancel") {
+          cancelDispatches += 1;
+          return { status: "ok" };
+        }
+        current = replacement;
+        await options?.onSignalAbort?.();
+        throw new Error("primary aborted");
+      },
+    );
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          gatewayContextResolver: () => current,
+        },
+        async () =>
+          await callAgentToolGatewayRequest({
+            method: "conversations.turn",
+            params: { turnId: "turn-1" },
+            onSignalAbort: async (request) => {
+              await request("conversations.turn.cancel", { turnId: "turn-1" });
+            },
+          }),
+      ),
+    ).rejects.toThrow(/Gateway|gateway|unavailable/u);
+    expect(cancelDispatches).toBe(0);
   });
 
   it("falls back to the original Gateway request outside the Gateway process", async () => {

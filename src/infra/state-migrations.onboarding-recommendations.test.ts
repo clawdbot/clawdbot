@@ -1,59 +1,27 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import { createOnboardingRecommendationsStore } from "../state/onboarding-recommendations.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
 import { migrateLegacyOnboardingRecommendationsScope } from "./state-migrations.onboarding-recommendations.js";
-
-type OnboardingRecommendationsMigrationDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "onboarding_recommendations"
->;
 
 function insertRecommendationRow(params: {
   database: { env: NodeJS.ProcessEnv };
   configKey: string;
   inventoryHash: string;
 }): void {
-  runOpenClawStateWriteTransaction(({ db: sqlite }) => {
-    const db = getNodeSqliteKysely<OnboardingRecommendationsMigrationDatabase>(sqlite);
-    executeSqliteQuerySync(
-      sqlite,
-      db.insertInto("onboarding_recommendations").values({
-        config_key: params.configKey,
-        inventory_hash: params.inventoryHash,
-        matches_json: "[]",
-        offered_at_ms: 1_000,
-        accepted_at_ms: 2_000,
-        updated_at_ms: 2_000,
-      }),
-    );
-  }, params.database);
-}
-
-function readRecommendationKey(
-  database: { env: NodeJS.ProcessEnv },
-  configKey: string,
-): { config_key: string } | undefined {
-  return runOpenClawStateWriteTransaction(({ db: sqlite }) => {
-    const db = getNodeSqliteKysely<OnboardingRecommendationsMigrationDatabase>(sqlite);
-    return executeSqliteQueryTakeFirstSync(
-      sqlite,
-      db
-        .selectFrom("onboarding_recommendations")
-        .select("config_key")
-        .where("config_key", "=", configKey),
-    );
-  }, database);
+  writeConfigMachineState(
+    `onboarding.recommendations.${params.configKey}`,
+    {
+      inventoryHash: params.inventoryHash,
+      matches: [],
+      offeredAt: 1_000,
+      acceptedAt: 2_000,
+      updatedAt: 2_000,
+    },
+    params.database,
+  );
 }
 
 afterEach(() => {
@@ -100,7 +68,9 @@ describe("onboarding recommendations scope migration", () => {
           acceptedAt: 2_000,
           updatedAt: 2_000,
         });
-        expect(readRecommendationKey(database, "primary")).toBeUndefined();
+        expect(
+          readConfigMachineState("onboarding.recommendations.primary", database),
+        ).toBeUndefined();
       },
     );
   });
@@ -143,7 +113,9 @@ describe("onboarding recommendations scope migration", () => {
           warnings: [],
         });
         expect(store.read()).toEqual(scoped);
-        expect(readRecommendationKey(database, "primary")).toBeUndefined();
+        expect(
+          readConfigMachineState("onboarding.recommendations.primary", database),
+        ).toBeUndefined();
       },
     );
   });

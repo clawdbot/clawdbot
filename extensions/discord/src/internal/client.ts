@@ -164,6 +164,10 @@ export class Client {
     return await this.entityCache.fetchMember(guildId, userId);
   }
 
+  async fetchGuildEmojis<T>(guildId: string, fetcher: () => Promise<T>): Promise<T> {
+    return await this.entityCache.fetchGuildEmojis(guildId, fetcher);
+  }
+
   async deployCommands(options: DeployCommandOptions = {}) {
     return await this.commandDeployer.deploy(options);
   }

@@ -322,9 +322,29 @@ function convertResponsesMessagesWithStyle(
       ),
     );
   }
-  const replayMessages = replayPlan.compaction
+  let replayMessages = replayPlan.compaction
     ? [...transformedRetainedMessages, replayPlan.compaction, ...transformedMessages]
     : transformedMessages;
+  // Responses continuation requires the complete prior input before tool output.
+  // Anchor context after the user or its compaction checkpoint, not each tool round.
+  // Other transports retain their tail placement for cross-turn prompt caching.
+  const isCarrier = (message: (typeof replayMessages)[number]) =>
+    "role" in message && message.role === "user" && message.runtimeContextCarrier === true;
+  const carriers = replayMessages.filter(isCarrier);
+  if (carriers.length > 0) {
+    const stableMessages = replayMessages.filter((message) => !isCarrier(message));
+    const insertionIndex =
+      stableMessages.findLastIndex((message) =>
+        "role" in message ? message.role === "user" : message.type === "compaction",
+      ) + 1;
+    if (insertionIndex > 0) {
+      replayMessages = [
+        ...stableMessages.slice(0, insertionIndex),
+        ...carriers,
+        ...stableMessages.slice(insertionIndex),
+      ];
+    }
+  }
   let msgIndex = 0;
   for (const msg of replayMessages) {
     if (!("role" in msg)) {

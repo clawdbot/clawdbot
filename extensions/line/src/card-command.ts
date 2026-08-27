@@ -3,16 +3,14 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { messageAction, postbackAction, uriAction } from "./actions.js";
 import {
   createActionCard,
   createImageCard,
   createInfoCard,
   createListCard,
-  createReceiptCard,
-  type CardAction,
-  type ListItem,
-} from "./flex-templates.js";
+} from "./flex-templates/basic-cards.js";
+import { createReceiptCard } from "./flex-templates/schedule-cards.js";
+import type { CardAction, ListItem } from "./flex-templates/types.js";
 import { createFlexMessage } from "./send.js";
 import type { LineChannelData } from "./types.js";
 
@@ -72,22 +70,13 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
 
     const actionData = data || label;
 
-    if (actionData.startsWith("http://") || actionData.startsWith("https://")) {
-      results.push({
-        label,
-        action: uriAction(label, actionData),
-      });
-    } else if (actionData.includes("=")) {
-      results.push({
-        label,
-        action: postbackAction(label, actionData, label),
-      });
-    } else {
-      results.push({
-        label,
-        action: messageAction(label, actionData),
-      });
-    }
+    const action =
+      actionData.startsWith("http://") || actionData.startsWith("https://")
+        ? { type: "uri" as const, label, uri: actionData }
+        : actionData.includes("=")
+          ? { type: "postback" as const, label, data: actionData, displayText: label }
+          : { type: "message" as const, label, text: actionData };
+    results.push({ label, action });
   }
 
   return results;

@@ -18,6 +18,7 @@ import {
   isCodexAppServerStartSelectionChangedError,
   releaseLeasedSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
+  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
 
@@ -53,46 +54,37 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   );
 }
 
+type CodexAppServerJsonClientOptions = Pick<
+  CodexAppServerClientOptions,
+  | "timeoutMs"
+  | "pluginConfig"
+  | "startOptions"
+  | "authProfileId"
+  | "authProfileStore"
+  | "authBindingFingerprint"
+  | "preparedAuth"
+  | "authRequirement"
+  | "agentDir"
+  | "config"
+> & {
+  sessionKey?: string;
+  sessionId?: string;
+  isolated?: boolean;
+};
+
 /** Sends a typed Codex app-server request and returns the method-specific response shape. */
-export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(params: {
-  method: M;
-  requestParams: CodexAppServerRequestParams<M>;
-  timeoutMs?: number;
-  pluginConfig?: unknown;
-  startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string | null;
-  agentDir?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  sessionKey?: string;
-  sessionId?: string;
-  isolated?: boolean;
-}): Promise<CodexAppServerRequestResult<M>>;
-export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
-  method: string;
-  requestParams?: unknown;
-  timeoutMs?: number;
-  pluginConfig?: unknown;
-  startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string | null;
-  agentDir?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  sessionKey?: string;
-  sessionId?: string;
-  isolated?: boolean;
-}): Promise<T>;
-export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
-  method: string;
-  requestParams?: unknown;
-  timeoutMs?: number;
-  pluginConfig?: unknown;
-  startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string | null;
-  agentDir?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  sessionKey?: string;
-  sessionId?: string;
-  isolated?: boolean;
-}): Promise<T> {
+export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(
+  params: CodexAppServerJsonClientOptions & {
+    method: M;
+    requestParams: CodexAppServerRequestParams<M>;
+  },
+): Promise<CodexAppServerRequestResult<M>>;
+export async function requestCodexAppServerJson<T = JsonValue | undefined>(
+  params: CodexAppServerJsonClientOptions & { method: string; requestParams?: unknown },
+): Promise<T>;
+export async function requestCodexAppServerJson<T = JsonValue | undefined>(
+  params: CodexAppServerJsonClientOptions & { method: string; requestParams?: unknown },
+): Promise<T> {
   // Fail closed before spawning or leasing a client for a guard-blocked method.
   const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
     method: params.method,
@@ -201,17 +193,8 @@ async function readCodexAccountEmailBestEffort(
  * callback re-runs once when the client's start selection changed underneath it.
  */
 export async function withCodexAppServerJsonClient<T>(
-  params: {
-    timeoutMs?: number;
+  params: CodexAppServerJsonClientOptions & {
     timeoutMessage?: string;
-    pluginConfig?: unknown;
-    startOptions?: CodexAppServerStartOptions;
-    authProfileId?: string | null;
-    agentDir?: string;
-    config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-    sessionKey?: string;
-    sessionId?: string;
-    isolated?: boolean;
     // Bounds the isolated-client shutdown. Callers on a tight result deadline
     // pass a small budget so cleanup cannot breach the outer timeout; defaults
     // to the conservative graceful/force-kill window used elsewhere.
@@ -247,6 +230,10 @@ export async function withCodexAppServerJsonClient<T>(
             pluginConfig: params.pluginConfig,
             timeoutMs: remainingTimeoutMs(),
             authProfileId: params.authProfileId,
+            authProfileStore: params.authProfileStore,
+            authBindingFingerprint: params.authBindingFingerprint,
+            preparedAuth: params.preparedAuth,
+            authRequirement: params.authRequirement,
             agentDir: params.agentDir,
             config: params.config,
             abandonSignal: timeoutController.signal,

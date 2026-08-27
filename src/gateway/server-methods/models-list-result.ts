@@ -41,6 +41,7 @@ import {
   resolveModelCatalogIdentityKey,
 } from "../../agents/openai-model-routes.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
+import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
@@ -441,8 +442,6 @@ type BuildModelsListResultParams = {
     agentId: string;
     config: OpenClawConfig;
     snapshot: ModelCatalogSnapshot;
-    /** The owner already ran full discovery for this exact snapshot. */
-    fullyDiscovered?: boolean;
   };
   catalogProjector?: ReturnType<typeof createGatewayAgentModelCatalogProjector>;
   preloadedOnly?: boolean;
@@ -465,13 +464,15 @@ export async function buildModelsListResult(
   let loadedSnapshot: Awaited<ReturnType<typeof loadDeferredCatalog>> | undefined;
   let loadedReadOnly = true;
   let usedPreloadedCatalog = false;
+  let catalogTimedOut = false;
   const handleCatalogTimeout = (timeoutMs: number) => {
+    catalogTimedOut = true;
     if (loggedSlowModelsListCatalog) {
       return;
     }
     loggedSlowModelsListCatalog = true;
-    params.context.logGateway.debug(
-      `models.list continuing without model catalog after ${timeoutMs}ms`,
+    params.context.logGateway.warn(
+      `models.list catalog load exceeded ${timeoutMs}ms; using the prepared catalog when available`,
     );
   };
   let snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
@@ -486,7 +487,8 @@ export async function buildModelsListResult(
       // owner carried the completed-discovery fact with the exact snapshot.
       if (
         preloadedCatalog &&
-        (loadedReadOnly || (params.preloadedOnly && preloadedCatalog.fullyDiscovered === true))
+        (loadedReadOnly ||
+          (params.preloadedOnly && isPreparedModelCatalogFull(preloadedCatalog.snapshot)))
       ) {
         usedPreloadedCatalog = true;
         return preloadedCatalog.snapshot;
@@ -555,6 +557,9 @@ export async function buildModelsListResult(
     (preloadedCatalog && params.catalogProjector
       ? undefined
       : await readPreparedCatalog(params.context, initialAgentId));
+  if (catalogTimedOut && ownerSnapshot) {
+    snapshot = ownerSnapshot;
+  }
   const cfg = ownerSnapshot?.config ?? initialConfig;
   const agentId = ownerSnapshot?.agentId ?? initialAgentId;
   const workspaceDir =

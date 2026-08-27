@@ -69,7 +69,7 @@ The Matrix outbound adapter advertises native support for:
 
 This metadata does not add Matrix callback semantics. Button and select values are fallback interaction payloads, usually slash commands or text commands. A Matrix client that wants to support interaction resolves the control value (`action.command`, then `action.value`, then `value`) and sends it back to the room as a normal message.
 
-For example, a button with value `/model deepseek/deepseek-chat -s` can be handled by sending that value as an encrypted Matrix text message in the same room. The explicit session flag prevents a presentation control from requesting a configured-default update.
+For example, a button with value `/model deepseek/deepseek-chat -s` can be handled by sending that value as an encrypted Matrix text message in the same room. The explicit session flag prevents a configured-default update regardless of the [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope) setting.
 
 ## Relationship to approval metadata
 

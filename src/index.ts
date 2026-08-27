@@ -10,6 +10,7 @@ import {
 } from "./cli/failure-output.js";
 import { isJsonOutputModeActive } from "./cli/json-output-mode.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
+import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
@@ -76,6 +77,9 @@ export async function runLegacyCliEntry(
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
+if (isMain) {
+  installDistEsmResolveFastPath(import.meta.url);
+}
 const handledRootVersion = isMain && tryHandleRootVersionFastPath(process.argv);
 
 if (!isMain) {

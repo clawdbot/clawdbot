@@ -12,6 +12,10 @@ type PackageManifestContractParams = Parameters<typeof describePackageManifestCo
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
   {
+    pluginId: "anthropic",
+    pluginLocalRuntimeDeps: ["@anthropic-ai/claude-agent-sdk"],
+  },
+  {
     pluginId: "buzz",
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.7.2",
@@ -32,6 +36,10 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
+  },
+  {
+    pluginId: "imap",
+    pluginLocalRuntimeDeps: ["imapflow", "mailauth", "mailparser"],
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },

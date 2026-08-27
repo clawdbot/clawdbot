@@ -56,6 +56,7 @@ type TestChatPane = HTMLElement & {
   routeFace: "chat" | "dashboard";
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   confirmConversationReset: () => Promise<boolean>;
+  commitSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
@@ -173,6 +174,26 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
+  it("couples explicit side-panel visibility to the Board dock", () => {
+    const pane = createTestPane();
+    const provider = mockBoardProvider("agent:main:current");
+    const applyOps = vi.spyOn(provider, "applyOps");
+    pane.boardProvider = provider;
+    pane.routeFace = "dashboard";
+    pane.handleBoardDockChange("hidden");
+    applyOps.mockClear();
+
+    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
+    expect(applyOps).toHaveBeenLastCalledWith([
+      { kind: "tab_update", tabId: "main", chatDock: "right" },
+    ]);
+
+    pane.commitSidebarLayout({ ...pane.state.sidebarLayout, open: false });
+    expect(applyOps).toHaveBeenLastCalledWith([
+      { kind: "tab_update", tabId: "main", chatDock: "hidden" },
+    ]);
+  });
+
   it("does not hydrate the swarm after becoming hidden during module loading", async () => {
     vi.useFakeTimers();
     const list = vi.fn().mockResolvedValue({ sessions: [] });

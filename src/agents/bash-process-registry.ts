@@ -49,7 +49,7 @@ type PendingOutputChunk = {
   text: string;
 };
 
-/** Mutable session state for a running bash exec process. */
+/** One process record from execution through completed retention. */
 export interface ProcessSession {
   id: string;
   command: string;
@@ -84,11 +84,14 @@ export interface ProcessSession {
   stdin?: SessionStdin;
   pid?: number;
   startedAt: number;
+  /** Set only on admission to completed retention; survives index removal. */
+  endedAt?: number;
   cwd?: string;
   maxOutputChars: number;
   pendingMaxOutputChars?: number;
   totalOutputChars: number;
-  pendingOutput: PendingOutputChunk[];
+  /** Live chunks become frozen text at completion, releasing the chunk graph. */
+  pendingOutput: PendingOutputChunk[] | string;
   pendingStdoutChars: number;
   pendingStderrChars: number;
   /** Output was dropped from the pending poll buffers since their last drain. */
@@ -110,32 +113,9 @@ export interface ProcessSession {
   cursorKeyMode: "unknown" | "normal" | "application";
 }
 
-/** Retained summary for a completed background session. */
-interface FinishedSession {
-  id: string;
-  command: string;
-  scopeKey?: string;
-  startedAt: number;
-  endedAt: number;
-  cwd?: string;
-  status: ProcessStatus;
-  exitCode?: number | null;
-  exitSignal?: NodeJS.Signals | number | null;
-  exitReason?: TerminationReason;
-  noOutputTimedOut?: boolean;
-  aggregated: string;
-  tail: string;
-  truncated: boolean;
-  totalOutputChars: number;
-  unreadOutput?: ReturnType<typeof drainSession>;
-  terminalPollObserved?: boolean;
-  notifyOnExitRemoval?: NotifyOnExitRemoval;
-}
-
 const runningSessions = new Map<string, ProcessSession>();
-const finishedSessions = new Map<string, FinishedSession>();
-let finishedSessionsByProcess = new WeakMap<ProcessSession, FinishedSession>();
-// Keep start chronology private while snapshots retain their completion-order eviction contract.
+const finishedSessions = new Map<string, ProcessSession & { endedAt: number }>();
+// Display uses start chronology; retained records are evicted in completion order.
 let processSessionStartOrders = new WeakMap<object, number>();
 let nextProcessSessionStartOrder = 0;
 const activeBackgroundExecSessionIds = new Set<string>();
@@ -178,11 +158,6 @@ export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
 
-/** Returns the terminal snapshot owned by this exact process incarnation. */
-export function getFinishedSessionForProcess(session: ProcessSession) {
-  return finishedSessionsByProcess.get(session);
-}
-
 function deleteFinishedSession(id: string): boolean {
   const session = finishedSessions.get(id);
   if (!session) {
@@ -220,6 +195,9 @@ export function clearFinishedSessionsForScopes(scopeKeys: Iterable<string>): voi
 
 /** Appends process output while enforcing aggregate and pending-output caps. */
 export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
+  if (typeof session.pendingOutput === "string") {
+    return;
+  }
   const streamChars = stream === "stdout" ? session.pendingStdoutChars : session.pendingStderrChars;
   const pendingCap = Math.min(
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
@@ -247,20 +225,16 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
 
 /** Drains pending chunks in producer callback order for a process poll. */
 export function drainSession(session: ProcessSession) {
-  const output = session.pendingOutput.map((chunk) => chunk.text).join("");
+  const pending = session.pendingOutput;
+  const output =
+    typeof pending === "string" ? pending : pending.map((chunk) => chunk.text).join("");
   const outputDropped = session.pendingOutputDropped;
-  session.pendingOutput = [];
+  // Draining a terminal record must not reopen it to late producer callbacks.
+  session.pendingOutput = typeof pending === "string" ? "" : [];
   session.pendingStdoutChars = 0;
   session.pendingStderrChars = 0;
   session.pendingOutputDropped = false;
   return { output, outputDropped };
-}
-
-/** Consumes the output transferred to one exact terminal snapshot. */
-export function drainFinishedSession(session: FinishedSession) {
-  const output = session.unreadOutput;
-  session.unreadOutput = undefined;
-  return output ?? { output: "", outputDropped: false };
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -282,7 +256,12 @@ export function markExited(
   session.exitReason = exitReason;
   session.noOutputTimedOut = noOutputTimedOut;
   session.tail = tail(session.aggregated, 2000);
-  moveToFinished(session, status);
+  // Finalizer diagnostics are already appended. Freeze output before retention
+  // accounts for its size, and release the live per-callback chunk objects.
+  const pending = drainSession(session);
+  session.pendingOutput = pending.output;
+  session.pendingOutputDropped = pending.outputDropped;
+  moveToFinished(session);
 }
 
 /** Marks a running session as reconnectable after the exec call returns. */
@@ -296,13 +275,9 @@ export function markBackgrounded(session: ProcessSession) {
 /** Records that a terminal process poll consumed the process result. */
 export function markTerminalPollObserved(session: ProcessSession): void {
   session.terminalPollObserved = true;
-  const finished = finishedSessionsByProcess.get(session);
-  if (finished) {
-    finished.terminalPollObserved = true;
-  }
 }
 
-/** Retains the precise event removal handle across the finished-session move. */
+/** Retains the precise completion-event removal handle on its process owner. */
 export function recordNotifyOnExitRemoval(
   session: ProcessSession,
   remove: NotifyOnExitRemoval,
@@ -312,10 +287,6 @@ export function recordNotifyOnExitRemoval(
     return;
   }
   session.notifyOnExitRemoval = remove;
-  const finished = finishedSessionsByProcess.get(session);
-  if (finished) {
-    finished.notifyOnExitRemoval = remove;
-  }
 }
 
 /** Acknowledges one completion event without touching unrelated queue entries. */
@@ -340,7 +311,7 @@ export function getActiveBackgroundExecSessionCount(): number {
   return activeBackgroundExecSessionIds.size;
 }
 
-function moveToFinished(session: ProcessSession, status: ProcessStatus) {
+function moveToFinished(session: ProcessSession) {
   runningSessions.delete(session.id);
 
   // The supervisor owns the raw process. The registry releases only the
@@ -361,31 +332,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   // Keep full completed logs; evict older records rather than silently
   // truncating the process poll/log contract or dropping the newest result.
   deleteFinishedSession(session.id);
-  const finished: FinishedSession = {
-    id: session.id,
-    command: session.command,
-    scopeKey: session.scopeKey,
-    startedAt: session.startedAt,
-    endedAt: Date.now(),
-    cwd: session.cwd,
-    status,
-    exitCode: session.exitCode,
-    exitSignal: session.exitSignal,
-    exitReason: session.exitReason,
-    ...(session.noOutputTimedOut !== undefined
-      ? { noOutputTimedOut: session.noOutputTimedOut }
-      : {}),
-    aggregated: session.aggregated,
-    tail: session.tail,
-    truncated: session.truncated,
-    totalOutputChars: session.totalOutputChars,
-    unreadOutput: drainSession(session),
-    ...(session.terminalPollObserved ? { terminalPollObserved: true } : {}),
-    ...(session.notifyOnExitRemoval ? { notifyOnExitRemoval: session.notifyOnExitRemoval } : {}),
-  };
-  processSessionStartOrders.set(finished, processSessionStartOrders.get(session)!);
-  finishedSessionsByProcess.set(session, finished);
-  finishedSessions.set(session.id, finished);
+  finishedSessions.set(session.id, Object.assign(session, { endedAt: Date.now() }));
   finishedSessionOutputChars += session.aggregated.length;
   while (
     finishedSessions.size > MAX_FINISHED_SESSION_COUNT ||
@@ -455,7 +402,6 @@ export function listFinishedSessions() {
 function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
-  finishedSessionsByProcess = new WeakMap();
   processSessionStartOrders = new WeakMap();
   nextProcessSessionStartOrder = 0;
   finishedSessionOutputChars = 0;

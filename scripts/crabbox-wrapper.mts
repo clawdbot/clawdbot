@@ -275,7 +275,7 @@ const jsRuntimeEntrypoints = new Set([
 ]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
 const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
-const awsMacosBunVersion = "1.3.14";
+const awsMacosBunVersion = "1.4.0";
 const awsMacosSwiftEntrypoints = new Set(["swift", "xcodebuild"]);
 const awsMacosSwiftScriptTargets = new Set([
   "mac:package",
@@ -2746,7 +2746,7 @@ function remotePosixJsEnvBootstrap() {
 }
 
 function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {}) {
-  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.15.0";
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.19.0";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_macos_js() {",
     'tool_root="${OPENCLAW_CRABBOX_MACOS_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
@@ -2850,7 +2850,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
 }
 
 function remoteWsl2JsBootstrap({ packageManager = false } = {}) {
-  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.15.0";
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.19.0";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_wsl2_js() {",
     'tool_root="${OPENCLAW_CRABBOX_WSL2_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
@@ -3263,26 +3263,28 @@ function injectRemoteAwsMacosJsBootstrap(run: RunInvocation, facts: RunFacts, pr
 
 function remoteAwsMacosSwiftBootstrap() {
   return [
-    "openclaw_crabbox_require_macos_swift_62() {",
+    "openclaw_crabbox_require_macos_swift_63() {",
     'openclaw_xcode="";',
-    'for openclaw_candidate in /Applications/Xcode_26.1.app /Applications/Xcode_26*.app /Applications/Xcode-26*.app; do if [ -d "$openclaw_candidate" ]; then openclaw_xcode="$openclaw_candidate"; fi; done;',
+    'for openclaw_candidate in /Applications/Xcode_26*.app /Applications/Xcode-26*.app /Applications/Xcode_2[7-9]*.app /Applications/Xcode-2[7-9]*.app; do if [ -d "$openclaw_candidate" ]; then openclaw_xcode="$openclaw_candidate"; fi; done;',
     'if [ -n "$openclaw_xcode" ]; then openclaw_developer="$openclaw_xcode/Contents/Developer"; if [ ! -d "$openclaw_developer" ]; then openclaw_developer="$openclaw_xcode"; fi; sudo xcode-select -s "$openclaw_developer" || return 1; fi;',
     'openclaw_swift_version="$(swift --version 2>&1)" || { status=$?; printf "%s\\n" "$openclaw_swift_version" >&2; return "$status"; };',
     'printf "%s\\n" "$openclaw_swift_version" >&2;',
     'openclaw_swift_major_minor="$(printf "%s\\n" "$openclaw_swift_version" | sed -nE "s/.*Apple Swift version ([0-9]+)\\.([0-9]+).*/\\1 \\2/p" | head -n 1)";',
-    'if [ -z "$openclaw_swift_major_minor" ]; then echo "[crabbox] OpenClaw macOS app proof requires Swift tools 6.2+; unable to parse swift --version." >&2; return 2; fi;',
+    'if [ -z "$openclaw_swift_major_minor" ]; then echo "[crabbox] OpenClaw macOS app proof requires Swift tools 6.3+; unable to parse swift --version." >&2; return 2; fi;',
     "set -- $openclaw_swift_major_minor;",
-    'if [ "$1" -lt 6 ] || { [ "$1" -eq 6 ] && [ "$2" -lt 2 ]; }; then',
-    'echo "[crabbox] OpenClaw macOS app proof requires Swift tools 6.2+ (Xcode 26.x)." >&2;',
-    'echo "[crabbox] current Swift is $1.$2; select/install Xcode 26.x or use a Blacksmith macOS runner with Xcode_26.1.app." >&2;',
+    'if [ "$1" -lt 6 ] || { [ "$1" -eq 6 ] && [ "$2" -lt 3 ]; }; then',
+    'echo "[crabbox] OpenClaw macOS app proof requires Swift tools 6.3+ (Xcode 26.4+)." >&2;',
+    'echo "[crabbox] current Swift is $1.$2; select/install Xcode 26.4 or newer." >&2;',
     "return 2;",
     "fi;",
-    'openclaw_xcodebuild_version="$(xcodebuild -version 2>&1)" || { printf "%s\\n" "$openclaw_xcodebuild_version" >&2; echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.x; active developer directory does not provide usable xcodebuild." >&2; return 2; };',
+    'openclaw_xcodebuild_version="$(xcodebuild -version 2>&1)" || { printf "%s\\n" "$openclaw_xcodebuild_version" >&2; echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.4+; active developer directory does not provide usable xcodebuild." >&2; return 2; };',
     'printf "%s\\n" "$openclaw_xcodebuild_version" >&2;',
-    'openclaw_xcode_major="$(printf "%s\\n" "$openclaw_xcodebuild_version" | sed -nE "s/^Xcode ([0-9]+)(\\..*)?$/\\1/p" | head -n 1)";',
-    'if [ "$openclaw_xcode_major" != "26" ]; then echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.x; current xcodebuild is ${openclaw_xcode_major:-unknown}." >&2; return 2; fi;',
+    'openclaw_xcode_major_minor="$(printf "%s\\n" "$openclaw_xcodebuild_version" | sed -nE "s/^Xcode ([0-9]+)\\.([0-9]+).*/\\1 \\2/p" | head -n 1)";',
+    'if [ -z "$openclaw_xcode_major_minor" ]; then echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.4+; unable to parse xcodebuild -version." >&2; return 2; fi;',
+    "set -- $openclaw_xcode_major_minor;",
+    'if [ "$1" -lt 26 ] || { [ "$1" -eq 26 ] && [ "$2" -lt 4 ]; }; then echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.4+; current xcodebuild is $1.$2." >&2; return 2; fi;',
     "};",
-    "openclaw_crabbox_require_macos_swift_62",
+    "openclaw_crabbox_require_macos_swift_63",
   ].join(" ");
 }
 
