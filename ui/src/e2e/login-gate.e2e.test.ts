@@ -255,6 +255,7 @@ suite.define(() => {
     try {
       await page.goto(new URL("settings/connection", suite.server.baseUrl).href);
       await page.locator("openclaw-app-shell").waitFor();
+      await page.locator("openclaw-connection-page .content-header").waitFor();
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");
 
@@ -273,7 +274,9 @@ suite.define(() => {
           ?.getBoundingClientRect();
         const navRect = document.querySelector(".shell-nav")?.getBoundingClientRect();
         const mainRect = document.querySelector("#control-ui-main")?.getBoundingClientRect();
-        const headerRect = document.querySelector(".content-header")?.getBoundingClientRect();
+        const headerRect = document
+          .querySelector("openclaw-connection-page .content-header")
+          ?.getBoundingClientRect();
         return {
           headerTop: headerRect?.top,
           noticeBottom: noticeRect?.bottom,
@@ -286,7 +289,7 @@ suite.define(() => {
         };
       });
       expect(bounds.noticeTop).toBe(bounds.mainTop);
-      expect((bounds.headerTop ?? 0) - (bounds.noticeBottom ?? 0)).toBe(44);
+      expect((bounds.headerTop ?? 0) - (bounds.noticeBottom ?? 0)).toBeCloseTo(44, 3);
       expect(bounds.noticeLeft).toBe(bounds.navRight);
       expect(bounds.noticeRight).toBe(bounds.mainRight);
       await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
