@@ -56,6 +56,8 @@ function createSelectedPluginPackageFixture() {
     version: packageJson.version,
     dependencies: { shared: "1.0.0", native: "2.0.0" },
     optionalDependencies: { optional: "3.0.0" },
+    peerDependencies: { peer: "1.0.0" },
+    peerDependenciesMeta: { peer: { optional: true } },
     openclaw: { extensions: ["./index.ts"], release: { publishToNpm: true } },
   };
   const files = {
@@ -333,31 +335,39 @@ describe("package-openclaw-for-docker", () => {
     expect(runImpl).toHaveBeenCalledOnce();
   });
 
-  it.each(["missing-entry", "stale-metadata"])(
-    "rejects %s in a selected built plugin",
-    async (failure) => {
-      const { sourceDir, outputDir, files, pluginPackage } = createSelectedPluginPackageFixture();
-      if (failure === "missing-entry") {
-        fs.rmSync(path.join(sourceDir, "dist/extensions/demo/index.js"));
-      } else {
-        fs.writeFileSync(
-          path.join(sourceDir, "dist/extensions/demo/package.json"),
-          JSON.stringify({ ...pluginPackage, version: "2026.7.1" }),
-        );
-      }
-      await expect(
-        packOpenClawPackageForDocker(sourceDir, outputDir, {
-          ...skipDocsMapLifecycle,
-          prepareChangelog: async () => {},
-          restoreChangelog: async () => {},
-          bundlePlugins: ["demo"],
-        }),
-      ).rejects.toThrow(failure === "missing-entry" ? /ENOENT/ : /does not match source metadata/);
-      expect(fs.readFileSync(path.join(sourceDir, "package.json"), "utf8")).toBe(
-        files["package.json"],
+  it.each([
+    { failure: "missing-entry", metadata: {} },
+    { failure: "stale-metadata", metadata: { version: "2026.7.1" } },
+    { failure: "stale-peer-dependencies", metadata: { peerDependencies: { missing: "1.0.0" } } },
+    { failure: "stale-peer-meta", metadata: { peerDependenciesMeta: {} } },
+  ])("rejects $failure in a selected built plugin", async ({ failure, metadata }) => {
+    const { sourceDir, outputDir, files, pluginPackage } = createSelectedPluginPackageFixture();
+    if (failure === "missing-entry") {
+      fs.rmSync(path.join(sourceDir, "dist/extensions/demo/index.js"));
+    } else {
+      fs.writeFileSync(
+        path.join(sourceDir, "dist/extensions/demo/package.json"),
+        JSON.stringify({ ...pluginPackage, ...metadata }),
       );
-    },
-  );
+    }
+    const runCaptureImpl = vi.fn(async () => {
+      throw new Error("unexpected pack");
+    });
+    await expect(
+      packOpenClawPackageForDocker(sourceDir, outputDir, {
+        ...skipDocsMapLifecycle,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        bundlePlugins: ["demo"],
+        runCaptureImpl,
+      }),
+    ).rejects.toThrow(failure === "missing-entry" ? /ENOENT/ : /does not match source metadata/);
+    expect(runCaptureImpl).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(sourceDir, "package.json"), "utf8")).toBe(
+      files["package.json"],
+    );
+  });
 
   it.each([
     { id: "../outside", error: /invalid plugin id/ },

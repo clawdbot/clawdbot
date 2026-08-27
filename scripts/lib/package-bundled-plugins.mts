@@ -70,9 +70,16 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
     ) as { id: string };
     if (
       manifest.id !== id ||
-      (["name", "version", "dependencies", "optionalDependencies"] as const).some(
-        (key) => !isDeepStrictEqual(builtPackage[key], sourcePackage[key]),
-      )
+      (
+        [
+          "name",
+          "version",
+          "dependencies",
+          "optionalDependencies",
+          "peerDependencies",
+          "peerDependenciesMeta",
+        ] as const
+      ).some((key) => !isDeepStrictEqual(builtPackage[key], sourcePackage[key]))
     ) {
       throw new Error(
         `Built plugin ${id} does not match source metadata; rebuild before packaging`,
