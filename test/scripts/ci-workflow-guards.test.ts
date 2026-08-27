@@ -10463,6 +10463,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("keeps the Crabbox gate publisher on protected main with minimal permissions", () => {
     const workflow = parse(readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"));
+    const publisher = readFileSync("scripts/pr-crabbox-gate-publisher.mjs", "utf8");
     const job = workflow.jobs.publish;
     expect(workflow.permissions).toEqual({});
     expect(workflow.on).toHaveProperty("workflow_dispatch");
@@ -10504,5 +10505,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         with: { "app-id": "2971289", "permission-members": "read" },
       },
     ]);
+    expect(publisher).toContain('const CHECK_NAME = "openclaw/crabbox-gate"');
+    expect(publisher).not.toContain('const CHECK_NAME = "openclaw/ci-gate"');
   });
 });

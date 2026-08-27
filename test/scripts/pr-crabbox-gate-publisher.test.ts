@@ -313,7 +313,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
             conclusion: "success",
             head_sha: headSha,
             id: 88,
-            name: "openclaw/ci-gate",
+            name: "openclaw/crabbox-gate",
           };
         }
         throw new Error(`unexpected GitHub call: ${method} ${path}`);
@@ -371,7 +371,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
       body: {
         conclusion: "success",
         head_sha: headSha,
-        name: "openclaw/ci-gate",
+        name: "openclaw/crabbox-gate",
         status: "completed",
       },
       method: "POST",
@@ -460,7 +460,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
             conclusion: "success",
             head_sha: headSha,
             id: "not-a-check-id",
-            name: "openclaw/ci-gate",
+            name: "openclaw/crabbox-gate",
           };
         }
         throw new Error(`unexpected GitHub call: ${method} ${path}`);

@@ -821,11 +821,20 @@ the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates the authenticated immutable broker
 run, ordered complete events, canonical command and bootstrap upload hash, and
-publishes `openclaw/ci-gate` only on the exact proven SHA. Retained broker logs
-are validated when non-empty but are optional because released Crabbox v0.46
-can report zero retained log bytes after a successful run. The local
-`.local/gates.env` provider/run/lease/URL fields are recovery metadata, not
-publication authority.
+publishes the distinct `openclaw/crabbox-gate` only on the exact proven SHA.
+Retained broker logs are validated when non-empty but are optional because
+released Crabbox v0.46 can report zero retained log bytes after a successful
+run. The local `.local/gates.env` provider/run/lease/URL fields are recovery
+metadata, not publication authority.
+
+The fallback never replaces or republishes `openclaw/ci-gate`. Native merge
+verification permits the server ruleset bypass only when the Crabbox check is
+completed successfully by GitHub Actions on the prepared SHA, the authenticated
+actor is still an active organization admin, and the sole unsatisfied required
+check is the normal CI gate with a recognized hosted-runner infrastructure
+failure. Missing or mismatched checks, ordinary test failures, unknown runner
+backends, pending contexts, and additional required-check failures remain
+blocking. The pinned squash merge still uses the exact prepared head.
 
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id

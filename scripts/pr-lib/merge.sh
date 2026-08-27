@@ -33,6 +33,9 @@ auto_merge_unavailable_error() {
     "$log_file"
 }
 
+# shellcheck source=scripts/pr-lib/crabbox-merge-bypass.sh
+source "$script_parent_dir/pr-lib/crabbox-merge-bypass.sh"
+
 mainline_drift_requires_sync() {
   local mainline_base="$1"
   local prepared_head_sha="$2"
@@ -99,6 +102,7 @@ mainline_drift_requires_sync() {
 
 merge_verify() {
   local pr="$1"
+  MERGE_USE_CRABBOX_ADMIN_BYPASS=false
   enter_worktree "$pr" false
 
   require_artifact .local/prep.env
@@ -178,18 +182,23 @@ merge_verify() {
   printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"'
 
   local failed_required
-  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="fail")] | length')
+  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="fail" or .bucket=="skipping")] | length')
   local pending_required
   pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length')
-
-  if [ "$failed_required" -gt 0 ]; then
-    echo "Required checks are failing."
-    exit 1
-  fi
 
   if [ "$pending_required" -gt 0 ]; then
     echo "Required checks are still pending."
     exit 1
+  fi
+
+  if [ "$failed_required" -gt 0 ]; then
+    echo "Required checks are failing; checking the bounded Crabbox infrastructure fallback."
+    if ! verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA"; then
+      echo "Crabbox merge bypass evidence is not sufficient." >&2
+      echo "Required checks are failing."
+      exit 1
+    fi
+    MERGE_USE_CRABBOX_ADMIN_BYPASS=true
   fi
 
   git fetch origin main
@@ -312,6 +321,15 @@ merge_run() {
       ;;
   esac
 
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ] && [ "$merge_method" != "squash" ]; then
+    echo "Crabbox infrastructure bypass requires the pinned squash merge method."
+    exit 2
+  fi
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ] && [ "$auto_merge_requested" = "true" ]; then
+    echo "Crabbox infrastructure bypass uses an immediate pinned admin squash merge; ignoring auto-merge."
+    auto_merge_requested=false
+  fi
+
   if [ "$auto_merge_requested" = "true" ] && [ "$merge_method" != "squash" ]; then
     echo "Auto-merge requires squash; unset OPENCLAW_PR_MERGE_METHOD or set it to squash."
     exit 2
@@ -426,13 +444,30 @@ merge_run() {
   fi
 
   if [ "$merge_submitted" != "true" ]; then
-    if ! gh_plain pr merge "$pr" \
-      "$merge_flag" \
-      --match-head-commit "$PREP_HEAD_SHA" \
-      >.local/merge-output.log 2>&1
-    then
-      print_relevant_log_excerpt .local/merge-output.log
-      exit 1
+    if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
+      if ! verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA"; then
+        echo "Crabbox merge bypass evidence is not sufficient." >&2
+        exit 1
+      fi
+      merge_label="admin squash with trusted Crabbox infrastructure proof"
+      if ! gh_plain pr merge "$pr" \
+        --admin \
+        "$merge_flag" \
+        --match-head-commit "$PREP_HEAD_SHA" \
+        >.local/merge-output.log 2>&1
+      then
+        print_relevant_log_excerpt .local/merge-output.log
+        exit 1
+      fi
+    else
+      if ! gh_plain pr merge "$pr" \
+        "$merge_flag" \
+        --match-head-commit "$PREP_HEAD_SHA" \
+        >.local/merge-output.log 2>&1
+      then
+        print_relevant_log_excerpt .local/merge-output.log
+        exit 1
+      fi
     fi
   fi
 
@@ -477,6 +512,17 @@ merge_run() {
     "$prep_sha_url" \
     "$landed_sha" \
     "$landed_sha_url"
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
+    local crabbox_check_url
+    local ci_gate_url
+    crabbox_check_url=$(jq -r .crabboxCheckUrl .local/merge-crabbox-bypass.json)
+    ci_gate_url=$(jq -r .ciGateUrl .local/merge-crabbox-bypass.json)
+    printf -v comment_body \
+      '%s\n- Alternate gate: [openclaw/crabbox-gate](%s)\n- Hosted CI infrastructure failure: [openclaw/ci-gate](%s)' \
+      "$comment_body" \
+      "$crabbox_check_url" \
+      "$ci_gate_url"
+  fi
   local comment_url=""
   local comment_err_file
   comment_err_file=$(mktemp)
