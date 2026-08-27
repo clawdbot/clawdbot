@@ -1261,8 +1261,10 @@ function shouldUseScopedOAuthCredential(params: {
 }
 
 function hasMatchingOAuthIdentity(persisted: OAuthCredential, supplied: OAuthCredential): boolean {
-  const persistedAccountId = persisted.accountId?.trim();
-  const suppliedAccountId = supplied.accountId?.trim();
+  // Claim-only workspaces must stay distinct even when their emails match,
+  // or a scoped refresh can overwrite a replacement persisted account.
+  const persistedAccountId = resolveOpenAICodexAuthIdentity(persisted).accountId?.trim();
+  const suppliedAccountId = resolveOpenAICodexAuthIdentity(supplied).accountId?.trim();
   if (persistedAccountId && suppliedAccountId) {
     return persistedAccountId === suppliedAccountId;
   }
