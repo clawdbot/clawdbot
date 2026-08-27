@@ -239,8 +239,10 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     await modal.updateComplete;
     const webAwesomeDialog = modal.shadowRoot?.querySelector<WaDialog>("wa-dialog");
     await webAwesomeDialog?.updateComplete;
+    const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
+    expect(dialog).toBeInstanceOf(HTMLDialogElement);
     const animationStarted = new Promise<Animation>((resolve) => {
-      webAwesomeDialog?.shadowRoot?.addEventListener("animationstart", (event) => {
+      dialog?.addEventListener("animationstart", (event) => {
         if (event.animationName !== "openclaw-drawer-in") {
           return;
         }
@@ -252,8 +254,6 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     });
     modal.show();
     const animation = await animationStarted;
-    const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
-    expect(dialog).toBeInstanceOf(HTMLDialogElement);
 
     expect(animation.effect).toBeInstanceOf(KeyframeEffect);
     const keyframes = (animation.effect as KeyframeEffect | null)?.getKeyframes();
