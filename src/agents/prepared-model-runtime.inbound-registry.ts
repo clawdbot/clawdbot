@@ -1,4 +1,6 @@
+import { isMainThread } from "node:worker_threads";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   listRuntimePluginIdsFromRegistry,
   registryMatchesManifestPluginIds,
@@ -11,8 +13,40 @@ import {
   getActivePluginRegistryWorkspaceDir,
   getActivePluginRuntimeSubagentMode,
 } from "../plugins/runtime.js";
+import {
+  logModelCatalogPluginScope,
+  resolveModelCatalogPluginScope,
+} from "./prepared-model-catalog-plugin-scope.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
+
+const workerScopeLog = createSubsystemLogger("agents/prepared-model-runtime.worker-scope");
+
+/**
+ * Scope an off-main-thread registry load to model-contributing plugins (openclaw-crb2).
+ *
+ * Returns `{}` on the main thread so the gateway keeps its existing behaviour exactly, and
+ * `{}` again if anything about resolving the scope throws — a scope bug must not become a
+ * catalog outage. Both fallbacks restore "load everything", which is slow but correct.
+ */
+function resolveWorkerModelCatalogBasePluginIds(
+  metadataSnapshot: PluginMetadataSnapshot,
+): { basePluginIds: string[] } | Record<string, never> {
+  if (isMainThread) {
+    return {};
+  }
+  try {
+    const scope = resolveModelCatalogPluginScope(metadataSnapshot);
+    logModelCatalogPluginScope(scope);
+    return { basePluginIds: scope.pluginIds };
+  } catch (error) {
+    workerScopeLog.warn(
+      `failed to resolve the model-catalog plugin scope; falling back to loading every plugin ` +
+        `(openclaw-crb2): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return {};
+  }
+}
 
 export type PreparedInboundRegistryLoader = (
   input: PreparedModelRuntimeInput,
@@ -116,7 +150,17 @@ export function prepareWorkspacePluginRegistries(
             ? { basePluginIds: [] }
             : inboundPluginRegistry
               ? { basePluginIds: listRuntimePluginIdsFromRegistry(inboundPluginRegistry) }
-              : {}),
+              : // openclaw-crb2. This bare fallthrough is the defect: with no request scope
+                // and no inbound registry, resolveAgentRuntimePluginRegistryLoad falls back
+                // to metadataSnapshot.pluginIds — EVERY installed plugin. On the gateway's
+                // main thread that is merely slow. Off the main thread it is dangerous: the
+                // prepared-model-catalog worker spent 44.6s importing 55 plugins with real
+                // side effects, and terminating it mid-import aborts the whole process.
+                //
+                // Gated on !isMainThread rather than on catalogMode deliberately — that is
+                // the exact condition under which the crash occurs, and it means the
+                // gateway's own main-thread behaviour is bit-for-bit unchanged.
+                resolveWorkerModelCatalogBasePluginIds(metadataSnapshot)),
           config: input.config,
           env: input.env ?? process.env,
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
