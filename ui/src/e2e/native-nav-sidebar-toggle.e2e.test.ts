@@ -680,6 +680,16 @@ suite.define(() => {
     await expect.poll(() => attentionDialog.count()).toBe(0);
     await expect.poll(() => dialog.isVisible()).toBe(true);
 
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("openclaw:debug-overlay-request"));
+    });
+    const debugOverlay = page.locator(".debug-overlay");
+    await debugOverlay.waitFor();
+    await expect.poll(() => dialog.isVisible()).toBe(false);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => debugOverlay.count()).toBe(0);
+
+    await trigger.click();
     await page.mouse.click(899, 450);
     await expect.poll(() => dialog.isVisible()).toBe(false);
     await expect

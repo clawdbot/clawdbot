@@ -12,6 +12,21 @@ import type { UpdateProgress } from "./update-confirmation.ts";
 const NAV_DRAWER_FOCUSABLE_SELECTOR =
   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
+type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
+type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
+
+export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
+  const dismissedPanel = [
+    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention"),
+  ]
+    .map((attention) => attention.dismissPanel())
+    .some((dismissed) => dismissed);
+  const dismissedMenu = host
+    .querySelector<AppSidebarElement>("openclaw-app-sidebar")
+    ?.dismissTransientMenus();
+  return dismissedMenu === true || dismissedPanel;
+}
+
 export function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
   const drawer = host.querySelector<HTMLElement>(".shell-nav");
   if (!drawer) {

@@ -52,6 +52,7 @@ import {
 } from "./native-web-chrome.ts";
 import { NavDrawerSwipeLoader } from "./nav-drawer-swipe-loader.ts";
 import {
+  dismissNavigationTransientSurfaces,
   handleNavDrawerKeydown,
   moveToastToNavDrawer,
   restoreToastFromNavDrawer,
@@ -59,14 +60,6 @@ import {
 } from "./navigation-surface.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
-
-type AppSidebarElement = HTMLElement & {
-  dismissTransientMenus: () => boolean;
-};
-
-type SidebarAttentionElement = HTMLElement & {
-  dismissPanel: () => boolean;
-};
 
 type DebugOverlayElement = HTMLElement & {
   toggle: () => void;
@@ -277,8 +270,7 @@ export class ShellChromeOwner {
   readonly handleNativeOpenSearch = (): void => this.openPalette();
 
   readonly handleNativeToggleSearch = (event: Event): void => {
-    // Native menu dispatch falls back to open-only search unless the toggle acknowledges it.
-    event.preventDefault();
+    event.preventDefault(); // Acknowledges toggle so native does not fall back to open-only search.
     this.togglePalette();
   };
 
@@ -385,13 +377,7 @@ export class ShellChromeOwner {
     }
   };
 
-  dismissSidebarTransientMenus(): boolean {
-    const sidebar = this.host.querySelector<AppSidebarElement>("openclaw-app-sidebar");
-    const dismissedPanel = sidebar
-      ?.querySelector<SidebarAttentionElement>("openclaw-sidebar-attention")
-      ?.dismissPanel();
-    return Boolean(sidebar?.dismissTransientMenus() || dismissedPanel);
-  }
+  dismissSidebarTransientMenus = (): boolean => dismissNavigationTransientSurfaces(this.host);
 
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
     const host = this.host;
@@ -405,6 +391,14 @@ export class ShellChromeOwner {
       ) {
         event.preventDefault();
         host.closeNavDrawer({ restoreFocus: true });
+      } else if (
+        !event.defaultPrevented &&
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) &&
+        this.isSettingsTakeover() &&
+        !this.shouldIgnoreSettingsEscape(event)
+      ) {
+        event.preventDefault();
+        host.exitSettings();
       }
       return;
     }
@@ -455,6 +449,9 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
+      if (event.eventPhase === Event.CAPTURING_PHASE) {
+        return;
+      }
       if (this.shouldIgnoreSettingsEscape(event)) {
         return;
       }
@@ -475,6 +472,9 @@ export class ShellChromeOwner {
 
   private readonly handleDebugOverlayRequest = (event: Event): void => {
     const host = this.host;
+    if (host.navDrawerOpen && isMobileNavLayout()) {
+      host.closeNavDrawer({ restoreFocus: false });
+    }
     const descriptor = lazyShellEvent(DEBUG_OVERLAY_REQUEST_EVENT, event);
     if (isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)) {
       host.querySelector<DebugOverlayElement>(DEBUG_OVERLAY_ELEMENT.tagName)?.toggle();
@@ -531,13 +531,10 @@ export class ShellChromeOwner {
     this.requestLazyElement(host.commandPaletteElement, descriptor, replay);
   };
 
-  readonly openPalette = (): void => {
+  readonly openPalette = (): void =>
     this.handleCommandPaletteOpen(new CustomEvent(COMMAND_PALETTE_OPEN_EVENT), this.openPalette);
-  };
 
-  readonly refreshControlUi = (): void => {
-    globalThis.location.reload();
-  };
+  readonly refreshControlUi = (): void => globalThis.location.reload();
 
   readonly handleShellNavDrawerToggle = (event: Event): void => {
     const trigger = (event as CustomEvent<ShellNavDrawerToggleDetail>).detail?.trigger;
@@ -553,9 +550,8 @@ export class ShellChromeOwner {
     }
   };
 
-  readonly openApprovals = (): void => {
-    window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
-  };
+  readonly openApprovals = (): void =>
+    void window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
 
   private readonly handleApprovalsOpen = (event: Event): void => {
     const host = this.host;
@@ -770,9 +766,8 @@ export class ShellChromeOwner {
         (host.context?.navigation.snapshot.navCollapsed ?? false))
     );
   }
-
   private isSettingsTakeover(): boolean {
     const routeId = this.host.routeState.routeId;
-    return routeId !== undefined && isSettingsNavigationRoute(routeId);
+    return routeId ? isSettingsNavigationRoute(routeId) : false;
   }
 }
