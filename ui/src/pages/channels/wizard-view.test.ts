@@ -193,7 +193,7 @@ describe("renderChannelWizard", () => {
 
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
     await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe("Copied!"));
-    expect(copy?.getAttribute("aria-label")).toBe("Copied!");
+    expect(copy?.getAttribute("aria-label")).toBeNull();
     expect(copiedText).toBe("openclaw channels add");
     expect(document.querySelector("textarea")).toBeNull();
   });
@@ -246,6 +246,7 @@ describe("renderChannelWizard", () => {
         await i18n.setLocale("de");
         render(renderChannelWizard(props), container);
         expect(button?.textContent?.trim()).toBe("Kopieren");
+        expect(button?.getAttribute("aria-label")).toBeNull();
       }
       if (copied) {
         write.resolve();
@@ -261,7 +262,7 @@ describe("renderChannelWizard", () => {
             ? "Copied!"
             : "Copy failed";
       await vi.waitFor(() => expect(button?.textContent?.trim()).toBe(feedback));
-      expect(button?.getAttribute("aria-label")).toBe(feedback);
+      expect(button?.getAttribute("aria-label")).toBeNull();
       expect(writeText).toHaveBeenCalledWith("openclaw channels add");
       expect(execCommand).toHaveBeenCalledTimes(copied ? 0 : 1);
 
@@ -269,6 +270,7 @@ describe("renderChannelWizard", () => {
         await i18n.setLocale("de");
         expect(() => render(renderChannelWizard(props), container)).not.toThrow();
         expect(button?.textContent?.trim()).toBe("Kopieren");
+        expect(button?.getAttribute("aria-label")).toBeNull();
       }
       const reset = schedule.mock.calls.find(
         ([, delay]) => delay === (copied ? 1_500 : 2_000),
@@ -278,7 +280,12 @@ describe("renderChannelWizard", () => {
       }
       reset();
       expect(button?.textContent?.trim()).toBe("Kopieren");
-      expect(button?.getAttribute("aria-label")).toBe("Kopieren");
+      expect(button?.getAttribute("aria-label")).toBeNull();
+
+      await i18n.setLocale("en");
+      render(renderChannelWizard(props), container);
+      expect(button?.textContent?.trim()).toBe("Copy");
+      expect(button?.getAttribute("aria-label")).toBeNull();
     },
   );
 });

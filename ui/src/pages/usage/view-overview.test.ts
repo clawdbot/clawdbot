@@ -630,7 +630,7 @@ describe("renderSessionsCard", () => {
     copyButton?.click();
     await vi.waitFor(() => {
       expect(copyButton?.textContent?.trim()).toBe(feedback);
-      expect(copyButton?.getAttribute("aria-label")).toBe(feedback);
+      expect(copyButton?.getAttribute("aria-label")).toBeNull();
     });
     expect(writeText).toHaveBeenCalledWith("Selected thread");
     expect(onSelectSession).toHaveBeenCalledOnce();

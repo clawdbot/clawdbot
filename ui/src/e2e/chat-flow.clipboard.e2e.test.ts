@@ -167,6 +167,10 @@ suite.define(() => {
         if (!button) {
           throw new Error(`Missing ${surface} copy button`);
         }
+        const hasAccessibleName = (name: string) =>
+          page
+            .getByRole(surface === "selection" ? "menuitem" : "button", { name, exact: true })
+            .evaluate((element, original) => element === original, button);
         await button.click();
         await expect
           .poll(async () => (await readClipboardFailureProof(page)).legacyAttempts)
@@ -178,7 +182,7 @@ suite.define(() => {
           });
         }
         expect(await button.evaluate((element) => element.isConnected)).toBe(true);
-        expect(await button.getAttribute("aria-label")).toBe("Copy failed");
+        expect(await hasAccessibleName("Copy failed")).toBe(true);
         const copiedValue = (await readClipboardFailureProof(page)).value;
         expect(copiedValue).toBe(
           surface === "tool-diff" ? "-before\n+after" : surface === "selection" ? text : "main",
@@ -196,11 +200,11 @@ suite.define(() => {
         if (surface === "selection") {
           await expect.poll(() => page.locator(".chat-reply-context-menu").count()).toBe(0);
         } else {
-          await expect.poll(() => button.getAttribute("aria-label")).toBe("Copied!");
+          await expect.poll(() => hasAccessibleName("Copied!")).toBe(true);
           expect(await button.isDisabled()).toBe(false);
           await expect
-            .poll(() => button.getAttribute("aria-label"))
-            .toBe(surface === "agent-id" ? "Copy ID" : "Copy");
+            .poll(() => hasAccessibleName(surface === "agent-id" ? "Copy ID" : "Copy"))
+            .toBe(true);
         }
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       } finally {

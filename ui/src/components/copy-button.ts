@@ -18,17 +18,18 @@ function readButtonLabel(button: HTMLButtonElement) {
 }
 
 function setButtonLabel(button: HTMLButtonElement, label: string, showFeedback = false) {
-  button.setAttribute("aria-label", label);
   // Feedback sits beside fixed-size icons; actionable tooltips dismiss on click.
   const feedback = button.parentElement?.querySelector<HTMLElement>("[data-copy-feedback]");
   if (feedback) {
     feedback.hidden = !showFeedback;
     feedback.textContent = label;
   }
-  // Preserve Lit's marker nodes so a later locale change can rerender this label.
+  // Keep Lit markers; a separate aria-label goes stale when visible text rerenders.
   const visibleLabel = button.querySelector("[data-copy-label]")?.lastChild;
   if (visibleLabel?.nodeType === Node.TEXT_NODE) {
     visibleLabel.nodeValue = label;
+  } else {
+    button.setAttribute("aria-label", label);
   }
 }
 
