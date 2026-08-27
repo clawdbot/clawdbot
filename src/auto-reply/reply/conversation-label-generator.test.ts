@@ -32,14 +32,14 @@ function resolveSelection({ modelRef, useUtilityModel, agentDir }: Record<string
   };
 }
 
-describe("generateConversationLabel", () => {
-  beforeEach(() => {
-    runIsolatedCompletion.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
-    runIsolatedCompletion.mockResolvedValue({ text: "Topic label" });
-  });
+beforeEach(() => {
+  runIsolatedCompletion.mockReset();
+  resolveSimpleCompletionSelectionForAgent.mockReset();
+  resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
+  runIsolatedCompletion.mockResolvedValue({ text: "Topic label" });
+});
 
+describe("generateConversationLabel", () => {
   it.each([
     ["generateConversationLabel", generateConversationLabel],
     ["generateConversationLabelWithFallback", generateConversationLabelWithFallback],
@@ -77,6 +77,7 @@ describe("generateConversationLabel", () => {
           "Do not describe your own capabilities or limitations.",
         prompt: userMessage,
         timeoutMs: 15_000,
+        outputTextPolicy: "strict-visible",
         streamParams: { maxTokens: 4_096 },
       });
     },
@@ -138,17 +139,21 @@ describe("generateConversationLabel", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledOnce();
   });
 
-  it("bounds labels without splitting surrogate pairs", async () => {
-    runIsolatedCompletion.mockResolvedValue({ text: `${"a".repeat(11)}😀tail` });
+  it.each([
+    ["bounds without splitting surrogate pairs", `${"a".repeat(11)}😀tail`, 12, "a".repeat(11)],
+    ["hides trailing reasoning", "Invoice follow-up<think>private", 128, "Invoice follow-up"],
+    ["preserves literal code tags", "Debug `<think>` parsing", 128, "Debug `<think>` parsing"],
+  ])("%s", async (_name, text, maxLength, expected) => {
+    runIsolatedCompletion.mockResolvedValue({ text });
 
     await expect(
       generateConversationLabel({
         userMessage: "Message",
         prompt: "Prompt",
         cfg: {},
-        maxLength: 12,
+        maxLength,
       }),
-    ).resolves.toBe("a".repeat(11));
+    ).resolves.toBe(expected);
   });
 });
 
@@ -163,15 +168,8 @@ describe("generateConversationLabelWithFallback", () => {
     preferredProfile: "work",
   };
 
-  beforeEach(() => {
-    runIsolatedCompletion.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
-    runIsolatedCompletion.mockResolvedValue({ text: "Utility title" });
-  });
-
   it("uses the utility candidate once", async () => {
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBe("Utility title");
+    await expect(generateConversationLabelWithFallback(params)).resolves.toBe("Topic label");
     expect(runIsolatedCompletion).toHaveBeenCalledOnce();
     expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
       provider: "openai",
@@ -216,9 +214,9 @@ describe("generateConversationLabelWithFallback", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps an explicit runtime owner across utility and primary attempts", async () => {
+  it("keeps the runtime owner when utility reasoning needs a primary fallback", async () => {
     runIsolatedCompletion
-      .mockRejectedValueOnce(new Error("utility unavailable"))
+      .mockResolvedValueOnce({ text: "<think>private" })
       .mockResolvedValueOnce({ text: "Primary title" });
 
     await expect(

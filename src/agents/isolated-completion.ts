@@ -68,10 +68,8 @@ type RunIsolatedCompletionParams = {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   thinkLevel?: ThinkLevel;
-  streamParams?: {
-    maxTokens?: number;
-    temperature?: number;
-  };
+  outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
+  streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
 };
 
 export type IsolatedCompletionResult = {
@@ -126,7 +124,10 @@ function selectIsolatedHarnessAuthPlan(attempt: PreparedAgentRuntimeAuthAttempt)
   };
 }
 
-function requireIsolatedAssistantText(assistant: AssistantMessage): string {
+function requireIsolatedAssistantText(
+  assistant: AssistantMessage,
+  options: { allowEmpty: boolean },
+): string {
   if (assistant.stopReason !== "stop" && assistant.stopReason !== "length") {
     throw new IsolatedCompletionError(
       "output-rejected",
@@ -148,7 +149,7 @@ function requireIsolatedAssistantText(assistant: AssistantMessage): string {
     );
   }
   const text = textParts.join("").trim();
-  if (!text) {
+  if (!text && !options.allowEmpty) {
     throw new IsolatedCompletionError(
       "output-rejected",
       "Isolated completion returned empty output.",
@@ -523,6 +524,7 @@ export async function runIsolatedCompletion(
         timeoutMs: request.timeoutMs,
         abortSignal: request.abortSignal,
         thinkLevel: request.thinkLevel,
+        outputTextPolicy: request.outputTextPolicy,
       };
       let result: AgentHarnessIsolatedCompletionResult | undefined;
       if (harness.runIsolatedCompletionV2) {
@@ -686,7 +688,9 @@ export async function runIsolatedCompletion(
         throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion failed.");
       }
       return {
-        text: requireIsolatedAssistantText(result.assistant),
+        text: requireIsolatedAssistantText(result.assistant, {
+          allowEmpty: request.outputTextPolicy === "strict-visible",
+        }),
         provider: result.assistant.provider,
         model: result.assistant.model,
         owner: { kind: "harness", id: harness.id },
