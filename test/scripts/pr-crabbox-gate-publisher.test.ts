@@ -185,6 +185,7 @@ describe("Crabbox immutable broker proof", () => {
       brokerEvents({ 4: { exitCode: 1, type: "command.failed" } }),
       retainedLog(),
     ],
+    ["malformed event type", {}, brokerEvents({ 3: { type: 7 } }), retainedLog()],
     ["nonzero command result", {}, brokerEvents({ 4: { exitCode: 1 } }), retainedLog()],
     ["retained marker", {}, brokerEvents(), retainedLog().replace("check_changed:ok", "missing")],
   ])("rejects mismatched %s", (_label, runOverrides, events, log) => {
@@ -350,6 +351,64 @@ describe("Crabbox gate publisher mutation boundary", () => {
       method: "POST",
       path: "/repos/openclaw/openclaw/check-runs",
     });
+  });
+
+  it("rejects a malformed published check ID", async () => {
+    const github = {
+      request: vi.fn(async (method: string, path: string) => {
+        if (path === "/repos/openclaw/openclaw/pulls/130481") {
+          return pullRequest();
+        }
+        if (path === "/repos/openclaw/openclaw/git/ref/heads/main") {
+          return { object: { sha: workflowSha }, ref: "refs/heads/main" };
+        }
+        if (path === "/users/maintainer") {
+          return { id: 42, login: "maintainer" };
+        }
+        if (method === "POST" && path === "/repos/openclaw/openclaw/check-runs") {
+          return {
+            app: { id: 15368 },
+            conclusion: "success",
+            head_sha: headSha,
+            id: "not-a-check-id",
+            name: "openclaw/ci-gate",
+          };
+        }
+        throw new Error(`unexpected GitHub call: ${method} ${path}`);
+      }),
+    };
+    const organization = {
+      request: vi.fn(async () => ({
+        role: "admin",
+        state: "active",
+        user: { login: "maintainer" },
+      })),
+    };
+    const broker = {
+      request: vi.fn(async (path: string, options?: { text?: boolean }) => {
+        if (path.endsWith("/logs") && options?.text) {
+          return retainedLog();
+        }
+        if (path.endsWith("/events?limit=500")) {
+          return { events: brokerEvents() };
+        }
+        if (path === `/v1/runs/${runId}`) {
+          return { run: brokerRun() };
+        }
+        throw new Error(`unexpected broker call: ${path}`);
+      }),
+    };
+
+    await expect(
+      runPublisher({
+        broker,
+        env: env(),
+        event: event(),
+        github,
+        now: Date.parse("2026-08-27T02:00:00Z"),
+        organization,
+      }),
+    ).rejects.toThrow(/published check ID must be a positive integer/u);
   });
 });
 

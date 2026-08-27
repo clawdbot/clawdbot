@@ -48,8 +48,8 @@ function record(value, label) {
 
 function assertExactKeys(value, expected, label) {
   const input = record(value, label);
-  const actual = Object.keys(input).toSorted();
-  const wanted = [...expected].toSorted();
+  const actual = Object.keys(input).toSorted((a, b) => a.localeCompare(b));
+  const wanted = [...expected].toSorted((a, b) => a.localeCompare(b));
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
     throw new Error(`${label} keys must be exactly: ${wanted.join(", ")}`);
   }
@@ -219,20 +219,21 @@ export function validateBrokerProof({ bootstrapSha256, context, events, log, now
   const eventTypes = [];
   for (const [index, value] of events.entries()) {
     const event = record(value, `Crabbox event ${index + 1}`);
+    const eventType = requiredString(event.type, `Crabbox event ${index + 1} type`);
     if (event.runID !== context.runId || event.seq !== index + 1) {
       throw new Error("Crabbox event sequence or run identity does not match");
     }
-    eventTypes.push(event.type);
-    if (event.type === "output.truncated") {
+    eventTypes.push(eventType);
+    if (eventType === "output.truncated") {
       throw new Error("Crabbox output event stream was truncated");
     }
-    if (event.type === "run.failed" || String(event.type).endsWith(".failed")) {
-      throw new Error(`Crabbox proof contains failed event ${event.type}`);
+    if (eventType === "run.failed" || eventType.endsWith(".failed")) {
+      throw new Error(`Crabbox proof contains failed event ${eventType}`);
     }
-    if (event.type === "script.uploaded" && event.message !== expectedUpload) {
+    if (eventType === "script.uploaded" && event.message !== expectedUpload) {
       throw new Error("Crabbox uploaded bootstrap hash does not match trusted main");
     }
-    if (event.type === "lease.created") {
+    if (eventType === "lease.created") {
       if (
         event.leaseID !== context.leaseId ||
         event.provider !== "aws" ||
@@ -241,7 +242,7 @@ export function validateBrokerProof({ bootstrapSha256, context, events, log, now
         throw new Error("Crabbox lease event does not match AWS/Linux proof");
       }
     }
-    if (event.type === "command.finished" && event.exitCode !== 0) {
+    if (eventType === "command.finished" && event.exitCode !== 0) {
       throw new Error("Crabbox command event did not finish successfully");
     }
   }
@@ -362,7 +363,7 @@ export async function runPublisher({ broker, event, github, organization, env, n
       "published check run identity or GitHub Actions app integration does not match",
     );
   }
-  return { checkId: check.id, context };
+  return { checkId: requiredPositiveInteger(check.id, "published check ID"), context };
 }
 
 export function createJsonApi({
