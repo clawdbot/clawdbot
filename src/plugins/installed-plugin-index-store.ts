@@ -237,6 +237,7 @@ function readInstalledPluginIndexRow(
 ): PersistedInstalledPluginIndexValue | undefined {
   const row = database
     .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+    // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
     .get(INSTALLED_PLUGIN_INDEX_STATE_KEY) as { value_json: string } | undefined;
   if (!row) {
     return undefined;
@@ -245,10 +246,12 @@ function readInstalledPluginIndexRow(
   if (
     !value ||
     typeof value !== "object" ||
+    // SAFETY: shape-checked field probe; the full value is validated below.
     typeof (value as PersistedInstalledPluginIndexValue).revision !== "number"
   ) {
     return undefined;
   }
+  // SAFETY: revision checked above; index stays unknown until parseInstalledPluginIndex.
   return value as PersistedInstalledPluginIndexValue;
 }
 
@@ -273,6 +276,7 @@ function writePersistedInstalledPluginIndexRow(
     generatedAtMs: index.generatedAtMs,
     ...(index.workspaceDir !== undefined ? { workspaceDir: index.workspaceDir } : {}),
     ...(index.refreshReason ? { refreshReason: index.refreshReason } : {}),
+    // SAFETY: canonical serializer output re-parsed for byte-order-stable embedding.
     installRecords: JSON.parse(serializePluginInstallRecordMap(index.installRecords)) as unknown,
     plugins: index.plugins.map((plugin) => {
       const installOwner = resolveInstalledPluginIndexInstallOwner(plugin);
@@ -334,6 +338,7 @@ function writePersistedInstalledPluginIndexToSqlite(
   return runOpenClawStateWriteTransaction(({ db }) => {
     const previousRow = readInstalledPluginIndexRow(db);
     if (previousRow) {
+      // SAFETY: field probe on the stored value; inspectPluginInstallRecordMap validates it.
       const previousInstallRecords = (previousRow.index as { installRecords?: unknown } | null)
         ?.installRecords;
       if (

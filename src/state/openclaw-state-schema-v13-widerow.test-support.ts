@@ -292,6 +292,29 @@ SELECT 'installed-plugin-index',
  WHERE state_key = 'plugins.installedIndex';
 DELETE FROM config_machine_state WHERE state_key = 'plugins.installedIndex';
 
+-- v12 carried the shared auth singleton tables; repopulate the 'shared' rows
+-- from the folded KV cells (value_json is the payload verbatim).
+CREATE TABLE IF NOT EXISTS auth_profile_stores (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  store_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+INSERT INTO auth_profile_stores (store_key, store_json, updated_at)
+SELECT 'shared', value_json, updated_at_ms
+  FROM config_machine_state
+ WHERE state_key = 'authProfiles.store';
+CREATE TABLE IF NOT EXISTS auth_profile_state (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  state_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+INSERT INTO auth_profile_state (store_key, state_json, updated_at)
+SELECT 'shared', value_json, updated_at_ms
+  FROM config_machine_state
+ WHERE state_key = 'authProfiles.state';
+DELETE FROM config_machine_state
+ WHERE state_key IN ('authProfiles.store', 'authProfiles.state');
+
 PRAGMA user_version = 12;
 UPDATE schema_meta SET schema_version = 12 WHERE meta_key = 'primary';
 COMMIT;

@@ -2208,6 +2208,24 @@ describe("openclaw state database", () => {
       insertLegacyHash.run("wk-setup", "AGENTS.md", "a".repeat(64));
       insertLegacyHash.run("wk-alias", "TOOLS.md", "b".repeat(64));
       insertLegacyHash.run("wk-orphan", "USER.md", "c".repeat(64));
+      const sharedStoreJson = JSON.stringify({
+        version: 1,
+        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "sk-shared" } },
+      });
+      const sharedStateJson = JSON.stringify({
+        version: 1,
+        order: { openai: ["openai:default"] },
+      });
+      const insertLegacyAuthStore = legacy.prepare(
+        "INSERT INTO auth_profile_stores (store_key, store_json, updated_at) VALUES (?, ?, ?)",
+      );
+      insertLegacyAuthStore.run("shared", sharedStoreJson, 91);
+      insertLegacyAuthStore.run("stray", '{"version":1,"profiles":{}}', 93);
+      legacy
+        .prepare(
+          "INSERT INTO auth_profile_state (store_key, state_json, updated_at) VALUES (?, ?, ?)",
+        )
+        .run("shared", sharedStateJson, 92);
       legacy.close();
 
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
@@ -2377,10 +2395,70 @@ describe("openclaw state database", () => {
           )
           .all(),
       ).toEqual([]);
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT value_json, updated_at_ms FROM config_machine_state
+              WHERE state_key = 'authProfiles.store'`,
+          )
+          .get(),
+      ).toEqual({ value_json: sharedStoreJson, updated_at_ms: 91 });
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT value_json, updated_at_ms FROM config_machine_state
+              WHERE state_key = 'authProfiles.state'`,
+          )
+          .get(),
+      ).toEqual({ value_json: sharedStateJson, updated_at_ms: 92 });
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT name FROM sqlite_master
+              WHERE type = 'table' AND name IN ('auth_profile_stores', 'auth_profile_state')`,
+          )
+          .all(),
+      ).toEqual([]);
       expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
     },
   );
+
+  it("keeps a pre-existing authProfiles.store KV value over the v13 auth import", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+    legacy
+      .prepare(
+        "INSERT INTO auth_profile_stores (store_key, store_json, updated_at) VALUES (?, ?, ?)",
+      )
+      .run("shared", '{"imported":true}', 10);
+    legacy
+      .prepare(
+        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+         VALUES ('authProfiles.store', ?, 20)`,
+      )
+      .run('{"kept":true}');
+    legacy.close();
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(13);
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+        )
+        .get(),
+    ).toEqual({ value_json: '{"kept":true}', updated_at_ms: 20 });
+    expect(
+      migrated.db
+        .prepare("SELECT name FROM sqlite_master WHERE name = 'auth_profile_stores'")
+        .all(),
+    ).toEqual([]);
+  });
 
   it.each(["runtime open", "doctor repair"] as const)(
     "retires v6 commitments through %s while preserving shared leases",
@@ -2618,7 +2696,7 @@ describe("openclaw state database", () => {
         "Folded singleton state tables into config_machine_state (v12)",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Consolidated shared state tables (v13)",
-        "Migrated shared state tables to SQLite STRICT typing (50)",
+        "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],
     });
@@ -2645,13 +2723,16 @@ describe("openclaw state database", () => {
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(migrated.db))).toEqual(
       normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()),
     );
+    // The fixture's auth_profile_stores row is keyed 'fixture-store', not the
+    // production 'shared' key, so the v13 fold drops the table without
+    // importing it into the KV.
     expect(
       migrated.db
         .prepare(
-          "SELECT store_key, store_json, updated_at FROM auth_profile_stores WHERE store_key = ?",
+          "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'",
         )
-        .get("fixture-store"),
-    ).toEqual({ store_key: "fixture-store", store_json: '{"fixture":true}', updated_at: 1000 });
+        .get(),
+    ).toBeUndefined();
     expect(
       migrated.db
         .prepare(
@@ -3235,18 +3316,22 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const legacy = new DatabaseSync(databasePath);
     legacy
       .prepare(
-        "INSERT INTO auth_profile_stores (store_key, store_json, updated_at) VALUES (?, ?, ?)",
+        `INSERT INTO workspace_path_aliases (
+           alias_key, alias_path, workspace_key, workspace_path, updated_at_ms
+         ) VALUES (?, ?, ?, ?, ?)`,
       )
-      .run("legacy-store", "{}", 20);
+      .run("legacy-alias", "/tmp/legacy-alias", "legacy-workspace", "/tmp/legacy-workspace", 20);
     legacy.exec(`
-      ALTER TABLE auth_profile_stores RENAME TO auth_profile_stores_strict;
-      CREATE TABLE auth_profile_stores (
-        store_key TEXT NOT NULL PRIMARY KEY,
-        store_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
+      ALTER TABLE workspace_path_aliases RENAME TO workspace_path_aliases_strict;
+      CREATE TABLE workspace_path_aliases (
+        alias_key TEXT NOT NULL PRIMARY KEY,
+        alias_path TEXT NOT NULL,
+        workspace_key TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL
       );
-      INSERT INTO auth_profile_stores SELECT * FROM auth_profile_stores_strict;
-      DROP TABLE auth_profile_stores_strict;
+      INSERT INTO workspace_path_aliases SELECT * FROM workspace_path_aliases_strict;
+      DROP TABLE workspace_path_aliases_strict;
       PRAGMA user_version = 2;
       UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
     `);
@@ -3269,13 +3354,15 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const migrated = openOpenClawStateDatabase(options);
     expect(
       migrated.db
-        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'auth_profile_stores'")
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'workspace_path_aliases'")
         .get(),
     ).toEqual({ strict: 1 });
-    expect(migrated.db.prepare("SELECT * FROM auth_profile_stores").get()).toEqual({
-      store_key: "legacy-store",
-      store_json: "{}",
-      updated_at: 20,
+    expect(migrated.db.prepare("SELECT * FROM workspace_path_aliases").get()).toEqual({
+      alias_key: "legacy-alias",
+      alias_path: "/tmp/legacy-alias",
+      workspace_key: "legacy-workspace",
+      workspace_path: "/tmp/legacy-workspace",
+      updated_at_ms: 20,
     });
   });
 
@@ -4064,13 +4151,15 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
-    drifted.exec("DROP TABLE auth_profile_stores;");
+    drifted.exec("DROP TABLE apns_registration_tombstones;");
     drifted.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table auth_profile_stores/iu);
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /missing table apns_registration_tombstones/iu,
+    );
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [],
-      warnings: [expect.stringContaining("missing table auth_profile_stores")],
+      warnings: [expect.stringContaining("missing table apns_registration_tombstones")],
     });
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
@@ -4078,7 +4167,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       expect(
         after
           .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'apns_registration_tombstones'",
           )
           .get(),
       ).toBeUndefined();
@@ -4103,18 +4192,18 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
       const { DatabaseSync } = requireNodeSqlite();
       const damaged = new DatabaseSync(databasePath);
-      damaged.exec("DROP TABLE auth_profile_stores;");
+      damaged.exec("DROP TABLE apns_registration_tombstones;");
       markStateDatabaseVersion(damaged, version);
       damaged.close();
 
       if (migrationPath === "runtime open") {
         expect(() => openOpenClawStateDatabase(options)).toThrow(
-          /missing table auth_profile_stores/iu,
+          /missing table apns_registration_tombstones/iu,
         );
       } else {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [],
-          warnings: [expect.stringContaining("missing table auth_profile_stores")],
+          warnings: [expect.stringContaining("missing table apns_registration_tombstones")],
         });
       }
 
@@ -4123,7 +4212,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         expect(
           after
             .prepare(
-              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'apns_registration_tombstones'",
             )
             .get(),
         ).toBeUndefined();
@@ -4216,17 +4305,16 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
     drifted.exec(`
-      DROP TABLE auth_profile_stores;
-      CREATE TABLE auth_profile_stores (
-        store_key TEXT COLLATE NOCASE NOT NULL PRIMARY KEY,
-        store_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
+      DROP TABLE apns_registration_tombstones;
+      CREATE TABLE apns_registration_tombstones (
+        node_id TEXT COLLATE NOCASE NOT NULL PRIMARY KEY,
+        deleted_at_ms INTEGER NOT NULL
       ) STRICT;
     `);
     drifted.close();
 
     expect(() => openOpenClawStateDatabase(options)).toThrow(
-      /column definitions differ for auth_profile_stores/iu,
+      /column definitions differ for apns_registration_tombstones/iu,
     );
   });
 
@@ -4520,7 +4608,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       expect(
         preserved
           .prepare(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'auth_profile_stores'",
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'apns_registration_tombstones'",
           )
           .get(),
       ).toBeUndefined();

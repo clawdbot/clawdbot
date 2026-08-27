@@ -43,18 +43,18 @@ function writeSharedAuthProfileStoreSqlite(home: string, store: unknown): void {
   const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS auth_profile_stores (
-        store_key TEXT NOT NULL PRIMARY KEY,
-        store_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
+      CREATE TABLE IF NOT EXISTS config_machine_state (
+        state_key TEXT NOT NULL PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL
       );
     `);
     db.prepare(
       `
-        INSERT INTO auth_profile_stores (store_key, store_json, updated_at)
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
         VALUES (?, ?, ?)
       `,
-    ).run("shared", JSON.stringify(store), Date.now());
+    ).run("authProfiles.store", JSON.stringify(store), Date.now());
   } finally {
     db.close();
   }

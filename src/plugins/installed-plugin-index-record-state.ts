@@ -31,6 +31,7 @@ export function inspectPersistedInstalledPluginIndexInstallRecordsSync(
         }
         const row = db
           .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+          // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
           .get("plugins.installedIndex") as { value_json: string } | undefined;
         if (!row) {
           return { status: "missing" };

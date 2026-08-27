@@ -25,19 +25,19 @@ function writeSharedDatabase(
   try {
     if (options.asView) {
       db.exec(`
-        CREATE VIEW auth_profile_stores AS
-          SELECT 'shared' AS store_key, '{}' AS store_json, 1 AS updated_at;
+        CREATE VIEW config_machine_state AS
+          SELECT 'authProfiles.store' AS state_key, '{}' AS value_json, 1 AS updated_at_ms;
       `);
     } else {
       db.exec(`
-        CREATE TABLE auth_profile_stores (
-          store_key TEXT NOT NULL PRIMARY KEY,
-          store_json TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
+        CREATE TABLE config_machine_state (
+          state_key TEXT NOT NULL PRIMARY KEY,
+          value_json TEXT NOT NULL,
+          updated_at_ms INTEGER NOT NULL
         ) STRICT;
       `);
-      db.prepare("INSERT INTO auth_profile_stores VALUES (?, ?, ?)").run(
-        "shared",
+      db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+        "authProfiles.store",
         options.storeJson ?? "{}",
         Date.now(),
       );
@@ -127,7 +127,7 @@ describe("auth profile store E2E assertions", () => {
     writeSharedDatabase(stateDir, { asView: true });
 
     expect(() => readSharedAuthProfileStoreText(stateDir)).toThrow(
-      "auth_profile_stores is view, not a table",
+      "config_machine_state is view, not a table",
     );
   });
 

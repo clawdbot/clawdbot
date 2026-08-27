@@ -14,17 +14,17 @@ export function readSharedAuthProfileStoreText(stateDir) {
     db = new DatabaseSync(dbPath, { readOnly: true });
     const schema = db
       .prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1")
-      .get("auth_profile_stores");
+      .get("config_machine_state");
     if (!schema) {
       return "";
     }
     if (schema.type !== "table") {
-      throw new Error(`auth_profile_stores is ${String(schema.type)}, not a table`);
+      throw new Error(`config_machine_state is ${String(schema.type)}, not a table`);
     }
     const row = db
-      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
-      .get("shared");
-    return typeof row?.store_json === "string" ? row.store_json : "";
+      .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+      .get("authProfiles.store");
+    return typeof row?.value_json === "string" ? row.value_json : "";
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`could not read the shared auth profile store: ${detail}`, {
