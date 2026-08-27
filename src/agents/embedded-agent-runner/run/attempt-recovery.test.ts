@@ -151,7 +151,7 @@ describe("recoverEmbeddedRunAttempt", () => {
 
   it.each<[string, TransportDropScenario]>([
     ["the exec batch is still running", { activeCount: 1 }],
-    ["a Code Mode run is parked", { activeCount: 1, codeModeSuspended: true }],
+    ["a Code Mode run is parked", { codeModeSuspended: true }],
     ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
     [
       "the failure is retryable but not a transport drop",
