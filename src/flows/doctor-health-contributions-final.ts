@@ -1,4 +1,5 @@
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
 import {
@@ -103,7 +104,10 @@ export function resolveFinalDoctorHealthContributions(params: {
         id: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
         description: "Declared channel package-state checker modules must load.",
         defaultEnabled: true,
-        async detect() {
+        async detect(ctx) {
+          if (shouldDeferConfiguredPluginInstallRepair(ctx.env ?? process.env)) {
+            return [];
+          }
           const { collectBundledChannelPackageStateLoadFailures } =
             await import("../channels/plugins/package-state-probes.js");
           return collectBundledChannelPackageStateLoadFailures().map((failure) => ({
