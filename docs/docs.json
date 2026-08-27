@@ -1992,6 +1992,7 @@
                   "reference/transcript-hygiene",
                   "reference/database-schemas",
                   "reference/memory-config",
+                  "reference/privacy-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
                   "date-time"
