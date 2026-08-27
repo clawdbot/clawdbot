@@ -190,6 +190,29 @@ async function startWatcher(
 }
 
 describe("IMAP watcher protocol boundary", () => {
+  it("dispatches no-evidence mail at an explicit unverified floor", async () => {
+    const { server, state, context, authenticator, dispatchHookAgentTurn } = await startWatcher({
+      account: {
+        senderAuth: { min: "unverified", trustedAuthservIds: [], acceptTrustedAuthservId: false },
+      },
+    });
+    await vi.waitFor(async () =>
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
+    );
+    authenticator.mockResolvedValue(createImapAuthResult("none"));
+    server.append(
+      "From: trusted@example.com\r\nSubject: Unproven\r\n\r\nNo authentication evidence",
+    );
+    await vi.waitFor(async () =>
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
+    );
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
+    expect(context.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("strength=unverified run=mail-run"),
+    );
+    expect(await state.skips.lookup("inbox:dmarc-none")).toBeUndefined();
+  });
+
   it.each(["rejected admission", "throwing admission", "transient authentication"] as const)(
     "retries %s without waiting for another email",
     async (failure) => {

@@ -87,11 +87,22 @@ The plugin checks the parsed `From` address against `allowedSenders` before any 
 
 | Evidence                                                                 | Recorded strength | Accepted by default                                                |
 | ------------------------------------------------------------------------ | ----------------- | ------------------------------------------------------------------ |
-| Client-side DKIM/DMARC verification returns `dmarc=pass`                 | `verified`        | Yes                                                                |
+| Local `mailauth` verification returns aligned `dmarc=pass`               | `verified`        | Yes                                                                |
 | A configured, trusted Authentication-Results server reports `dmarc=pass` | `asserted`        | No; requires `acceptTrustedAuthservId: true` and `min: "asserted"` |
 | SPF alone passes or an untrusted server asserts a result                 | `unverified`      | No; requires `min: "unverified"`                                   |
-| No usable authentication evidence                                        | `mutable`         | No; requires `min: "mutable"`                                      |
+| Unproven ownership, including no evidence or a DMARC `temperror` result  | `unverified`      | No; requires `min: "unverified"` or lower                          |
 | A matching sender-specific plus-address token                            | `mutable`         | Yes, only for the named allowlisted sender                         |
+
+The shared identifier-authentication ladder is `verified > asserted > unverified > mutable`.
+`mutable` denotes a changeable or shared alias and is never produced by the IMAP
+authentication mapper. The gate still records it for the separate token path and
+early rejections before authentication. `min: "mutable"` remains valid and accepts
+any classified strength; it does not bypass the sender allowlist or freshness checks.
+
+The default minimum remains `verified`; `asserted` and `verified` admission are
+unchanged. An explicit `min: "unverified"` now admits no-evidence mail and DMARC
+`temperror` results, which previously required `min: "mutable"`. Authenticator
+exceptions still cause retries unless an explicitly trusted header satisfies the floor.
 
 Configure a sender-bound token only when an allowlisted sender cannot produce useful DKIM or DMARC authentication:
 

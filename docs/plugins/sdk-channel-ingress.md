@@ -135,6 +135,10 @@ execution-identity assurance strength. In particular, an identifier claim of
 `verified` never becomes execution assurance `boundary-verified` or
 `cryptographic`.
 
+Import the type and `meetsIdentifierAuthentication(actual, minimum)` from
+`openclaw/plugin-sdk/channel-ingress-runtime`. Downstream authentication mappers
+should use this boolean comparator instead of maintaining their own rank tables.
+
 The meanings are normative:
 
 - `verified`: the owning trusted transport or session boundary bound this exact
