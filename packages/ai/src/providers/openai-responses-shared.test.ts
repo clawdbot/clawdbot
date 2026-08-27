@@ -2473,7 +2473,7 @@ describe("processResponsesStream", () => {
         stream,
         nativeOpenAIModel,
       ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    ).rejects.toThrow("Responses stream changed output item identity");
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
   });
 
