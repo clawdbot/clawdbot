@@ -220,7 +220,7 @@ describe("applyClawAddPlan workspace adoption", () => {
     expect(readInstallRow("worker", root)).toBeUndefined();
   });
 
-  it("rejects a live workspace claim before writing adopted workspace files", async () => {
+  it("reserves an adopted workspace before writing adopted workspace files", async () => {
     const { source, workspace } = await createPlanSource();
     await mkdir(workspace, { recursive: true });
     await writeFile(join(workspace, "AGENTS.md"), "# Agent\n", "utf8");
@@ -232,21 +232,27 @@ describe("applyClawAddPlan workspace adoption", () => {
     expect(plan.blockers).toEqual([]);
     const seedPackageBootstrap = vi.fn(async () => undefined);
     const createWorkspaceFiles = vi.fn();
+    const commitConfig = vi.fn(async (transform) => {
+      transform({
+        agents: { entries: { other: { name: "Other", workspace } } },
+      });
+    });
 
     await expect(
       applyClawAddPlan(plan, {
         consentPlanIntegrity: plan.planIntegrity,
         env: stateEnv(source.packageRoot),
-        readConfig: () => ({
-          agents: { entries: { other: { name: "Other", workspace } } },
-        }),
+        commitConfig,
         seedPackageBootstrap,
         createWorkspaceFiles,
       }),
-    ).rejects.toMatchObject({ code: "workspace_collision" });
+    ).resolves.toMatchObject({
+      error: { code: "workspace_collision" },
+      status: "partial",
+    });
 
+    expect(commitConfig).toHaveBeenCalledOnce();
     expect(seedPackageBootstrap).not.toHaveBeenCalled();
     expect(createWorkspaceFiles).not.toHaveBeenCalled();
-    expect(readInstallRow("adopt-agent", source.packageRoot)).toBeUndefined();
   });
 });
