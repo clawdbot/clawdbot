@@ -649,9 +649,10 @@ export class ToolSearchRuntime {
       entry.source === "openclaw" &&
       "prepareBeforeToolCallParams" in entry.tool &&
       typeof entry.tool.prepareBeforeToolCallParams === "function";
+    const wrapperOptions = this.options.prepareInput ? { protectNetworkErrors: false } : undefined;
     const executionTool =
       (prepareInput || validateInput) && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
-        ? wrapToolWithBeforeToolCallHook(entry.tool as never)
+        ? wrapToolWithBeforeToolCallHook(entry.tool as never, undefined, wrapperOptions)
         : entry.tool;
     const runExecution = async () => {
       const parentToolCallId = options?.parentToolCallId ?? toolCallId;
@@ -707,11 +708,10 @@ export class ToolSearchRuntime {
         )
       : await runExecution();
     const acceptedResult = await acceptResultBeforeProjection(result);
-    const parentToolCallId = options?.parentToolCallId;
-    if (parentToolCallId) {
+    if (options?.parentToolCallId) {
       this.terminalTargetBatchByParent.set(
-        parentToolCallId,
-        this.terminalTargetBatchByParent.get(parentToolCallId) !== false &&
+        options.parentToolCallId,
+        this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
           acceptedResult.terminate === true,
       );
     }

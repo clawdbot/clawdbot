@@ -90,9 +90,8 @@ import {
 } from "./tool-result-error.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-type BeforeToolCallWrapperOptions = {
+type BeforeToolCallWrapperOptions = BeforeToolCallDiagnosticOptions & {
   approvalMode?: "request" | "report" | "deny";
-  emitDiagnostics: boolean;
 };
 type ForwardedToolExecution = (...args: unknown[]) => ReturnType<AnyAgentTool["execute"]>;
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
@@ -294,7 +293,7 @@ export function buildBlockedToolResult(params: {
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
+  options: Partial<BeforeToolCallWrapperOptions> = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
@@ -303,7 +302,7 @@ export function wrapToolWithBeforeToolCallHook(
   const toolName = tool.name || "tool";
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
   const hookOptions: BeforeToolCallWrapperOptions = {
-    ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
+    ...options,
     emitDiagnostics: options.emitDiagnostics !== false,
   };
   const toolContentPolicy = resolveDiagnosticModelContentCapturePolicy(ctx?.config);
@@ -552,7 +551,8 @@ export function wrapToolWithBeforeToolCallHook(
             ...executionArgs,
           );
         } catch (error) {
-          throw tool.resultContentSource === "network" &&
+          throw hookOptions.protectNetworkErrors !== false &&
+            tool.resultContentSource === "network" &&
             getBeforeToolCallFailureDisposition(error) === undefined
             ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
             : error;
@@ -698,7 +698,7 @@ export function wrapToolWithBeforeToolCallHook(
     enumerable: true,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
-    value: hookOptions satisfies BeforeToolCallDiagnosticOptions,
+    value: hookOptions,
     enumerable: false,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_SOURCE_TOOL, {

@@ -3,6 +3,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 export type BeforeToolCallDiagnosticOptions = {
   emitDiagnostics: boolean;
+  protectNetworkErrors?: boolean;
 };
 
 export const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
