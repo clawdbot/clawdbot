@@ -52,12 +52,21 @@ export async function loadChannelConfigSurfaceModule(
   modulePath: string,
 ): Promise<{ schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null> {
   const resolvedPath = path.resolve(modulePath);
+  try {
+    const imported = (await import(pathToFileURL(resolvedPath).href)) as Record<string, unknown>;
+    const native = resolveConfigSchemaExport(imported);
+    if (native) {
+      return native;
+    }
+  } catch {
+    // Source modules that need plugin SDK aliases or Jiti transpilation use the fallback below.
+  }
+
   const aliasMap = buildPluginLoaderAliasMap(resolvedPath, "", undefined, "src");
-  // Jiti 2.7 passes Windows drive paths raw to import(); use its source loader there.
-  // Disabled caches keep generation source-current.
+  // Disabled caches keep generation source-current for the compatibility path.
   const jiti = createJiti(import.meta.url, {
     ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative: process.platform !== "win32",
+    tryNative: false,
     moduleCache: false,
     fsCache: false,
   });
