@@ -414,7 +414,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
             url.searchParams.get("uploadType") === "multipart"
           ) {
             request.setEncoding("utf8");
-            for await (const chunk of request) uploadBody += chunk;
+            for await (const chunk of request) {
+              uploadBody += chunk;
+            }
             respondJson({ file: { name: "files/input-0" } });
             return;
           }
@@ -475,6 +477,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
             headers: { "X-Proof-Tenant": "remote" },
           },
         });
+        if (!adapter.provider) {
+          throw new Error("Expected a Gemini embedding provider");
+        }
         await expect(adapter.provider.embed("hello", { inputType: "query" })).resolves.toEqual([
           1, 0, 0,
         ]);
