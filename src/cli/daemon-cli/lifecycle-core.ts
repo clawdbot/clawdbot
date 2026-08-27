@@ -284,9 +284,11 @@ export async function runServiceStart(params: {
     }
     if (startResult.outcome === "already-running") {
       if (startResult.issues.length > 0) {
+        // Only services with a repair callback can rebuild their definition during restart.
+        const repairAction = params.repairLoadedService ? "restart" : "install --force";
         const warning = `${params.serviceNoun} service already running, but its installed service definition needs repair: ${startResult.issues
           .map((issue) => issue.message)
-          .join("; ")}; run \`${serviceCommand} restart\` to apply.`;
+          .join("; ")}; run \`${serviceCommand} ${repairAction}\` to apply.`;
         warnings.push(warning);
         if (!json) {
           defaultRuntime.log(warning);

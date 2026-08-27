@@ -24,11 +24,12 @@ const loadConfig = vi.fn<() => OpenClawConfig>(() => ({
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
 const appendGatewayLifecycleAudit = vi.fn();
+const MISSING_SERVICE_PROGRAM = "/openclaw-test-missing-runtime/node";
 const SERVICE_REPAIR_COMMAND_CASES = [
-  ["Gateway", "", "", "openclaw gateway"],
-  ["Node", "", "", "openclaw node"],
-  ["Node", "work", "", "openclaw --profile work node"],
-  ["Node", "work", "demo", "openclaw --container demo node"],
+  ["Gateway", "", "", "openclaw gateway", "restart"],
+  ["Node", "", "", "openclaw node", "install --force"],
+  ["Node", "work", "", "openclaw --profile work node", "install --force"],
+  ["Node", "work", "demo", "openclaw --container demo node", "install --force"],
 ] as const;
 const createGatewayLifecycleMutationAudit = vi.fn(
   (params: { action: string; source?: string }) => (mutation: { mode: string; pid?: number }) =>
@@ -784,39 +785,46 @@ describe("runServiceRestart token drift", () => {
   });
 
   it.each(SERVICE_REPAIR_COMMAND_CASES)(
-    "warns in json with the correct %s service restart command",
-    async (serviceNoun, profile, container, command) => {
+    "warns in json with the %s service repair command and active context",
+    async (serviceNoun, profile, container, command, repairAction) => {
       vi.stubEnv("OPENCLAW_PROFILE", profile);
       vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
       service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
       service.readCommand.mockResolvedValue({
-        programArguments: ["openclaw", serviceNoun.toLowerCase(), "--port", "18789"],
+        programArguments: [MISSING_SERVICE_PROGRAM, "openclaw", serviceNoun.toLowerCase()],
       });
 
-      await runServiceStart({ ...createServiceRunArgs(), serviceNoun, expectedPort: 19_001 });
+      await runServiceStart({
+        ...createServiceRunArgs(),
+        serviceNoun,
+        repairLoadedService: serviceNoun === "Gateway" ? vi.fn(async () => null) : undefined,
+      });
 
       const payload = readJsonLog<{ result?: string; warnings?: string[] }>();
       expect(payload.result).toBe("already-running");
       expect(payload.warnings).toEqual([
-        `${serviceNoun} service already running, but its installed service definition needs repair: service port 18789 does not match current gateway config port 19001; run \`${command} restart\` to apply.`,
+        `${serviceNoun} service already running, but its installed service definition needs repair: service command points at a missing path: ${MISSING_SERVICE_PROGRAM}; run \`${command} ${repairAction}\` to apply.`,
       ]);
       expect(service.start).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["Gateway", "Node"])(
+  it.each([
+    ["Gateway", "restart"],
+    ["Node", "install --force"],
+  ])(
     "prints one warning line when an already-running %s service needs repair",
-    async (serviceNoun) => {
+    async (serviceNoun, repairAction) => {
       service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
       service.readCommand.mockResolvedValue({
-        programArguments: ["openclaw", serviceNoun.toLowerCase(), "--port", "18789"],
+        programArguments: [MISSING_SERVICE_PROGRAM, "openclaw", serviceNoun.toLowerCase()],
       });
 
       await runServiceStart({
         serviceNoun,
         service,
         renderStartHints: () => [],
-        expectedPort: 19_001,
+        repairLoadedService: serviceNoun === "Gateway" ? vi.fn(async () => null) : undefined,
       });
 
       const repairWarnings = lifecycleRuntimeLogs.filter((line) =>
@@ -826,7 +834,7 @@ describe("runServiceRestart token drift", () => {
       );
       expect(repairWarnings).toHaveLength(1);
       expect(repairWarnings[0]).toContain(
-        `run \`openclaw ${serviceNoun.toLowerCase()} restart\` to apply.`,
+        `run \`openclaw ${serviceNoun.toLowerCase()} ${repairAction}\` to apply.`,
       );
       expect(service.start).not.toHaveBeenCalled();
     },
@@ -956,12 +964,12 @@ describe("runServiceRestart token drift", () => {
       vi.stubEnv("OPENCLAW_PROFILE", profile);
       vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
       service.readCommand.mockResolvedValue({
-        programArguments: ["openclaw", serviceNoun.toLowerCase(), "--port", "18789"],
+        programArguments: [MISSING_SERVICE_PROGRAM, "openclaw", serviceNoun.toLowerCase()],
       });
 
-      await expect(
-        runServiceStart({ ...createServiceRunArgs(), serviceNoun, expectedPort: 19_001 }),
-      ).rejects.toThrow("__exit__:1");
+      await expect(runServiceStart({ ...createServiceRunArgs(), serviceNoun })).rejects.toThrow(
+        "__exit__:1",
+      );
 
       const payload = readJsonLog<{
         ok?: boolean;
@@ -980,7 +988,6 @@ describe("runServiceRestart token drift", () => {
           ...createServiceRunArgs(),
           serviceNoun,
           opts: { json: false },
-          expectedPort: 19_001,
         }),
       ).rejects.toThrow("__exit__:1");
       expect(lifecycleRuntimeLogs).toContain(`Tip: ${command} install --force`);
