@@ -50,7 +50,7 @@ import {
   readNativeHistoryState,
   type NativeHistoryState,
 } from "./native-web-chrome.ts";
-import type { NavDrawerSwipeOwner } from "./nav-drawer-swipe.ts";
+import { NavDrawerSwipeLoader } from "./nav-drawer-swipe-loader.ts";
 import {
   handleNavDrawerKeydown,
   moveToastToNavDrawer,
@@ -108,15 +108,9 @@ export interface ShellChromeHost extends HTMLElement {
 export class ShellChromeOwner {
   private pendingLazyAction = readLazyShellAction();
   private listeners: AbortController | undefined;
-  private navDrawerSwipeOwner?: NavDrawerSwipeOwner;
+  private readonly navDrawerSwipe: NavDrawerSwipeLoader;
   constructor(private readonly host: ShellChromeHost) {
-    void import("./nav-drawer-swipe.ts").then(({ NavDrawerSwipeOwner }) => {
-      const owner = new NavDrawerSwipeOwner(host, () => this.toggleNavigationSurface());
-      this.navDrawerSwipeOwner = owner;
-      if (host.isConnected) {
-        owner.connect();
-      }
-    }, Boolean);
+    this.navDrawerSwipe = new NavDrawerSwipeLoader(host, () => this.toggleNavigationSurface());
   }
 
   private isSessionRoute(): boolean {
@@ -183,13 +177,16 @@ export class ShellChromeOwner {
       options,
     );
     window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen, options);
-    this.navDrawerSwipeOwner?.connect();
+    this.navDrawerSwipe.connect();
+    if (isMobileNavLayout()) {
+      this.navDrawerSwipe.load();
+    }
   }
 
   disconnect(): void {
     this.listeners?.abort();
     this.listeners = undefined;
-    this.navDrawerSwipeOwner?.disconnect();
+    this.navDrawerSwipe.disconnect();
   }
 
   toggleNavigationSurface(trigger?: HTMLElement): void {
@@ -200,6 +197,7 @@ export class ShellChromeOwner {
       return;
     }
     if (isMobileNavLayout()) {
+      this.navDrawerSwipe.load();
       if (host.navDrawerOpen) {
         host.closeNavDrawer({ restoreFocus: true });
         return;
@@ -207,9 +205,7 @@ export class ShellChromeOwner {
       host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host) ?? null;
       host.navDrawerOpen = true;
       moveToastToNavDrawer(host);
-      if (this.navDrawerSwipeOwner) {
-        this.navDrawerSwipeOwner.opened();
-      } else {
+      if (!this.navDrawerSwipe.opened()) {
         void host.updateComplete.then(() => {
           if (host.isConnected && host.navDrawerOpen) {
             host.querySelector<HTMLElement>(".shell-nav")?.focus({ preventScroll: true });
@@ -246,7 +242,7 @@ export class ShellChromeOwner {
     const host = this.host;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
-      this.navDrawerSwipeOwner?.closed();
+      this.navDrawerSwipe.closed();
     }
     restoreToastFromNavDrawer(host);
     const trigger = options.restoreFocus ? host.navDrawerTrigger : null;
@@ -347,6 +343,7 @@ export class ShellChromeOwner {
     const dismissedSidebarMenus =
       mobileNavLayout && !host.navDrawerOpen && this.dismissSidebarTransientMenus();
     if (mobileNavLayout) {
+      this.navDrawerSwipe.load();
       host.desktopNavigationExpanded = false;
     } else if (host.navDrawerOpen) {
       host.closeNavDrawer({ restoreFocus: false });

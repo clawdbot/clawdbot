@@ -17,6 +17,18 @@ export function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): voi
   if (!drawer) {
     return;
   }
+  if (
+    event
+      .composedPath()
+      .some(
+        (target) =>
+          target instanceof Element &&
+          target !== drawer &&
+          target.matches("dialog, [role='dialog']"),
+      )
+  ) {
+    return;
+  }
   const focusable = [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
     (candidate) => candidate.checkVisibility(),
   );

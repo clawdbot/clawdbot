@@ -564,8 +564,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         type="button"
         class="shell-nav-backdrop"
         tabindex="-1"
-        aria-label=${t("nav.collapse")}
-        aria-hidden=${navDrawerOpen ? nothing : "true"}
+        aria-hidden="true"
         ?inert=${!navDrawerOpen}
         @click=${() => host.closeNavDrawer({ restoreFocus: true })}
       ></button>

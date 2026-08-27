@@ -121,6 +121,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
         id="sidebar-issues-panel"
         class="sidebar-issues-panel"
         role="dialog"
+        aria-modal="true"
         aria-labelledby="sidebar-issues-panel-heading"
         style=${panelStyle}
         @keydown=${params.onKeydown}

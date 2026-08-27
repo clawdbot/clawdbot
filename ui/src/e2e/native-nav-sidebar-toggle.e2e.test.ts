@@ -165,6 +165,13 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
+    expect(
+      await page.evaluate(() =>
+        performance
+          .getEntriesByType("resource")
+          .some((entry) => entry.name.includes("nav-drawer-swipe")),
+      ),
+    ).toBe(false);
     const toggle = page.locator(".shell-chrome-controls__nav-toggle");
     await expect.poll(() => toggle.isVisible()).toBe(true);
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
@@ -601,6 +608,9 @@ suite.define(() => {
       .toContain("shell--nav-drawer-open");
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
     await expect.poll(() => dialog.isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell-nav-backdrop").getAttribute("aria-hidden"))
+      .toBe("true");
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
 
@@ -625,6 +635,22 @@ suite.define(() => {
     await expect.poll(() => sessionMenu.count()).toBe(0);
     await expect.poll(() => dialog.isVisible()).toBe(true);
 
+    await page.locator(".chat-pane-cache__pane--visible").evaluate((pane) => {
+      const details = document.createElement("details");
+      details.className = "chat-controls__inline-select";
+      details.id = "drawer-underlying-details-probe";
+      details.open = true;
+      pane.append(details);
+    });
+    const pageDetails = page.locator("#drawer-underlying-details-probe");
+    await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
+    await expect.poll(() => dialog.isVisible()).toBe(false);
+
+    await trigger.click();
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+
     await page.keyboard.press("Escape");
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
@@ -636,7 +662,24 @@ suite.define(() => {
       .toBe(true);
 
     await trigger.click();
+    const inbox = navigation.locator(".sidebar-issues-button");
+    await inbox.click();
+    const attentionDialog = page.getByRole("dialog", { name: "Inbox" });
+    await attentionDialog.waitFor();
+    await expect.poll(() => attentionDialog.getAttribute("aria-modal")).toBe("true");
+    const attentionControls = attentionDialog.locator("button, a[href], summary");
+    const lastAttentionControl = attentionControls.last();
+    await lastAttentionControl.focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.activeElement?.closest("#sidebar-issues-panel") !== null),
+      )
+      .toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => attentionDialog.count()).toBe(0);
     await expect.poll(() => dialog.isVisible()).toBe(true);
+
     await page.mouse.click(899, 450);
     await expect.poll(() => dialog.isVisible()).toBe(false);
     await expect

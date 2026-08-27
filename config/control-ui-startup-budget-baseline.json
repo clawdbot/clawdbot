@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 343529,
-  "reason": "compact chat topbar and route-aware native chrome on the boot path; measured 343529 B with compact layout regression coverage",
+  "startupJsGzipBytes": 344044,
+  "reason": "mobile drawer modal ownership and breakpoint-gated swipe loader; measured 344044 B with desktop request and modal regression coverage",
   "updatedAt": "2026-08-27"
 }

@@ -249,6 +249,9 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (document.querySelector(".shell-nav[aria-modal='true']")) {
+      return;
+    }
     if (event.key !== "Escape") {
       return;
     }

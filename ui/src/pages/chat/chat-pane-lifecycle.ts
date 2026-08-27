@@ -305,6 +305,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   protected readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (document.querySelector(".shell-nav[aria-modal='true']")) {
+      return;
+    }
     const togglePanelSlot = (slot: SidebarSlotId) => {
       const state = this.state;
       if (!state) {
