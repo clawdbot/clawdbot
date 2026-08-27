@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { persistSessionTranscriptTurn } from "../../../config/sessions/session-accessor.js";
+import { startSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import type { AgentSession } from "../../sessions/index.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -49,7 +57,7 @@ vi.mock("../../tool-search.js", () => ({
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: hoisted.buildEmbeddedExtensionFactories,
 }));
-vi.mock("../logger.js", () => ({ log: { info: vi.fn() } }));
+vi.mock("../logger.js", () => ({ log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
 vi.mock("../resource-loader.js", () => ({
   createEmbeddedAgentResourceLoader: hoisted.createEmbeddedAgentResourceLoader,
 }));
@@ -69,7 +77,10 @@ vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: hoisted.notifyToolActivity,
 }));
 
-import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
+import {
+  prepareEmbeddedAttemptAgentSession,
+  prepareEmbeddedAttemptSessionManager,
+} from "./attempt-session-prepare.js";
 
 const attempt = {
   authStorage: { id: "auth" },
@@ -89,6 +100,7 @@ const attempt = {
 
 function createInput(options?: {
   activationError?: Error;
+  attempt?: EmbeddedRunAttemptParams;
   codeModeControlsEnabledForRun?: boolean;
   coreReadAllowed?: boolean;
 }) {
@@ -166,7 +178,7 @@ function createInput(options?: {
     events,
     hookRunner,
     input: {
-      attempt,
+      attempt: options?.attempt ?? attempt,
       agentCoreThinkingLevel: "high" as const,
       agentDir: "/agent",
       clientToolPreparation: {
@@ -199,8 +211,15 @@ function createInput(options?: {
   };
 }
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
@@ -292,6 +311,54 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       contextOverflowRecoveryOwner: "session",
     });
   });
+
+  it("waits for a deferred projection rebuild before opening the persisted session", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-attempt-session-") };
+    const sessionTarget = { agentId: "main", env, sessionId: "large-session" };
+    // Past the sync-rebuild size gate the store hands the projection rebuild to the
+    // reconcile worker; a post-compaction retry reopens the session inside that window.
+    // The fixture recreates the window directly so its width does not depend on timing.
+    await persistSessionTranscriptTurn(
+      { ...sessionTarget, sessionKey: "agent:main:large-session" },
+      {
+        messages: Array.from({ length: 5_000 }, (_, index) => ({
+          eventId: `event-${index}`,
+          parentId: index === 0 ? null : `event-${index - 1}`,
+          message: { role: index % 2 === 0 ? "user" : "assistant", content: `turn ${index}` },
+        })),
+        touchSessionEntry: false,
+      },
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(sessionTarget.sessionId);
+    startSessionTranscriptIndexReconcile({
+      agentId: "main",
+      env,
+      preferredSessionId: sessionTarget.sessionId,
+    });
+    const onSessionManagerCreated = vi.fn();
+
+    const result = await prepareEmbeddedAttemptSessionManager({
+      attempt: { ...attempt, sessionTarget } as unknown as EmbeddedRunAttemptParams,
+      agentDir: "/agent",
+      effectiveCwd: "/workspace",
+      effectiveWorkspace: "/workspace",
+      onSessionManagerCreated,
+      replayAllowedToolNames: new Set(),
+      resolveActiveContextEnginePluginId: () => undefined,
+      sessionAgentId: "main",
+      transcriptLifecycle: {
+        withTranscriptWrite: async (operation: () => unknown) => await operation(),
+      } as never,
+      withOwnedTranscriptWrite: async (operation) => await operation(),
+    });
+
+    expect(onSessionManagerCreated).toHaveBeenCalledWith(result.sessionManager);
+    expect(result.sessionManager.getSessionId()).toBe(sessionTarget.sessionId);
+    expect(result.sessionManager.getPersistedEntries().length).toBeGreaterThan(0);
+  }, 30_000);
 
   it("publishes session ownership before activation can fail", async () => {
     const fixture = createInput({ activationError: new Error("activation failed") });

@@ -3,6 +3,7 @@
  * It may assume attempt configuration and tool inputs are ready.
  */
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import {
   attachRuntimePromptMediaFacts,
@@ -70,6 +71,27 @@ type ClientToolPreparation = Omit<
 >;
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
+
+// The run's own transcript writes (compaction, tool-result truncation, repair) leave a
+// large session's projection rebuilding off-thread; the bounded open reads that projection
+// and fails closed, so settle it first instead of failing the retry with "rebuilding".
+async function openAttemptSessionManager(
+  attempt: EmbeddedRunAttemptParams,
+  cwd: string,
+): Promise<SessionManager> {
+  if (!attempt.sessionTarget) {
+    return SessionManager.inMemory(cwd);
+  }
+  const target = attempt.sessionTarget as SessionTranscriptRuntimeTarget;
+  await waitForSessionTranscriptProjection(target);
+  return SessionManager.open(target, cwd, {
+    maxBytes: Math.min(
+      64 * 1024 * 1024,
+      Math.max(1024, (attempt.contextTokenBudget ?? 128_000) * 8),
+    ),
+    maxEvents: 10_000,
+  });
+}
 
 /** Prepares resource loading, client tools, and the active agent session. */
 export async function prepareEmbeddedAttemptAgentSession(input: {
@@ -440,20 +462,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   let latestUserTurnTranscriptRecorder = attempt.userTurnTranscriptRecorder;
   const userTranscriptContextRegistry = createUserTranscriptContextRegistry();
   const sessionManager = guardSessionManager(
-    attempt.sessionManager ??
-      (attempt.sessionTarget
-        ? SessionManager.open(
-            attempt.sessionTarget as SessionTranscriptRuntimeTarget,
-            input.effectiveCwd,
-            {
-              maxBytes: Math.min(
-                64 * 1024 * 1024,
-                Math.max(1024, (attempt.contextTokenBudget ?? 128_000) * 8),
-              ),
-              maxEvents: 10_000,
-            },
-          )
-        : SessionManager.inMemory(input.effectiveCwd)),
+    attempt.sessionManager ?? (await openAttemptSessionManager(attempt, input.effectiveCwd)),
     {
       agentId: input.sessionAgentId,
       runId: attempt.runId,
