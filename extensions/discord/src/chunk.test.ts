@@ -397,4 +397,22 @@ describe("chunkDiscordText", () => {
     expect(expectDefined(chunks[1], "second Discord chunk")).toBe("_`unclosed\n10. after_");
     expect(chunks.every((chunk) => (chunk.match(/_/g) || []).length % 2 === 0)).toBe(true);
   });
+
+  it("does not treat fence marker lines with non-whitespace trailing text as closing fences", () => {
+    const codeLines = [
+      "```txt",
+      "code-line-1",
+      "```not-a-close",
+      ...Array.from({ length: 20 }, (_, i) => `code-body-${i + 1}`),
+      "# heading-that-must-remain-inside-code",
+      "```",
+    ].join("\n");
+
+    const chunks = chunkDiscordText(codeLines, { maxChars: 2000, maxLines: 10 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    for (const chunk of chunks) {
+      expect(hasBalancedFences(chunk)).toBe(true);
+    }
+  });
 });
