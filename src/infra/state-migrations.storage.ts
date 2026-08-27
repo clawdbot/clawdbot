@@ -35,7 +35,7 @@ import {
   normalizeLegacySqliteInteger,
   pickLegacyColumn,
   readLegacyTaskDeliveryRows,
-  readLegacyTaskRows,
+  readLegacyTaskRowsWithSettlements,
   type SqliteBindRow,
 } from "./state-migrations.task-sidecar-rows.js";
 
@@ -650,8 +650,12 @@ async function migrateLegacyTaskRunsSidecar(params: {
   const warnings: string[] = [];
   let taskRows: SqliteBindRow[];
   let deliveryRows: SqliteBindRow[];
+  let settledLostTaskIds = new Set<string>();
   try {
-    taskRows = readLegacyTaskRows(sourcePath);
+    const { rows, settledLostTaskIds: settled } =
+      readLegacyTaskRowsWithSettlements(sourcePath);
+    taskRows = rows;
+    settledLostTaskIds = settled;
     deliveryRows = readLegacyTaskDeliveryRows(sourcePath);
   } catch (err) {
     return {
@@ -712,15 +716,10 @@ async function migrateLegacyTaskRunsSidecar(params: {
           importedTasks++;
         }
         const deliveryColumns = ["requester_origin_json", "last_notified_event_at"];
-        // Reconciling cron rows settled during normalization must not carry
-        // their pending delivery state into shared state as actionable.
-        const settledLostTaskIds = new Set(
-          taskRows
-            .filter((row) => row.status === "lost")
-            .map((row) => legacyKeyValue(expectDefined(row.task_id, "task migration row key"))),
-        );
         for (const row of deliveryRows) {
           const taskId = legacyKeyValue(expectDefined(row.task_id, "delivery migration row key"));
+          // Only deliveries of tasks this migration just settled are skipped;
+          // pre-existing lost rows keep their recorded delivery state.
           if (settledLostTaskIds.has(taskId)) {
             skippedSettledDeliveryStates++;
             continue;

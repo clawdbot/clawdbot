@@ -38,6 +38,13 @@ function legacyStringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+// A legacy cron reconciliation has no surviving runtime to finish it, so the
+// importer settles it as explicit historical evidence instead of carrying a
+// nonterminal row (and its actionable pending delivery) forward.
+export function isUnresumableCronReconcilingRow(row: Record<string, unknown>): boolean {
+  return row.runtime === "cron" && row.status === "reconciling";
+}
+
 function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
   const runtime = legacyStringValue(row.runtime);
   const sourceId = typeof row.source_id === "string" ? row.source_id : "";
@@ -66,7 +73,7 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
   // A legacy cron reconciliation has no surviving runtime to finish it, so the
   // importer settles it as explicit historical evidence instead of carrying a
   // nonterminal row (and its actionable pending delivery) forward.
-  const isUnresumableCronReconciling = runtime === "cron" && row.status === "reconciling";
+  const isUnresumableCronReconciling = isUnresumableCronReconcilingRow(row);
   const status = isUnresumableCronReconciling ? "lost" : (row.status ?? "");
   const settledDeliveryStatus = isUnresumableCronReconciling ? "not_applicable" : deliveryStatus;
   const settledNotifyPolicy = isUnresumableCronReconciling ? "silent" : (row.notify_policy ?? "");
@@ -145,6 +152,36 @@ export function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
       )
       .all()
       .map((row) => normalizeLegacyTaskRow(row as Record<string, unknown>));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Reads normalized task rows plus the ids this migration settles as lost.
+ * The settled set is captured from the raw rows so delivery-state skipping
+ * can stay scoped to rows reconciled here instead of every lost row.
+ */
+export function readLegacyTaskRowsWithSettlements(sourcePath: string): {
+  rows: SqliteBindRow[];
+  settledLostTaskIds: Set<string>;
+} {
+  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+  const settledLostTaskIds = new Set<string>();
+  try {
+    const columns = listSqliteColumns(db, "task_runs");
+    if (columns.size === 0) {
+      return { rows: [], settledLostTaskIds };
+    }
+    for (const raw of db
+      .prepare(`SELECT task_id FROM task_runs WHERE runtime = 'cron' AND status = 'reconciling'`)
+      .all() as Array<Record<string, unknown>>) {
+      const taskId = legacyStringValue(raw.task_id);
+      if (taskId) {
+        settledLostTaskIds.add(taskId);
+      }
+    }
+    return { rows: readLegacyTaskRows(sourcePath), settledLostTaskIds };
   } finally {
     db.close();
   }
