@@ -490,23 +490,39 @@ function findPotentialCallStart(
 }
 
 /**
- * True when `partial` shows a different amount of text preceding `contentIndex` than
- * `trackedLength` accounts for. The carried fence-state scan advances in event order;
- * `partial`'s own per-block offsets are in content-index order. These normally agree,
- * but not when a provider interleaves active blocks (an earlier block can stream after
- * a later one) or when an earlier block was never streamed as its own delta at all --
- * either way the scan's state does not correspond to "everything that precedes this
- * block", in either direction, so it must not be trusted for a candidate here. Only a
- * check against the partial's own authoritative text, or a full parse, can be.
+ * True when `partial` shows different text preceding `contentIndex` than the carried
+ * scan tracked. The scan advances in event order; `partial`'s own per-block offsets are
+ * in content-index order. These normally agree, but not when a provider interleaves
+ * active blocks (an earlier block can stream after a later one) or when an earlier
+ * block was never streamed as its own delta at all -- either way the scan's state does
+ * not correspond to "everything that precedes this block", so it must not be trusted
+ * for a candidate here. Only a check against the partial's own authoritative text, or a
+ * full parse, can be.
+ *
+ * A length mismatch alone already proves this (checked first, and cheaply, since it
+ * needs no materialized prefix). Matching lengths do not prove agreement, though --
+ * interleaved blocks of the same length streamed out of order produce the same tracked
+ * length from different actual text (e.g. opposite fence state) -- so a same-length,
+ * nonzero prefix still needs a real text comparison. `trackedPrefix` is called lazily:
+ * only this rarer case pays for materializing it, and its cost is bounded by the
+ * (typically small, fixed) preceding-block size, not by however large the current
+ * block's own growing content is.
  */
 function hasUntrackedPrecedingContext(
   partial: unknown,
   contentIndex: number,
   trackedLength: number,
+  trackedPrefix: () => string,
 ): boolean {
   const candidate = extractStandaloneCandidate(partial);
   const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
-  return part !== undefined && part.start !== trackedLength;
+  if (!candidate || !part) {
+    return false;
+  }
+  if (part.start !== trackedLength) {
+    return true;
+  }
+  return part.start > 0 && candidate.text.slice(0, part.start) !== trackedPrefix();
 }
 
 function resolvePartialProtectionCheck(params: {
@@ -1405,6 +1421,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
                   incomingRecord.partial,
                   eventContentIndex(incomingRecord),
                   protectionBlockStart,
+                  () => materializeProtectionPrefix(true),
                 );
                 let isProtectedAt: ((offset: number) => boolean) | undefined =
                   !untrackedPrecedingContext && options.protectedRangesFenceCompatible

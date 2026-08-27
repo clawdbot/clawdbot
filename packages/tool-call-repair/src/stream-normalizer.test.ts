@@ -745,9 +745,6 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     // Wrongly "protected" would stream the raw candidate bytes straight out as literal
     // visible text; correctly recognized as a real, unfenced call, they are buffered as
     // a pending candidate instead and never appear verbatim in a streamed delta.
-    // Wrongly "protected" would stream the raw candidate bytes straight out as literal
-    // visible text; correctly recognized as a real, unfenced call, they are buffered as
-    // a pending candidate instead and never appear verbatim in a streamed delta.
     const streamedText = events
       .map((event) =>
         typeof event.delta === "string"
@@ -758,6 +755,50 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
       )
       .join("");
     expect(streamedText).not.toContain('{"path":"example.txt"}');
+  });
+
+  it("does not trust a same-length prefix that came from a different block order (#122513)", async () => {
+    // codex review: a length match alone does not prove the event-order scan represents
+    // the same prefix as content-index order. Block 1 streams "```\n" first (opens a
+    // backtick fence); block 0 then streams "~~~\n" (opens a tilde fence, since a tilde
+    // delimiter never closes a backtick fence). Event order ends with fenceChar "`";
+    // content-index order (0 then 1) ends with fenceChar "~" -- same tracked length (8),
+    // opposite fence identity. Block 2's own "```" delimiter would close the (wrong)
+    // event-order backtick fence but not the (correct) content-order tilde fence, so a
+    // length-only check wrongly lets a call still inside the real fence through.
+    const block1 = "```\n";
+    const block0 = "~~~\n";
+    const candidate = ["```", "[read]", '{"path":"example.txt"}', "[/read]", "```", ""].join("\n");
+    const events = await collectNormalizedEvents(
+      [
+        streamTextDelta(block1, 1, assistantMessage(textContent("", block1))),
+        streamTextDelta(block0, 0, assistantMessage(textContent(block0, block1))),
+        streamTextDelta(candidate, 2, assistantMessage(textContent(block0, block1, candidate))),
+      ],
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        protectedRangesFenceCompatible: true,
+        resolveProtectedRanges: resolveTestFenceRanges,
+      },
+    );
+
+    // Correctly distrusted (this fix), block 2's candidate is recognized as still inside
+    // the real (content-order) fence and streams straight out as literal visible text.
+    // Wrongly trusted event-order state instead closes the fence on block 2's own
+    // opening "```" and buffers the call as a pending candidate -- and since nothing
+    // resolves it here, it silently never appears in the output at all.
+    const streamedText = events
+      .map((event) =>
+        typeof event.delta === "string"
+          ? event.delta
+          : typeof event.content === "string"
+            ? event.content
+            : "",
+      )
+      .join("");
+    expect(streamedText).toContain('{"path":"example.txt"}');
   });
 
   it("preserves candidate bytes after bounded protection history overflows", async () => {
