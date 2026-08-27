@@ -40,7 +40,9 @@ it("retires queued Gateway work and listeners when its page closes", async ({ ga
   );
   const storage = window.sessionStorage;
   const socket = new window.WebSocket("ws://mock-gateway");
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(socket.readyState).toBe(window.WebSocket.OPEN);
   const responses: string[] = [];
   socket.addEventListener("message", (event) => responses.push(String(event.data)));
@@ -58,7 +60,9 @@ it("retires queued Gateway work and listeners when its page closes", async ({ ga
   });
   gatewayPage.close();
   window.dispatchEvent(new window.Event("fixture-probe"));
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
   expect(storage.getItem("openclaw.control-ui-e2e.configState")).toBeNull();
   expect(responses).toEqual([]);

@@ -9,6 +9,7 @@ type MockGatewayPage = {
 };
 
 export const mockGatewayTest = it.extend<{ gatewayPage: MockGatewayPage }>({
+  // oxlint-disable-next-line no-empty-pattern -- Vitest requires destructuring to discover fixture dependencies.
   gatewayPage: async ({}, use) => {
     const dom = new JSDOM("", { url: "http://mock-control-ui/", runScripts: "outside-only" });
     try {
