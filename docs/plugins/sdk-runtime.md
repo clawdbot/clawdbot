@@ -416,8 +416,9 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
   <Accordion title="api.runtime.hooks">
     Dispatch isolated agent turns for untrusted external-content triggers, such
     as an email watcher. Unlike `api.runtime.subagent.run(...)`, hook dispatch
-    wraps external content, serializes runs for the same session, and uses the
-    Gateway hook execution lane and completion reporting.
+    wraps external content, serializes runs for the same session, and reports
+    completion through the Gateway. Plugin turns share the cron execution
+    budget independently of the HTTP hooks endpoint and its reserved capacity.
 
     ```typescript
     const result = await api.runtime.hooks.dispatchHookAgentTurn({
