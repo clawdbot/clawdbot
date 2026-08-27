@@ -17,6 +17,7 @@ import {
   releaseChildSpec,
   releaseCompositeJobsSha256,
   releaseExecutionPlanSha256,
+  validateReleaseExecutionPlanArtifact,
   verifyReleaseContinuationSource,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { resolveReleaseToolingIdentity } from "../../scripts/release-tooling-identity.mjs";
@@ -117,7 +118,7 @@ process.exit(1);
     process.env.GH_TOKEN = "test-token";
     try {
       await expect(loadPlan({ repository: "openclaw/openclaw", runId: "77" })).rejects.toThrow(
-        "run predates immutable FRV plans; provide --legacy-plan",
+        "run has no authenticated immutable FRV plan",
       );
       await expect(
         createClient("openclaw/openclaw").loadSourceManifest("77", 1),
@@ -204,6 +205,277 @@ function child(key: string, runId: string) {
     workflowSha: SHA,
   };
 }
+
+function legacyChild(key: string, runId: string, sourceParentAttempt = 1) {
+  const spec = releaseChildSpec(key);
+  return {
+    ...child(key, runId),
+    displayTitle: `${spec.displayName} full-release-validation-77-${sourceParentAttempt}${spec.suffix}`,
+    sourceParentAttempt,
+    url: `https://github.com/openclaw/openclaw/actions/runs/${runId}`,
+    workflow: spec.workflow,
+    workflowRef: SOURCE_REF,
+  };
+}
+
+function reviewedLegacyPlan() {
+  return {
+    candidate: candidate(),
+    children: {
+      normalCi: legacyChild("normalCi", "101"),
+      pluginPrerelease: legacyChild("pluginPrerelease", "202"),
+      productPerformance: legacyChild("productPerformance", "303"),
+      releaseChecks: legacyChild("releaseChecks", "404"),
+    },
+    releaseProfile: "beta",
+    runReleaseSoak: "false",
+    source: {
+      displayTitle: "Full Release Validation",
+      event: "workflow_dispatch",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runId: "77",
+      workflowPath: ".github/workflows/full-release-validation.yml",
+      workflowRef: SOURCE_REF,
+      workflowSha: SHA,
+    },
+    targetSha: TARGET_SHA,
+    toolingSha: SHA,
+    validationInputs: VALIDATION_INPUTS,
+  };
+}
+
+const HISTORICAL_PLAN_SHA256 = "0e7683dd218ad0be045cceffeac112fecd0c439236a1b978af646519c106fc44";
+
+function historicalExecutionPlan() {
+  const selected = Object.entries(reviewedLegacyPlan().children).map(([key, entry]) => {
+    const spec = releaseChildSpec(key);
+    return {
+      dispatchName: spec.dispatchName,
+      displayTitle: entry.displayTitle,
+      key,
+      required: true,
+      result: "success",
+      runAttempt: entry.runAttempt,
+      runId: entry.runId,
+      selected: true,
+      source: "fresh",
+      url: entry.url,
+      workflow: entry.workflow,
+      workflowRef: entry.workflowRef,
+      workflowSha: entry.workflowSha,
+    };
+  });
+  const npmTelegram = releaseChildSpec("npmTelegram");
+  return {
+    blockers: [],
+    children: [
+      ...selected,
+      {
+        dispatchName: npmTelegram.dispatchName,
+        displayTitle: `${npmTelegram.displayName} full-release-validation-77-1${npmTelegram.suffix}`,
+        key: npmTelegram.key,
+        required: false,
+        result: "skipped",
+        runAttempt: null,
+        runId: "",
+        selected: false,
+        source: "fresh",
+        url: "",
+        workflow: npmTelegram.workflow,
+        workflowRef: SOURCE_REF,
+        workflowSha: SHA,
+      },
+    ],
+    errors: [],
+    evidenceReuse: { requested: false },
+    gates: [{ name: "Resolve target ref", required: true, result: "success" }],
+    kind: "openclaw.full-release-execution-plan",
+    parentRunAttempt: 1,
+    parentRunId: "77",
+    releaseProfile: "beta",
+    rerunGroup: "all",
+    sha256: HISTORICAL_PLAN_SHA256,
+    targetSha: TARGET_SHA,
+    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: SHA },
+    version: 1,
+    workflowRef: SOURCE_REF,
+    workflowSha: SHA,
+  };
+}
+
+function writeLegacyPlan(value = reviewedLegacyPlan()) {
+  const root = tempDirs.make("frv-legacy-plan-");
+  const path = join(root, "legacy.json");
+  writeFileSync(path, JSON.stringify(value));
+  return path;
+}
+
+describe("historical FRV plan compatibility", () => {
+  it("authenticates a frozen historical v1 fixture without synthesizing modern fields", () => {
+    const plan = validateReleaseExecutionPlanArtifact(historicalExecutionPlan(), {
+      parentRunId: "77",
+    });
+    expect(plan.sha256).toBe(HISTORICAL_PLAN_SHA256);
+    expect(plan).not.toHaveProperty("attemptEvidenceVersion");
+    expect(plan).not.toHaveProperty("continuation");
+    expect(plan.children.every((entry) => !Object.hasOwn(entry, "sourceParentAttempt"))).toBe(true);
+  });
+
+  it("requires a reviewed legacy plan for an authenticated historical artifact", async () => {
+    await expect(
+      loadPlan({ repository: "openclaw/openclaw", runId: "77" }, async () =>
+        historicalExecutionPlan(),
+      ),
+    ).rejects.toThrow("run predates attempt-aware immutable plans; provide --legacy-plan");
+  });
+
+  it("accepts a matching reviewed legacy plan bound to the historical artifact", async () => {
+    await expect(
+      loadPlan(
+        {
+          legacyPlanPath: writeLegacyPlan(),
+          repository: "openclaw/openclaw",
+          runId: "77",
+        },
+        async () => historicalExecutionPlan(),
+      ),
+    ).resolves.toMatchObject({
+      legacy: true,
+      releaseProfile: "beta",
+      rerunGroup: "all",
+      targetSha: TARGET_SHA,
+    });
+  });
+
+  it("rejects a tampered historical artifact before reading the legacy plan", async () => {
+    const artifact = historicalExecutionPlan();
+    artifact.targetSha = "c".repeat(40);
+    await expect(
+      loadPlan(
+        {
+          legacyPlanPath: "/does/not/exist.json",
+          repository: "openclaw/openclaw",
+          runId: "77",
+        },
+        async () => artifact,
+      ),
+    ).rejects.toThrow("release execution plan artifact digest is invalid");
+  });
+
+  it("rejects a recomputed mixed historical and attempt-aware schema", () => {
+    const artifact = {
+      ...historicalExecutionPlan(),
+      attemptEvidenceVersion: 1,
+    };
+    artifact.sha256 = releaseExecutionPlanSha256(artifact);
+    expect(() => validateReleaseExecutionPlanArtifact(artifact)).toThrow(
+      "release execution plan artifact schema is invalid",
+    );
+  });
+
+  it("rejects legacy mode without an authenticated historical artifact", async () => {
+    await expect(
+      loadPlan(
+        {
+          legacyPlanPath: writeLegacyPlan(),
+          repository: "openclaw/openclaw",
+          runId: "77",
+        },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("run has no authenticated immutable FRV plan");
+  });
+
+  it.each([
+    {
+      label: "parent attempt",
+      mutateArtifact: () => {},
+      mutateLegacy: (legacy: ReturnType<typeof reviewedLegacyPlan>) => {
+        legacy.source.runAttempt = 2;
+        legacy.candidate.imageArtifactRunAttempt = "2";
+        legacy.candidate.packageArtifactRunAttempt = "2";
+        legacy.candidate.prepublishPluginRegistryArtifactRunAttempt = "2";
+        for (const entry of Object.values(legacy.children)) {
+          entry.sourceParentAttempt = 2;
+          const spec = releaseChildSpec(entry.key);
+          entry.displayTitle = `${spec.displayName} full-release-validation-77-2${spec.suffix}`;
+        }
+      },
+    },
+    {
+      label: "target",
+      mutateArtifact: () => {},
+      mutateLegacy: (legacy: ReturnType<typeof reviewedLegacyPlan>) => {
+        legacy.targetSha = "c".repeat(40);
+        legacy.candidate.packageSourceSha = legacy.targetSha;
+      },
+    },
+    {
+      label: "workflow ref",
+      mutateArtifact: () => {},
+      mutateLegacy: (legacy: ReturnType<typeof reviewedLegacyPlan>) => {
+        legacy.source.workflowRef = "main";
+        for (const entry of Object.values(legacy.children)) {
+          entry.workflowRef = "main";
+        }
+      },
+    },
+    {
+      label: "workflow SHA",
+      mutateArtifact: () => {},
+      mutateLegacy: (legacy: ReturnType<typeof reviewedLegacyPlan>) => {
+        legacy.source.workflowSha = "c".repeat(40);
+        legacy.source.workflowRef = `release-ci/${legacy.source.workflowSha.slice(0, 12)}-77`;
+        for (const entry of Object.values(legacy.children)) {
+          entry.workflowRef = legacy.source.workflowRef;
+          entry.workflowSha = legacy.source.workflowSha;
+        }
+      },
+    },
+    {
+      label: "release profile",
+      mutateArtifact: () => {},
+      mutateLegacy: (legacy: ReturnType<typeof reviewedLegacyPlan>) => {
+        legacy.releaseProfile = "stable";
+      },
+    },
+    {
+      label: "rerun group",
+      mutateArtifact: (artifact: ReturnType<typeof historicalExecutionPlan>) => {
+        artifact.rerunGroup = "ci";
+      },
+      mutateLegacy: () => {},
+    },
+    {
+      label: "child tuple",
+      mutateArtifact: () => {},
+      mutateLegacy: (legacy: ReturnType<typeof reviewedLegacyPlan>) => {
+        legacy.children.normalCi.runId = "999";
+        legacy.children.normalCi.url = "https://github.com/openclaw/openclaw/actions/runs/999";
+      },
+    },
+  ])(
+    "rejects a reviewed legacy plan with a mismatched $label",
+    async ({ mutateArtifact, mutateLegacy }) => {
+      const artifact = historicalExecutionPlan();
+      const legacy = reviewedLegacyPlan();
+      mutateArtifact(artifact);
+      mutateLegacy(legacy);
+      artifact.sha256 = releaseExecutionPlanSha256(artifact);
+      await expect(
+        loadPlan(
+          {
+            legacyPlanPath: writeLegacyPlan(legacy),
+            repository: "openclaw/openclaw",
+            runId: "77",
+          },
+          async () => artifact,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+});
 
 function runFor(entry: ReturnType<typeof child>, attempt: number, conclusion: string | null) {
   return {
@@ -973,7 +1245,7 @@ describe("frv continuation controller", () => {
         },
         async () => sealedContinuationPlan(child("normalCi", "101"), "88"),
       ),
-    ).rejects.toThrow("run has a canonical execution plan; reject --legacy-plan");
+    ).rejects.toThrow("run has an attempt-aware execution plan; reject --legacy-plan");
   });
 
   it("rejects focused and non-FRV roots before any mutation", async () => {

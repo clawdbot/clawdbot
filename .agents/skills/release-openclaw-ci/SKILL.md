@@ -155,8 +155,9 @@ until their dependent enforcement changes land.
   pnpm frv verify --run <successful-parent-run-id>
   ```
 
-- A pre-support parent has no execution-plan artifact. Recover it only with an
-  operator-reviewed `--legacy-plan <json>` that freezes the source parent tuple,
+- A historical parent whose authenticated execution-plan artifact predates
+  attempt-aware evidence can be recovered only with an operator-reviewed
+  `--legacy-plan <json>` that freezes the source parent tuple,
   source repository, exact child tuples, target SHA, complete candidate
   identity, release profile, soak value, complete validation inputs, and the
   reviewed continuation Tooling SHA. The controller reruns only those child
@@ -170,9 +171,11 @@ until their dependent enforcement changes land.
   ```
 
   The continuation parent records the legacy source in its immutable plan and
-  emits a normal `rerunGroup=all` manifest. If a canonical plan artifact exists,
-  legacy mode is rejected. A historical source manifest is optional only for
-  these pre-support roots. When absent, preflight and publication independently
+  emits a normal `rerunGroup=all` manifest. The reviewed JSON must match the
+  historical artifact's parent attempt, target, workflow, profile, rerun group,
+  and selected child tuples. Attempt-aware artifacts reject legacy mode. A
+  historical source manifest is optional only for these pre-support roots. When
+  absent, preflight and publication independently
   bind the exact successful root resolver, release-checks child resolver,
   reusable-workflow Inputs group, source workflow-dispatch schema, and package,
   plugin-registry, and Docker candidate artifacts. Blank omitted inputs are

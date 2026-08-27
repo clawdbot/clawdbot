@@ -149,6 +149,53 @@ const RELEASE_VALIDATION_INPUT_KEYS = Object.freeze(
     "targetContextRef",
   ].toSorted(),
 );
+const HISTORICAL_EXECUTION_PLAN_KEYS = Object.freeze(
+  [
+    "blockers",
+    "children",
+    "errors",
+    "evidenceReuse",
+    "gates",
+    "kind",
+    "parentRunAttempt",
+    "parentRunId",
+    "releaseProfile",
+    "rerunGroup",
+    "sha256",
+    "targetSha",
+    "trustedWorkflow",
+    "version",
+    "workflowRef",
+    "workflowSha",
+  ].toSorted(),
+);
+const ATTEMPT_AWARE_EXECUTION_PLAN_KEYS = Object.freeze(
+  [...HISTORICAL_EXECUTION_PLAN_KEYS, "attemptEvidenceVersion"].toSorted((left, right) =>
+    left.localeCompare(right),
+  ),
+);
+const HISTORICAL_EXECUTION_PLAN_CHILD_KEYS = Object.freeze(
+  [
+    "dispatchName",
+    "displayTitle",
+    "key",
+    "required",
+    "result",
+    "runAttempt",
+    "runId",
+    "selected",
+    "source",
+    "url",
+    "workflow",
+    "workflowRef",
+    "workflowSha",
+  ].toSorted(),
+);
+const ATTEMPT_AWARE_EXECUTION_PLAN_CHILD_KEYS = Object.freeze(
+  [...HISTORICAL_EXECUTION_PLAN_CHILD_KEYS, "sourceParentAttempt"].toSorted((left, right) =>
+    left.localeCompare(right),
+  ),
+);
 const HISTORICAL_REUSABLE_INPUTS = Object.freeze([
   ["npm_telegram_provider_mode", "npmTelegramProviderMode"],
   ["npm_telegram_scenario", "npmTelegramScenario"],
@@ -1387,12 +1434,65 @@ function normalizedTrustedWorkflow(identity) {
   return { fullRef, ref, sha };
 }
 
+function hasExactKeys(value, expectedKeys) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    JSON.stringify(Object.keys(value).toSorted()) === JSON.stringify(expectedKeys)
+  );
+}
+
+function releaseExecutionPlanShape(payload) {
+  const hasAttemptEvidence = Object.hasOwn(payload, "attemptEvidenceVersion");
+  const hasContinuation = Object.hasOwn(payload, "continuation");
+  const expectedPlanKeys = hasAttemptEvidence
+    ? hasContinuation
+      ? [...ATTEMPT_AWARE_EXECUTION_PLAN_KEYS, "continuation"].toSorted((left, right) =>
+          left.localeCompare(right),
+        )
+      : ATTEMPT_AWARE_EXECUTION_PLAN_KEYS
+    : HISTORICAL_EXECUTION_PLAN_KEYS;
+  const expectedChildKeys = hasAttemptEvidence
+    ? ATTEMPT_AWARE_EXECUTION_PLAN_CHILD_KEYS
+    : HISTORICAL_EXECUTION_PLAN_CHILD_KEYS;
+  if (
+    (!hasAttemptEvidence && hasContinuation) ||
+    (hasAttemptEvidence && payload.attemptEvidenceVersion !== 1) ||
+    !hasExactKeys(payload, expectedPlanKeys) ||
+    !Array.isArray(payload.children) ||
+    payload.children.some((child) => !hasExactKeys(child, expectedChildKeys))
+  ) {
+    throw new Error("release execution plan artifact schema is invalid");
+  }
+  return hasAttemptEvidence ? "attempt-aware" : "historical";
+}
+
 function executionPlanDigestPayload(plan) {
+  if (!Object.hasOwn(plan, "attemptEvidenceVersion")) {
+    return {
+      blockers: plan.blockers,
+      children: plan.children,
+      errors: plan.errors,
+      evidenceReuse: plan.evidenceReuse,
+      gates: plan.gates,
+      kind: plan.kind,
+      parentRunAttempt: plan.parentRunAttempt,
+      parentRunId: plan.parentRunId,
+      releaseProfile: plan.releaseProfile,
+      rerunGroup: plan.rerunGroup,
+      targetSha: plan.targetSha,
+      trustedWorkflow: plan.trustedWorkflow,
+      version: plan.version,
+      workflowRef: plan.workflowRef,
+      workflowSha: plan.workflowSha,
+    };
+  }
   return {
     attemptEvidenceVersion: plan.attemptEvidenceVersion,
     blockers: plan.blockers,
     children: plan.children,
-    continuation: plan.continuation,
+    ...(Object.hasOwn(plan, "continuation") ? { continuation: plan.continuation } : {}),
     errors: plan.errors,
     evidenceReuse: plan.evidenceReuse,
     gates: plan.gates,
@@ -1428,14 +1528,21 @@ export function buildReleaseExecutionPlanArtifact({
   rerunGroup,
   trustedWorkflow,
 }) {
+  const attemptAware = attemptEvidenceVersion !== undefined;
   const normalizedReuse = normalizedEvidenceReuse(evidenceReuse);
   if (!validEvidenceReuseIdentity(normalizedReuse)) {
     throw new Error("release execution plan evidence reuse binding is invalid");
   }
   const normalizedPlanContinuation = normalizedContinuation(continuation);
+  if (!attemptAware && normalizedPlanContinuation) {
+    throw new Error("historical release execution plans cannot contain continuation state");
+  }
   const normalizedChildren = children.map((child) => {
     const spec = releaseChildSpec(child.key);
-    return normalizedPlanChild({ ...child, dispatchName: spec.dispatchName });
+    return normalizedPlanChild(
+      { ...child, dispatchName: spec.dispatchName },
+      { sourceParentAttempt: attemptAware },
+    );
   });
   for (const spec of CHILD_SPECS) {
     if (
@@ -1449,6 +1556,7 @@ export function buildReleaseExecutionPlanArtifact({
             evidenceReuse: normalizedReuse,
             expected,
           }),
+          { sourceParentAttempt: attemptAware },
         ),
       );
     }
@@ -1486,15 +1594,12 @@ export function buildReleaseExecutionPlanArtifact({
   const plan = {
     version: 1,
     kind: "openclaw.full-release-execution-plan",
-    attemptEvidenceVersion:
-      attemptEvidenceVersion === undefined ? undefined : Number(attemptEvidenceVersion),
     parentRunId: String(expected.parentRunId),
     parentRunAttempt: positiveInteger(expected.parentRunAttempt),
     workflowRef: boundedString(expected.workflowRef, MAX_LABEL_LENGTH),
     workflowSha: boundedString(expected.workflowSha, MAX_LABEL_LENGTH),
     targetSha: boundedString(expected.targetSha, MAX_LABEL_LENGTH),
     trustedWorkflow: normalizedTrustedWorkflow(trustedWorkflow),
-    continuation: normalizedPlanContinuation,
     releaseProfile: boundedString(releaseProfile, MAX_LABEL_LENGTH),
     rerunGroup: boundedString(rerunGroup, MAX_LABEL_LENGTH),
     evidenceReuse: normalizedReuse,
@@ -1502,8 +1607,14 @@ export function buildReleaseExecutionPlanArtifact({
     children: normalizedChildren,
     blockers: normalizeIssues(blockers, "release_blocker"),
     errors: normalizeIssues(errors, "orchestration_error"),
+    ...(attemptAware
+      ? {
+          attemptEvidenceVersion: Number(attemptEvidenceVersion),
+          ...(normalizedPlanContinuation ? { continuation: normalizedPlanContinuation } : {}),
+        }
+      : {}),
   };
-  if (plan.attemptEvidenceVersion !== undefined && plan.attemptEvidenceVersion !== 1) {
+  if (attemptAware && plan.attemptEvidenceVersion !== 1) {
     throw new Error("release execution plan attempt evidence version is invalid");
   }
   return { ...plan, sha256: releaseExecutionPlanSha256(plan) };
@@ -1512,6 +1623,11 @@ export function buildReleaseExecutionPlanArtifact({
 export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("release execution plan artifact is invalid");
+  }
+  const shape = releaseExecutionPlanShape(payload);
+  const sha256 = releaseExecutionPlanSha256(payload);
+  if (payload.sha256 !== sha256) {
+    throw new Error("release execution plan artifact digest is invalid");
   }
   if (
     payload.version !== 1 ||
@@ -1539,8 +1655,11 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     throw new Error("release execution plan evidence reuse binding is invalid");
   }
   const trustedWorkflow = normalizedTrustedWorkflow(payload.trustedWorkflow);
-  const continuation = normalizedContinuation(payload.continuation);
-  const children = validatePlan(payload.children);
+  const continuation =
+    shape === "attempt-aware" ? normalizedContinuation(payload.continuation) : undefined;
+  const children = validatePlan(payload.children, {
+    sourceParentAttempt: shape === "attempt-aware",
+  });
   validateExecutionPlanChildBindings(children, payload, continuation);
   if (
     continuation &&
@@ -1572,10 +1691,6 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
   }
   const plan = {
     ...payload,
-    attemptEvidenceVersion:
-      payload.attemptEvidenceVersion === undefined
-        ? undefined
-        : Number(payload.attemptEvidenceVersion),
     parentRunAttempt: positiveInteger(payload.parentRunAttempt),
     parentRunId: String(payload.parentRunId),
     children,
@@ -1583,16 +1698,14 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     errors: normalizeIssues(payload.errors, "orchestration_error"),
     evidenceReuse,
     gates: Array.isArray(payload.gates) ? payload.gates.map(normalizedGate) : [],
-    continuation,
     trustedWorkflow,
+    ...(shape === "attempt-aware"
+      ? {
+          attemptEvidenceVersion: Number(payload.attemptEvidenceVersion),
+          ...(Object.hasOwn(payload, "continuation") ? { continuation } : {}),
+        }
+      : {}),
   };
-  if (plan.attemptEvidenceVersion !== undefined && plan.attemptEvidenceVersion !== 1) {
-    throw new Error("release execution plan attempt evidence version is invalid");
-  }
-  const sha256 = releaseExecutionPlanSha256(plan);
-  if (payload.sha256 !== sha256) {
-    throw new Error("release execution plan artifact digest is invalid");
-  }
   return { ...plan, sha256 };
 }
 
@@ -1834,8 +1947,8 @@ function childTiming(child) {
   };
 }
 
-function normalizedPlanChild(child) {
-  return {
+function normalizedPlanChild(child, options = {}) {
+  const normalized = {
     dispatchName: boundedString(child.dispatchName, MAX_LABEL_LENGTH),
     displayTitle: boundedString(child.displayTitle, MAX_LABEL_LENGTH),
     key: boundedString(child.key, MAX_LABEL_LENGTH),
@@ -1845,12 +1958,17 @@ function normalizedPlanChild(child) {
     runId: boundedString(child.runId, MAX_LABEL_LENGTH),
     selected: child.selected === true,
     source: ["continuation", "reused"].includes(child.source) ? child.source : "fresh",
-    sourceParentAttempt: positiveInteger(child.sourceParentAttempt) ?? null,
     url: boundedString(child.url, MAX_URL_LENGTH),
     workflow: boundedString(child.workflow, MAX_LABEL_LENGTH),
     workflowRef: boundedString(child.workflowRef, MAX_LABEL_LENGTH),
     workflowSha: boundedString(child.workflowSha, MAX_LABEL_LENGTH),
   };
+  return options.sourceParentAttempt === false
+    ? normalized
+    : {
+        ...normalized,
+        sourceParentAttempt: positiveInteger(child.sourceParentAttempt) ?? null,
+      };
 }
 
 export function buildReleaseStateArtifact({
@@ -1932,13 +2050,13 @@ export function buildReleaseStateArtifact({
   };
 }
 
-function validatePlan(value) {
+function validatePlan(value, options = {}) {
   if (!Array.isArray(value)) {
     throw new Error("release state plan is invalid");
   }
   const keys = new Set();
   return value.map((child) => {
-    const normalized = normalizedPlanChild(child);
+    const normalized = normalizedPlanChild(child, options);
     if (
       !normalized.key ||
       !normalized.workflow ||

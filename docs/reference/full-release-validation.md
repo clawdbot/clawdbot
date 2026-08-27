@@ -99,8 +99,8 @@ attempts, the immutable execution plan, Decision/Drain artifacts, and the final
 manifest are the complete state model. It never tags, publishes, changes a
 registry, or prepares a new candidate.
 
-A parent created before immutable execution plans requires an explicit,
-reviewed legacy source plan:
+A parent with an authenticated historical execution-plan artifact that predates
+attempt-aware evidence requires an explicit, reviewed legacy source plan:
 
 ```bash
 pnpm frv continue --failed \
@@ -120,14 +120,17 @@ The JSON must freeze:
 After the exact failed child jobs pass, the controller dispatches one
 continuation parent from the frozen reviewed Tooling SHA. That parent dispatches
 no children, prepares no candidate, disables release-evidence dispatch, and
-emits a normal all-group manifest bound to the legacy source. If the source run
-already has a canonical execution-plan artifact, legacy mode is rejected.
+emits a normal all-group manifest bound to the legacy source. The reviewed JSON
+must match the authenticated historical artifact's parent attempt, target,
+workflow, profile, rerun group, and exact selected child tuples. Attempt-aware
+artifacts reject legacy mode.
 Missing identity is an error; the command does not guess from current `main` or
 the newest similarly named run.
 
 Historical legacy plans use `sourceEvidenceMode: historical-exact-tuple`.
 Their failed source root may omit the validation manifest that newer roots
-always emit, but only when the source has no canonical execution-plan artifact.
+always emit, but only when its authenticated plan predates attempt-aware
+evidence.
 Manifestless recovery binds the exact successful root resolver, the successful
 release-checks child resolver, one complete reusable-workflow runner Inputs
 group, the exact source `workflow_dispatch` schema, and the package,

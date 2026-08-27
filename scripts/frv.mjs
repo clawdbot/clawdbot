@@ -426,6 +426,46 @@ export function validateLegacySource(
   };
 }
 
+function bindLegacySourceToHistoricalArtifact(plan, artifact) {
+  const source = plan.continuation;
+  if (
+    source.sourceRunId !== artifact.parentRunId ||
+    source.sourceRunAttempt !== artifact.parentRunAttempt ||
+    plan.targetSha !== artifact.targetSha ||
+    source.sourceWorkflowRef !== artifact.workflowRef ||
+    source.sourceWorkflowSha !== artifact.workflowSha ||
+    plan.releaseProfile !== artifact.releaseProfile ||
+    plan.rerunGroup !== artifact.rerunGroup
+  ) {
+    throw new Error("legacy continuation plan differs from the authenticated historical artifact");
+  }
+  const artifactChildren = Object.fromEntries(
+    artifact.children
+      .filter((child) => child.selected)
+      .map((child) => [
+        child.key,
+        {
+          displayTitle: child.displayTitle,
+          runAttempt: child.runAttempt,
+          runId: child.runId,
+          sourceParentAttempt: artifact.parentRunAttempt,
+          url: child.url,
+          workflow: child.workflow,
+          workflowRef: child.workflowRef,
+          workflowSha: child.workflowSha,
+        },
+      ]),
+  );
+  if (
+    JSON.stringify(canonicalJson(plan.children)) !== JSON.stringify(canonicalJson(artifactChildren))
+  ) {
+    throw new Error(
+      "legacy continuation child tuples differ from the authenticated historical artifact",
+    );
+  }
+  return plan;
+}
+
 function selectedChildren(plan) {
   if (plan.legacy) {
     return Object.entries(plan.children).map(([key, child]) =>
@@ -1371,21 +1411,25 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
 
 export async function loadPlan(options, loadExecutionPlan = downloadExecutionPlan) {
   const payload = await loadExecutionPlan(options.repository, options.runId);
-  if (options.legacyPlanPath) {
-    if (payload) {
-      throw new Error("run has a canonical execution plan; reject --legacy-plan");
-    }
-    return validateLegacySource(
-      readJson(options.legacyPlanPath, "legacy continuation plan"),
-      options.runId,
-      options.repository,
-    );
-  }
   if (!payload) {
-    throw new Error("run predates immutable FRV plans; provide --legacy-plan");
+    throw new Error("run has no authenticated immutable FRV plan");
   }
   const plan = validateReleaseExecutionPlanArtifact(payload, { parentRunId: options.runId });
-  if (plan.attemptEvidenceVersion !== 1) {
+  const attemptAware = Object.hasOwn(plan, "attemptEvidenceVersion");
+  if (options.legacyPlanPath) {
+    if (attemptAware) {
+      throw new Error("run has an attempt-aware execution plan; reject --legacy-plan");
+    }
+    return bindLegacySourceToHistoricalArtifact(
+      validateLegacySource(
+        readJson(options.legacyPlanPath, "legacy continuation plan"),
+        options.runId,
+        options.repository,
+      ),
+      plan,
+    );
+  }
+  if (!attemptAware) {
     throw new Error("run predates attempt-aware immutable plans; provide --legacy-plan");
   }
   if (plan.rerunGroup !== "all") {

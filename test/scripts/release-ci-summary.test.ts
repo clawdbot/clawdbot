@@ -8,6 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildReleaseExecutionPlanArtifact,
+  composeReleaseChildAttemptEvidence,
   HISTORICAL_CONTINUATION_SOURCE_MODE,
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
@@ -859,6 +860,7 @@ function strictContinuationFixture({
     validationInputs: structuredClone(validationInputs),
   };
   const executionPlan = buildReleaseExecutionPlanArtifact({
+    attemptEvidenceVersion: 1,
     children,
     continuation,
     evidenceReuse: { requested: false },
@@ -954,6 +956,37 @@ function strictContinuationFixture({
       },
     ]),
   );
+  const childJobs = new Map(
+    children.map((child) => [
+      child.runId,
+      [
+        {
+          completed_at: "2026-08-22T00:01:00Z",
+          conclusion: "success",
+          html_url: `https://example.invalid/jobs/${child.key}`,
+          name: child.key === "productPerformance" ? "Verify artifact-only report mode" : "test",
+          started_at: "2026-08-22T00:00:00Z",
+          status: "completed",
+        },
+      ],
+    ]),
+  );
+  Object.assign(rootManifest, {
+    childEvidence: Object.fromEntries(
+      children.map((child) => [
+        child.key,
+        composeReleaseChildAttemptEvidence({
+          attempts: [{ jobs: childJobs.get(child.runId)!, runAttempt: 1 }],
+          expected: {
+            ...child,
+            plannedRunAttempt: child.runAttempt,
+            repository: "openclaw/openclaw",
+          },
+          run: childById.get(child.runId)!,
+        }),
+      ]),
+    ),
+  });
   const rootResolveJob = {
     conclusion: "success",
     id: 899,
@@ -1199,6 +1232,7 @@ function strictContinuationFixture({
     },
     compareCommits: () => ({ status: "identical" }),
     getJobLog: (jobId: number) => logByJobId.get(jobId) ?? "",
+    getRunAttemptJobs: (runId: string) => childJobs.get(runId) ?? [],
     getParentJobs: (runId: string) =>
       runId === sourceRunId
         ? sourceJobs
