@@ -77,6 +77,65 @@ describe("LINE rich-message boundaries", () => {
     });
   });
 
+  it.each([
+    {
+      kind: "command",
+      action: { type: "command", command: "/status" },
+      expected: { type: "message", text: "/status" },
+    },
+    {
+      kind: "callback",
+      action: { type: "callback", value: "action=status" },
+      expected: { type: "postback", data: "action=status" },
+    },
+    {
+      kind: "url",
+      action: { type: "url", url: "https://example.com/status" },
+      expected: { type: "uri", uri: "https://example.com/status" },
+    },
+    {
+      kind: "web-app",
+      action: { type: "web-app", url: "https://example.com/app" },
+      expected: { type: "uri", uri: "https://example.com/app" },
+    },
+  ] as const)(
+    "preserves 40-character Flex $kind labels while quick replies stay bounded",
+    async ({ action, expected }) => {
+      const label = "x".repeat(40);
+      const result = await lineOutboundAdapter.renderPresentation?.({
+        payload: { text: "Choose one" },
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label, action },
+                { label: `${label}y`, action },
+              ],
+            },
+            {
+              type: "select",
+              options: [{ label, action: { type: "callback", value: "quick" } }],
+            },
+          ],
+        },
+        ctx: {} as never,
+      });
+      const line = result?.channelData?.line as {
+        flexMessage: { contents: { footer: { contents: Array<{ action: { label: string } }> } } };
+        quickReplyItems: unknown[];
+      };
+
+      expect(line.flexMessage.contents.footer.contents).toMatchObject([
+        { action: { ...expected, label } },
+        { action: { ...expected, label } },
+      ]);
+      expect(createLineQuickReply(line.quickReplyItems as never)).toMatchObject({
+        items: [{ action: { type: "postback", data: "quick", label: "x".repeat(20) } }],
+      });
+    },
+  );
+
   it("validates every typed LINE-specific rich-message shape", () => {
     const schema = resolveChannelDataSchema();
     const valid = [

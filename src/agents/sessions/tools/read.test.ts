@@ -8,7 +8,7 @@ import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createReadToolDefinition } from "./read.js";
+import { createReadTool, createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
@@ -38,9 +38,7 @@ function createTinyBmp(): Buffer {
   return buffer;
 }
 
-function textContent(
-  result: Awaited<ReturnType<ReturnType<typeof createReadToolDefinition>["execute"]>>,
-): string {
+function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
 }
@@ -104,6 +102,46 @@ describe("read tool", () => {
       });
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { source: "extension", modelHasVision: false },
+    { source: "extension", modelHasVision: true },
+    { source: "embedded", modelHasVision: false },
+    { source: "embedded", modelHasVision: true },
+    { source: "embedded", modelHasVision: undefined },
+  ])("matches image attachments to $source vision capability $modelHasVision", async (testCase) => {
+    const stateDir = tempDirs.make("openclaw-read-vision-");
+    const imagePath = path.join(stateDir, "pixel.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+
+    const result =
+      testCase.source === "embedded"
+        ? await createReadTool(stateDir, {
+            autoResizeImages: false,
+            modelHasVision: testCase.modelHasVision,
+          }).execute("embedded-read", { path: imagePath })
+        : await createReadToolDefinition(stateDir, { autoResizeImages: false }).execute(
+            "extension-read",
+            { path: imagePath },
+            undefined,
+            undefined,
+            {
+              model: { input: testCase.modelHasVision ? ["text", "image"] : ["text"] },
+            } as never,
+          );
+    const imageParts = result.content.filter((part) => part.type === "image");
+    const omitted = testCase.modelHasVision === false;
+
+    expect(imageParts).toHaveLength(omitted ? 0 : 1);
+    expect(textContent(result).includes("does not support images")).toBe(omitted);
+    if (!omitted) {
+      expect(imageParts[0]).toStrictEqual({
+        type: "image",
+        data: ONE_PIXEL_PNG_BASE64,
+        mimeType: "image/png",
+      });
     }
   });
 

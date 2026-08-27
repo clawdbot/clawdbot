@@ -61,6 +61,8 @@ export type QueuedChatSendOptions = {
   previousDraft?: string;
   restoreAttachments?: boolean;
   restoreDraft?: boolean;
+  /** Recognized remote commands remain editable when the Gateway rejects them. */
+  restoreOnTerminalFailure?: boolean;
   routingSessionKey?: string;
   storageMode?: QueuedChatStorageMode;
   target?: ChatCommandTarget;

@@ -142,6 +142,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-zalo",
     "extensions",
     "gateway",
+    "gateway-methods-isolated",
     "hooks",
     "infra",
     "logging",

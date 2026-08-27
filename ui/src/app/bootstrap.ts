@@ -4,7 +4,6 @@ import {
 } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import {
   createApplicationRouter,
   locationForRoute,
@@ -15,6 +14,10 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { setSessionPathBuilder } from "../app-session-path-builder.ts";
+import {
+  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
+  sessionRefFromPath,
+} from "../app-session-route-paths.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -30,7 +33,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
-import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
+import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createApplicationConfigCapability } from "./config.ts";
@@ -42,7 +45,9 @@ import type {
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
+import { applyControlUiAccent } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
@@ -65,7 +70,12 @@ import {
   resolveApplicationStartupSettings,
 } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
-import { resolveTheme, type ThemeMode } from "./theme.ts";
+import {
+  resolveTheme,
+  syncThemeFontStylesheet,
+  syncThemePaletteStylesheet,
+  type ThemeMode,
+} from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
@@ -83,7 +93,9 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
+  syncThemeFontStylesheet(settings.theme);
   syncCustomThemeStyleTag(settings.customTheme);
+  applyControlUiAccent(settings.accent);
   const background = getComputedStyle(root).getPropertyValue("--bg").trim();
   if (background) {
     for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
@@ -101,11 +113,19 @@ function createApplicationTheme(
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
+  let presentationGeneration = 0;
   const publish = () => {
-    applyThemePresentation(settings);
-    for (const listener of listeners) {
-      listener();
-    }
+    const generation = ++presentationGeneration;
+    syncThemePaletteStylesheet(settings.theme, () => {
+      // A slower palette cannot overwrite a newer selection or a disposed app.
+      if (generation !== presentationGeneration) {
+        return;
+      }
+      applyThemePresentation(settings);
+      for (const listener of listeners) {
+        listener();
+      }
+    });
   };
 
   const detachSystemThemeListener = () => {
@@ -134,8 +154,12 @@ function createApplicationTheme(
   };
 
   syncSystemThemeListener();
+  publish();
 
   return {
+    get settings() {
+      return settings;
+    },
     get mode() {
       return settings.themeMode;
     },
@@ -175,6 +199,7 @@ function createApplicationTheme(
       return () => listeners.delete(listener);
     },
     dispose() {
+      presentationGeneration += 1;
       detachSystemThemeListener();
       listeners.clear();
     },
@@ -183,13 +208,13 @@ function createApplicationTheme(
 
 function createApplicationNavigationPreferences(
   initialSettings: UiSettings,
+  navCollapsed: boolean,
 ): ApplicationNavigationPreferences {
-  let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    navCollapsed: settings.navCollapsed,
-    navWidth: settings.navWidth,
-    sidebarEntries: settings.sidebarEntries,
-    pinnedAgentIds: settings.pinnedAgentIds ?? [],
+    navCollapsed,
+    navWidth: initialSettings.navWidth,
+    sidebarEntries: initialSettings.sidebarEntries,
+    pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -199,20 +224,20 @@ function createApplicationNavigationPreferences(
     },
     update(patch) {
       const nextSnapshot = { ...snapshot, ...patch };
-      if (
-        nextSnapshot.navCollapsed === snapshot.navCollapsed &&
-        nextSnapshot.navWidth === snapshot.navWidth &&
-        nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
-        nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
-      ) {
+      const persistedChanged =
+        nextSnapshot.navWidth !== snapshot.navWidth ||
+        nextSnapshot.sidebarEntries !== snapshot.sidebarEntries ||
+        nextSnapshot.pinnedAgentIds !== snapshot.pinnedAgentIds;
+      if (!persistedChanged && nextSnapshot.navCollapsed === snapshot.navCollapsed) {
         return;
       }
-      settings = patchSettings({
-        navCollapsed: nextSnapshot.navCollapsed,
-        navWidth: nextSnapshot.navWidth,
-        sidebarEntries: [...nextSnapshot.sidebarEntries],
-        pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
-      });
+      if (persistedChanged) {
+        patchSettings({
+          navWidth: nextSnapshot.navWidth,
+          sidebarEntries: [...nextSnapshot.sidebarEntries],
+          pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
+        });
+      }
       snapshot = nextSnapshot;
       for (const listener of listeners) {
         listener(snapshot);
@@ -228,7 +253,7 @@ function createApplicationNavigationPreferences(
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
-  readonly documentMode: ApprovalDocumentMode | null;
+  readonly documentMode: ControlUiDocumentMode | null;
   readonly focusLocation: ControlUiFocusLocation | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
@@ -258,7 +283,7 @@ export function bootstrapApplication(
   const [basePath, resourceBasePath] = resolveControlUiPaths(
     startupLocation.pathname || globalThis.location?.pathname || "/",
   );
-  const documentMode = resolveApprovalDocumentMode(startupLocation.pathname, basePath);
+  const documentMode = resolveControlUiDocumentMode(startupLocation.pathname, basePath);
   const persistedSettings = loadSettings();
   const initialSettings = documentMode
     ? resolvePageGatewaySettings(persistedSettings)
@@ -279,16 +304,26 @@ export function bootstrapApplication(
       saveSettings(startup.settings);
     }
   }
-  const applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  const startupSearchParams = new URLSearchParams(applicationLocation.search);
+  const hasSidebarCollapseIntent =
+    startupSearchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name) ===
+    SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value;
+  if (hasSidebarCollapseIntent) {
+    // Sidebar-row hrefs mark new-tab intent once; strip it so copied URLs and reloads stay canonical.
+    startupSearchParams.delete(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name);
+    const search = startupSearchParams.toString();
+    applicationLocation = { ...applicationLocation, search: search ? `?${search}` : "" };
+  }
   if (applicationLocation !== startup.location) {
     history.replace(applicationLocation);
   }
   const focusLocation = parseControlUiFocusLocation(applicationLocation, basePath);
+  // Focus documents render before the shell; starting the application router
+  // would rewrite their reserved presentation route into an ordinary page.
+  const startsApplicationRouter = documentMode === null && focusLocation === null;
   const firstRunDefaultLanding =
-    documentMode === null &&
-    focusLocation === null &&
-    isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
-  const firstRunRedirectEnabled = firstRunDefaultLanding;
+    startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
   const sessionPathBuilderReady =
     dependencies.sessionPathBuilderReady ??
     (documentMode ||
@@ -314,16 +349,8 @@ export function bootstrapApplication(
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
-  const startupRouteId = routeIdFromPath(applicationLocation.pathname, basePath);
-  const releasedSessionQuery =
-    (startupRouteId === "chat" || startupRouteId === "dashboard") &&
-    sessionRouteNamespaceFromPath(applicationLocation.pathname, basePath) === null &&
-    new URLSearchParams(applicationLocation.search).has("session");
   const deferInitialLocationUntilGateway =
-    documentMode === null &&
-    !releasedSessionQuery &&
-    firstRunDefaultLanding &&
-    !parseAgentSessionKey(settings.sessionKey);
+    firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
   let resolveInitialFirstRunDecision: (() => void) | null = null;
   const initialFirstRunDecision = deferInitialLocationUntilGateway
     ? new Promise<void>((resolve) => {
@@ -355,6 +382,7 @@ export function bootstrapApplication(
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
+  const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
     resourceBasePath,
     auth: {
@@ -377,7 +405,11 @@ export function bootstrapApplication(
   };
   const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
   syncConfigWriteSuspension();
-  const navigation = createApplicationNavigationPreferences(settings);
+  const navigation = createApplicationNavigationPreferences(
+    settings,
+    hasSidebarCollapseIntent &&
+      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
+  );
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({
@@ -396,11 +428,7 @@ export function bootstrapApplication(
     initialUserMessage,
   });
   const chatAttachmentHandoff = createChatAttachmentHandoff();
-  applyThemePresentation(settings);
   const router = createApplicationRouter();
-  // Focus documents render before the shell; starting the application router
-  // would rewrite their reserved presentation route into an ordinary page.
-  const startsApplicationRouter = documentMode === null && focusLocation === null;
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -513,6 +541,7 @@ export function bootstrapApplication(
     agentSelection,
     channels,
     config,
+    scopeUpgrade,
     runtimeConfig,
     sessions,
     placementStartup,
@@ -563,7 +592,7 @@ export function bootstrapApplication(
       steps.push(() =>
         startModelSetupFirstRunRedirectAfterLocation({
           context,
-          enabled: firstRunRedirectEnabled,
+          enabled: firstRunDefaultLanding,
           history,
           initialLocationReady: deferInitialLocationUntilGateway
             ? Promise.resolve(applicationLocation)
@@ -632,6 +661,7 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
+      scopeUpgrade.dispose();
       placementStartup.dispose();
       sessions.dispose();
       workboard.dispose();

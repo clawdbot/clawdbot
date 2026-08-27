@@ -76,9 +76,9 @@ function normalizeProviderModelsForConfig(
   provider: ProviderConfig,
   options: ProviderModelNormalizationOptions = {},
   completeCatalogCosts = false,
-): { provider: ProviderConfig; mutated: boolean } {
+): ProviderConfig {
   if (!Array.isArray(provider.models) || provider.models.length === 0) {
-    return { provider, mutated: false };
+    return provider;
   }
 
   let mutated = false;
@@ -122,9 +122,7 @@ function normalizeProviderModelsForConfig(
     }
   }
 
-  return mutated
-    ? { provider: { ...provider, models: nextModels }, mutated }
-    : { provider, mutated };
+  return mutated ? { ...provider, models: nextModels } : provider;
 }
 
 export function normalizeProviderCatalogModelsForConfig(
@@ -141,10 +139,8 @@ export function normalizeProviderCatalogModelsForConfig(
     // Complete the publication schema after duplicate rows merge, or synthetic
     // zeroes can mask explicit cache prices supplied by a later row.
     const normalized = normalizeProviderModelsForConfig(providerKey, provider, options, true);
-    if (normalized.mutated) {
-      mutated = true;
-    }
-    next[providerKey] = normalized.provider;
+    mutated ||= normalized !== provider;
+    next[providerKey] = normalized;
   }
 
   return mutated ? next : providers;
@@ -195,35 +191,26 @@ export function normalizeProviders(params: {
       secretDefaults: params.secretDefaults,
     });
     if (normalizedHeaders.mutated) {
-      mutated = true;
       normalizedProvider = { ...normalizedProvider, headers: normalizedHeaders.headers };
     }
-    const providerWithConfiguredApiKey = normalizeConfiguredProviderApiKey({
+    normalizedProvider = normalizeConfiguredProviderApiKey({
       providerKey: normalizedKey,
       provider: normalizedProvider,
       secretDefaults: params.secretDefaults,
       profileApiKey: undefined,
       secretRefManagedProviders: params.secretRefManagedProviders,
     });
-    if (providerWithConfiguredApiKey !== normalizedProvider) {
-      mutated = true;
-      normalizedProvider = providerWithConfiguredApiKey;
-    }
 
     // Reverse-lookup: if apiKey looks like a resolved secret value (not an env
     // var name), check whether it matches the canonical env var for this provider.
     // This prevents resolveConfigEnvVars()-resolved secrets from being persisted
     // to models.json as plaintext. (Fixes #38757)
-    const providerWithResolvedEnvApiKey = normalizeResolvedEnvApiKey({
+    normalizedProvider = normalizeResolvedEnvApiKey({
       providerKey: normalizedKey,
       provider: normalizedProvider,
       env,
       secretRefManagedProviders: params.secretRefManagedProviders,
     });
-    if (providerWithResolvedEnvApiKey !== normalizedProvider) {
-      mutated = true;
-      normalizedProvider = providerWithResolvedEnvApiKey;
-    }
 
     const needsProfileApiKey =
       Array.isArray(normalizedProvider.models) &&
@@ -236,7 +223,7 @@ export function normalizeProviders(params: {
     const providerApiKeyResolver = needsProfileApiKey
       ? resolveProviderConfigApiKeyResolver(normalizedKey, undefined, params.manifestRegistry)
       : undefined;
-    const providerWithApiKey = resolveMissingProviderApiKey({
+    normalizedProvider = resolveMissingProviderApiKey({
       providerKey: normalizedKey,
       provider: normalizedProvider,
       env,
@@ -244,32 +231,17 @@ export function normalizeProviders(params: {
       secretRefManagedProviders: params.secretRefManagedProviders,
       providerApiKeyResolver,
     });
-    if (providerWithApiKey !== normalizedProvider) {
-      mutated = true;
-      normalizedProvider = providerWithApiKey;
-    }
 
-    const providerSpecificNormalized = normalizeProviderSpecificConfig(
+    normalizedProvider = normalizeProviderSpecificConfig(
       normalizedKey,
       normalizedProvider,
       params.manifestRegistry,
     );
-    if (providerSpecificNormalized !== normalizedProvider) {
-      mutated = true;
-      normalizedProvider = providerSpecificNormalized;
-    }
 
-    const providerWithNormalizedModels = normalizeProviderModelsForConfig(
-      normalizedKey,
-      normalizedProvider,
-      {
-        manifestPlugins: params.manifestPlugins,
-      },
-    );
-    if (providerWithNormalizedModels.mutated) {
-      mutated = true;
-      normalizedProvider = providerWithNormalizedModels.provider;
-    }
+    normalizedProvider = normalizeProviderModelsForConfig(normalizedKey, normalizedProvider, {
+      manifestPlugins: params.manifestPlugins,
+    });
+    mutated ||= normalizedProvider !== provider;
 
     const existing = next[normalizedKey];
     if (existing) {

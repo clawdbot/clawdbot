@@ -307,7 +307,7 @@ class GatewayDiscovery(
 
   private fun resolvedHostAddress(resolved: NsdServiceInfo): String? {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-      return resolved.hostAddresses.firstOrNull()?.hostAddress
+      return resolved.hostAddresses.firstOrNull { it.hostAddress?.contains('%') == false }?.hostAddress
     }
     return legacyHostAddress(resolved)
   }

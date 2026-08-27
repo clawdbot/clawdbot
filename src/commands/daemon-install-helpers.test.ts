@@ -14,6 +14,7 @@ import {
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
+  resolvePreferredBunPath: vi.fn(),
   resolvePreferredNodePath: vi.fn(),
   resolveGatewayProgramArguments: vi.fn(),
   resolveSystemNodeInfo: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock("./daemon-install-auth-profiles-store.runtime.js", () => ({
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
+  resolvePreferredBunPath: mocks.resolvePreferredBunPath,
   resolvePreferredNodePath: mocks.resolvePreferredNodePath,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
@@ -344,14 +346,14 @@ describe("buildGatewayInstallPlan", () => {
     ...env,
   });
 
-  it("uses provided nodePath and returns plan", async () => {
+  it("uses provided runtimePath and returns plan", async () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
       env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
-      nodePath: "/custom/node",
+      runtimePath: "/custom/node",
     });
 
     expect(plan.programArguments).toEqual(["node", "gateway"]);
@@ -366,6 +368,35 @@ describe("buildGatewayInstallPlan", () => {
     expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
     expect(serviceEnvRequest?.port).toBe(3000);
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
+  });
+
+  it("resolves and forwards Bun for a Bun Gateway install plan", async () => {
+    const bunPath = "/home/test/.bun/bin/bun";
+    mockNodeGatewayPlanFixture();
+    mocks.resolvePreferredBunPath.mockResolvedValue(bunPath);
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: [bunPath, "/opt/openclaw/dist/index.js", "gateway"],
+    });
+
+    await buildGatewayInstallPlan({
+      env: { HOME: isolatedHome },
+      port: 3000,
+      runtime: "bun",
+    });
+
+    expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({
+      env: { HOME: isolatedHome },
+      runtime: "bun",
+    });
+    expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith({
+      port: 3000,
+      dev: false,
+      runtime: "bun",
+      runtimePath: bunPath,
+      wrapperPath: undefined,
+    });
+    expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
   });
 
   it("passes only the existing service NODE_OPTIONS to heap resolution", async () => {
@@ -399,7 +430,7 @@ describe("buildGatewayInstallPlan", () => {
         env: { HOME: isolatedHome },
         port: 3000,
         runtime: "node",
-        nodePath: "/opt/homebrew/opt/node/bin/node",
+        runtimePath: "/opt/homebrew/opt/node/bin/node",
         platform: "darwin",
       });
     } finally {
@@ -412,14 +443,14 @@ describe("buildGatewayInstallPlan", () => {
     ).toStrictEqual(["/opt/homebrew/opt/node/bin", path.dirname(openclawBinPath)]);
   });
 
-  it("does not prepend '.' when nodePath is a bare executable name", async () => {
+  it("does not prepend '.' when runtimePath is a bare executable name", async () => {
     mockNodeGatewayPlanFixture();
 
     await buildGatewayInstallPlan({
       env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
-      nodePath: "node",
+      runtimePath: "node",
     });
 
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
@@ -591,6 +622,203 @@ describe("buildGatewayInstallPlan", () => {
     );
     expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
   });
+
+  it("keeps first-install provider API keys file-backed without capturing unrelated credentials", async () => {
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+    mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENAI_API_KEY: "ambient-openai",
+        ANTHROPIC_API_KEY: "ambient-anthropic",
+        ANTHROPIC_OAUTH_TOKEN: "ambient-oauth",
+        ANTHROPIC_ADMIN_API_KEY: "ambient-anthropic-admin",
+        OPENAI_ADMIN_KEY: "ambient-openai-admin",
+        GITHUB_TOKEN: "ambient-github",
+        GH_TOKEN: "ambient-gh",
+        UNRECOGNIZED_API_KEY: "ambient-unrecognized",
+        NODE_OPTIONS: "--require /tmp/untrusted.js",
+      }),
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      config: {},
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBe("ambient-openai");
+    expect(plan.environment.ANTHROPIC_API_KEY).toBe("ambient-anthropic");
+    expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+    expect(plan.environmentValueSources?.ANTHROPIC_API_KEY).toBe("file");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    expect(plan.environment.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
+    expect(plan.environment.ANTHROPIC_ADMIN_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENAI_ADMIN_KEY).toBeUndefined();
+    expect(plan.environment.GITHUB_TOKEN).toBeUndefined();
+    expect(plan.environment.GH_TOKEN).toBeUndefined();
+    expect(plan.environment.UNRECOGNIZED_API_KEY).toBeUndefined();
+    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+  });
+
+  it("does not let enabled third-party plugins capture ambient provider API keys", async () => {
+    const pluginId = "third-party-provider";
+    const pluginRoot = path.join(isolatedHome, pluginId);
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "index.js"));
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: { type: "object", additionalProperties: false },
+        setup: { providers: [{ id: pluginId, envVars: ["THIRD_PARTY_API_KEY"] }] },
+        providerAuthChoices: [
+          {
+            provider: pluginId,
+            method: "api-key",
+            choiceId: "third-party-api-key",
+            appGuidedSecret: true,
+          },
+        ],
+      }),
+    );
+    mockNodeGatewayPlanFixture();
+    mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
+    const env = isolatedPlanEnv({
+      OPENAI_API_KEY: "bundled-openai",
+      THIRD_PARTY_API_KEY: "ambient-third-party",
+    });
+    const config: OpenClawConfig = {
+      plugins: {
+        enabled: true,
+        load: { paths: [pluginRoot] },
+        entries: { [pluginId]: { enabled: true } },
+      },
+    };
+    const { loadManifestMetadataSnapshot } =
+      await import("../plugins/manifest-contract-eligibility.js");
+    const snapshot = loadManifestMetadataSnapshot({ config, env });
+    const externalPlugin = snapshot.plugins.find(({ id }) => id === pluginId);
+    expect(externalPlugin).toEqual(expect.objectContaining({ origin: "config" }));
+    expect(externalPlugin?.trustedOfficialInstall).not.toBe(true);
+    expect(snapshot.index.plugins.find(({ pluginId: id }) => id === pluginId)?.enabled).toBe(true);
+
+    const plan = await buildGatewayInstallPlan({
+      env,
+      config,
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBe("bundled-openai");
+    expect(plan.environment.THIRD_PARTY_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("keeps durable provider API keys authoritative over first-install shell credentials", async () => {
+    await writeStateDirDotEnv("OPENAI_API_KEY=durable-openai\n", {
+      stateDir: path.join(isolatedHome, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+    mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENAI_API_KEY: "ambient-openai",
+        ANTHROPIC_API_KEY: "ambient-anthropic",
+      }),
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      config: {},
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.ANTHROPIC_API_KEY).toBe("ambient-anthropic");
+    expect(plan.environmentValueSources?.ANTHROPIC_API_KEY).toBe("file");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
+  });
+
+  it("does not claim provider API keys already owned by Linux auth profiles", async () => {
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({ OPENAI_API_KEY: "profile-owned-openai" }),
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      config: {},
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBe("profile-owned-openai");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it.each(["inline", "file"] as const)(
+    "preserves an existing %s provider API key over unrelated shell credentials",
+    async (source) => {
+      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+      mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
+
+      const plan = await buildGatewayInstallPlan({
+        env: isolatedPlanEnv({ OPENAI_API_KEY: "ambient-openai" }),
+        existingEnvironment: { OPENAI_API_KEY: "operator-openai" },
+        existingEnvironmentValueSources: { OPENAI_API_KEY: source },
+        port: 3000,
+        runtime: "node",
+        platform: "linux",
+        config: {},
+      });
+
+      expect(plan.environment.OPENAI_API_KEY).toBe("operator-openai");
+      expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe(source);
+      expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { currentOpenAiKey: "existing-managed-openai", expectedOpenAiKey: undefined },
+    { currentOpenAiKey: "rotated-operator-openai", expectedOpenAiKey: "rotated-operator-openai" },
+  ])(
+    "retires managed provider keys while preserving genuinely rotated replacements",
+    async ({ currentOpenAiKey, expectedOpenAiKey }) => {
+      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+      mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
+
+      const plan = await buildGatewayInstallPlan({
+        env: isolatedPlanEnv({
+          OPENAI_API_KEY: currentOpenAiKey,
+          ANTHROPIC_API_KEY: "fresh-operator-anthropic",
+        }),
+        existingEnvironment: {
+          OPENAI_API_KEY: "existing-managed-openai",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY",
+        },
+        existingEnvironmentValueSources: { OPENAI_API_KEY: "file" },
+        port: 3000,
+        runtime: "node",
+        platform: "linux",
+        config: {},
+      });
+
+      expect(plan.environment.OPENAI_API_KEY).toBe(expectedOpenAiKey);
+      expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe(
+        expectedOpenAiKey ? "file" : undefined,
+      );
+      expect(plan.environment.ANTHROPIC_API_KEY).toBe("fresh-operator-anthropic");
+      expect(plan.environmentValueSources?.ANTHROPIC_API_KEY).toBe("file");
+      expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    },
+  );
 
   it("renders config env SecretRefs as file-backed managed values on Linux", async () => {
     mockNodeGatewayPlanFixture({

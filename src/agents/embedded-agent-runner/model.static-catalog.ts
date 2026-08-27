@@ -27,7 +27,7 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { buildInlineProviderModels, type InlineModelEntry } from "./model.inline-provider.js";
 import {
   createStaticModelIdMatcher,
   staticModelIdMatches,
@@ -97,38 +97,22 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
   };
 }
 
-function modelFromProviderStaticCatalog(params: {
-  provider: string;
-  providerConfig: ModelProviderConfig;
-  model: ModelProviderConfig["models"][number];
-  providerMetadataOwners?: PluginMetadataSnapshot["owners"];
-}): ProviderRuntimeModel {
-  const [model] = buildInlineProviderModels(
-    {
-      [params.provider]: { ...params.providerConfig, models: [params.model] },
-    },
-    { providerMetadataOwners: params.providerMetadataOwners },
-  );
+function completeProviderStaticCatalogModel(
+  model: InlineModelEntry,
+  providerConfig: ModelProviderConfig,
+): ProviderRuntimeModel {
   return {
     ...model,
-    id: model?.id ?? params.model.id,
-    name: model?.name || params.model.name || params.model.id,
-    provider: params.provider,
-    api: model?.api ?? params.model.api ?? params.providerConfig.api ?? "openai-responses",
-    baseUrl: model?.baseUrl ?? params.model.baseUrl ?? params.providerConfig.baseUrl ?? "",
-    reasoning: model?.reasoning ?? params.model.reasoning ?? false,
-    input: normalizeStaticCatalogInput(model?.input ?? params.model.input),
-    cost: model?.cost ?? normalizeStaticCatalogCost(params.model.cost),
-    contextWindow: model?.contextWindow ?? params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-    contextTokens: model?.contextTokens ?? params.model.contextTokens,
-    maxTokens:
-      model?.maxTokens ??
-      params.model.maxTokens ??
-      params.providerConfig.maxTokens ??
-      DEFAULT_CONTEXT_TOKENS,
-    ...(params.providerConfig.authHeader !== undefined
-      ? { authHeader: params.providerConfig.authHeader }
-      : {}),
+    name: model.name || model.id,
+    api: model.api ?? providerConfig.api ?? "openai-responses",
+    baseUrl: model.baseUrl ?? "",
+    reasoning: model.reasoning ?? false,
+    input: normalizeStaticCatalogInput(model.input),
+    cost: model.cost ?? normalizeStaticCatalogCost(undefined),
+    contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: model.contextTokens,
+    maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
   };
 }
 
@@ -485,21 +469,20 @@ async function loadBundledProviderStaticCatalogModels(params: {
     });
     for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
       const provider = normalizeProviderId(providerIdRaw);
-      if (!provider || !Array.isArray(providerConfig.models)) {
+      // Empty catalogs never resolve request secrets or transport settings.
+      if (
+        !provider ||
+        !Array.isArray(providerConfig.models) ||
+        providerConfig.models.length === 0
+      ) {
         continue;
       }
       const models = modelsByProvider.get(provider) ?? [];
       models.push(
-        ...providerConfig.models.map((model) =>
-          modelFromProviderStaticCatalog({
-            provider,
-            providerConfig,
-            model,
-            ...(params.providerMetadataOwners
-              ? { providerMetadataOwners: params.providerMetadataOwners }
-              : {}),
-          }),
-        ),
+        ...buildInlineProviderModels(
+          { [provider]: providerConfig },
+          { providerMetadataOwners: params.providerMetadataOwners },
+        ).map((model) => completeProviderStaticCatalogModel(model, providerConfig)),
       );
       modelsByProvider.set(provider, models);
     }
@@ -639,17 +622,6 @@ function createScopedBundledProviderStaticCatalogModelResolver(
   };
 }
 
-/**
- * Prepares bundled provider static-catalog lookup.
- * Each provider hook runs at most once for the resolver lifetime.
- */
-function createBundledProviderStaticCatalogModelResolver(
-  params: BundledProviderStaticCatalogResolverParams = {},
-): (lookup: BundledStaticCatalogLookup) => Promise<ProviderRuntimeModel | undefined> {
-  const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(params);
-  return async (lookup) => await resolveModel(lookup);
-}
-
 function resolveOwnedNestedProviderLookup(params: {
   lookup: BundledStaticCatalogLookup;
   resolverParams: BundledProviderStaticCatalogResolverParams;
@@ -735,5 +707,5 @@ export async function resolveBundledProviderStaticCatalogModel(params: {
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ProviderRuntimeModel | undefined> {
-  return createBundledProviderStaticCatalogModelResolver(params)(params);
+  return createScopedBundledProviderStaticCatalogModelResolver(params)(params);
 }

@@ -26,6 +26,9 @@
           "enabled": {
             "type": "boolean"
           },
+          "responsePrefix": {
+            "type": "string"
+          },
           "markdown": {
             "type": "object",
             "properties": {
@@ -198,6 +201,11 @@
               ]
             }
           },
+          "historyLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
+          },
           "groups": {
             "type": "object",
             "propertyNames": {
@@ -212,6 +220,23 @@
                 },
                 "requireMention": {
                   "type": "boolean"
+                },
+                "groupPolicy": {
+                  "type": "string",
+                  "enum": ["open", "disabled", "allowlist"]
+                },
+                "groupAllowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
                 }
               },
               "additionalProperties": false

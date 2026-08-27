@@ -203,7 +203,7 @@ export function registerCompletionCli(program: Command) {
       // introduce unrelated plugin failures before the cache can be checked or installed.
       if (options.install && !options.writeState) {
         const targetShell = options.shell ?? resolveShellFromEnv();
-        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        await installCompletion(targetShell, false, program.name());
         return;
       }
 
@@ -239,7 +239,7 @@ export function registerCompletionCli(program: Command) {
 
       if (options.install) {
         const targetShell = options.shell ?? resolveShellFromEnv();
-        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        await installCompletion(targetShell, false, program.name());
         return;
       }
 

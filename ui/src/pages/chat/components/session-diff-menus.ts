@@ -55,7 +55,6 @@ export type SessionDiffMenuDraft = WithoutMenuAnchor<SessionDiffMenuData>;
 
 export type SessionDiffMenuAction =
   | { kind: "collapse-all" }
-  | { kind: "copy-path"; path: string }
   | { kind: "expand-all" }
   | { kind: "open-editor"; editor: EditorId; path: string }
   | { kind: "open-file"; path: string }
@@ -99,10 +98,6 @@ class SessionDiffMenu extends OpenClawLightDomElement {
       "scope:uncommitted": { kind: "scope", value: { scope: "uncommitted" } },
     };
     const fileMenu = this.menu?.kind === "file" ? this.menu : null;
-    if (fileMenu && value === "copy-path") {
-      this.run({ kind: "copy-path", path: fileMenu.path });
-      return;
-    }
     if (fileMenu && value === "open-file") {
       this.run({ kind: "open-file", path: fileMenu.path });
       return;
@@ -142,10 +137,7 @@ class SessionDiffMenu extends OpenClawLightDomElement {
 
   private renderFileMenu(menu: Extract<SessionDiffMenuData, { kind: "file" }>) {
     return html`
-      <wa-dropdown-item class="session-menu__item" value="copy-path">
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
-        <span class="session-menu__text">${t("chat.sessionDiff.copyPath")}</span>
-      </wa-dropdown-item>
+      ${this.renderCopyRow(menu.path, t("chat.sessionDiff.copyPath"))}
       <wa-dropdown-item class="session-menu__item" value="open-file" ?disabled=${!menu.canOpenFile}>
         <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.fileText}</span>
         <span class="session-menu__text">${t("chat.sessionDiff.openFile")}</span>

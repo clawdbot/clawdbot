@@ -1,12 +1,71 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
+import "../styles/sidebar-attention-floating.css";
 import "../styles/sidebar-issues.css";
 import "./web-awesome-tabs.ts";
+// Upgrade the real element: the floating layout once regressed because a base
+// class stamped inline `display: contents`, which only a live upgrade reveals.
+import "./sidebar-attention.ts";
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  document.body.replaceChildren();
+  document.documentElement.classList.remove(
+    "openclaw-native-nav",
+    "openclaw-native-macos",
+    "openclaw-native-web-chrome",
+  );
+});
 
 describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
+  it("positions collapsed sidebar attention beyond chrome controls", () => {
+    const shell = document.createElement("div");
+    shell.className = "shell shell--nav-collapsed";
+    shell.innerHTML = `
+      <div class="shell-chrome-controls">
+        <button class="shell-chrome-controls__button"></button>
+        <button class="shell-chrome-controls__button"></button>
+        <button class="shell-chrome-controls__button"></button>
+        <button class="shell-chrome-controls__button shell-chrome-controls__custodian"></button>
+      </div>
+      <nav class="macos-titlebar-controls">
+        ${Array.from(
+          { length: 5 },
+          () => '<button class="topbar-icon-btn macos-titlebar-controls__button"></button>',
+        ).join("")}
+      </nav>
+      <main class="content">
+        <openclaw-sidebar-attention class="sidebar-attention--floating">
+          <button class="sidebar-issues-button"></button>
+        </openclaw-sidebar-attention>
+      </main>
+    `;
+    document.body.append(shell);
+
+    const attention = shell.querySelector<HTMLElement>("openclaw-sidebar-attention")!;
+    const chrome = shell.querySelector<HTMLElement>(".shell-chrome-controls")!;
+    const nativeChrome = shell.querySelector<HTMLElement>(".macos-titlebar-controls")!;
+    const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
+
+    expect(getComputedStyle(attention).position).toBe("fixed");
+    expect(getComputedStyle(attention).display).toBe("flex");
+    expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+      chrome.getBoundingClientRect().right + 8,
+    );
+    expect(Number.parseFloat(getComputedStyle(inbox).borderTopWidth)).toBeGreaterThan(0);
+
+    document.documentElement.classList.add("openclaw-native-nav");
+    expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(8);
+
+    document.documentElement.classList.add("openclaw-native-macos");
+    expect(getComputedStyle(attention).top).toBe("52px");
+
+    document.documentElement.classList.add("openclaw-native-web-chrome");
+    expect(
+      attention.getBoundingClientRect().left - nativeChrome.getBoundingClientRect().right,
+    ).toBe(4);
+  });
+
   it("keeps hub tabs compact and item rails flush with the scrollport", async () => {
     const fixture = document.createElement("section");
     fixture.className = "sidebar-issues-panel";
@@ -78,5 +137,31 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(getComputedStyle(badge!).borderRadius).not.toBe("0px");
     expect(getComputedStyle(summary!).paddingBlock).toBe("8px");
     expect(item!.getBoundingClientRect().right).toBeCloseTo(list!.getBoundingClientRect().right, 1);
+  });
+
+  it("keeps mobile dismiss actions visible and touch-sized", () => {
+    const shell = document.createElement("div");
+    shell.className = "shell shell--mobile-nav";
+    shell.innerHTML = `
+      <section class="sidebar-issues-panel">
+        <header class="sidebar-issues-panel__header">
+          <button class="sidebar-issues-panel__dismiss-shown" type="button">Dismiss shown</button>
+        </header>
+        <div class="sidebar-issues-panel__summary">
+          <button class="sidebar-issues-panel__dismiss" type="button">Dismiss</button>
+        </div>
+      </section>
+    `;
+    document.body.append(shell);
+
+    const dismiss = shell.querySelector<HTMLElement>(".sidebar-issues-panel__dismiss")!;
+    const dismissShown = shell.querySelector<HTMLElement>(".sidebar-issues-panel__dismiss-shown")!;
+    const style = getComputedStyle(dismiss);
+
+    expect(style.opacity).toBe("1");
+    expect(style.pointerEvents).not.toBe("none");
+    expect(dismiss.getBoundingClientRect().width).toBeGreaterThanOrEqual(40);
+    expect(dismiss.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
+    expect(dismissShown.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
   });
 });

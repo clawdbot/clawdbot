@@ -207,6 +207,7 @@ const DiscordAccountSchemaBase = z
       allowFrom: DiscordIdListSchema.optional(),
       streaming: DiscordPreviewStreamingConfigSchema.optional(),
     }),
+    joinIntro: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     token: registerSensitiveConfigSchema(SecretInputSchema.optional()),
     applicationId: DiscordIdSchema.optional(),

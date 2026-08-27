@@ -3,7 +3,6 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import {
   emitAgentActivityEvent,
   type AgentCommandOutputEventData,
@@ -185,6 +184,13 @@ export async function handleToolExecutionEnd(
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
+  // A Code Mode exec that returns "waiting" parked a run the model resumes via
+  // `wait`; record that here so recovery can tell parked nested work apart
+  // from any other still-active lifecycle item.
+  const codeModeSuspended =
+    !isToolError &&
+    ctx.params.codeModeExecToolNames?.has(toolName) === true &&
+    readToolResultDetails(sanitizedResult)?.status === "waiting";
   const terminate =
     result !== null &&
     typeof result === "object" &&
@@ -198,6 +204,7 @@ export async function handleToolExecutionEnd(
     isError: observerIsError,
     ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
+    ...(codeModeSuspended ? { codeModeSuspended: true } : {}),
   });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
@@ -247,6 +254,7 @@ export async function handleToolExecutionEnd(
       : {}),
   });
   ctx.state.lastToolError = terminal.lastToolError;
+  const terminalErrorStatus = terminal.executionStarted ? "failed" : "blocked";
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;
@@ -289,8 +297,7 @@ export async function handleToolExecutionEnd(
         config: ctx.params.config,
         currentChannelId: ctx.params.currentChannelId,
         currentMessagingTarget: ctx.params.currentMessagingTarget,
-        currentThreadId:
-          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        currentThreadId: ctx.params.currentThreadId,
         currentMessageId: ctx.params.currentMessageId,
         replyToMode: ctx.params.replyToMode,
         hasRepliedRef: startData?.hasRepliedRef,
@@ -318,8 +325,7 @@ export async function handleToolExecutionEnd(
         currentAccountId: ctx.params.currentAccountId,
         currentChannelId: ctx.params.currentChannelId,
         currentMessagingTarget: ctx.params.currentMessagingTarget,
-        currentThreadId:
-          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        currentThreadId: ctx.params.currentThreadId,
         sessionKey: ctx.params.sessionKey,
         deliveredPayload: extractionResult,
       }),
@@ -447,7 +453,7 @@ export async function handleToolExecutionEnd(
     phase: "end",
     kind: "tool",
     title: buildToolItemTitle(toolName, meta),
-    status: isToolError ? "failed" : "completed",
+    status: isToolError ? terminalErrorStatus : "completed",
     name: toolName,
     meta,
     commandBearing: callSummary.commandBearing,
@@ -542,7 +548,7 @@ export async function handleToolExecutionEnd(
       const output = extractLiveExecOutput(eventResult);
       const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
-        execDetails?.status === "failed" || isToolError ? "failed" : "completed";
+        execDetails?.status === "failed" || isToolError ? terminalErrorStatus : "completed";
       emitTrackedItemEvent(ctx, {
         itemId: commandItemId,
         phase: "end",
@@ -568,7 +574,11 @@ export async function handleToolExecutionEnd(
         ...(output ? { output } : {}),
         status: commandStatus,
         ...(execDetails && "exitCode" in execDetails ? { exitCode: execDetails.exitCode } : {}),
-        ...(execDetails && "durationMs" in execDetails
+        ...(execDetails &&
+        "durationMs" in execDetails &&
+        typeof execDetails.durationMs === "number" &&
+        Number.isFinite(execDetails.durationMs) &&
+        execDetails.durationMs >= 0
           ? { durationMs: execDetails.durationMs }
           : {}),
         ...(execDetails && "cwd" in execDetails && typeof execDetails.cwd === "string"

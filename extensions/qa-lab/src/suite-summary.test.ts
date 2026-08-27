@@ -128,6 +128,13 @@ describe("qa suite summary helpers", () => {
         scenarios: [{ status: "pass" }, { status: "pass" }],
       },
     },
+    {
+      name: "positive counts without their claimed scenario rows",
+      summary: {
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [],
+      },
+    },
   ])("rejects complete suite accounting with $name", async ({ summary }) => {
     for (const reader of [
       readQaSuiteFailedScenarioCountFromFile,

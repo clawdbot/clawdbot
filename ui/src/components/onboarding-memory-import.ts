@@ -11,6 +11,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/onboarding-memory-import.css";
@@ -25,15 +26,6 @@ type ProviderResult =
 
 function toErrorMessage(error: unknown): string {
   return formatUiError(error, t("onboarding.memoryImport.unknownError"));
-}
-
-function createIdempotencyKey(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return [...globalThis.crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
 }
 
 function plannedItems(provider: MemoryMigrationProviderPlan) {
@@ -244,7 +236,7 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
         const result = await client.request<MigrationsMemoryApplyResult>(
           "migrations.memory.apply",
           {
-            idempotencyKey: createIdempotencyKey(),
+            idempotencyKey: generateUUID(),
             agentId,
             providerId: provider.providerId,
             planFingerprint,

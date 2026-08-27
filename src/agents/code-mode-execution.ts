@@ -84,6 +84,7 @@ export async function runCodeModeExec(params: {
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
     prepareInput: true,
+    validateInput: true,
   });
   params.onRuntime?.(runtime);
   const bridgeDispatch = createCodeModeBridgeDispatchState();
@@ -120,7 +121,7 @@ export async function runCodeModeExec(params: {
   try {
     const source = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      deadlineMs,
+      remainingMs: deadlineMs - Date.now(),
       signal: params.signal,
       createTimeoutError: () => new Error("interrupted"),
       createAbortError: () => new Error("code mode execution aborted"),
@@ -363,7 +364,7 @@ async function settleCodeModeResult(params: {
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
           codeModeRunId: params.codeModeReplayId,
-          deadlineMs: settleDeadline(),
+          remainingMs: settleDeadline() - Date.now(),
           activeRunId,
           ctx: params.ctx,
           signal: params.signal,
@@ -499,7 +500,7 @@ async function settleCodeModeResult(params: {
             namespaceRuntime: params.namespaceRuntime,
             parentToolCallId: params.parentToolCallId,
             codeModeRunId: params.codeModeReplayId,
-            deadlineMs: settleDeadline(),
+            remainingMs: settleDeadline() - Date.now(),
             activeRunId,
             ctx: params.ctx,
             signal: params.signal,
@@ -542,7 +543,7 @@ async function settleCodeModeResult(params: {
       catalogProjection: params.catalogProjection,
       namespaceRuntime: params.namespaceRuntime,
       output,
-      deadlineMs: settleDeadline(),
+      remainingMs: settleDeadline() - Date.now(),
       deliveredOutputCount,
       reservedActiveRunSlot: params.reservedActiveRunSlot,
       replaySafe: params.replaySafe,

@@ -171,4 +171,12 @@ describe("config set input parsing", () => {
       expect(parsed).toEqual([{ path: "gateway.port", value: 19000 }]);
     });
   });
+
+  it("rejects batch entries with non-finite numbers", () => {
+    expect(() =>
+      parseBatchSource({
+        batchJson: '[{"path":"channels.custom.timeout","value":1e999}]',
+      }),
+    ).toThrow("Value must be a finite number");
+  });
 });

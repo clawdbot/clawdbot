@@ -368,8 +368,12 @@ export async function completeEmbeddedAttemptAfterTurn(
   });
   runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, state.promptError);
 
+  // A detached run (skill experience review) writes no transcript or session record and
+  // runs under the foreground session key; firing agent_end here would let plugins observe
+  // it as a foreground turn and let the review schedule a successor review of itself.
   if (
     attempt.operation !== "settled-tool-finalization" &&
+    attempt.sessionPersistence !== "detached" &&
     !state.beforeAgentFinalizeRevisionReason
   ) {
     const lifecycleForAgentEnd = input.readLifecycleState();
@@ -390,6 +394,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       ctx: buildEmbeddedAgentEndContext({
         run: attempt,
         agentId: runtime.hookAgentId,
+        agentDir: runtime.agentDir,
         trace: freezeDiagnosticTraceContext(runtime.diagnosticTrace),
         skillWorkshopAvailable: runtime.skillWorkshopAvailable,
         compacted: state.compactionOccurredThisAttempt,

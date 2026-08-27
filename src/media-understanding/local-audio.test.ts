@@ -111,6 +111,30 @@ describe("local audio selection", () => {
     });
   });
 
+  it("discovers Windows commands through case-insensitive PATH and PATHEXT values", async () => {
+    const availableDirectory = "/virtual/audio-tools";
+    const commandPath = path.join(availableDirectory, "whisper.AUDIO");
+    const inspect = (env: NodeJS.ProcessEnv) =>
+      inspectLocalAudioSelection({
+        env,
+        platform: "win32",
+        arch: "x64",
+        checkExecutable: async (filePath) => filePath === commandPath,
+        listDirectory: async () => [],
+      });
+
+    for (const env of [
+      { Path: "/virtual/missing-tools", pAtHeXt: ".AUDIO" },
+      { Path: availableDirectory, pAtHeXt: ".MISSING" },
+    ]) {
+      expect((await inspect(env)).selected).toBeUndefined();
+    }
+
+    expect((await inspect({ Path: availableDirectory, pAtHeXt: ".AUDIO" })).selected).toMatchObject(
+      { id: "whisper", resolvedCommand: commandPath },
+    );
+  });
+
   it("retries binary inspection after a transient failure", async () => {
     const tempDir = tempDirs.make("openclaw-local-audio-");
     const modelPath = path.join(tempDir, "whisper.bin");

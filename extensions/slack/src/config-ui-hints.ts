@@ -41,6 +41,10 @@ export const slackChannelConfigUiHints = {
     },
     progress: { labels: "openclaw" },
   }),
+  joinIntro: {
+    label: "Slack Channel Join Introduction",
+    help: "Post one brief, room-specific introduction when the bot joins an allowed Slack channel (default: true). Account settings override the channel-wide setting.",
+  },
   allowBots: {
     label: "Slack Allow Bot Messages",
     help: "Allow bot-authored messages to trigger Slack replies (default: false).",

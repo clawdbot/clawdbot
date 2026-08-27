@@ -134,6 +134,7 @@ export function makeChatHost(
     chatStreamStartedAt: null,
     lastError: null,
     sessionKey: "agent:main",
+    sidebarLayout: { columns: [] },
     basePath: "",
     resourceBasePath: "",
     hello: sessionMutationGatewayHello(),

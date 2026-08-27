@@ -30,6 +30,7 @@ import type {
 } from "./current-user-profile-display.js";
 
 type ChatDisplayProjectionOptions = {
+  includeCommentaryFallbacks?: boolean;
   maxChars?: number;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
@@ -314,7 +315,11 @@ export function projectChatDisplayMessagesWithState(
   const projectedErrors = projectEmptyAssistantErrorMessages(repairedStreamErrors.messages);
   const filtered = filterVisibleProjectedHistoryMessages(
     projectSessionsSendInterSessionMessages(
-      toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
+      toProjectedMessages(
+        sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
+          includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
+        }),
+      ),
     ),
     options?.turnBoundaryPending,
   );
@@ -338,28 +343,6 @@ export function projectChatDisplayMessages(
   options?: ChatDisplayProjectionOptions,
 ): Array<Record<string, unknown>> {
   return projectChatDisplayMessagesWithState(messages, options).messages;
-}
-
-function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
-  if (
-    typeof maxMessages !== "number" ||
-    !Number.isFinite(maxMessages) ||
-    maxMessages <= 0 ||
-    messages.length <= maxMessages
-  ) {
-    return messages;
-  }
-  return messages.slice(-Math.floor(maxMessages));
-}
-
-export function projectRecentChatDisplayMessages(
-  messages: unknown[],
-  options?: ChatDisplayProjectionOptions & { maxMessages?: number },
-): Array<Record<string, unknown>> {
-  return limitChatDisplayMessages(
-    projectChatDisplayMessages(messages, options),
-    options?.maxMessages,
-  );
 }
 
 export function projectChatDisplayMessage(

@@ -89,6 +89,22 @@ describe("installGatewayDaemonNonInteractive", () => {
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards Bun as the explicit daemon runtime", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await installGatewayDaemonNonInteractive({
+      nextConfig: {} as OpenClawConfig,
+      opts: { installDaemon: true, daemonRuntime: "bun" },
+      runtime,
+      port: 18789,
+    });
+
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: "bun" }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("aborts with actionable error when SecretRef is unresolved", async () => {
     resolveGatewayInstallToken.mockResolvedValue({
       token: undefined,

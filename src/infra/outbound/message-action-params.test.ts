@@ -98,6 +98,16 @@ describe("message action media helpers", () => {
     });
     expect(
       resolveAttachmentMediaPolicy({
+        sandboxRoot: "/tmp/workspace",
+        sandboxContainerWorkdir: "/sandbox",
+      }),
+    ).toEqual({
+      mode: "sandbox",
+      sandboxRoot: "/tmp/workspace",
+      containerWorkdir: "/sandbox",
+    });
+    expect(
+      resolveAttachmentMediaPolicy({
         sandboxRoot: "   ",
         mediaLocalRoots: ["/tmp/a"],
       }),
@@ -127,39 +137,49 @@ describe("message action media helpers", () => {
     });
   });
 
-  maybeIt("normalizes sandbox media lists and dedupes resolved workspace paths", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-"));
-    try {
-      await expect(
-        normalizeSandboxMediaList({
-          values: [" data:text/plain;base64,QQ== "],
-        }),
-      ).rejects.toThrow(/data:/i);
-      await expect(
-        normalizeSandboxMediaList({
-          values: [
-            " file:///workspace/assets/photo.png ",
-            "/workspace/assets/photo.png",
-            "buffer://message-send/attachment",
-            " ",
-          ],
-          sandboxRoot: ` ${sandboxRoot} `,
-        }),
-      ).resolves.toEqual([
-        path.join(sandboxRoot, "assets", "photo.png"),
-        "buffer://message-send/attachment",
-      ]);
-    } finally {
-      await fs.rm(sandboxRoot, { recursive: true, force: true });
-    }
-  });
+  maybeIt.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])(
+    "normalizes $name media lists and dedupes resolved workspace paths",
+    async ({ containerWorkdir }) => {
+      const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-"));
+      try {
+        await expect(
+          normalizeSandboxMediaList({
+            values: [" data:text/plain;base64,QQ== "],
+          }),
+        ).rejects.toThrow(/data:/i);
+        await expect(
+          normalizeSandboxMediaList({
+            values: [
+              ` file://${containerWorkdir}/assets/photo.png `,
+              `${containerWorkdir}/assets/photo.png`,
+              "buffer://message-send/attachment",
+              " ",
+            ],
+            sandboxRoot: ` ${sandboxRoot} `,
+            sandboxContainerWorkdir: containerWorkdir,
+          }),
+        ).resolves.toEqual([
+          path.join(sandboxRoot, "assets", "photo.png"),
+          "buffer://message-send/attachment",
+        ]);
+      } finally {
+        await fs.rm(sandboxRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
-  maybeIt("normalizes mediaUrl and fileUrl sandbox media params", async () => {
+  maybeIt.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])("normalizes $name mediaUrl and fileUrl sandbox media params", async ({ containerWorkdir }) => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-alias-"));
     try {
       const args: Record<string, unknown> = {
-        mediaUrl: " file:///workspace/assets/photo.png ",
-        fileUrl: "/workspace/docs/report.pdf",
+        mediaUrl: ` file://${containerWorkdir}/assets/photo.png `,
+        fileUrl: `${containerWorkdir}/docs/report.pdf`,
       };
 
       await normalizeSandboxMediaParams({
@@ -167,6 +187,7 @@ describe("message action media helpers", () => {
         mediaPolicy: {
           mode: "sandbox",
           sandboxRoot: ` ${sandboxRoot} `,
+          containerWorkdir,
         },
       });
 
@@ -222,11 +243,14 @@ describe("message action media helpers", () => {
     }
   });
 
-  maybeIt("normalizes the selected structured attachment sandbox source", async () => {
+  maybeIt.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])("normalizes the selected $name structured attachment source", async ({ containerWorkdir }) => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-attachment-"));
     try {
       const attachment: Record<string, unknown> = {
-        path: "/workspace/replies/photo.png",
+        path: `${containerWorkdir}/replies/photo.png`,
         mimeType: "image/png",
         name: "photo.png",
       };
@@ -239,6 +263,7 @@ describe("message action media helpers", () => {
         mediaPolicy: {
           mode: "sandbox",
           sandboxRoot,
+          containerWorkdir,
         },
       });
 

@@ -11,7 +11,7 @@ import {
   assertFreshSetupMigrationTarget,
   buildSetupMigrationTargetSnapshot,
   inspectSetupMigrationFreshness,
-  preserveSetupMigrationSecurityAcknowledgement,
+  preserveSetupMigrationOnboardingConsents,
 } from "./setup.migration-snapshot.js";
 
 async function writeFile(filePath: string, content: string) {
@@ -33,11 +33,12 @@ describe("setup migration import freshness", () => {
     expect(result).toEqual({ fresh: true, reasons: [] });
   });
 
-  it("allows the first-launch security acknowledgement before import", async () => {
+  it("allows first-launch security and telemetry consent before import", async () => {
     const root = tempRoots.make("openclaw-setup-migration-");
     const result = await inspectSetupMigrationFreshness({
       baseConfig: {
         wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
+        telemetry: { enabled: true, consentedAt: "2026-06-30T00:00:00.000Z" },
       },
       stateDir: path.join(root, "state"),
       workspaceDir: path.join(root, "workspace"),
@@ -82,13 +83,19 @@ describe("setup migration import freshness", () => {
     ).not.toBe(initial);
   });
 
-  it("preserves the first-launch acknowledgement across the lock-time config reread", () => {
+  it("preserves first-launch consent choices across the lock-time config reread", () => {
     expect(
-      preserveSetupMigrationSecurityAcknowledgement(
+      preserveSetupMigrationOnboardingConsents(
         {},
-        { wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" } },
+        {
+          wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
+          telemetry: { enabled: false, consentedAt: "2026-06-30T00:00:00.000Z" },
+        },
       ),
-    ).toEqual({ wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" } });
+    ).toEqual({
+      wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
+      telemetry: { enabled: false, consentedAt: "2026-06-30T00:00:00.000Z" },
+    });
   });
 
   it("rejects other wizard config during import freshness checks", async () => {
