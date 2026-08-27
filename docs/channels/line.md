@@ -107,9 +107,16 @@ LINE-specific settings:
   accepted while the Gateway is stopping are still persisted and drain after the
   next start.
 - **Duplicate suppression window.** Completed and failed queue records are
-  retained for 30 days (up to 4096 entries each per account); while the record
-  exists, a redelivered webhook for the same event is acknowledged without a
-  second dispatch.
+  retained for up to 30 days, subject to a cap of 4096 records each per account —
+  whichever limit is reached first. The cap is an independent pruning limit, not a
+  reporting detail: it keeps the most recently updated 4096 records of each kind
+  and drops the rest, so a busy account can evict a record well before 30 days.
+  LINE prunes on every admission rather than on a timer, so the cap applies as
+  soon as it is exceeded. While a record exists, a redelivered webhook for the
+  same event is acknowledged without a second dispatch; once it is gone — by age
+  or by cap — a redelivery is admitted and dispatched again, so handlers with
+  external side effects should not treat this window as a substitute for their own
+  idempotency.
 
 The `500`-on-persistence-failure contract only helps if LINE re-sends the event.
 LINE redelivers a webhook when **Webhook redelivery** is enabled for the channel in
