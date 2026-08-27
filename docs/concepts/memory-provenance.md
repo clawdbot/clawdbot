@@ -57,6 +57,11 @@ edits and external writers during a sensitive cleanup; they do not share the
 memory plugin's mutation lock. Run the preview again afterward to check for
 remaining attributable artifacts.
 
+If deletion fails, resolve the reported storage or filesystem error, rerun the
+same command, then repeat it with `--dry-run`. A failure can leave partial
+cleanup. The purge keeps corpus and origin evidence until dependent artifacts
+are cleaned; do not delete that evidence manually to clear an error.
+
 The full flags, selector semantics, and report fields are in
 [`memory forget`](/cli/memory#memory-forget).
 
@@ -79,6 +84,10 @@ When [dreaming](/concepts/dreaming) merges or supersedes tracked entries,
 reconciliation transfers the parents' origins to the surviving entry. It
 runs in code around the model call, including for participating agents that
 share a workspace; the model does not own the origin rows.
+
+Origins for replaced entries remain while retained rewrite preimages still
+reference their promotion markers. Backup rotation prunes those origins only
+when live entries, retained preimages, and indexed snapshots no longer reference them.
 
 When backfill coalesces the same claim from several sessions, it retains every
 source origin without counting the repeated claim as extra evidence.
@@ -112,6 +121,9 @@ To keep Gmail hook sessions out of **dreaming ingestion and session backfill**:
 }
 ```
 
+IMAP uses the exact hook source `email`; Gmail hooks use `gmail`. Include both
+values to exclude both sources. Generic webhooks use `webhook`.
+
 You can also exclude channel/plugin identifiers (not room IDs) or chat types.
 Empty or omitted lists add no policy exclusions. A match in any list excludes
 the whole session; values
@@ -137,7 +149,13 @@ for exact matching rules and exclusion reasons.
 | Direct writes and session hooks | Not applied                              |
 
 Matching requires retained session metadata; missing fields do not match a
-rule. Automatic dreaming separately skips retained archives. To exclude an
+rule. Both controls honor the configured `session.store`, including custom
+and shared stores, while keeping selection scoped to the chosen agent. Older
+retained records may have only a coarse `webhook` classification; without the
+original exact source, OpenClaw does not infer `email` or `webhook` for matching.
+Select those sessions explicitly by full ID.
+
+Automatic dreaming separately skips retained archives. To exclude an
 archived session from backfill and transcript indexing too, explicitly forget
 its full session ID. Those paths check forgotten-session records even when
 the former channel, chat type, or hook-source metadata is no longer available.
@@ -203,7 +221,8 @@ or hook source. Keep an admission rule for future matching sessions, within
   have been erased.
 - **Untracked older memories.** No origin row means no lineage-based deletion.
   New session backfill preserves origins, but it does not retroactively supply
-  lineage for candidates staged by older versions. Inspect those separately.
+  lineage for candidates or rewrite backups whose origins were lost in older
+  versions. Inspect those separately; a prior purge is not automatically repaired.
 - **Freeform edits.** `curatedWrites` reports recognized writes or write
   attempts with a `relativePath` and `observedAt`. That record alone does
   not delete a file or identify contributing lines. Supported write/edit/patch

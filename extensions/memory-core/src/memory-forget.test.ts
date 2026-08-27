@@ -13,6 +13,7 @@ import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +28,7 @@ import {
   recordMemoryEntryOrigins,
 } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
+import * as memoryDatabase from "./memory/manager-db.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
@@ -388,8 +390,18 @@ describe("memory forget", () => {
     db.prepare(
       `INSERT INTO session_participants
          (session_key, actor_type, actor_id, first_prompted_at, last_prompted_at)
-       VALUES (?, 'user', 'participant', 1, 1)`,
+       VALUES (?, 'human', 'participant', 1, 1)`,
     ).run("agent:main:archived");
+    expect(
+      (
+        await forgetMemoryEntries({
+          cfg,
+          agentId: "main",
+          participants: ["participant"],
+          dryRun: true,
+        })
+      ).sessionIds,
+    ).toEqual(["archived"]);
     await appendSessionTranscriptMessageByIdentity({
       agentId: "main",
       sessionId: "archived",
@@ -411,9 +423,13 @@ describe("memory forget", () => {
     expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
   });
 
-  it.each(["merged", "superseded"] as const)(
-    "preserves another workspace agent's deletion lineage when an entry is %s",
-    async (action) => {
+  it.each([
+    { action: "merged", failOrigins: false },
+    { action: "superseded", failOrigins: false },
+    { action: "merged", failOrigins: true },
+  ] as const)(
+    "preserves workspace deletion lineage for $action (origin failure: $failOrigins)",
+    async ({ action, failOrigins }) => {
       cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
@@ -433,16 +449,14 @@ describe("memory forget", () => {
       const snippet =
         action === "merged" ? "The launch code is violet." : "The launch code is cobalt.";
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
-      await fs.writeFile(
-        memoryPath,
-        [
-          "# Long-Term Memory",
-          ...(action === "superseded" ? ["<!-- openclaw-memory-lineage:launch-code -->"] : []),
-          "<!-- openclaw-memory-promotion:retired-entry -->",
-          priorEntry,
-          "",
-        ].join("\n"),
-      );
+      const previousMemory = [
+        "# Long-Term Memory",
+        ...(action === "superseded" ? ["<!-- openclaw-memory-lineage:launch-code -->"] : []),
+        "<!-- openclaw-memory-promotion:retired-entry -->",
+        priorEntry,
+        "",
+      ].join("\n");
+      await fs.writeFile(memoryPath, previousMemory);
       const notePath = path.join(workspaceDir, "memory", "2026-08-26.md");
       await fs.mkdir(path.dirname(notePath), { recursive: true });
       await fs.writeFile(notePath, `${snippet}\n`);
@@ -513,7 +527,14 @@ describe("memory forget", () => {
         deleteSession: vi.fn(async () => undefined),
       };
 
-      const applied = await applyShortTermPromotions({
+      if (failOrigins) {
+        openOpenClawAgentDatabase({ agentId: "gamma" }).db.exec(`
+          CREATE TRIGGER fail_origin_reservation BEFORE INSERT ON memory_entry_origins
+          WHEN NEW.entry_key != 'retired-entry'
+          BEGIN SELECT RAISE(ABORT, 'injected origin write failure'); END;
+        `);
+      }
+      const application = applyShortTermPromotions({
         agentId: "alpha",
         workspaceAgentIds: ["vacant", "gamma", "alpha", "gamma"],
         workspaceDir,
@@ -523,10 +544,27 @@ describe("memory forget", () => {
         nowMs,
         ...thresholds,
       });
+      if (failOrigins) {
+        await expect(application).rejects.toThrow("injected origin write failure");
+        await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
+        expect(
+          (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
+        ).toBeUndefined();
+        return;
+      }
+      const applied = await application;
 
       expect(applied.applied).toBe(1);
-      expect(listMemoryEntryOrigins({ agentId: "gamma" })).toMatchObject([
-        { entryKey: promoted!.key, sessionId: "private-session" },
+      expect(
+        listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+      ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
+      const readBackups = () =>
+        readMemoryCoreWorkspaceEntries<{ content: string }>({
+          namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+          workspaceDir,
+        });
+      expect((await readBackups()).map(({ value }) => value.content)).toEqual([
+        expect.stringContaining(priorEntry),
       ]);
       expect(
         vacantDb
@@ -540,10 +578,13 @@ describe("memory forget", () => {
         sessionIds: ["private-session"],
       });
       expect(report).toMatchObject({
-        entryKeys: [promoted!.key],
-        artifacts: { memoryEntries: 1, originRows: 1 },
+        entryKeys: expect.arrayContaining([promoted!.key]),
+        artifacts: { memoryEntries: 1, backups: 1 },
       });
       expect(await fs.readFile(memoryPath, "utf8")).not.toContain(snippet);
+      expect((await readBackups()).every(({ value }) => !value.content.includes(priorEntry))).toBe(
+        true,
+      );
       expect(listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
     },
   );
@@ -628,124 +669,140 @@ describe("memory forget", () => {
     expect(survivingMemory).not.toContain(candidateKey);
   });
 
-  it("durably purges every derived owner, archived narrative, and verbatim dream quote", async () => {
-    await seedSession("survivor");
-    await seedSession("target", "gmail");
-    recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: [
-        {
-          entryKey: "mixed-entry",
-          agentId: "main",
-          sessionId: "target",
-          sessionKey: "agent:main:target",
-          originClass: "owner",
-          observedAt: 1_000,
-        },
-        {
-          entryKey: "mixed-entry",
-          agentId: "main",
-          sessionId: "survivor",
-          sessionKey: "agent:main:survivor",
-          originClass: "owner",
-          observedAt: 1_000,
-        },
-        {
-          entryKey: "clean-entry",
-          agentId: "main",
-          sessionId: "survivor",
-          sessionKey: "agent:main:survivor",
-          originClass: "owner",
-          observedAt: 1_000,
-        },
-      ],
-    });
-    const memoryContent = [
-      "# Long-Term Memory",
-      "Curated operator fact.",
-      "<!-- openclaw-memory-lineage:old-lineage -->",
-      "<!-- openclaw-memory-promotion:mixed-entry -->",
-      "- Erase the mixed secret.",
-      "<!-- openclaw-memory-promotion:clean-entry -->",
-      "- Keep the clean fact.",
-      "<!-- openclaw-memory-promotion:legacy-entry -->",
-      "- Preserve an untargetable legacy fact.",
-      "",
-    ].join("\n");
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memoryContent);
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "# User\nCurated private profile.\n");
-    const sourceSnippet = "User: Please remember violet-mongoose-42.";
-    const assistantSnippet = "Assistant: The launch code is violet-mongoose-42.";
-    const lightDiaryPath = path.join(workspaceDir, "memory", "dreaming", "light", "2026-08-26.md");
-    const rootDiaryPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.mkdir(path.dirname(lightDiaryPath), { recursive: true });
-    await fs.writeFile(
-      lightDiaryPath,
-      `# Light Dream\n- Candidate: ${sourceSnippet}\n- Candidate: Keep an unrelated memory.\n`,
-    );
-    await fs.writeFile(rootDiaryPath, `# Dream Diary\n- Candidate: ${assistantSnippet}\n`);
-    const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-    await fs.mkdir(corpusDir, { recursive: true });
-    const mixedCorpusPath = path.join(corpusDir, "2026-08-25.txt");
-    const removedCorpusPath = path.join(corpusDir, "2026-08-26.txt");
-    await fs.writeFile(
-      mixedCorpusPath,
-      `[main/sessions/main/target#L1] ${sourceSnippet}\n[main/sessions/main/survivor#L1] keep\n`,
-    );
-    await fs.writeFile(removedCorpusPath, `[main/sessions/main/target#L2] ${assistantSnippet}\n`);
-    await writeMemoryCoreWorkspaceEntries({
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      workspaceDir,
-      entries: [
-        {
-          key: "mixed-entry",
-          value: { key: "mixed-entry", path: "memory/source.md", snippet: "erase" },
-        },
-        {
-          key: "clean-entry",
-          value: { key: "clean-entry", path: "memory/source.md", snippet: "keep" },
-        },
-      ],
-    });
-    await writeSessionIngestionState(workspaceDir, {
-      version: 3,
-      files: {
-        "main:sessions/main/target": {
-          mtimeMs: 1,
-          size: 1,
-          contentHash: "hash",
-          lineCount: 1,
-          lastContentLine: 1,
-        },
-      },
-      seenMessages: {
-        "main:sessions/main/target": ["target-hash"],
-        "main:sessions/main/survivor": ["survivor-hash"],
-      },
-    });
-    await writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-      workspaceDir,
-      entries: [
-        {
-          key: "backup",
-          value: {
-            createdAt: "2026-08-25T00:00:00.000Z",
-            content: `${memoryContent}- Candidate: ${sourceSnippet}\n`,
-            contentHash: createHash("sha256")
-              .update(`${memoryContent}- Candidate: ${sourceSnippet}\n`)
-              .digest("hex"),
+  it.each([
+    { failure: "none", corpusExtension: "txt" },
+    { failure: "index", corpusExtension: "txt" },
+    { failure: "backup", corpusExtension: "txt" },
+    { failure: "memory", corpusExtension: "txt" },
+    { failure: "corpus", corpusExtension: "txt" },
+    { failure: "origins", corpusExtension: "txt" },
+    { failure: "memory", corpusExtension: "md" },
+  ])(
+    "durably purges every derived owner after a $failure failure with $corpusExtension corpus",
+    async ({ failure, corpusExtension }) => {
+      await seedSession("survivor");
+      await seedSession("target", "gmail");
+      recordMemoryEntryOrigins({
+        agentId: "main",
+        origins: [
+          {
+            entryKey: "mixed-entry",
+            agentId: "main",
+            sessionId: "target",
+            sessionKey: "agent:main:target",
+            originClass: "owner",
+            observedAt: 1_000,
+          },
+          {
+            entryKey: "mixed-entry",
+            agentId: "main",
+            sessionId: "survivor",
+            sessionKey: "agent:main:survivor",
+            originClass: "owner",
+            observedAt: 1_000,
+          },
+          {
+            entryKey: "clean-entry",
+            agentId: "main",
+            sessionId: "survivor",
+            sessionKey: "agent:main:survivor",
+            originClass: "owner",
+            observedAt: 1_000,
+          },
+        ],
+      });
+      const memoryContent = [
+        "# Long-Term Memory",
+        "Curated operator fact.",
+        "<!-- openclaw-memory-lineage:old-lineage -->",
+        "<!-- openclaw-memory-promotion:mixed-entry -->",
+        "- Erase the mixed secret.",
+        "<!-- openclaw-memory-promotion:clean-entry -->",
+        "- Keep the clean fact.",
+        "<!-- openclaw-memory-promotion:legacy-entry -->",
+        "- Preserve an untargetable legacy fact.",
+        "",
+      ].join("\n");
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memoryContent);
+      await fs.writeFile(path.join(workspaceDir, "USER.md"), "# User\nCurated private profile.\n");
+      const sourceSnippet = "User: Please remember violet-mongoose-42.";
+      const assistantSnippet = "Assistant: The launch code is violet-mongoose-42.";
+      const lightDiaryPath = path.join(
+        workspaceDir,
+        "memory",
+        "dreaming",
+        "light",
+        "2026-08-26.md",
+      );
+      const rootDiaryPath = path.join(workspaceDir, "DREAMS.md");
+      await fs.mkdir(path.dirname(lightDiaryPath), { recursive: true });
+      await fs.writeFile(
+        lightDiaryPath,
+        `# Light Dream\n- Candidate: ${sourceSnippet}\n- Candidate: Keep an unrelated memory.\n`,
+      );
+      await fs.writeFile(rootDiaryPath, `# Dream Diary\n- Candidate: ${assistantSnippet}\n`);
+      const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      await fs.mkdir(corpusDir, { recursive: true });
+      const mixedCorpusPath = path.join(corpusDir, `2026-08-25.${corpusExtension}`);
+      const removedCorpusPath = path.join(corpusDir, `2026-08-26.${corpusExtension}`);
+      await fs.writeFile(
+        mixedCorpusPath,
+        `[main/sessions/main/target#L1] ${sourceSnippet}\n[main/sessions/main/survivor#L1] keep\n`,
+      );
+      await fs.writeFile(removedCorpusPath, `[main/sessions/main/target#L2] ${assistantSnippet}\n`);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: SHORT_TERM_RECALL_NAMESPACE,
+        workspaceDir,
+        entries: [
+          {
+            key: "mixed-entry",
+            value: { key: "mixed-entry", path: "memory/source.md", snippet: "erase" },
+          },
+          {
+            key: "clean-entry",
+            value: { key: "clean-entry", path: "memory/source.md", snippet: "keep" },
+          },
+        ],
+      });
+      await writeSessionIngestionState(workspaceDir, {
+        version: 3,
+        files: {
+          "main:sessions/main/target": {
+            mtimeMs: 1,
+            size: 1,
+            contentHash: "hash",
+            lineCount: 1,
+            lastContentLine: 1,
           },
         },
-      ],
-    });
+        seenMessages: {
+          "main:sessions/main/target": ["target-hash"],
+          "main:sessions/main/survivor": ["survivor-hash"],
+        },
+      });
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+        workspaceDir,
+        entries: [
+          {
+            key: "backup",
+            value: {
+              createdAt: "2026-08-25T00:00:00.000Z",
+              content: `${memoryContent}- Candidate: ${sourceSnippet}\n`,
+              contentHash: createHash("sha256")
+                .update(`${memoryContent}- Candidate: ${sourceSnippet}\n`)
+                .digest("hex"),
+            },
+          },
+        ],
+      });
 
-    const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
-    const db = openMemoryDatabaseAtPath(agentDatabase.path, true, "main");
-    vectorDatabase = db;
-    const loaded = await loadSqliteVecExtension({ db });
-    expect(loaded.ok).toBe(true);
-    db.exec(`
+      const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
+      const db = openMemoryDatabaseAtPath(agentDatabase.path, true, "main");
+      vectorDatabase = db;
+      const loaded = await loadSqliteVecExtension({ db });
+      expect(loaded.ok).toBe(true);
+      db.exec(`
       CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(
         text, id UNINDEXED, path UNINDEXED, source UNINDEXED,
         model UNINDEXED, start_line UNINDEXED, end_line UNINDEXED
@@ -754,224 +811,300 @@ describe("memory forget", () => {
         id TEXT PRIMARY KEY, embedding FLOAT[2]
       );
     `);
-    const transcriptPath = path.join(stateDir, "agents", "main", "sessions", "target.jsonl");
-    await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-    await fs.writeFile(transcriptPath, "source transcript survives deletion\n");
-    const narrativeSessionId = "3cb3f634-6821-4123-8123-abcdef123456";
-    const narrativeArchiveName = `${narrativeSessionId}.jsonl.deleted.2026-08-26T10-00-00.000Z.zst`;
-    const narrativeArchivePath = path.join(path.dirname(transcriptPath), narrativeArchiveName);
-    const narrativeTranscript = [
-      {
-        type: "message",
-        message: { role: "user", content: `Write a dream diary entry: ${sourceSnippet}` },
-      },
-      {
-        type: "session",
-        sessionKey: "agent:main:dreaming-narrative-memory-core-v2-light-orphan",
-      },
-    ];
-    await fs.writeFile(
-      narrativeArchivePath,
-      zstdCompressSync(
-        `${narrativeTranscript.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      ),
-    );
-    expect(
-      db
-        .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
-        .get(narrativeSessionId),
-    ).toBeUndefined();
-    const indexedFiles = [
-      { path: "MEMORY.md", source: "memory", originClass: "owner" },
-      {
-        path: "memory/.dreams/session-corpus/2026-08-26.txt",
-        source: "memory",
-        originClass: "owner",
-      },
-      {
-        path: "sessions/main/target.jsonl.reset.2026-08-25T10-00-00.000Z.zst",
-        source: "sessions",
-        originClass: "owner",
-      },
-      {
-        path: `sessions/main/${narrativeArchiveName}`,
-        source: "sessions",
-        originClass: "owner",
-        sessionKind: "unknown",
-        text: "violet",
-      },
-      {
-        path: "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst",
-        source: "sessions",
-        originClass: "owner",
-      },
-    ];
-    for (const [index, file] of indexedFiles.entries()) {
-      const chunkId = `chunk-${index}`;
-      const hash = `hash-${index}`;
-      const text = file.text ?? "erase";
-      db.prepare(
-        `INSERT INTO memory_index_chunks (
+      const transcriptPath = path.join(stateDir, "agents", "main", "sessions", "target.jsonl");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "source transcript survives deletion\n");
+      const narrativeSessionId = "3cb3f634-6821-4123-8123-abcdef123456";
+      const narrativeArchiveName = `${narrativeSessionId}.jsonl.deleted.2026-08-26T10-00-00.000Z.zst`;
+      const narrativeArchivePath = path.join(path.dirname(transcriptPath), narrativeArchiveName);
+      const narrativeTranscript = [
+        {
+          type: "message",
+          message: { role: "user", content: `Write a dream diary entry: ${sourceSnippet}` },
+        },
+        {
+          type: "session",
+          sessionKey: "agent:main:dreaming-narrative-memory-core-v2-light-orphan",
+        },
+      ];
+      await fs.writeFile(
+        narrativeArchivePath,
+        zstdCompressSync(
+          `${narrativeTranscript.map((record) => JSON.stringify(record)).join("\n")}\n`,
+        ),
+      );
+      expect(
+        db
+          .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
+          .get(narrativeSessionId),
+      ).toBeUndefined();
+      const indexedFiles = [
+        { path: "MEMORY.md", source: "memory", originClass: "owner" },
+        {
+          path: `memory/.dreams/session-corpus/2026-08-26.${corpusExtension}`,
+          source: "memory",
+          originClass: "owner",
+        },
+        {
+          path: "sessions/main/target.jsonl.reset.2026-08-25T10-00-00.000Z.zst",
+          source: "sessions",
+          originClass: "owner",
+        },
+        {
+          path: `sessions/main/${narrativeArchiveName}`,
+          source: "sessions",
+          originClass: "owner",
+          sessionKind: "unknown",
+          text: "violet",
+        },
+        {
+          path: "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst",
+          source: "sessions",
+          originClass: "owner",
+        },
+      ];
+      for (const [index, file] of indexedFiles.entries()) {
+        const chunkId = `chunk-${index}`;
+        const hash = `hash-${index}`;
+        const text = file.text ?? "erase";
+        db.prepare(
+          `INSERT INTO memory_index_chunks (
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         ) VALUES (?, ?, ?, 1, 1, ?, 'test', ?, '[1,0]', 1)`,
-      ).run(chunkId, file.path, file.source, hash, text);
-      db.prepare(
-        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
-      ).run(file.path, file.source, hash);
-      db.prepare(
-        `INSERT INTO memory_index_chunks_fts
+        ).run(chunkId, file.path, file.source, hash, text);
+        db.prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
+        ).run(file.path, file.source, hash);
+        db.prepare(
+          `INSERT INTO memory_index_chunks_fts
           (text, id, path, source, model, start_line, end_line)
          VALUES (?, ?, ?, ?, 'test', 1, 1)`,
-      ).run(text, chunkId, file.path, file.source);
-      db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
-        chunkId,
-        new Float32Array([1, 0]),
-      );
-      db.prepare(
-        `INSERT INTO memory_embedding_cache
+        ).run(text, chunkId, file.path, file.source);
+        db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
+          chunkId,
+          new Float32Array([1, 0]),
+        );
+        db.prepare(
+          `INSERT INTO memory_embedding_cache
           (provider, model, provider_key, hash, embedding, dims, updated_at)
          VALUES ('test', 'test', 'test', ?, '[1,0]', 2, 1)`,
-      ).run(hash);
-      db.prepare(
-        `INSERT INTO memory_index_chunk_provenance
+        ).run(hash);
+        db.prepare(
+          `INSERT INTO memory_index_chunk_provenance
           (chunk_id, origin_class, session_kind, observed_at)
          VALUES (?, ?, ?, 1)`,
-      ).run(chunkId, file.originClass, file.sessionKind ?? "interactive");
-    }
-    db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
-    const revisionBefore = (
-      db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
-        revision: number;
+        ).run(chunkId, file.originClass, file.sessionKind ?? "interactive");
       }
-    ).revision;
-
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      hookSources: ["gmail"],
-      dryRun: true,
-    });
-    expect(preview).toMatchObject({
-      dryRun: true,
-      sessionIds: ["target"],
-      entryKeys: ["mixed-entry"],
-      mixedLineageEntryKeys: ["mixed-entry"],
-      untargetableEntryKeys: ["legacy-entry"],
-      artifacts: {
-        memoryFiles: 3,
-        memoryEntries: 1,
-        memoryLines: 2,
-        sessionCorpusFiles: 2,
-        sessionCorpusLines: 2,
-        indexChunks: 4,
-        indexSources: 3,
-        ftsRows: 4,
-        vectorRows: 4,
-        embeddingCacheRows: 4,
-        shortTermEntries: 1,
-        seenHashScopes: 1,
-        backups: 1,
-        originRows: 2,
-      },
-    });
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
-    expect(
-      db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("memory_session_tombstones"),
-    ).toBeUndefined();
-    expect(
-      (
+      db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
+      const revisionBefore = (
         db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
           revision: number;
         }
-      ).revision,
-    ).toBe(revisionBefore);
+      ).revision;
 
-    const report = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
-    expect(report).toEqual({ ...preview, dryRun: false });
-    const survivingMemory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
-    expect(survivingMemory).toContain("Curated operator fact.");
-    expect(survivingMemory).toContain("Keep the clean fact.");
-    expect(survivingMemory).toContain("Preserve an untargetable legacy fact.");
-    expect(survivingMemory).not.toContain("mixed secret");
-    expect(survivingMemory).not.toContain("old-lineage");
-    expect(await fs.readFile(lightDiaryPath, "utf8")).toBe(
-      "# Light Dream\n- Candidate: Keep an unrelated memory.\n",
-    );
-    expect(await fs.readFile(rootDiaryPath, "utf8")).toBe("# Dream Diary\n");
-    expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toContain("Curated");
-    expect(await fs.readFile(mixedCorpusPath, "utf8")).toBe(
-      "[main/sessions/main/survivor#L1] keep\n",
-    );
-    await expect(fs.stat(removedCorpusPath)).rejects.toMatchObject({ code: "ENOENT" });
-    for (const table of [
-      "memory_index_chunks",
-      "memory_index_chunks_fts",
-      "memory_index_chunks_vec",
-      "memory_index_chunk_provenance",
-      "memory_embedding_cache",
-    ]) {
-      expect(
-        (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count,
-      ).toBe(1);
-    }
-    expect(
-      (db.prepare("SELECT path FROM memory_index_sources").all() as Array<{ path: string }>).map(
-        (row) => row.path,
-      ),
-    ).toEqual(["MEMORY.md", "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst"]);
-    expect(
-      db
-        .prepare("SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
-        .all("violet"),
-    ).toEqual([]);
-    expect(await fs.readFile(transcriptPath, "utf8")).toBe("source transcript survives deletion\n");
-    expect(
-      (
-        db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
-          revision: number;
-        }
-      ).revision,
-    ).toBeGreaterThan(revisionBefore);
-    expect(
-      (
-        await readMemoryCoreWorkspaceEntries({
-          namespace: SHORT_TERM_RECALL_NAMESPACE,
-          workspaceDir,
-        })
-      ).map((entry) => entry.key),
-    ).toEqual(["clean-entry"]);
-    expect((await readSessionIngestionState(workspaceDir)).seenMessages).toEqual({
-      "main:sessions/main/survivor": ["survivor-hash"],
-    });
-    const backups = await readMemoryCoreWorkspaceEntries<{
-      content: string;
-      contentHash: string;
-    }>({ namespace: DREAMING_MEMORY_BACKUP_NAMESPACE, workspaceDir });
-    expect(backups[0]?.value.content).not.toContain("mixed secret");
-    expect(backups[0]?.value.content).not.toContain(sourceSnippet);
-    expect(backups[0]?.value.contentHash).toBe(
-      createHash("sha256").update(backups[0]!.value.content).digest("hex"),
-    );
-    expect(listMemoryEntryOrigins({ agentId: "main" }).map((origin) => origin.entryKey)).toEqual([
-      "clean-entry",
-    ]);
-    const tombstones = listMemorySessionTombstones({ agentId: "main" });
-    expect(tombstones).toEqual([
-      {
+      const preview = await forgetMemoryEntries({
+        cfg,
         agentId: "main",
-        sessionId: "target",
-        reason: "forgotten",
-        createdAt: expect.any(Number),
-      },
-    ]);
+        hookSources: ["gmail"],
+        dryRun: true,
+      });
+      expect(preview).toMatchObject({
+        dryRun: true,
+        sessionIds: ["target"],
+        entryKeys: ["mixed-entry"],
+        mixedLineageEntryKeys: ["mixed-entry"],
+        untargetableEntryKeys: ["legacy-entry"],
+        artifacts: {
+          memoryFiles: 3,
+          memoryEntries: 1,
+          memoryLines: 2,
+          sessionCorpusFiles: 2,
+          sessionCorpusLines: 2,
+          indexChunks: 4,
+          indexSources: 3,
+          ftsRows: 4,
+          vectorRows: 4,
+          embeddingCacheRows: 4,
+          shortTermEntries: 1,
+          seenHashScopes: 1,
+          backups: 1,
+          originRows: 2,
+        },
+      });
+      expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+      expect(
+        db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get("memory_session_tombstones"),
+      ).toBeUndefined();
+      expect(
+        (
+          db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+            revision: number;
+          }
+        ).revision,
+      ).toBe(revisionBefore);
 
-    const repeated = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
-    expect(repeated.sessionIds).toEqual(["target"]);
-    expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
-  });
+      if (failure !== "none") {
+        const failureMessage = `synthetic ${failure} storage failure`;
+        if (failure === "memory" || failure === "corpus") {
+          const writeFile = fs.writeFile.bind(fs);
+          const failedPath =
+            failure === "memory" ? path.join(workspaceDir, "MEMORY.md") : mixedCorpusPath;
+          const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+            await writeFile(...args);
+            if (args[0] === failedPath) {
+              throw new Error(failureMessage);
+            }
+          });
+          try {
+            await expect(
+              forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] }),
+            ).rejects.toThrow(failureMessage);
+          } finally {
+            fault.mockRestore();
+          }
+        } else {
+          const trigger =
+            failure === "backup"
+              ? "BEFORE UPDATE ON plugin_state_entries WHEN OLD.plugin_id = 'memory-core' AND OLD.namespace = 'dreaming-memory-backups'"
+              : failure === "index"
+                ? "BEFORE DELETE ON memory_index_chunks WHEN OLD.id = 'chunk-0'"
+                : "BEFORE DELETE ON memory_entry_origins WHEN OLD.entry_key = 'mixed-entry'";
+          const injectFailure = (connection: DatabaseSync) =>
+            connection.exec(
+              `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
+            );
+          // Attach the fault to the actual purge connection after schema validation,
+          // so an unexpected persistent trigger cannot fail database admission first.
+          const faultDb = failure === "backup" ? openOpenClawStateDatabase().db : agentDatabase.db;
+          const openDatabase = openMemoryDatabaseAtPath;
+          const fault =
+            failure === "index"
+              ? vi
+                  .spyOn(memoryDatabase, "openMemoryDatabaseAtPath")
+                  .mockImplementation((...args) => {
+                    const connection = openDatabase(...args);
+                    injectFailure(connection);
+                    return connection;
+                  })
+              : undefined;
+          if (!fault) {
+            injectFailure(faultDb);
+          }
+          try {
+            await expect(
+              forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] }),
+            ).rejects.toMatchObject(
+              failure === "backup"
+                ? { cause: { message: failureMessage } }
+                : { message: failureMessage },
+            );
+          } finally {
+            if (fault) {
+              fault.mockRestore();
+            } else {
+              faultDb.exec("DROP TRIGGER abort_forget");
+            }
+          }
+        }
+        expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+          { sessionId: "target", reason: "forgotten" },
+        ]);
+      }
+      const retryPreview = await forgetMemoryEntries({
+        cfg,
+        agentId: "main",
+        hookSources: ["gmail"],
+        dryRun: true,
+      });
+      const report = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
+      expect(report).toEqual({ ...retryPreview, dryRun: false });
+      const survivingMemory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+      expect(survivingMemory).toContain("Curated operator fact.");
+      expect(survivingMemory).toContain("Keep the clean fact.");
+      expect(survivingMemory).toContain("Preserve an untargetable legacy fact.");
+      expect(survivingMemory).not.toContain("mixed secret");
+      expect(survivingMemory).not.toContain("old-lineage");
+      expect(await fs.readFile(lightDiaryPath, "utf8")).toBe(
+        "# Light Dream\n- Candidate: Keep an unrelated memory.\n",
+      );
+      expect(await fs.readFile(rootDiaryPath, "utf8")).toBe("# Dream Diary\n");
+      expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toContain("Curated");
+      expect(await fs.readFile(mixedCorpusPath, "utf8")).toBe(
+        "[main/sessions/main/survivor#L1] keep\n",
+      );
+      await expect(fs.stat(removedCorpusPath)).rejects.toMatchObject({ code: "ENOENT" });
+      for (const table of [
+        "memory_index_chunks",
+        "memory_index_chunks_fts",
+        "memory_index_chunks_vec",
+        "memory_index_chunk_provenance",
+        "memory_embedding_cache",
+      ]) {
+        expect(
+          (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count,
+        ).toBe(1);
+      }
+      expect(
+        (db.prepare("SELECT path FROM memory_index_sources").all() as Array<{ path: string }>).map(
+          (row) => row.path,
+        ),
+      ).toEqual(["MEMORY.md", "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst"]);
+      expect(
+        db
+          .prepare("SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+          .all("violet"),
+      ).toEqual([]);
+      expect(await fs.readFile(transcriptPath, "utf8")).toBe(
+        "source transcript survives deletion\n",
+      );
+      expect(
+        (
+          db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+            revision: number;
+          }
+        ).revision,
+      ).toBeGreaterThan(revisionBefore);
+      expect(
+        (
+          await readMemoryCoreWorkspaceEntries({
+            namespace: SHORT_TERM_RECALL_NAMESPACE,
+            workspaceDir,
+          })
+        ).map((entry) => entry.key),
+      ).toEqual(["clean-entry"]);
+      expect((await readSessionIngestionState(workspaceDir)).seenMessages).toEqual({
+        "main:sessions/main/survivor": ["survivor-hash"],
+      });
+      const backups = await readMemoryCoreWorkspaceEntries<{
+        content: string;
+        contentHash: string;
+      }>({ namespace: DREAMING_MEMORY_BACKUP_NAMESPACE, workspaceDir });
+      expect(backups[0]?.value.content).not.toContain("mixed secret");
+      expect(backups[0]?.value.content).not.toContain(sourceSnippet);
+      expect(backups[0]?.value.contentHash).toBe(
+        createHash("sha256").update(backups[0]!.value.content).digest("hex"),
+      );
+      expect(listMemoryEntryOrigins({ agentId: "main" }).map((origin) => origin.entryKey)).toEqual([
+        "clean-entry",
+      ]);
+      const tombstones = listMemorySessionTombstones({ agentId: "main" });
+      expect(tombstones).toEqual([
+        {
+          agentId: "main",
+          sessionId: "target",
+          reason: "forgotten",
+          createdAt: expect.any(Number),
+        },
+      ]);
+
+      const repeated = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
+      expect(repeated.sessionIds).toEqual(["target"]);
+      expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
+      expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+    },
+  );
 
   it("keeps missing provenance untargetable without creating its table during dry-run", async () => {
     await seedSession("target");
