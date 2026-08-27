@@ -28,7 +28,7 @@ import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
-import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
@@ -128,10 +128,7 @@ export function buildThreadingToolContext(params: {
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
   });
-  const originTo = resolveOriginMessageTo({
-    originatingTo: sessionCtx.OriginatingTo,
-    to: sessionCtx.To,
-  });
+  const originTo = sessionCtx.OriginatingTo ?? sessionCtx.To;
   if (!config) {
     return {
       currentMessageId,
@@ -280,10 +277,7 @@ function buildEmbeddedContextFromTemplate(params: {
     }),
     ...(sessionCtx.ChatType ? { chatType: sessionCtx.ChatType } : {}),
     agentAccountId: sessionCtx.AccountId,
-    messageTo: resolveOriginMessageTo({
-      originatingTo: sessionCtx.OriginatingTo,
-      to: sessionCtx.To,
-    }),
+    messageTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??

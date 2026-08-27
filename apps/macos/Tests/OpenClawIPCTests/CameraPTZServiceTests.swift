@@ -35,7 +35,7 @@ struct CameraPTZServiceTests {
         }
     }
 
-    private final class FakeController: CameraPTZControlling, @unchecked Sendable {
+    private final class FakeDevice: @unchecked Sendable {
         var rawStatus: CameraPTZRawStatus
         var statusHook: (() -> Void)?
         var panTiltHook: (() -> Void)?
@@ -45,48 +45,168 @@ struct CameraPTZServiceTests {
         var panTiltError: Error?
         var zoomError: Error?
         var statusFailureCalls: Set<Int> = []
-        private var statusCalls = 0
+        var statusCalls = 0
+        var openCount = 0
+        var acceptsWrites = true
+        var panLandingOffset: Int32 = 0
+        var events: [String] = []
 
         init(status: CameraPTZRawStatus) {
             self.rawStatus = status
         }
+    }
+
+    private final class FakeController: CameraPTZControlling, @unchecked Sendable {
+        private let device: FakeDevice
+        private let connection: Int
+        private var pendingPanTilt: (pan: Int32, tilt: Int32)?
+        private var pendingZoom: Int32?
+        private var closed = false
+
+        var statusHook: (() -> Void)? {
+            get { self.device.statusHook }
+            set { self.device.statusHook = newValue }
+        }
+
+        var panTiltHook: (() -> Void)? {
+            get { self.device.panTiltHook }
+            set { self.device.panTiltHook = newValue }
+        }
+
+        var panTiltWrites: [(Int32, Int32)] {
+            self.device.panTiltWrites
+        }
+
+        var zoomWrites: [Int32] {
+            self.device.zoomWrites
+        }
+
+        var closeCount: Int {
+            self.device.closeCount
+        }
+
+        var events: [String] {
+            self.device.events
+        }
+
+        var acceptsWrites: Bool {
+            get { self.device.acceptsWrites }
+            set { self.device.acceptsWrites = newValue }
+        }
+
+        var panLandingOffset: Int32 {
+            get { self.device.panLandingOffset }
+            set { self.device.panLandingOffset = newValue }
+        }
+
+        var panTiltError: Error? {
+            get { self.device.panTiltError }
+            set { self.device.panTiltError = newValue }
+        }
+
+        var zoomError: Error? {
+            get { self.device.zoomError }
+            set { self.device.zoomError = newValue }
+        }
+
+        var statusFailureCalls: Set<Int> {
+            get { self.device.statusFailureCalls }
+            set { self.device.statusFailureCalls = newValue }
+        }
+
+        init(status: CameraPTZRawStatus) {
+            self.device = FakeDevice(status: status)
+            self.connection = 0
+        }
+
+        private init(device: FakeDevice, connection: Int) {
+            self.device = device
+            self.connection = connection
+        }
+
+        func openConnection() -> FakeController {
+            self.device.openCount += 1
+            let connection = self.device.openCount
+            self.device.events.append("open:\(connection)")
+            return FakeController(device: self.device, connection: connection)
+        }
+
+        func withCaptureSession<T>(_ body: () throws -> T) rethrows -> T {
+            self.device.events.append("session:start")
+            defer { self.device.events.append("session:stop") }
+            return try body()
+        }
 
         func status() throws -> CameraPTZRawStatus {
-            self.statusHook?()
-            self.statusCalls += 1
-            if self.statusFailureCalls.remove(self.statusCalls) != nil {
+            self.device.statusHook?()
+            self.device.statusCalls += 1
+            self.device.events.append("status:\(self.connection)")
+            if self.device.statusFailureCalls.remove(self.device.statusCalls) != nil {
                 throw FakeFailure.status
             }
-            return self.rawStatus
+            let committed = self.device.rawStatus
+            return CameraPTZRawStatus(
+                pan: committed.pan.map {
+                    CameraPTZRawAxisStatus(
+                        current: self.pendingPanTilt?.pan ?? $0.current,
+                        range: $0.range,
+                        canSet: $0.canSet)
+                },
+                tilt: committed.tilt.map {
+                    CameraPTZRawAxisStatus(
+                        current: self.pendingPanTilt?.tilt ?? $0.current,
+                        range: $0.range,
+                        canSet: $0.canSet)
+                },
+                zoom: committed.zoom.map {
+                    CameraPTZRawAxisStatus(
+                        current: self.pendingZoom ?? $0.current,
+                        range: $0.range,
+                        canSet: $0.canSet)
+                })
         }
 
         func setPanTilt(pan: Int32, tilt: Int32) throws {
-            if let panTiltError { throw panTiltError }
-            self.panTiltHook?()
-            self.panTiltWrites.append((pan, tilt))
-            self.rawStatus = CameraPTZRawStatus(
-                pan: self.rawStatus.pan.map {
-                    CameraPTZRawAxisStatus(current: pan, range: $0.range, canSet: $0.canSet)
+            if let panTiltError = self.device.panTiltError { throw panTiltError }
+            self.device.panTiltHook?()
+            self.device.panTiltWrites.append((pan, tilt))
+            self.device.events.append("write:panTilt:\(self.connection)")
+            self.pendingPanTilt = (pan, tilt)
+            guard self.device.acceptsWrites else { return }
+            let committed = self.device.rawStatus
+            self.device.rawStatus = CameraPTZRawStatus(
+                pan: committed.pan.map {
+                    CameraPTZRawAxisStatus(
+                        current: pan + self.device.panLandingOffset,
+                        range: $0.range,
+                        canSet: $0.canSet)
                 },
-                tilt: self.rawStatus.tilt.map {
+                tilt: committed.tilt.map {
                     CameraPTZRawAxisStatus(current: tilt, range: $0.range, canSet: $0.canSet)
                 },
-                zoom: self.rawStatus.zoom)
+                zoom: committed.zoom)
         }
 
         func setZoom(_ zoom: Int32) throws {
-            if let zoomError { throw zoomError }
-            self.zoomWrites.append(zoom)
-            self.rawStatus = CameraPTZRawStatus(
-                pan: self.rawStatus.pan,
-                tilt: self.rawStatus.tilt,
-                zoom: self.rawStatus.zoom.map {
+            if let zoomError = self.device.zoomError { throw zoomError }
+            self.device.zoomWrites.append(zoom)
+            self.device.events.append("write:zoom:\(self.connection)")
+            self.pendingZoom = zoom
+            guard self.device.acceptsWrites else { return }
+            let committed = self.device.rawStatus
+            self.device.rawStatus = CameraPTZRawStatus(
+                pan: committed.pan,
+                tilt: committed.tilt,
+                zoom: committed.zoom.map {
                     CameraPTZRawAxisStatus(current: zoom, range: $0.range, canSet: $0.canSet)
                 })
         }
 
         func close() {
-            self.closeCount += 1
+            guard !self.closed else { return }
+            self.closed = true
+            self.device.closeCount += 1
+            self.device.events.append("close:\(self.connection)")
         }
     }
 
@@ -94,7 +214,11 @@ struct CameraPTZServiceTests {
         let controller: FakeController
 
         func open(deviceId _: String) -> any CameraPTZControlling {
-            self.controller
+            self.controller.openConnection()
+        }
+
+        func withCaptureSession<T>(deviceId _: String, body: () throws -> T) rethrows -> T {
+            try self.controller.withCaptureSession(body)
         }
     }
 
@@ -181,6 +305,36 @@ struct CameraPTZServiceTests {
         #expect(range.value(percent: 200) == 500)
     }
 
+    @Test func `unknown explicit capture device never falls back to another camera`() {
+        var selectedFallback = false
+
+        #expect(throws: CameraPTZError.deviceNotFound("missing")) {
+            try CameraCapturePipelineSupport.selectCamera(
+                deviceId: "missing",
+                matching: { _ in nil as String? },
+                fallback: {
+                    selectedFallback = true
+                    return "different-camera"
+                },
+                unavailableError: CameraCaptureService.CameraError.cameraUnavailable,
+                deviceNotFoundError: { CameraPTZError.deviceNotFound($0) })
+        }
+        #expect(!selectedFallback)
+    }
+
+    @Test func `capture without an explicit device preserves facing camera fallback`() throws {
+        for deviceId in [nil, ""] as [String?] {
+            let selected = try CameraCapturePipelineSupport.selectCamera(
+                deviceId: deviceId,
+                matching: { _ in nil as String? },
+                fallback: { "facing-camera" },
+                unavailableError: CameraCaptureService.CameraError.cameraUnavailable,
+                deviceNotFoundError: { CameraPTZError.deviceNotFound($0) })
+
+            #expect(selected == "facing-camera")
+        }
+    }
+
     @Test func `USB identity uses AVFoundation packed identifier`() throws {
         let identity = try CameraUSBIdentity.parse(deviceId: "0x21100002e1a4c06")
 
@@ -263,6 +417,67 @@ struct CameraPTZServiceTests {
         #expect(response.axes.zoom?.step == 5)
         #expect(response.canHome)
         #expect(controller.closeCount == 1)
+    }
+
+    @Test func `status keeps the capture stream active around all UVC access`() async throws {
+        let controller = self.makeController()
+
+        _ = try await self.makeService(controller).status(deviceId: "camera-id")
+
+        #expect(controller.events == [
+            "session:start", "open:1", "status:1", "close:1", "session:stop",
+        ])
+    }
+
+    @Test func `control closes its writer before verifying on a fresh connection`() async throws {
+        let controller = self.makeController()
+
+        let response = try await self.makeService(controller).control(OpenClawCameraPTZControlParams(
+            deviceId: "camera-id",
+            operation: .set,
+            target: OpenClawCameraPTZAxisValues(panDegrees: 5)))
+
+        #expect(response.state.panDegrees == 5)
+        #expect(controller.events == [
+            "session:start", "open:1", "status:1", "write:panTilt:1", "close:1",
+            "open:2", "status:2", "close:2", "session:stop",
+        ])
+    }
+
+    @Test func `connection local setpoint echoes never turn ignored motion into success`() async {
+        let controller = self.makeController()
+        controller.acceptsWrites = false
+
+        do {
+            _ = try await self.makeService(controller).control(OpenClawCameraPTZControlParams(
+                deviceId: "camera-id",
+                operation: .set,
+                target: OpenClawCameraPTZAxisValues(panDegrees: 5, zoomPercent: 75)))
+            Issue.record("the writer echoed ignored setpoints as a successful physical move")
+        } catch let CameraPTZError.partial(applied, state, failure) {
+            #expect(applied == ["panTilt", "zoom"])
+            #expect(state == CameraPTZState(panDegrees: 0, tiltDegrees: 0, zoomPercent: 50))
+            #expect(failure.contains("panDegrees requested=5.0 observed=0.0"))
+            #expect(failure.contains("zoomPercent requested=75.0 observed=50.0"))
+            #expect(failure.contains("video stream"))
+            #expect(failure.contains("AI framing/tracking"))
+            #expect(controller.events.contains("open:2"))
+            #expect(controller.events.last == "session:stop")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test func `verified motion within one advertised axis step still succeeds`() async throws {
+        let controller = self.makeController()
+        controller.panLandingOffset = 1800
+
+        let response = try await self.makeService(controller).control(OpenClawCameraPTZControlParams(
+            deviceId: "camera-id",
+            operation: .set,
+            target: OpenClawCameraPTZAxisValues(panDegrees: 5)))
+
+        #expect(response.state.panDegrees == 5.5)
     }
 
     @Test func `readable axes without SET capability are not exposed or writable`() async throws {

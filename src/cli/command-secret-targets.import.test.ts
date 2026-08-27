@@ -47,7 +47,10 @@ describe("command secret targets module import", () => {
 
   it("loads registry lazily for agent runtime plugin credential targets", async () => {
     const listSecretTargetRegistryEntries = vi.fn(() => [
-      { id: "plugins.entries.example.config.webSearch.apiKey" },
+      {
+        id: "plugins.entries.example.config.webSearch.apiKey",
+        pathPatternSegments: ["plugins", "entries", "example", "config", "webSearch", "apiKey"],
+      },
       { id: "plugins.entries.example.config.other.apiKey" },
       { id: "channels.telegram.botToken" },
     ]);

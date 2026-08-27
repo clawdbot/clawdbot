@@ -29,8 +29,6 @@ type RoleSnapshotStats = {
 };
 
 const ROLE_SNAPSHOT_TRUNCATION_MARKER = "[...TRUNCATED - page too large]";
-// A formatter ref precedes any YAML scalar delimiter; ref-looking scalar text is hostile page content.
-const ROLE_SNAPSHOT_LINE_REF_RE = /^\s*-\s+\w+(?:\s+"(?:\\.|[^"\\])*")?[^:]*?\[ref=([^\]]+)\]/;
 
 /** Options for filtering and compacting role snapshots. */
 export type RoleSnapshotOptions = {
@@ -43,7 +41,8 @@ export type RoleSnapshotOptions = {
 };
 
 function findSnapshotLineRef(line: string): string | undefined {
-  return ROLE_SNAPSHOT_LINE_REF_RE.exec(line)?.[1];
+  // Names and scalar values are page content, never formatter-owned refs.
+  return parseSnapshotLine(line)?.suffix.match(/^[^:]*?\[ref=([^\]]+)\]/)?.[1];
 }
 
 function getRoleSnapshotIdentityKey(
@@ -193,34 +192,45 @@ function getIndentLevel(line: string): number {
   return indent === undefined ? 0 : Math.floor(indent.length / 2);
 }
 
-function matchInteractiveSnapshotLine(
-  line: string,
-  options: RoleSnapshotOptions,
-): { roleRaw: string; role: string; name?: string; suffix: string } | null {
-  const depth = getIndentLevel(line);
-  if (options.maxDepth !== undefined && depth > options.maxDepth) {
+function parseSnapshotLine(line: string) {
+  const entry = line.match(/^(\s*-\s+)(.*)$/s);
+  if (!entry) {
     return null;
   }
-  const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
+  const prefix = entry[1]!;
+  const content = entry[2]!;
+  // Playwright JSON-encodes names, then single-quotes YAML keys when required.
+  // Keep the token lexical here: the shared finalizer also consumes MCP text.
+  const quoted = content.match(/^'((?:[^']|'')*)'(.*)$/s);
+  const key = quoted ? quoted[1]!.replaceAll("''", "'") : content;
+  const match = key.match(/^(\w+)(?:\s+("(?:\\.|[^"\\])*"))?(.*)$/s);
   if (!match) {
     return null;
   }
-  const roleRaw = match[2];
-  const name = match[3];
-  const suffix = match[4];
-  if (roleRaw === undefined || suffix === undefined) {
-    return null;
+  const roleRaw = match[1]!;
+  let nameToken = match[2];
+  let suffix = match[3]!;
+  // Slash-delimited names are emitted literally outside codegen mode. An
+  // unquoted YAML value cannot be part of that name (even if it contains '/').
+  if (nameToken === undefined && suffix.startsWith(" /")) {
+    const header = quoted ? suffix : suffix.split(/:(?=\s|$)/, 1)[0]!;
+    const literal = header.match(/^ (\/.*\/)/s);
+    if (literal) {
+      nameToken = literal[1]!;
+      suffix = suffix.slice(literal[0].length);
+    }
   }
-  if (roleRaw.startsWith("/")) {
-    return null;
-  }
-  const role = normalizeLowercaseStringOrEmpty(roleRaw);
   return {
+    prefix,
     roleRaw,
-    role,
-    ...(name ? { name } : {}),
-    suffix,
+    role: normalizeLowercaseStringOrEmpty(roleRaw),
+    nameToken,
+    suffix: suffix + (quoted?.[2] ?? ""),
   };
+}
+
+function decodeSnapshotName(nameToken: string | undefined): string | undefined {
+  return nameToken?.startsWith('"') ? JSON.parse(nameToken) : nameToken;
 }
 
 type RoleNameTracker = {
@@ -334,23 +344,12 @@ function processLine(
     return null;
   }
 
-  const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
-  if (!match) {
+  const parsed = parseSnapshotLine(line);
+  if (!parsed) {
     return options.interactive ? null : line;
   }
-
-  const prefix = match[1];
-  const roleRaw = match[2];
-  const name = match[3];
-  const suffix = match[4];
-  if (prefix === undefined || roleRaw === undefined || suffix === undefined) {
-    return options.interactive ? null : line;
-  }
-  if (roleRaw.startsWith("/")) {
-    return options.interactive ? null : line;
-  }
-
-  const role = normalizeLowercaseStringOrEmpty(roleRaw);
+  const { prefix, roleRaw, role, suffix } = parsed;
+  const name = decodeSnapshotName(parsed.nameToken);
   const isInteractive = INTERACTIVE_ROLES.has(role);
   const isContent = CONTENT_ROLES.has(role);
   const isStructural = STRUCTURAL_ROLES.has(role);
@@ -378,7 +377,7 @@ function processLine(
 
   let enhanced = `${prefix}${roleRaw}`;
   if (name) {
-    enhanced += ` "${name}"`;
+    enhanced += ` ${JSON.stringify(name)}`;
   }
   enhanced += ` [ref=${ref}]`;
   if (nth > 0) {
@@ -390,21 +389,27 @@ function processLine(
   return enhanced;
 }
 
-type InteractiveSnapshotLine = NonNullable<ReturnType<typeof matchInteractiveSnapshotLine>>;
+type InteractiveSnapshotLine = NonNullable<ReturnType<typeof parseSnapshotLine>> & {
+  name?: string;
+};
 
 function buildInteractiveSnapshotLines(params: {
   lines: string[];
   options: RoleSnapshotOptions;
   resolveRef: (parsed: InteractiveSnapshotLine) => { ref: string; nth?: number } | null;
   recordRef: (parsed: InteractiveSnapshotLine, ref: string, nth?: number) => void;
-  includeSuffix: (suffix: string) => boolean;
+  formatSuffix: (suffix: string, ref: string) => string;
 }): string[] {
   const out: string[] = [];
   for (const line of params.lines) {
-    const parsed = matchInteractiveSnapshotLine(line, params.options);
-    if (!parsed) {
+    if (params.options.maxDepth !== undefined && getIndentLevel(line) > params.options.maxDepth) {
       continue;
     }
+    const entry = parseSnapshotLine(line);
+    if (!entry) {
+      continue;
+    }
+    const parsed = { ...entry, name: decodeSnapshotName(entry.nameToken) };
     if (!INTERACTIVE_ROLES.has(parsed.role)) {
       continue;
     }
@@ -416,15 +421,13 @@ function buildInteractiveSnapshotLines(params: {
 
     let enhanced = `- ${parsed.roleRaw}`;
     if (parsed.name) {
-      enhanced += ` "${parsed.name}"`;
+      enhanced += ` ${JSON.stringify(parsed.name)}`;
     }
     enhanced += ` [ref=${resolved.ref}]`;
     if ((resolved.nth ?? 0) > 0) {
       enhanced += ` [nth=${resolved.nth}]`;
     }
-    if (params.includeSuffix(parsed.suffix)) {
-      enhanced += parsed.suffix;
-    }
+    enhanced += params.formatSuffix(parsed.suffix, resolved.ref);
     out.push(enhanced);
   }
   return out;
@@ -482,7 +485,7 @@ export function buildRoleSnapshotFromAriaSnapshot(
           nth,
         };
       },
-      includeSuffix: (suffix) => suffix.includes("["),
+      formatSuffix: (suffix) => (suffix.includes("[") ? suffix : ""),
     });
 
     removeNthFromNonDuplicates(refs, tracker);
@@ -511,12 +514,8 @@ export function buildRoleSnapshotFromAriaSnapshot(
 }
 
 function parseAiSnapshotRef(suffix: string): string | null {
-  const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
-  if (eMatch) {
-    return eMatch[1] ?? null;
-  }
-  const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
-  return numMatch?.[1] ?? null;
+  // Playwright's page-wide AI snapshots qualify element refs with a frame seq.
+  return suffix.match(/^[^:]*?\[ref=((?:f\d+)?e\d+|\d{1,9})\]/i)?.[1] ?? null;
 }
 
 /**
@@ -542,7 +541,7 @@ export function buildRoleSnapshotFromAiSnapshot(
       recordRef: ({ role, name }, ref) => {
         refs[ref] = { role, ...(name ? { name } : {}) };
       },
-      includeSuffix: () => true,
+      formatSuffix: (suffix, ref) => suffix.replace(` [ref=${ref}]`, ""),
     });
     return {
       snapshot: out.join("\n") || "(no interactive elements)",
@@ -557,24 +556,13 @@ export function buildRoleSnapshotFromAiSnapshot(
       continue;
     }
 
-    const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
-    if (!match) {
+    const parsed = parseSnapshotLine(line);
+    if (!parsed) {
       out.push(line);
       continue;
     }
-    const roleRaw = match[2];
-    const name = match[3];
-    const suffix = match[4];
-    if (roleRaw === undefined || suffix === undefined) {
-      out.push(line);
-      continue;
-    }
-    if (roleRaw.startsWith("/")) {
-      out.push(line);
-      continue;
-    }
-
-    const role = normalizeLowercaseStringOrEmpty(roleRaw);
+    const { role, suffix } = parsed;
+    const name = decodeSnapshotName(parsed.nameToken);
     const isStructural = STRUCTURAL_ROLES.has(role);
 
     if (options.compact && isStructural && !name) {

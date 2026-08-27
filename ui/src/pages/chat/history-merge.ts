@@ -238,9 +238,9 @@ export function reduceChatSessionProjection(
     return next;
   };
   const preparedEvent =
-    event.type === "messagePersisted"
+    event.type === "messagePersisted" && handoff
       ? { ...event, message: adopt(event.message, event.envelope ?? event) }
-      : event.type === "snapshotLoaded"
+      : event.type === "snapshotLoaded" && handoff
         ? { ...event, messages: event.messages.map((message) => adopt(message)) }
         : event;
   let projection = current;

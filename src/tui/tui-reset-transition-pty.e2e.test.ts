@@ -33,7 +33,8 @@ describe("TUI reset transition PTY", () => {
           OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "1000",
           OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
           OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "2",
-          TERM_PROGRAM: "Apple_Terminal",
+          // Synthetic Return must not consult the host macOS modifier state.
+          TERM_PROGRAM: undefined,
           NO_COLOR: undefined,
         },
         exitTimeoutMs: EXIT_TIMEOUT_MS,

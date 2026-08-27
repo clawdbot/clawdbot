@@ -5,6 +5,7 @@
  */
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -201,6 +202,7 @@ async function requestPluginToolApproval(params: {
           pluginId: approval.pluginId,
           title: approval.title,
           description: approval.description,
+          ...(approval.scope ? { scope: sanitizeApprovalScope(approval.scope) } : {}),
           severity: approval.severity,
           allowedDecisions: approval.allowedDecisions,
           toolName: params.toolName,
@@ -288,6 +290,7 @@ async function requestPluginToolApproval(params: {
           {
             title: approval.title,
             description: approval.description,
+            ...(approval.scope ? { scope: approval.scope } : {}),
             severity: approval.severity,
             allowedDecisions: approval.allowedDecisions,
             toolName: params.toolName,

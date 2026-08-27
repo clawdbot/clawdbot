@@ -9,6 +9,7 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -19,7 +20,8 @@ export type NormalizedAllowFrom = {
   invalidEntries: string[];
 };
 
-const warnedInvalidEntries = new Set<string>();
+// Telegram owns this process-local warning bound; authorization output stays unchanged.
+const warnedInvalidEntries = createDedupeCache({ ttlMs: 0, maxSize: 256 });
 const log = createSubsystemLogger("telegram/bot-access");
 
 function warnInvalidAllowFromEntries(entries: string[]) {
@@ -27,10 +29,9 @@ function warnInvalidAllowFromEntries(entries: string[]) {
     return;
   }
   for (const entry of entries) {
-    if (warnedInvalidEntries.has(entry)) {
+    if (warnedInvalidEntries.check(entry)) {
       continue;
     }
-    warnedInvalidEntries.add(entry);
     log.warn(
       [
         "Invalid allowFrom entry:",

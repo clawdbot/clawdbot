@@ -12,6 +12,7 @@ import {
   PreparedModelRuntimePublicationSupersededError,
   createPreparedModelRuntimeOwner,
   createPreparedModelRuntimeReplacement,
+  advancePreparedModelRuntimeOwnerConfig,
   effectiveEnvironmentFingerprint,
   hasSameLifecycleInput,
   listConfiguredOwnerInputs,
@@ -77,6 +78,18 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
+
+/** Advances model-neutral config identity without rebuilding prepared generation artifacts. */
+export function advancePreparedModelRuntimeConfig(config: OpenClawConfig): void {
+  for (const owner of owners.values()) {
+    // Read-only owners include the config hash in their map key and remain bound to their lease.
+    if (owner.input.readOnly) {
+      continue;
+    }
+    advancePreparedModelRuntimeOwnerConfig(owner, config);
+  }
+  replyDispatchPublication.advanceConfig(config);
+}
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
 export async function loadPreparedModelRuntimeSnapshot(
@@ -414,7 +427,7 @@ export function rejectPendingPreparedModelRuntimeReplacement(
 async function refreshPreparedModelRuntimeSnapshotsNow(
   config: OpenClawConfig,
   options: PreparedModelRuntimeRefreshOptions,
-  publicationEpoch: number,
+  isPublicationCurrent: () => boolean,
 ): Promise<void> {
   retainedGatewayRunOwners.clear(owners);
   const { defaultWorkspaceDir: workspace, allowGatewaySubagentBinding: bindings } = options;
@@ -479,10 +492,10 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     owners,
     agentBuildCompletions,
     buildTimeoutMs: modelRuntimeBuildTimeoutMs,
-    isPublicationCurrent: () => publicationEpoch === refreshRequestEpoch,
+    isPublicationCurrent,
     // Config replacement is one transaction. Per-owner auth supersession may retire individual
     // candidates, while a newer config epoch stops every remaining build in this publication.
-    isBuildCurrent: () => publicationEpoch === refreshRequestEpoch,
+    isBuildCurrent: isPublicationCurrent,
     onBuildStats: options.onBuildStats,
     pluginMetadataSnapshot: options.pluginMetadataSnapshot,
     registerEntriesAfterBuildStart: true,
@@ -491,33 +504,38 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
-  config: OpenClawConfig,
+  config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
   options: PreparedModelRuntimeRefreshOptions = {},
 ): Promise<void> {
+  if (options.isPublicationCurrent?.() === false) {
+    return Promise.resolve();
+  }
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
   markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
   const requestEpoch = refreshRequestEpoch;
   const replacement = pendingModelRuntimeReplacement;
+  const isPublicationCurrent = () =>
+    requestEpoch === refreshRequestEpoch && options.isPublicationCurrent?.() !== false;
   return enqueuePreparedModelRuntimePublication(async () => {
-    if (requestEpoch !== refreshRequestEpoch) {
+    if (!isPublicationCurrent()) {
       return;
     }
-    await refreshPreparedModelRuntimeSnapshotsNow(config, options, requestEpoch);
-    if (requestEpoch !== refreshRequestEpoch) {
+    const currentConfig = typeof config === "function" ? await config() : config;
+    if (!isPublicationCurrent()) {
+      return;
+    }
+    await refreshPreparedModelRuntimeSnapshotsNow(currentConfig, options, isPublicationCurrent);
+    if (!isPublicationCurrent()) {
       return;
     }
     await drainPendingAuthMutations();
-    if (requestEpoch !== refreshRequestEpoch) {
+    if (!isPublicationCurrent()) {
       return;
     }
     replyDispatchPublication.rebuild(owners.values());
   }).then(
     () => {
-      if (
-        requestEpoch === refreshRequestEpoch &&
-        replacement &&
-        pendingModelRuntimeReplacement === replacement
-      ) {
+      if (isPublicationCurrent() && replacement && pendingModelRuntimeReplacement === replacement) {
         pendingModelRuntimeReplacement = undefined;
         replacement.resolve();
         // Publication listeners may synchronously read the committed owner. Clear the lifecycle
@@ -527,7 +545,7 @@ export function refreshPreparedModelRuntimeSnapshots(
     },
     (error: unknown) => {
       const refreshError = toStringifiedError(error);
-      if (requestEpoch === refreshRequestEpoch) {
+      if (isPublicationCurrent()) {
         // Candidate and queued auth builds may finish independently. A failed transaction must
         // leave no owner from its partially published generation request-visible.
         for (const owner of owners.values()) {
@@ -538,11 +556,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           owner.pluginGeneration = undefined;
         }
       }
-      if (
-        requestEpoch === refreshRequestEpoch &&
-        replacement &&
-        pendingModelRuntimeReplacement === replacement
-      ) {
+      if (isPublicationCurrent() && replacement && pendingModelRuntimeReplacement === replacement) {
         pendingModelRuntimeReplacement = undefined;
         replacement.reject(refreshError);
         notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });

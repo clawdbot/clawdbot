@@ -82,6 +82,7 @@ function renderDailyChart(
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function directText(element: Element | null | undefined): string | undefined {
@@ -557,7 +558,16 @@ describe("renderCostWindowComparison", () => {
 describe("renderSessionsCard", () => {
   const noop = () => {};
 
-  it("renders named native session toggles while preserving shift selection and separate copy", () => {
+  it.each([
+    { copied: true, feedback: "Copied!" },
+    { copied: false, feedback: "Copy failed" },
+  ])("keeps session selection separate while showing $feedback", async ({ copied, feedback }) => {
+    const writeText = vi.fn(async () => {
+      if (!copied) {
+        throw new Error("Clipboard access denied");
+      }
+    });
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
     const container = document.createElement("div");
     document.body.append(container);
     const onSelectSession = vi.fn<(key: string, shiftKey: boolean) => void>();
@@ -610,12 +620,28 @@ describe("renderSessionsCard", () => {
     expect(document.activeElement).toBe(next);
     next?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectSession).toHaveBeenCalledOnce();
-    expect(onSelectSession).toHaveBeenCalledWith("agent:main:next", true);
+    expect(onSelectSession).toHaveBeenCalledWith(
+      "agent:main:next",
+      true,
+      sessions.map((s) => s.key),
+    );
 
-    rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button")?.click();
+    const copyButton = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button");
+    copyButton?.click();
+    await vi.waitFor(() => {
+      expect(copyButton?.textContent?.trim()).toBe(feedback);
+      expect(copyButton?.getAttribute("aria-label")).toBe(feedback);
+    });
+    expect(writeText).toHaveBeenCalledWith("Selected thread");
+    expect(copyButton?.dataset[copied ? "copied" : "error"]).toBe("1");
+    expect(copyButton?.dataset[copied ? "error" : "copied"]).toBeUndefined();
     expect(onSelectSession).toHaveBeenCalledOnce();
     rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
-    expect(onSelectSession).toHaveBeenCalledWith("agent:main:selected", false);
+    expect(onSelectSession).toHaveBeenCalledWith(
+      "agent:main:selected",
+      false,
+      sessions.map((s) => s.key),
+    );
   });
 
   it("sorts cost by the selected day values when day filters are active", () => {

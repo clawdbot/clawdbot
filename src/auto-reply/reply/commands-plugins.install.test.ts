@@ -344,12 +344,12 @@ describe("handleCommands /plugins install", () => {
       ok: true,
       pluginId: "wecom-openclaw-plugin",
       targetDir: "/tmp/wecom-openclaw-plugin",
-      version: "2026.5.7",
+      version: "2026.7.2",
       extensions: ["index.js"],
       npmResolution: {
         name: "@wecom/wecom-openclaw-plugin",
-        version: "2026.5.7",
-        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+        version: "2026.7.2",
+        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
       },
     });
     persistPluginInstallMock.mockResolvedValue({});
@@ -362,15 +362,15 @@ describe("handleCommands /plugins install", () => {
 
       expect(result?.reply?.text).toContain('Installed plugin "wecom-openclaw-plugin"');
       expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
-        spec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+        spec: "@wecom/wecom-openclaw-plugin@2026.7.2",
         expectedPluginId: "wecom-openclaw-plugin",
         trustedSourceLinkedOfficialInstall: true,
       });
       expectPersistedInstall("wecom-openclaw-plugin", {
         source: "npm",
-        spec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+        spec: "@wecom/wecom-openclaw-plugin@2026.7.2",
         installPath: "/tmp/wecom-openclaw-plugin",
-        version: "2026.5.7",
+        version: "2026.7.2",
       });
     });
   });
@@ -1056,12 +1056,12 @@ describe("handleCommands /plugins install", () => {
       ok: true,
       pluginId: "wecom-openclaw-plugin",
       targetDir: "/tmp/wecom-openclaw-plugin",
-      version: "2026.5.7",
+      version: "2026.7.2",
       extensions: ["index.js"],
       npmResolution: {
         name: "@wecom/wecom-openclaw-plugin",
-        version: "2026.5.7",
-        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+        version: "2026.7.2",
+        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
       },
     });
     persistPluginInstallMock.mockResolvedValue({});
@@ -1087,9 +1087,9 @@ describe("handleCommands /plugins install", () => {
         source: "npm",
         spec: "@wecom/wecom-openclaw-plugin@latest",
         installPath: "/tmp/wecom-openclaw-plugin",
-        version: "2026.5.7",
+        version: "2026.7.2",
         resolvedName: "@wecom/wecom-openclaw-plugin",
-        resolvedVersion: "2026.5.7",
+        resolvedVersion: "2026.7.2",
       });
     });
   });

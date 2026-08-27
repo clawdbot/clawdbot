@@ -171,6 +171,7 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
   const voiceStatesEnabled = intentsConfig?.voiceStates ?? voiceEnabled ?? false;
   let intents =
     discordGateway.GatewayIntents.Guilds |
+    discordGateway.GatewayIntents.GuildExpressions |
     discordGateway.GatewayIntents.GuildMessages |
     discordGateway.GatewayIntents.DirectMessages |
     discordGateway.GatewayIntents.GuildMessageReactions |

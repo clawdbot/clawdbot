@@ -1,8 +1,16 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import readline from "node:readline";
 
 let nextRequestId = 1;
 const pending = new Map();
+const tracePath = process.env.OPENCLAW_ACPX_PROCESS_FIXTURE_TRACE;
+
+function trace(method) {
+  if (tracePath) {
+    fs.appendFileSync(tracePath, `${JSON.stringify({ method })}\n`, "utf8");
+  }
+}
 
 function write(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -33,6 +41,7 @@ const model = {
 };
 
 async function handle(method, params) {
+  trace(method);
   if (method === "initialize") {
     return { userAgent: "openclaw-acpx-process-fixture", codexHome: process.cwd() };
   }
@@ -105,7 +114,7 @@ async function handle(method, params) {
   throw new Error(`unsupported fixture method: ${method}`);
 }
 
-readline.createInterface({ input: process.stdin }).on("line", async (line) => {
+async function handleLine(line) {
   let message;
   try {
     message = JSON.parse(line);
@@ -133,4 +142,8 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
       error: { code: -32601, message: error instanceof Error ? error.message : String(error) },
     });
   }
+}
+
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  void handleLine(line);
 });

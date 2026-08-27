@@ -40,6 +40,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -257,6 +258,170 @@ test("sessions.create assigns and registers its requested group", async () => {
     new Set(["conn-1"]),
     { dropIfSlow: true },
   );
+});
+
+test.each([
+  ["sessions.create", "create"],
+  ["sessions.patch", "patch"],
+  ["sessions.patchMany", "patch-many"],
+] as const)(
+  "required operator sandbox follows new %s session ownership",
+  async (method, suffix) => {
+    const { storePath } = await createSessionStoreDir();
+    const profile = ensureProfileForEmail(`sandboxed-session-${suffix}@example.com`);
+    setUserProfileRole(profile.id, "guest");
+    const cfg = {
+      ...getRuntimeConfig(),
+      session: { ...getRuntimeConfig().session, store: storePath },
+      gateway: {
+        ...getRuntimeConfig().gateway,
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" as const },
+              agents: ["main"],
+              scopes: ["operator.read" as const, "operator.write" as const],
+              sandbox: "required" as const,
+            },
+          },
+        },
+      },
+    };
+    const client = {
+      connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as never;
+    const key = `agent:main:dashboard:role-sandbox-${suffix}`;
+    const request =
+      method === "sessions.create"
+        ? { agentId: "main", key }
+        : method === "sessions.patch"
+          ? { key, label: "Guest session" }
+          : { patch: { label: "Guest session" }, targets: [{ key }] };
+
+    const created = await directSessionReq<{ outcomes?: Array<{ ok: boolean }> }>(method, request, {
+      client,
+      context: { getRuntimeConfig: () => cfg },
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    if (method === "sessions.patchMany") {
+      expect(created.payload?.outcomes).toEqual([{ ok: true, key }]);
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
+
+    for (const forgedSandbox of [null, "inherit"] as const) {
+      const forged = await directSessionReq(
+        "sessions.patch",
+        { key, sandbox: forgedSandbox },
+        { client, context: { getRuntimeConfig: () => cfg } },
+      );
+
+      expect(forged).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sandbox: "required",
+    });
+  },
+);
+
+test("operator role agent allowlists protect creation without blocking existing sessions", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const profile = ensureProfileForEmail("restricted-session-creator@example.com");
+  setUserProfileRole(profile.id, "guest");
+  const cfg = {
+    ...getRuntimeConfig(),
+    session: { ...getRuntimeConfig().session, store: storePath },
+    gateway: {
+      ...getRuntimeConfig().gateway,
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "view" as const },
+            agents: ["guest-only"],
+            scopes: ["operator.read" as const, "operator.write" as const],
+          },
+        },
+      },
+    },
+  };
+  const client = {
+    connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+  } as never;
+  const requestOptions = { client, context: { getRuntimeConfig: () => cfg } };
+  const deniedKey = "agent:main:dashboard:role-denied";
+
+  const created = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", key: deniedKey },
+    requestOptions,
+  );
+  expect(created).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+  });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: deniedKey, storePath })).toBeUndefined();
+
+  const patched = await directSessionReq(
+    "sessions.patch",
+    { key: deniedKey, label: "bypass attempt" },
+    requestOptions,
+  );
+  expect(patched).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+
+  const patchedMany = await directSessionReq<{ outcomes: Array<{ ok: boolean; error?: unknown }> }>(
+    "sessions.patchMany",
+    { patch: { label: "bulk bypass attempt" }, targets: [{ key: deniedKey }] },
+    requestOptions,
+  );
+  expect(patchedMany).toMatchObject({
+    ok: true,
+    payload: { outcomes: [{ ok: false, error: { code: "FORBIDDEN" } }] },
+  });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: deniedKey, storePath })).toBeUndefined();
+
+  const existingKey = "agent:main:dashboard:role-existing";
+  await writeSessionStore({
+    entries: {
+      [existingKey]: sessionStoreEntry("role-existing-session", {
+        createdActor: { type: "human", id: profile.id },
+      }),
+    },
+  });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: existingKey, storePath })).toMatchObject({
+    sessionId: "role-existing-session",
+  });
+  expect(
+    resolveGatewaySessionStoreTarget({ cfg, key: existingKey, agentId: "main" }).storePath,
+  ).toBe(storePath);
+  const adopted = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", key: existingKey },
+    requestOptions,
+  );
+  expect(adopted.ok).toBe(true);
+  const existingPatch = await directSessionReq(
+    "sessions.patch",
+    { key: existingKey, label: "still allowed" },
+    requestOptions,
+  );
+  expect(existingPatch.ok).toBe(true);
 });
 
 test("sessions.create carries keyed adoption authorization through the durable commit", async () => {
@@ -1340,6 +1505,86 @@ test("sessions.create rejects draft visibility when policy disables drafts", asy
       details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
     },
   });
+});
+
+test("sessions.create persists explicit tool overrides before the first turn", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  const sessionKey = "agent:main:dashboard:create-tool-overrides";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("tool-overrides-parent", {
+        toolOverrides: { skills: { inherited: false } },
+      }),
+    },
+  });
+  const requested = {
+    mcpServers: { zeta: false, alpha: true },
+    mcpToolsDeny: { github: ["write", "read", "write"] },
+    skills: { release: false },
+    webSearch: false,
+  };
+  const normalized = {
+    mcpServers: { alpha: true, zeta: false },
+    mcpToolsDeny: { github: ["read", "write"] },
+    skills: { release: false },
+    webSearch: false,
+  };
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const observed: Array<unknown> = [];
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    observed.push(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.toolOverrides);
+    respond(true, { runId: "create-tool-overrides-run", status: "started" });
+  });
+  const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
+
+  try {
+    const created = await directSessionReq<{
+      entry?: { toolOverrides?: unknown };
+      runStarted?: boolean;
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        key: sessionKey,
+        parentSessionKey,
+        message: "run with the selected capabilities",
+        toolOverrides: requested,
+      },
+      client,
+    );
+
+    expect(created).toMatchObject({
+      ok: true,
+      payload: { entry: { toolOverrides: normalized }, runStarted: true },
+    });
+    expect(observed).toEqual([normalized]);
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.toolOverrides).toEqual(
+      normalized,
+    );
+
+    const retried = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", key: sessionKey, toolOverrides: requested },
+      client,
+    );
+    expect(retried.ok).toBe(true);
+
+    const mismatch = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", key: sessionKey, toolOverrides: { skills: { release: true } } },
+      client,
+    );
+    expect(mismatch).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "sessions.create toolOverrides requires a new session",
+      },
+    });
+  } finally {
+    chatSend.mockRestore();
+  }
 });
 
 test("sessions.create rolls back failed provisioning before a same-key creator proceeds", async () => {
@@ -3725,6 +3970,69 @@ test("sessions.create inherits explicit selection without runtime model identity
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
 });
 
+test("sessions.create skips inherited active auto fallback model overrides", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = { model: { primary: "openai/gpt-primary" } };
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent-auto-fallback", {
+        providerOverride: "google-vertex",
+        modelOverride: "gemini-fallback",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-primary",
+        agentRuntimeOverride: "vertex-runtime",
+        contextWindow: "1m",
+        authProfileOverride: "google-vertex:fallback",
+        authProfileOverrideSource: "auto",
+        thinkingLevel: "high",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    resolved?: { modelProvider?: string; model?: string };
+    entry?: {
+      parentSessionKey?: string;
+      providerOverride?: string;
+      modelOverride?: string;
+      modelOverrideSource?: string;
+      agentRuntimeOverride?: string;
+      contextWindow?: string;
+      authProfileOverride?: string;
+      authProfileOverrideSource?: string;
+      thinkingLevel?: string;
+    };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.providerOverride).toBeUndefined();
+  expect(created.payload?.entry?.modelOverride).toBeUndefined();
+  expect(created.payload?.entry?.modelOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.agentRuntimeOverride).toBeUndefined();
+  expect(created.payload?.entry?.contextWindow).toBe("1m");
+  expect(created.payload?.entry?.authProfileOverride).toBeUndefined();
+  expect(created.payload?.entry?.authProfileOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.thinkingLevel).toBe("high");
+  expect(created.payload?.resolved).toEqual({ modelProvider: "openai", model: "gpt-primary" });
+
+  const key = created.payload?.key as string;
+  const storedEntry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+  expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
+  expect(storedEntry?.providerOverride).toBeUndefined();
+  expect(storedEntry?.modelOverride).toBeUndefined();
+  expect(storedEntry?.agentRuntimeOverride).toBeUndefined();
+  expect(storedEntry?.contextWindow).toBe("1m");
+  expect(storedEntry?.authProfileOverride).toBeUndefined();
+  expect(storedEntry?.authProfileOverrideSource).toBeUndefined();
+  expect(storedEntry?.thinkingLevel).toBe("high");
+});
+
 test("sessions.create resolves the current default instead of inherited runtime identity", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = { model: { primary: "anthropic/current-model" } };
@@ -4180,6 +4488,121 @@ test("sessions.create adopting an existing key does not restamp node provenance"
         (event) => event.kind === "created",
       ),
     ).toEqual([]);
+  } finally {
+    chatSend.mockRestore();
+  }
+});
+
+test("sessions.create replays an identical creation once and rejects conflicting intent", async () => {
+  await createSessionStoreDir();
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const { sessionCreateHandlers } = await import("./server-methods/sessions-create.js");
+  let sharedContext:
+    | Parameters<NonNullable<(typeof chatHandlers)["chat.send"]>>[0]["context"]
+    | undefined;
+  const chatSend = vi
+    .spyOn(chatHandlers, "chat.send")
+    .mockImplementation(async ({ context, respond }) => {
+      sharedContext ??= context;
+      respond(true, { runId: "create-once", status: "started" });
+    });
+  const dedupe = new Map();
+  const client = {
+    connect: {
+      role: "operator",
+      scopes: ["operator.write", "operator.admin"],
+      device: { id: "control-ui-device" },
+    },
+    authenticatedUserProfile: { profileId: "profile-owner" },
+  };
+  const params = {
+    agentId: "main",
+    idempotencyKey: "create-once",
+    message: "start this task exactly once",
+    permissionMode: "full",
+  };
+  const request = async (nextParams = params, nextClient = client) => {
+    if (!sharedContext) {
+      return await directSessionReq<{ key: string }>("sessions.create", nextParams, {
+        client: nextClient as never,
+        context: { dedupe },
+      });
+    }
+    let result:
+      | { ok: boolean; payload?: { key: string }; error?: { code?: string; message?: string } }
+      | undefined;
+    await sessionCreateHandlers["sessions.create"]?.({
+      req: {} as never,
+      params: nextParams,
+      client: nextClient as never,
+      context: sharedContext,
+      isWebchatConnect: () => false,
+      respond: (ok, payload, error) => {
+        result = { ok, payload: payload as { key: string } | undefined, error };
+      },
+    });
+    if (!result) {
+      throw new Error("sessions.create did not respond");
+    }
+    return result;
+  };
+
+  try {
+    const first = await request();
+    const replay = await request(
+      {
+        message: params.message,
+        permissionMode: params.permissionMode,
+        idempotencyKey: params.idempotencyKey,
+        agentId: params.agentId,
+      },
+      {
+        ...client,
+        connect: {
+          ...client.connect,
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+        },
+      },
+    );
+
+    expect(first.ok).toBe(true);
+    expect(replay).toEqual(first);
+    expect(chatSend).toHaveBeenCalledOnce();
+    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
+      idempotencyKey: expect.any(String),
+      message: "start this task exactly once",
+    });
+
+    const conflict = await request({ ...params, message: "start a different task" });
+    expect(conflict).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "session creation idempotency key was reused with different parameters",
+      },
+    });
+    expect(chatSend).toHaveBeenCalledOnce();
+
+    const downgraded = await request(params, {
+      ...client,
+      connect: { ...client.connect, scopes: ["operator.write"] },
+    });
+    expect(downgraded).toMatchObject({
+      ok: false,
+      error: { message: "missing scope: operator.admin" },
+    });
+    expect(chatSend).toHaveBeenCalledOnce();
+
+    const differentOwner = await request(params, {
+      ...client,
+      authenticatedUserProfile: { profileId: "profile-other" },
+    });
+    expect(differentOwner.ok).toBe(true);
+    expect(differentOwner.payload?.key).not.toBe(first.payload?.key);
+    expect(chatSend).toHaveBeenCalledTimes(2);
+    expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).not.toBe(
+      chatSend.mock.calls[0]?.[0].params.idempotencyKey,
+    );
   } finally {
     chatSend.mockRestore();
   }

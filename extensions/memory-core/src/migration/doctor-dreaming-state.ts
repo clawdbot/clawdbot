@@ -24,10 +24,6 @@ import {
 // Import from the defining modules, not the short-term-promotion barrel: the
 // barrel pulls memory-host-events/kysely, which doctor enumeration cold-loads.
 import { normalizeShortTermPhaseSignalStore } from "../short-term-promotion-store.js";
-import {
-  SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
-  SHORT_TERM_STORE_RELATIVE_PATH,
-} from "../short-term-promotion-types.js";
 import { normalizeShortTermRecallStore } from "../short-term-promotion-utils.js";
 import { resolveConfiguredWorkspaces } from "./doctor-workspaces.js";
 import { dreamingStateComparison } from "./dreaming-state-comparison.js";
@@ -38,16 +34,7 @@ type LegacySource = {
   filePath: string;
 };
 
-const LEGACY_DAILY_INGESTION_STATE_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "daily-ingestion.json",
-);
-const LEGACY_SESSION_INGESTION_STATE_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "session-ingestion.json",
-);
+const LEGACY_DREAMING_STATE_DIR = path.join("memory", ".dreams");
 
 async function readJsonFile(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
@@ -58,15 +45,15 @@ async function collectLegacySources(
   env: NodeJS.ProcessEnv,
 ): Promise<LegacySource[]> {
   const sources: LegacySource[] = [];
-  for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
+  for (const workspaceDir of await resolveConfiguredWorkspaces(config, env)) {
     const candidates = [
-      { label: "daily ingestion", relativePath: LEGACY_DAILY_INGESTION_STATE_RELATIVE_PATH },
-      { label: "session ingestion", relativePath: LEGACY_SESSION_INGESTION_STATE_RELATIVE_PATH },
-      { label: "short-term recall", relativePath: SHORT_TERM_STORE_RELATIVE_PATH },
-      { label: "phase signals", relativePath: SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH },
+      { label: "daily ingestion", fileName: "daily-ingestion.json" },
+      { label: "session ingestion", fileName: "session-ingestion.json" },
+      { label: "short-term recall", fileName: "short-term-recall.json" },
+      { label: "phase signals", fileName: "phase-signals.json" },
     ];
     for (const candidate of candidates) {
-      const filePath = path.join(workspaceDir, candidate.relativePath);
+      const filePath = path.join(workspaceDir, LEGACY_DREAMING_STATE_DIR, candidate.fileName);
       if (await legacyStateFileExists(filePath)) {
         sources.push({ workspaceDir, label: candidate.label, filePath });
       }

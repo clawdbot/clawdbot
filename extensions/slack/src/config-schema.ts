@@ -93,6 +93,7 @@ const SlackAccountSchema = z
       omit: ["groupAllowFrom"],
       streaming: SlackStreamingConfigSchema.optional(),
     }),
+    joinIntro: z.boolean().optional(),
     postAs: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     relay: SlackRelaySchema.optional(),

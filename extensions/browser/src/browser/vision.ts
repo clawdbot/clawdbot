@@ -90,10 +90,18 @@ export async function describeBrowserScreenshot(
   deps: BrowserScreenshotDescriptionDeps,
 ): Promise<BrowserScreenshotDescriptionResult | null> {
   const filePath = await resolveImageUnderstandingFilePath(ctx, deps);
+  const agentId = ctx.agentDir
+    ? undefined
+    : (await import("openclaw/plugin-sdk/agent-scope-runtime")).resolveSessionAgentId({
+        agentId: ctx.agentId,
+        sessionKey: ctx.mediaScope?.sessionKey,
+        config: ctx.cfg,
+      });
   const described = await deps.describeImageFile({
     filePath,
     cfg: ctx.cfg,
     prompt: DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
+    ...(agentId ? { agentId } : {}),
     agentDir: ctx.agentDir,
     workspaceDir: ctx.workspaceDir,
     activeModel: normalizeActiveModel(ctx.activeModel),

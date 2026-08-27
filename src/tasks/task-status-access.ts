@@ -5,7 +5,6 @@ import {
   listActiveGeneratedMediaTaskIdsForSessionKey,
 } from "./generated-media-task-activity.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
-import { getTasksByRunScope, pickPreferredRunIdTask } from "./task-registry-state.js";
 // Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
@@ -57,30 +56,6 @@ export function listTasksForAgentIdForStatus(agentId: string): TaskRecord[] {
 
 export function findTaskByRunIdForStatus(runId: string): TaskRecord | undefined {
   return findTaskByRunId(runId);
-}
-
-export function findTaskByRunIdForChildSessionForStatus(
-  runId: string,
-  childSessionKey: string,
-): Pick<TaskRecord, "taskId" | "status" | "childSessionKey"> | undefined {
-  const normalizedChildSessionKey = childSessionKey.trim();
-  if (!normalizedChildSessionKey) {
-    return undefined;
-  }
-  // A run id can span multiple task scopes. Terminal ownership must stay on
-  // the exact child session instead of adopting the registry's global preference.
-  const task = pickPreferredRunIdTask(
-    getTasksByRunScope({ runId, sessionKey: normalizedChildSessionKey }).filter(
-      (candidate) => candidate.childSessionKey?.trim() === normalizedChildSessionKey,
-    ),
-  );
-  return task
-    ? {
-        taskId: task.taskId,
-        status: task.status,
-        childSessionKey: task.childSessionKey,
-      }
-    : undefined;
 }
 
 /** Snapshots generated-media task ids so replay guards stay attempt-local. */

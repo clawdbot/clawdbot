@@ -165,23 +165,142 @@ describe("TUI plugin approvals", () => {
         id: "plugin:other",
         request: {
           ...approvalPayload().request,
+          agentId: "other",
           sessionKey: "agent:other:main",
         },
       }),
     );
     expect(harness.openOverlay).not.toHaveBeenCalled();
 
+    harness.setAgentId("other");
     harness.setSessionKey("agent:other:main");
     harness.controller.sessionChanged();
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
 
     harness.controller.handleEvent("plugin.approval.resolved", { id: "plugin:other" });
+    harness.setAgentId("main");
     harness.setSessionKey("agent:main:main");
     harness.listPluginApprovals.mockResolvedValueOnce([approvalPayload()]);
     await harness.controller.refresh();
 
     expect(harness.listPluginApprovals).toHaveBeenCalledTimes(1);
     expect(harness.openOverlay).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      label: "shows a fixed-store alias owned by the active agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "main",
+      approvalSession: "support",
+      visible: true,
+    },
+    {
+      label: "matches normalized agent identities for a fixed-store alias",
+      selectedAgent: "Main",
+      selectedSession: "agent:main:support",
+      approvalAgent: " MAIN ",
+      approvalSession: "support",
+      visible: true,
+    },
+    {
+      label: "rejects a fixed-store alias owned by another agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "work",
+      approvalSession: "support",
+      visible: false,
+    },
+    {
+      label: "rejects a fixed-store alias without explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: null,
+      approvalSession: "support",
+      visible: false,
+    },
+    {
+      label: "rejects a missing session key even with explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "main",
+      approvalSession: null,
+      visible: false,
+    },
+    {
+      label: "rejects a matching canonical key with a contradictory explicit owner",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "work",
+      approvalSession: "agent:main:support",
+      visible: false,
+    },
+    {
+      label: "accepts a canonical key whose parsed owner identifies the active agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: null,
+      approvalSession: "agent:main:support",
+      visible: true,
+    },
+    {
+      label: "rejects a different agent's canonical key with a colliding alias",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "work",
+      approvalSession: "agent:work:support",
+      visible: false,
+    },
+    {
+      label: "rejects an ownerless foreign canonical key against a bare selected alias",
+      selectedAgent: "main",
+      selectedSession: "support",
+      approvalAgent: null,
+      approvalSession: "agent:work:support",
+      visible: false,
+    },
+    {
+      label: "rejects a foreign canonical key with a misleading explicit owner",
+      selectedAgent: "main",
+      selectedSession: "support",
+      approvalAgent: "main",
+      approvalSession: "agent:work:support",
+      visible: false,
+    },
+    {
+      label: "rejects a global approval without explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "global",
+      approvalAgent: null,
+      approvalSession: "global",
+      visible: false,
+    },
+    {
+      label: "preserves case-sensitive opaque session references",
+      selectedAgent: "main",
+      selectedSession: "agent:main:matrix:group:!Room:example.org",
+      approvalAgent: "main",
+      approvalSession: "matrix:group:!room:example.org",
+      visible: false,
+    },
+  ])("$label", ({ selectedAgent, selectedSession, approvalAgent, approvalSession, visible }) => {
+    const harness = createHarness();
+    harness.setAgentId(selectedAgent);
+    harness.setSessionKey(selectedSession);
+
+    harness.controller.handleEvent(
+      "plugin.approval.requested",
+      approvalPayload({
+        request: {
+          ...approvalPayload().request,
+          agentId: approvalAgent,
+          sessionKey: approvalSession,
+        },
+      }),
+    );
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(visible ? 1 : 0);
   });
 
   it("preserves requested events received while a refresh is in flight", async () => {

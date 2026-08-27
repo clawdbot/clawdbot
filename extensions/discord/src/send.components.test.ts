@@ -36,9 +36,12 @@ vi.mock("./send.outbound.js", () => ({
 }));
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
-vi.mock("./runtime-api.js", () => ({
-  loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
-}));
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
+  return { ...actual, loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock };
+});
 
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
 let editDiscordComponentMessage: typeof import("./send.components.js").editDiscordComponentMessage;
@@ -183,6 +186,46 @@ describe("sendDiscordComponentMessage", () => {
 
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("msg-progress");
+  });
+
+  it("rechecks delivery authority before each retried component post", async () => {
+    let authorityActive = true;
+    const loopback = await createDiscordLoopbackRest({
+      status: (request) => {
+        if (request.method === "POST") {
+          authorityActive = false;
+          return 503;
+        }
+        return 200;
+      },
+    });
+    try {
+      const authorityRevoked = new Error("delivery authority revoked");
+      const onPlatformSendDispatch = vi.fn(async () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      });
+
+      await expect(
+        sendDiscordComponentMessage(
+          "channel:789",
+          { blocks: [{ type: "actions", buttons: [{ label: "Open" }] }] },
+          {
+            cfg: DISCORD_TEST_CFG,
+            rest: loopback.rest,
+            token: "test-token",
+            onPlatformSendDispatch,
+          },
+        ),
+      ).rejects.toBe(authorityRevoked);
+
+      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(1);
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("edits component messages and refreshes component registry entries", async () => {
@@ -494,7 +537,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect((body.components as Array<{ type?: number }>).length).toBeGreaterThan(0);
   });
 
-  it("preserves an explicit component attachment name before MIME fallback", async () => {
+  it("preserves an explicit component attachment name before inferred filename and MIME fallback", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({
       type: ChannelType.GuildText,
@@ -504,6 +547,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
       buffer: Buffer.from("png"),
       contentType: "image/png",
+      fileName: "report.pdf",
     });
 
     await sendDiscordComponentMessage(

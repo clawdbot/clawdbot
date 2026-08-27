@@ -1,0 +1,320 @@
+{
+  "id": "daytona",
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": [
+      "plugins.entries.daytona"
+    ]
+  },
+  "name": "Daytona Sandbox",
+  "description": "OpenClaw sandbox backend that runs agent exec and file tools inside Daytona cloud sandboxes over the Daytona toolbox API.",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "env"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "store"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "exec"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        ]
+      },
+      "apiUrl": {
+        "type": "string",
+        "minLength": 1
+      },
+      "target": {
+        "type": "string",
+        "minLength": 1
+      },
+      "snapshot": {
+        "type": "string",
+        "minLength": 1
+      },
+      "image": {
+        "type": "string",
+        "minLength": 1
+      },
+      "resources": {
+        "type": "object",
+        "properties": {
+          "cpu": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "gpu": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "memory": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "disk": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      },
+      "user": {
+        "type": "string",
+        "minLength": 1
+      },
+      "volumes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "volumeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "mountPath": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "volumeId",
+            "mountPath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "autoStopInterval": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "autoPauseInterval": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "autoArchiveInterval": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "autoDeleteInterval": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "networkBlockAll": {
+        "type": "boolean"
+      },
+      "networkAllowList": {
+        "type": "string",
+        "minLength": 1
+      },
+      "domainAllowList": {
+        "type": "string",
+        "minLength": 1
+      },
+      "remoteWorkspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "remoteAgentWorkspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 2147000
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "Daytona API Key",
+      "help": "Daytona API key or SecretRef (fallback: DAYTONA_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "dtn_..."
+    },
+    "apiUrl": {
+      "label": "Daytona API URL",
+      "help": "Optional Daytona API base URL (fallback: DAYTONA_API_URL env var). Defaults to Daytona cloud.",
+      "advanced": true
+    },
+    "target": {
+      "label": "Target Region",
+      "help": "Optional Daytona target region for new sandboxes (fallback: DAYTONA_TARGET env var).",
+      "advanced": true
+    },
+    "snapshot": {
+      "label": "Snapshot",
+      "help": "Daytona snapshot for new sandboxes. Defaults to the Daytona default snapshot. The image needs sh, tar, base64, stat, and python3 on PATH. Mutually exclusive with image."
+    },
+    "image": {
+      "label": "Image",
+      "help": "Docker image for new sandboxes, pulled or built by Daytona on first create. Mutually exclusive with snapshot.",
+      "advanced": true
+    },
+    "resources": {
+      "label": "Resources",
+      "help": "CPU, GPU, memory (GiB), and disk (GiB) for image-based sandboxes. Omitted fields use the Daytona defaults. Snapshot sandboxes size from the snapshot.",
+      "advanced": true
+    },
+    "user": {
+      "label": "OS User",
+      "help": "OS user for the sandbox. When set, align remoteWorkspaceDir and remoteAgentWorkspaceDir with that user's writable paths.",
+      "advanced": true
+    },
+    "volumes": {
+      "label": "Volumes",
+      "help": "Daytona volumes to mount, as { volumeId, mountPath } entries. Volume paths are reachable from exec commands but stay outside the file-tool workspace mounts.",
+      "advanced": true
+    },
+    "autoStopInterval": {
+      "label": "Auto-stop Interval Minutes",
+      "help": "Minutes of inactivity before Daytona stops the sandbox; 0 keeps it running. Defaults to the Daytona default (15). Stopped sandboxes restart on next use."
+    },
+    "autoPauseInterval": {
+      "label": "Auto-pause Interval Minutes",
+      "help": "Minutes of inactivity before Daytona pauses the sandbox; 0 disables. Pause needs VM-based runners and preserves memory state. Only one of auto-stop and auto-pause may be non-zero.",
+      "advanced": true
+    },
+    "autoArchiveInterval": {
+      "label": "Auto-archive Interval Minutes",
+      "help": "Minutes a stopped sandbox waits before Daytona archives it to cold storage; 0 uses the Daytona maximum. Defaults to 7 days.",
+      "advanced": true
+    },
+    "autoDeleteInterval": {
+      "label": "Auto-delete Interval Minutes",
+      "help": "Minutes a sandbox may stay stopped before Daytona deletes it; 0 deletes immediately on stop. Disabled by default.",
+      "advanced": true
+    },
+    "networkBlockAll": {
+      "label": "Block Network",
+      "help": "Block all sandbox network egress. Enabled by default, matching the Docker backend's no-network default; set false for open egress.",
+      "advanced": true
+    },
+    "networkAllowList": {
+      "label": "Network Allow List",
+      "help": "Comma-separated CIDR addresses the sandbox may reach. Setting this with Block Network unset enables selective egress.",
+      "advanced": true
+    },
+    "domainAllowList": {
+      "label": "Domain Allow List",
+      "help": "Comma-separated domains the sandbox may reach. Setting this with Block Network unset enables selective egress.",
+      "advanced": true
+    },
+    "remoteWorkspaceDir": {
+      "label": "Remote Workspace Dir",
+      "help": "Absolute path of the writable session workspace inside the Daytona sandbox.",
+      "advanced": true
+    },
+    "remoteAgentWorkspaceDir": {
+      "label": "Remote Agent Dir",
+      "help": "Absolute path mirroring the real agent workspace when workspaceAccess is not none.",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "API Timeout Seconds",
+      "help": "Timeout for Daytona API operations such as create, upload, and filesystem commands.",
+      "advanced": true
+    }
+  }
+}

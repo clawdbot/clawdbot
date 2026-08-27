@@ -1,0 +1,45 @@
+{
+  "name": "@openclaw/daytona-sandbox",
+  "version": "2026.8.1",
+  "description": "OpenClaw sandbox backend for Daytona cloud sandboxes with remote workspaces over the Daytona toolbox API",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "dependencies": {
+    "@daytona/sdk": "0.201.0",
+    "zod": "4.4.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/daytona-sandbox",
+      "npmSpec": "@openclaw/daytona-sandbox",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.8.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.8.1"
+    },
+    "build": {
+      "openclawVersion": "2026.8.1",
+      "bundledDist": false,
+      "staticAssets": [
+        {
+          "source": "./src/daytona-exec-launcher.mjs",
+          "output": "daytona-exec-launcher.mjs"
+        }
+      ]
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

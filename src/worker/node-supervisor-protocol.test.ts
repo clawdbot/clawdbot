@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
   parseNodeWorkerConnectionFailureMessage,
+  parseNodeWorkerLaunchInput,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerSupervisorIdentity,
 } from "./node-supervisor-protocol.js";
@@ -18,6 +20,24 @@ const identity: NodeWorkerSupervisorIdentity = {
   placementGeneration: 4,
   runId: "run-1",
 };
+
+describe("node worker supervisor launch request", () => {
+  it("rejects mismatched launch and turn ids", () => {
+    const descriptor = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
+
+    expect(() =>
+      parseNodeWorkerLaunchInput(
+        JSON.stringify({
+          launchId: "other-launch",
+          gatewayNamespace: "gateway-1",
+          expectedBundleHash: descriptor.admission.handshake.bundleHash,
+          placementGeneration: 4,
+          descriptor,
+        }),
+      ),
+    ).toThrow("launchId must match descriptor assignment turnId");
+  });
+});
 
 describe("node worker supervisor wire receipt", () => {
   it("accepts only bounded worker connection diagnostics", () => {

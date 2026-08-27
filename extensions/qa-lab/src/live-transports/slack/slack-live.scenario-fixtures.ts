@@ -89,10 +89,7 @@ function hasSlackCommentaryLaneMarker(
     return true;
   }
   const blockText = message.blockText ?? [];
-  return (
-    blockText.some((text) => text.trim() === "Update") &&
-    blockText.some((text) => text.includes(marker))
-  );
+  return blockText.some((text) => text.trim() === `• *Update* — ${marker}`);
 }
 
 export function buildSlackProgressCommentaryRun(
@@ -110,7 +107,7 @@ export function buildSlackProgressCommentaryRun(
     input: [
       `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
       "Do not call any tool until that commentary message is complete.",
-      `Then use the exec tool exactly once to run: grep '${toolMarker}' /dev/null || sleep 5.`,
+      `Then use the exec tool exactly once to run: sleep 5 # ${toolMarker}.`,
       `After the command finishes, reply with only this exact marker: ${finalMarker}`,
     ].join(" "),
     matchText: finalMarker,

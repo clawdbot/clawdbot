@@ -1,6 +1,6 @@
 // Discord plugin module implements shared interactive behavior.
 import {
-  reduceLegacyInteractiveReply,
+  legacyInteractiveReplyToPresentation,
   resolveMessagePresentationActionValue,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
@@ -13,6 +13,10 @@ import type {
   MessagePresentationOption,
   MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveAskUserQuestionOptionIndex,
+  type AskUserQuestionOptionIndices,
+} from "openclaw/plugin-sdk/reply-payload";
 import { buildDiscordApprovalCustomId } from "./approval-custom-id.js";
 import {
   buildDiscordActivityCustomId,
@@ -58,7 +62,7 @@ const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
 
 function buildDiscordButtonComponent(
   button: MessagePresentationButton,
-  optionIndex: number,
+  options: DiscordPresentationBuildOptions,
 ): DiscordComponentButtonSpec | undefined {
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
@@ -77,6 +81,17 @@ function buildDiscordButtonComponent(
     };
   }
   if (action.type === "question") {
+    if ("intent" in action) {
+      return undefined;
+    }
+    const optionIndex = resolveAskUserQuestionOptionIndex({
+      questionOptionIndices: options.questionOptionIndices,
+      questionId: action.questionId,
+      optionValue: action.optionValue,
+    });
+    if (optionIndex === undefined) {
+      return undefined;
+    }
     const internalCustomId = buildDiscordQuestionCustomId({
       questionId: action.questionId,
       optionIndex,
@@ -133,11 +148,12 @@ function buildDiscordButtonComponent(
 function appendDiscordButtonBlocks(
   blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
   buttons: readonly MessagePresentationButton[],
+  options: DiscordPresentationBuildOptions,
 ): void {
-  // Index is position in the question's options; core emits one buttons block in option order.
-  const components = buttons
-    .map((button, optionIndex) => buildDiscordButtonComponent(button, optionIndex))
-    .filter((button): button is DiscordComponentButtonSpec => Boolean(button));
+  const components = buttons.flatMap((button) => {
+    const component = buildDiscordButtonComponent(button, options);
+    return component ? [component] : [];
+  });
   for (let index = 0; index < components.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
     blocks.push({
       type: "actions",
@@ -179,33 +195,21 @@ function appendDiscordSelectBlock(
  */
 export function buildDiscordInteractiveComponents(
   interactive?: LegacyInteractiveReply,
+  options: DiscordPresentationBuildOptions = {},
 ): DiscordComponentMessageSpec | undefined {
-  const blocks = reduceLegacyInteractiveReply(
-    interactive,
-    [] as NonNullable<DiscordComponentMessageSpec["blocks"]>,
-    (state, block) => {
-      if (block.type === "text") {
-        const text = block.text.trim();
-        if (text) {
-          state.push({ type: "text", text });
-        }
-        return state;
-      }
-      if (block.type === "buttons") {
-        appendDiscordButtonBlocks(state, block.buttons);
-        return state;
-      }
-      if (block.type === "select") {
-        appendDiscordSelectBlock(state, block);
-      }
-      return state;
-    },
+  return buildDiscordPresentationComponents(
+    interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined,
+    options,
   );
-  return blocks.length > 0 ? { blocks } : undefined;
 }
+
+export type DiscordPresentationBuildOptions = {
+  questionOptionIndices?: AskUserQuestionOptionIndices;
+};
 
 export function buildDiscordPresentationComponents(
   presentation?: MessagePresentation,
+  options: DiscordPresentationBuildOptions = {},
 ): DiscordComponentMessageSpec | undefined {
   if (!presentation) {
     return undefined;
@@ -216,7 +220,7 @@ export function buildDiscordPresentationComponents(
   }
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
-      const text = block.text.trim();
+      const text = block.text;
       if (text) {
         blocks.push({
           type: "text",
@@ -230,7 +234,7 @@ export function buildDiscordPresentationComponents(
       continue;
     }
     if (block.type === "buttons") {
-      appendDiscordButtonBlocks(blocks, block.buttons);
+      appendDiscordButtonBlocks(blocks, block.buttons, options);
       continue;
     }
     if (block.type === "select") {

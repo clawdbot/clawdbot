@@ -49,8 +49,8 @@ function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
 
 // Count jobs the store still marks in-flight (`state.runningAtMs` is a number).
 // The scheduler sets this while a run is active and clears it on completion, so a
-// leftover marker (gateway killed mid-run) makes `cron list` show the job as
-// `running` while nothing executes it. Startup marks exactly these runs interrupted
+// leftover marker (gateway killed mid-run) can survive while nothing executes it.
+// Startup marks exactly these runs interrupted
 // (`src/cron/service/ops-lifecycle.ts` `start`), so doctor only reports the count here.
 function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
   return jobs.filter((job) => {
@@ -459,9 +459,9 @@ export async function maybeRepairLegacyCronStore(params: {
     const subject = inFlightCount === 1 ? "it" : "them";
     note(
       [
-        `${pluralize(inFlightCount, "automation")} ${inFlightCount === 1 ? "is" : "are"} still marked in-flight (\`state.runningAtMs\` is set), so ${formatCliCommand("openclaw automations list")} shows ${subject} as \`running\`.`,
+        `${pluralize(inFlightCount, "automation")} ${inFlightCount === 1 ? "is" : "are"} still marked in-flight (\`state.runningAtMs\` is set).`,
         `- If no gateway is currently executing ${subject}, the marker is left over from an interrupted run; the gateway marks such runs interrupted the next time it starts.`,
-        `- Review with ${formatCliCommand("openclaw automations list")} or ${formatCliCommand("openclaw automations show <id>")}.`,
+        `- Review with ${formatCliCommand("openclaw automations list --all")} or ${formatCliCommand("openclaw automations show <id>")}.`,
       ].join("\n"),
       "Cron",
     );

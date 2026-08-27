@@ -30,21 +30,8 @@ const STATUS_LABEL_KEYS = {
   timed_out: "tasksPage.status.timedOut",
 } as const satisfies Record<TaskStatus, string>;
 
-const STATUS_CHIP_CLASSES = {
-  queued: "chip-warn",
-  running: "chip-warn",
-  completed: "chip-ok",
-  failed: "chip-danger",
-  cancelled: "",
-  timed_out: "chip-danger",
-} as const satisfies Record<TaskStatus, string>;
-
 export function taskStatusLabel(status: TaskStatus): string {
   return t(STATUS_LABEL_KEYS[status]);
-}
-
-export function taskStatusChipClass(status: TaskStatus): string {
-  return STATUS_CHIP_CLASSES[status];
 }
 
 export function taskRuntimeLabel(task: TaskSummary): string {

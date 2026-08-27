@@ -471,6 +471,7 @@ describe("buildOpenAIProvider", () => {
 
     try {
       const result = await provider.catalog?.run({
+        providerIds: ["openai"],
         resolveProviderAuth: () => ({
           mode: "api_key",
           apiKey: "sk-openai",
@@ -496,6 +497,40 @@ describe("buildOpenAIProvider", () => {
       fetchSpy.mockRestore();
     }
   });
+
+  it.each(["azure-openai", "azure-openai-responses"])(
+    "does not resolve OpenAI credentials or fetch for %s-only catalog scope",
+    async (providerId) => {
+      const provider = buildOpenAIProvider();
+      const resolveProviderAuth = vi.fn(() => ({
+        mode: "api_key" as const,
+        apiKey: "sk-openai",
+        source: "profile" as const,
+      }));
+      const resolveProviderApiKey = vi.fn(() => ({ apiKey: "sk-openai" }));
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }));
+
+      try {
+        await expect(
+          provider.catalog?.run({
+            providerIds: [providerId],
+            resolveProviderAuth,
+            resolveProviderApiKey,
+            config: {},
+            env: {},
+          }),
+        ).resolves.toBeNull();
+        expect(resolveProviderAuth).not.toHaveBeenCalled();
+        expect(resolveProviderApiKey).not.toHaveBeenCalled();
+        expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
 
   it("falls back to direct API-key catalog discovery when OAuth resolution fails", async () => {
     mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("expired oauth profile"));

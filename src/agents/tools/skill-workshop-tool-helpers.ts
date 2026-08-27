@@ -1,3 +1,9 @@
+import { autonomousSkillSizeError } from "../../skills/workshop/collection-contracts.js";
+import {
+  readProposalFrontmatter,
+  stripProposalFrontmatterForSkill,
+} from "../../skills/workshop/frontmatter.js";
+import { prepareSkillProposalDraft } from "../../skills/workshop/proposal-draft.js";
 import {
   inspectSkillProposal,
   resolvePendingSkillProposal,
@@ -11,6 +17,31 @@ import type {
   SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
 import { readPositiveIntegerParam, readToolStringParam, ToolInputError } from "./common.js";
+
+export function assertAutonomousSkillSize(
+  name: string,
+  description: string | undefined,
+  content: string,
+  currentContent: string | undefined,
+  maxSkillBytes: number,
+): void {
+  const draft = prepareSkillProposalDraft({
+    name,
+    description: description ?? readProposalFrontmatter(currentContent ?? "")?.description ?? name,
+    content,
+    fallbackFrontmatterContent: currentContent,
+    date: new Date().toISOString(),
+    maxSkillBytes,
+  });
+  if (!draft.ok) {
+    throw draft.error.cause;
+  }
+  const resultChars = stripProposalFrontmatterForSkill(draft.value.content).length;
+  const sizeError = autonomousSkillSizeError(name, currentContent?.length ?? 0, resultChars);
+  if (sizeError) {
+    throw new ToolInputError(sizeError);
+  }
+}
 
 export function skillWorkshopAgentEventActor(agentId?: string) {
   return { type: "agent" as const, ...(agentId ? { id: agentId } : {}) };

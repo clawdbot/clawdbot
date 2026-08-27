@@ -394,24 +394,6 @@ export async function healthCommand(
         runtime.log(`  ${channelId}: ${probes.join(", ") || "(none)"}`);
       }
     }
-    const channelAccountFallbacks = Object.fromEntries(
-      displayPlugins.map((plugin) => {
-        const accountIds = plugin.config.listAccountIds(cfg);
-        const defaultAccountId = resolveChannelDefaultAccountId({
-          plugin,
-          cfg,
-          accountIds,
-        });
-        const preferred = resolvePreferredAccountId({
-          accountIds,
-          defaultAccountId,
-          boundAccounts: defaultAgentId
-            ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
-            : [],
-        });
-        return [plugin.id, [preferred] as string[]] as const;
-      }),
-    );
     const accountIdsByChannel = (() => {
       const entries = displayAgents.length > 0 ? displayAgents : resolvedAgents;
       const byChannel: Record<string, string[]> = {};
@@ -427,11 +409,6 @@ export async function healthCommand(
         }
         if (accountIds.length > 0) {
           byChannel[channelId] = accountIds;
-        }
-      }
-      for (const [channelId, fallbackIds] of Object.entries(channelAccountFallbacks)) {
-        if (!byChannel[channelId] || byChannel[channelId].length === 0) {
-          byChannel[channelId] = fallbackIds;
         }
       }
       return byChannel;

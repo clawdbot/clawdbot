@@ -56,6 +56,7 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 Related model-config surfaces:
 
 - `agents.defaults.models` stores aliases and per-model settings. Adding an entry does not restrict model overrides.
+- `agents.defaults.modelSelectionScope` optionally chooses the scope of chat commands and Gateway session model updates without an explicit scope. Omit it to preserve existing behavior; see [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 - `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or trailing prefix wildcards such as `provider/*` and `provider/namespace/*`; omit it or set `[]` to allow any model. Per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
 - `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles, supported channel thread/topic titles, and progress narration. Per-agent `agents.entries.*.utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model; set it to an empty string to disable utility routing. Generated titles retry once with the primary model when a distinct utility model fails. For dashboard titles, automatic utility derivation and the regular fallback follow the effective session provider and auth profile; an explicit utility model keeps its configured provider/auth. An empty utility model skips only the alternate small-model route, not dashboard title generation. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
@@ -188,7 +189,9 @@ when the model itself stays the same.
 
 ## `/model` in chat
 
-Direct owner/admin `/model <model>` requests **default scope**: it changes this session and starts a best-effort configured-default update. Adding `-s` uses **session scope**: only this session changes. If the agent has no explicit primary model, its effective default is the shared global `agents.defaults.model` fallback.
+`/model <model>` changes the current session. Use `-s` for only this session, `-a` to also update the agent's default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`. Configured-default writes require owner or admin authority.
+
+Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"session"`, `"agent"`, or `"global"` scope. Leaving this setting unset preserves existing behavior: direct owner/admin commands request a best-effort update to the agent's explicit primary when one exists, otherwise to the shared `agents.defaults.model` fallback. Without owner/admin authority, bare commands remain session-only and explicit `-a` or `-g` requests are rejected.
 
 ```text
 /model
@@ -196,15 +199,19 @@ Direct owner/admin `/model <model>` requests **default scope**: it changes this 
 /model 3
 /model openai/gpt-5.4
 /model openai/gpt-5.4 -s
+/model openai/gpt-5.4 -a
+/model openai/gpt-5.4 -g
 /model default -s
 /model default
 /model status
 ```
 
-- `/model` and `/model list` show a compact numbered picker (model family + available providers); `/model <#>` selects from it. The Telegram callback picker is session-only. The Discord picker follows the direct command flow, so an owner/admin submission requests a configured-default update. `/models add` is deprecated and returns a message instead of registering models from chat.
-- **Configured default:** Direct owner/admin `/model <model>` changes the current session and requests a best-effort update of the effective configured default. OpenClaw targets the agent's explicit primary when one exists; otherwise it targets the shared `agents.defaults.model` fallback. Immutable configuration is left unchanged, and asynchronous write failures are logged without reverting the session selection.
-- **Current session only:** `/model <model> -s` (or `--session`) changes the current session without changing either configured default. A non-owner's bare `/model <model>` is also session-only because that caller cannot write configured defaults. An explicit user-selected model and auth profile stay pinned across `/new`, `/reset`, session rollover, compaction, and cooldown windows while they remain valid for the provider; automatic profile pins may rotate or clear.
-- **Use the configured default:** `/model default` (with or without `-s`) clears the current session model selection so it inherits the current effective configured default. A compatible auth-profile pin remains; an incompatible pin is cleared. It does not restore an older configured default that a previous owner/admin `/model <model>` replaced.
+- `/model` and `/model list` show a compact numbered picker. `/model <#>` selects from it. Discord pickers follow the direct command behavior, including `modelSelectionScope`. Telegram callback pickers always stay session-only. `/models add` is deprecated and returns a message instead of registering models from chat.
+- **Current session:** `/model <model> -s` (or `--session`) changes only this session, regardless of `modelSelectionScope`. Neither configured default changes.
+- **Agent default:** Owner/admin `/model <model> -a` (or `--agent`) selects the model for this session and requests an update for `agents.entries.<agent>.model`. It creates an explicit primary for that configured agent when needed and never falls through to the shared global default.
+- **Global default:** Owner/admin `/model <model> -g` (or `--global`) changes this session and requests an update for the shared `agents.defaults.model` fallback. It does not overwrite other agents' explicit primaries or other sessions' model pins. New and existing unpinned sessions, and cron jobs that inherit this default, can use the changed model on their next run.
+- Immutable configuration stays unchanged. Asynchronous write errors are logged without reverting the session selection. Explicit model and auth-profile pins survive `/new`, `/reset`, session rollover, compaction, and cooldown windows while valid.
+- **Use the configured default:** `/model default -s` clears the current session model selection without writing configured defaults. A compatible auth-profile pin remains. An incompatible pin is cleared. Selecting the effective configured default by name also clears the session model pin, but agent/global scope still requests a write to that configured target. This does not restore an older configured default changed by a previous selection.
 - If the agent is idle, a model change applies to the next run immediately. If a run is already active, the switch is queued for the next clean retry point (or a later one, if tool activity or reply output already started).
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.

@@ -1,12 +1,11 @@
 import type { Event, Relay } from "nostr-tools";
 import { BUZZ_INBOUND_MESSAGE_KINDS } from "./message-event.js";
-import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 import {
   BUZZ_REPLAY_DISPATCH_MAX_PENDING,
   type BuzzReplayDispatchReservation,
 } from "./replay-dispatch.js";
 
-const HISTORY_PAGE_TIMEOUT_MS = 10_000;
 const HISTORY_PAGE_COMPLETE_REASON = "buzz room history page loaded";
 
 type BuzzRoomHistoryCatchUp = "complete" | "aborted" | "timestamp-over-limit";
@@ -28,88 +27,35 @@ async function queryBuzzRoomHistoryPage(params: {
 }): Promise<BuzzRoomHistoryPage> {
   const events: Event[] = [];
   let overLimit = false;
-  return await new Promise<BuzzRoomHistoryPage>((resolve, reject) => {
-    let settled = false;
-    let receivedEose = false;
-    const timeout = setTimeout(() => {
-      const error = new Error(`Timed out loading Buzz room history for ${params.channelId}`);
-      finish(error);
-      params.relay.close();
-    }, HISTORY_PAGE_TIMEOUT_MS);
-    const subscriptionRef: { current?: ReturnType<Relay["prepareSubscription"]> } = {};
-    const finish = (error?: unknown) => {
-      if (settled) {
+  return await queryBuzzRelaySnapshot({
+    relay: params.relay,
+    filters: [
+      {
+        kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
+        "#h": [params.channelId],
+        since: params.since,
+        until: params.until,
+        ...(params.requestLimit === undefined ? {} : { limit: params.requestLimit }),
+      },
+    ],
+    signal: params.signal,
+    timeoutMessage: `Timed out loading Buzz room history for ${params.channelId}`,
+    abortMessage: "Buzz room history query aborted",
+    failureMessage: "Buzz room history query failed",
+    closeReason: HISTORY_PAGE_COMPLETE_REASON,
+    closeMessage: (reason) => `Buzz room history query closed for ${params.channelId}: ${reason}`,
+    onEvent: (event) => {
+      if (params.skipEventIds?.has(event.id)) {
         return;
       }
-      settled = true;
-      clearTimeout(timeout);
-      params.signal?.removeEventListener("abort", onAbort);
-      if (receivedEose) {
-        subscriptionRef.current?.close(HISTORY_PAGE_COMPLETE_REASON);
-      }
-      if (error === undefined) {
-        resolve({ events, overLimit });
+      if (events.length < params.maxEvents) {
+        events.push(event);
       } else {
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Buzz room history query failed", { cause: error }),
-        );
+        overLimit = true;
       }
-    };
-    const onAbort = () =>
-      finish(params.signal?.reason ?? new Error("Buzz room history query aborted"));
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    try {
-      subscriptionRef.current = openBuzzRelaySubscription(
-        params.relay,
-        [
-          {
-            kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
-            "#h": [params.channelId],
-            since: params.since,
-            until: params.until,
-            ...(params.requestLimit === undefined ? {} : { limit: params.requestLimit }),
-          },
-        ],
-        {
-          onevent: (event) => {
-            if (params.skipEventIds?.has(event.id)) {
-              return;
-            }
-            if (events.length < params.maxEvents) {
-              events.push(event);
-            } else {
-              overLimit = true;
-            }
-          },
-          oneose: () => {
-            receivedEose = true;
-            if (settled) {
-              subscriptionRef.current?.close(HISTORY_PAGE_COMPLETE_REASON);
-            } else {
-              finish();
-            }
-          },
-          onclose: (reason) => {
-            if (reason !== HISTORY_PAGE_COMPLETE_REASON) {
-              finish(
-                new Error(`Buzz room history query closed for ${params.channelId}: ${reason}`),
-              );
-            }
-          },
-        },
-      );
-    } catch (error) {
-      finish(error);
-      return;
-    }
-    if (settled && receivedEose) {
-      subscriptionRef.current.close(HISTORY_PAGE_COMPLETE_REASON);
-    }
-    if (params.signal?.aborted) {
-      onAbort();
-    }
+    },
+    result: () => ({ events, overLimit }),
+    checkAbortAfterSubscribe: true,
   });
 }
 

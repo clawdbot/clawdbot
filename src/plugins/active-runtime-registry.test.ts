@@ -155,6 +155,35 @@ describe("getLoadedRuntimePluginRegistry", () => {
     expect(listRuntimePluginIdsFromRegistry(bundleRegistry)).toContain("bundle");
   });
 
+  it("falls through to containment reuse when scoped load options miss the exact cache key", () => {
+    const registry = createRegistryWithPlugin("demo");
+    setActivePluginRegistry(registry, "gateway-root-key", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        loadOptions: { workspaceDir: "/tmp/ws", onlyPluginIds: ["demo"] },
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["demo"],
+      }),
+    ).toBe(registry);
+  });
+
+  it("keeps exact-key semantics for unscoped load-option requests", () => {
+    setActivePluginRegistry(
+      createRegistryWithPlugin("demo"),
+      "gateway-root-key",
+      "default",
+      "/tmp/ws",
+    );
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        loadOptions: { workspaceDir: "/tmp/ws" },
+        workspaceDir: "/tmp/ws",
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {
     setActivePluginRegistry(createRegistryWithPlugin("demo"), "demo");
 

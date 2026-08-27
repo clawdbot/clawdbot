@@ -3,7 +3,12 @@ import { setPluginToolMeta } from "../plugins/tools.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
-import { activeRuns, removeExpiredRuns, resumingRunIds } from "./code-mode-state.js";
+import {
+  activeRuns,
+  disposeAllCodeModeRuns,
+  removeExpiredRuns,
+  resumingRunIds,
+} from "./code-mode-state.js";
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
 import { createCodeModeTools } from "./code-mode.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
@@ -20,8 +25,7 @@ export const testing = {
 };
 
 export function resetCodeModeTestState(): void {
-  testing.activeRuns.clear();
-  testing.resumingRunIds.clear();
+  disposeAllCodeModeRuns();
 }
 
 export function fakeTool(name: string, description: string): AnyAgentTool {
