@@ -97,9 +97,7 @@ async function resolveCliBackendEnvValues(params: {
   }
   // Defer the secrets provider graph until a SecretRef actually needs
   // materialization. A static import stalls agents-core Vitest collection.
-  const { materializeSecretInput } = await import(
-    "../../secrets/resolve-secret-input-string.js"
-  );
+  const { materializeSecretInput } = await import("../../secrets/resolve-secret-input-string.js");
   const config = params.config;
   if (!config) {
     return Object.fromEntries([...literals, ...secretRefs.map(([key]) => [key, ""] as const)]);
