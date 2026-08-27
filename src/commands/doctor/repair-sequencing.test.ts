@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairPluginOpenClawHostLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
-  migrateLegacyOnboardingRecommendationsScope: vi.fn(),
   migrateLegacyTailscaleProfileIdentities: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
   maybeRepairOpenAICodexAuthConfig: vi.fn(),
@@ -54,10 +53,6 @@ vi.mock("../doctor-plugin-registry.js", () => ({
 
 vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
-}));
-
-vi.mock("../../infra/state-migrations.onboarding-recommendations.js", () => ({
-  migrateLegacyOnboardingRecommendationsScope: mocks.migrateLegacyOnboardingRecommendationsScope,
 }));
 
 vi.mock("../../state/user-profiles-tailscale-migration.js", () => ({
@@ -280,10 +275,6 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
-    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValue({
-      changes: [],
-      warnings: [],
-    });
     mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({ changes: [], warnings: [] });
     mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReturnValue(new Map());
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
@@ -329,33 +320,6 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       changes: [],
     }));
-  });
-
-  it("runs the doctor-only onboarding recommendation scope migration", async () => {
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
-    const candidate = {} as OpenClawConfig;
-    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValue({
-      changes: ["Migrated onboarding recommendation state."],
-      warnings: ["Migration warning."],
-    });
-
-    const result = await runDoctorRepairSequence({
-      state: {
-        cfg: candidate,
-        candidate,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      doctorFixCommand: "openclaw doctor --fix",
-      env,
-    });
-
-    expect(mocks.migrateLegacyOnboardingRecommendationsScope).toHaveBeenCalledWith({
-      cfg: candidate,
-      env,
-    });
-    expect(result.changeNotes).toContain("Migrated onboarding recommendation state.");
-    expect(result.warningNotes).toContain("Migration warning.");
   });
 
   it("runs the doctor-only Tailscale profile identity migration", async () => {
@@ -414,7 +378,7 @@ describe("doctor repair sequencing", () => {
       warnings: ["Plugin \u001B[31mwarning\u001B[0m\r\nnext."],
       notices: ["Plugin \u001B[31mnotice\u001B[0m\r\nnext."],
     });
-    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValueOnce({
+    mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValueOnce({
       changes: ["Migrated \u001B[31mrecommendations\u001B[0m\r\nnext."],
       warnings: ["Migration \u001B[31mwarning\u001B[0m\r\nnext."],
     });

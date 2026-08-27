@@ -683,7 +683,9 @@ CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
 
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,
-  workspace_path TEXT NOT NULL,
+  -- NULL only for attestation-only rows whose legacy source never recorded a
+  -- path (orphan hashed-key attestations); setup rows always carry one.
+  workspace_path TEXT,
   -- NULL setup columns mean an attestation-only row: replaceWorkspaceAttestation
   -- may record hashes before any setup milestone exists for the workspace.
   version INTEGER,
@@ -691,7 +693,8 @@ CREATE TABLE IF NOT EXISTS workspace_setup_state (
   setup_completed_at TEXT,
   updated_at INTEGER,
   attested_at_ms INTEGER,
-  attestation_updated_at_ms INTEGER
+  attestation_updated_at_ms INTEGER,
+  CHECK (version IS NULL OR workspace_path IS NOT NULL)
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_workspace_setup_state_path

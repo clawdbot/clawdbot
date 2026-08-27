@@ -236,7 +236,9 @@ function readSnapshotFromDatabase(params: {
       .selectAll()
       .where("workspace_key", "=", identity.workspaceKey),
   );
-  if (setupRow && setupRow.workspace_path !== identity.workspacePath) {
+  // A NULL path marks a legacy orphan attestation; the first live access to a
+  // matching workspace adopts it, so only a differing recorded path collides.
+  if (setupRow?.workspace_path != null && setupRow.workspace_path !== identity.workspacePath) {
     throw new Error("workspace state key collision");
   }
   if (setupRow?.version != null && setupRow.version !== WORKSPACE_SETUP_STATE_VERSION) {
@@ -478,6 +480,8 @@ export function replaceWorkspaceAttestation(params: {
         })
         .onConflict((conflict) =>
           conflict.column("workspace_key").doUpdateSet({
+            // Heals the NULL path on adopted legacy orphan attestation rows.
+            workspace_path: identity.workspacePath,
             attested_at_ms: params.attestedAtMs,
             attestation_updated_at_ms: updatedAtMs,
           }),

@@ -2367,6 +2367,16 @@ describe("openclaw state database", () => {
           attestation_updated_at_ms: 2_100,
         },
         {
+          workspace_key: "wk-orphan",
+          workspace_path: null,
+          version: null,
+          bootstrap_seeded_at: null,
+          setup_completed_at: null,
+          updated_at: null,
+          attested_at_ms: 3_000,
+          attestation_updated_at_ms: 3_100,
+        },
+        {
           workspace_key: "wk-setup",
           workspace_path: "/tmp/wk-setup",
           version: 1,
@@ -2386,6 +2396,7 @@ describe("openclaw state database", () => {
           .all(),
       ).toEqual([
         { workspace_key: "wk-alias", filename: "TOOLS.md", sha256: "b".repeat(64) },
+        { workspace_key: "wk-orphan", filename: "USER.md", sha256: "c".repeat(64) },
         { workspace_key: "wk-setup", filename: "AGENTS.md", sha256: "a".repeat(64) },
       ]);
       expect(

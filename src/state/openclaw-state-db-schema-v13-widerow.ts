@@ -137,10 +137,9 @@ export function migrateJsonCanonicalWideRowsV13(
              )
        WHERE workspace_key IN (SELECT workspace_key FROM workspace_attestations);
     `);
-    // Attestation-only workspaces keep their hashes when a path alias records
-    // the real workspace path. An orphan without any alias has no recoverable
-    // path; its hashes are re-derived at the next bootstrap attestation, so it
-    // is dropped rather than persisted with a fabricated path.
+    // Attestation-only workspaces borrow their path from an alias when one
+    // exists; the legacy attestation table never stored a path, so orphans
+    // keep a NULL path and heal it when the workspace next appears.
     db.exec(`
       INSERT INTO workspace_setup_state (
         workspace_key, workspace_path, attested_at_ms, attestation_updated_at_ms
@@ -151,11 +150,7 @@ export function migrateJsonCanonicalWideRowsV13(
              a.attested_at_ms,
              a.updated_at_ms
         FROM workspace_attestations a
-       WHERE a.workspace_key NOT IN (SELECT workspace_key FROM workspace_setup_state)
-         AND EXISTS (
-               SELECT 1 FROM workspace_path_aliases alias
-                WHERE alias.workspace_key = a.workspace_key
-             );
+       WHERE a.workspace_key NOT IN (SELECT workspace_key FROM workspace_setup_state);
     `);
     db.exec("DROP TABLE workspace_attestations;");
     migrated = true;

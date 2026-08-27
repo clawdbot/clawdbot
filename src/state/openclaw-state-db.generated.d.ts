@@ -1469,7 +1469,7 @@ export interface WorkspaceSetupState {
   updated_at: number | null;
   version: number | null;
   workspace_key: string;
-  workspace_path: string;
+  workspace_path: string | null;
 }
 
 export interface WorktreeProvisionedFileChunks {

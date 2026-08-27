@@ -377,7 +377,7 @@ export function importAndRecordReceipt(params: {
             .selectAll()
             .where("workspace_key", "=", params.source.workspaceKey),
         );
-        if (existing) {
+        if (existing && existing.version != null) {
           if (
             existing.workspace_path !== params.source.workspaceDir ||
             existing.version !== WORKSPACE_SETUP_STATE_VERSION
@@ -456,19 +456,30 @@ export function importAndRecordReceipt(params: {
             verifiedFingerprint = existingFingerprint;
           }
         } else {
+          // Missing row, or an attestation-only merged row (NULL version) that
+          // adopts the legacy setup facts; a differing recorded path conflicts.
+          if (
+            existing?.workspace_path != null &&
+            existing.workspace_path !== params.source.workspaceDir
+          ) {
+            throw new Error("legacy workspace setup conflicts with canonical SQLite state");
+          }
+          const setupColumns = {
+            workspace_path: params.source.workspaceDir,
+            version: WORKSPACE_SETUP_STATE_VERSION,
+            bootstrap_seeded_at: params.parsed.value.bootstrapSeededAt ?? null,
+            setup_completed_at: params.parsed.value.setupCompletedAt ?? null,
+            updated_at: now,
+          };
           executeSqliteQuerySync(
             db,
-            kysely.insertInto("workspace_setup_state").values({
-              workspace_key: params.source.workspaceKey,
-              workspace_path: params.source.workspaceDir,
-              version: WORKSPACE_SETUP_STATE_VERSION,
-              bootstrap_seeded_at: params.parsed.value.bootstrapSeededAt ?? null,
-              setup_completed_at: params.parsed.value.setupCompletedAt ?? null,
-              updated_at: now,
-            }),
+            kysely
+              .insertInto("workspace_setup_state")
+              .values({ workspace_key: params.source.workspaceKey, ...setupColumns })
+              .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(setupColumns)),
           );
           imported = true;
-          resolution = "inserted";
+          resolution = existing ? "merged" : "inserted";
           verifiedFingerprint = incomingFingerprint;
         }
         const verified = executeSqliteQueryTakeFirstSync(
@@ -478,13 +489,16 @@ export function importAndRecordReceipt(params: {
             .selectAll()
             .where("workspace_key", "=", params.source.workspaceKey),
         );
-        const actualFingerprint = verified
-          ? setupFingerprint({
-              workspacePath: verified.workspace_path,
-              bootstrapSeededAt: verified.bootstrap_seeded_at,
-              setupCompletedAt: verified.setup_completed_at,
-            })
-          : null;
+        // Every setup import branch writes the source path, so a NULL path
+        // here is a verification failure, not an attestation-only row.
+        const actualFingerprint =
+          verified && verified.workspace_path != null
+            ? setupFingerprint({
+                workspacePath: verified.workspace_path,
+                bootstrapSeededAt: verified.bootstrap_seeded_at,
+                setupCompletedAt: verified.setup_completed_at,
+              })
+            : null;
         if (!verified || actualFingerprint !== verifiedFingerprint) {
           throw new Error("SQLite verification failed for workspace setup state");
         }
@@ -588,17 +602,15 @@ export function importAndRecordReceipt(params: {
             verifiedFingerprint = incomingFingerprint;
           }
         } else {
-          if (!params.source.workspaceDir) {
-            // Mirrors the setup path: file-discovered legacy sources always carry a dir.
-            throw new Error("legacy workspace attestation has no workspace path");
-          }
           executeSqliteQuerySync(
             db,
             kysely
               .insertInto("workspace_setup_state")
               .values({
                 workspace_key: params.source.workspaceKey,
-                workspace_path: params.source.workspaceDir,
+                // Orphan hashed-key attestation files carry no path; the row
+                // heals its NULL path when the workspace next appears live.
+                workspace_path: params.source.workspaceDir ?? null,
                 attested_at_ms: parsedAttestation.attestedAtMs,
                 attestation_updated_at_ms: now,
               })

@@ -409,11 +409,11 @@ WHERE attested_at_ms IS NOT NULL;
 CREATE INDEX idx_workspace_attestations_attested
   ON workspace_attestations(attested_at_ms DESC, workspace_key);
 
--- Data note: v12 requires version/updated_at NOT NULL, so merged
--- attestation-only rows (NULL version) cannot survive the downgrade; drop
--- them and their generated hashes.
+-- Data note: v12 requires version/updated_at NOT NULL in the setup table, so
+-- merged attestation-only rows (NULL version) survive the downgrade only as
+-- workspace_attestations rows, which also own the generated hashes in v12.
 DELETE FROM workspace_generated_bootstrap_hashes
-WHERE workspace_key IN (SELECT workspace_key FROM workspace_setup_state WHERE version IS NULL);
+WHERE workspace_key NOT IN (SELECT workspace_key FROM workspace_attestations);
 DELETE FROM workspace_setup_state WHERE version IS NULL;
 
 CREATE TABLE workspace_setup_state_migration_v12 (
