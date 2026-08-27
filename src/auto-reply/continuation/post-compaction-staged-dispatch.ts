@@ -24,6 +24,7 @@ import {
 } from "./delegate-spawn-authority.js";
 import { requeueReleasedPostCompactionTaskFlowDelegate } from "./delegate-store-post-compaction.js";
 import { revalidatePendingDelegateForSpawn } from "./delegate-store.js";
+import { formatDelegateTaskForSystemEvent } from "./delegate-system-event.js";
 import {
   classifyPostCompactionDelegateAge,
   formatPostCompactionStaleRejection,
@@ -34,10 +35,6 @@ import { checkContinuationBudget, type ChainState } from "./scheduler.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
 
 const postCompactionLog = createSubsystemLogger("continuation/compaction");
-
-function formatDelegateTaskForSystemEvent(task: string): string {
-  return task;
-}
 
 export interface PostCompactionSpawnContext {
   agentSessionKey: string;

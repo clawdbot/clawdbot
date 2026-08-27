@@ -44,6 +44,7 @@ import {
 } from "./chat-server-timing.js";
 import type { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { prepareSessionProjectWorkspace } from "./session-create-project.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type PreparedChatSendAttachments = Extract<
@@ -228,22 +229,36 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
+          // Preparation stays after the ACK but inside admitted dispatch, so the
+          // same visible run owns workspace progress, cancellation, and errors.
+          let assertWorkspaceRunOwnership: (() => void) | undefined;
+          if (entry && Object.hasOwn(entry, "pendingProjectGitUrl")) {
+            assertWorkspaceRunOwnership = await prepareSessionProjectWorkspace({
+              admission,
+              client,
+              context,
+              session,
+            });
+            assertWorkspaceRunOwnership();
+          }
           if (replyContextFieldsPromise && !preAckReplyContextPromise) {
-            applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
+            const replyContextFields = await replyContextFieldsPromise;
+            assertWorkspaceRunOwnership?.();
+            applyChatSendReplyContextFields(ctx, replyContextFields);
             messageInjectionAttempt = beginCapturedMessageInjection();
           }
           if (messageInjectionAttempt) {
-            if (
-              await finalizeAcceptedChatSendMessageInjection({
-                attempt: messageInjectionAttempt,
-                context,
-                ctx,
-                persistUserTurnTranscriptBestEffort: persistGatewayUserTurnTranscriptBestEffort,
-                session,
-                startedAt: admissionStartedAt,
-                target: messageInjectionTarget!,
-              })
-            ) {
+            const injected = await finalizeAcceptedChatSendMessageInjection({
+              attempt: messageInjectionAttempt,
+              context,
+              ctx,
+              persistUserTurnTranscriptBestEffort: persistGatewayUserTurnTranscriptBestEffort,
+              session,
+              startedAt: admissionStartedAt,
+              target: messageInjectionTarget!,
+            });
+            assertWorkspaceRunOwnership?.();
+            if (injected) {
               acceptedMessageInjection = true;
               return {
                 queuedFinal: false,
@@ -251,9 +266,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               };
             }
           }
-          applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
-          const dispatchInbound = () =>
-            dispatchInboundMessageWithProjectedDispatcher({
+          const pluginBoundMedia = await pluginBoundMediaPromise;
+          assertWorkspaceRunOwnership?.();
+          applyChatSendManagedMedia(ctx, pluginBoundMedia);
+          const dispatchInbound = () => {
+            assertWorkspaceRunOwnership?.();
+            return dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
               toolsAllow,
@@ -377,6 +395,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 },
               },
             });
+          };
           const dispatchResult = await (cronCreatorAuthority && externalAuthorityAdmission
             ? externalAuthorityAdmission.run(
                 cronCreatorAuthority,

@@ -1170,12 +1170,82 @@ describe("coalesceActivityRuns", () => {
     expect(appended.key).toBe(initial.key);
   });
 
-  it("keeps adjacent tool activity from different runs separate", () => {
+  it("keeps adjacent tool activity separate when a run has a visible reply", () => {
     const groups = projectedToolGroups();
     const first = { ...groups[0]!, runId: "run-1" };
     const second = { ...groups[1]!, runId: "run-2" };
+    const reply: MessageGroup = {
+      kind: "group",
+      key: "group:assistant:reply",
+      role: "assistant",
+      messages: [{ key: "assistant:reply", message: assistantMessage("Done.", 3_500) }],
+      timestamp: 3_500,
+      isStreaming: false,
+      runId: "run-2",
+    };
 
-    expect(coalesceActivityRuns([first, second])).toEqual([first, second]);
+    expect(coalesceActivityRuns([first, second, reply])).toEqual([first, second, reply]);
+  });
+
+  it("pools consecutive reply-less runs' activity into one rollup", () => {
+    const groups = projectedToolGroups();
+    const runs = groups.map((group, index) =>
+      Object.assign({}, group, { runId: `run-${index + 1}` }),
+    );
+    const projected = coalesceActivityRuns(runs);
+    const run = requireActivityRun(projected[0]);
+
+    expect(projected).toHaveLength(1);
+    expect(run.groups).toEqual(runs);
+  });
+
+  it("pools reply-less assistant tool activity like heartbeat wakes", () => {
+    const heartbeatGroup = (index: number): MessageGroup => ({
+      kind: "group",
+      key: `group:assistant:hb-${index}`,
+      role: "assistant",
+      messages: [
+        {
+          key: `hb-${index}`,
+          message: assistantMessage(
+            [
+              {
+                type: "toolCall",
+                id: `hb-call-${index}`,
+                name: "heartbeat_respond",
+                arguments: {},
+              },
+              { type: "toolResult", id: `hb-call-${index}`, name: "heartbeat_respond", text: "ok" },
+            ],
+            1_000 * index,
+            { runId: `hb-run-${index}` },
+          ),
+        },
+      ],
+      timestamp: 1_000 * index,
+      isStreaming: false,
+      runId: `hb-run-${index}`,
+    });
+    const beats = [heartbeatGroup(1), heartbeatGroup(2), heartbeatGroup(3)];
+    const projected = coalesceActivityRuns(beats);
+    const run = requireActivityRun(projected[0]);
+
+    expect(projected).toHaveLength(1);
+    expect(run.groups).toEqual(beats);
+  });
+
+  it("keeps a live run's activity out of the reply-less pool", () => {
+    const groups = projectedToolGroups();
+    const first = { ...groups[0]!, runId: "run-1" };
+    const live = { ...groups[1]!, runId: "run-2" };
+    const streamRun = {
+      kind: "stream-run" as const,
+      key: "stream-run:live",
+      runId: "run-2",
+      parts: [],
+    };
+
+    expect(coalesceActivityRuns([first, live, streamRun])).toEqual([first, live, streamRun]);
   });
 
   it("treats every non-tool item as a hard presentation boundary", () => {
@@ -1891,6 +1961,45 @@ describe("buildCachedChatItems", () => {
       createProps({ messages, searchOpen: true, searchQuery: "after" }),
     );
     expect(filtered.some((item) => item.kind === "notice")).toBe(false);
+  });
+
+  it("renders CLI harness-injected user turns as collapsed context, not operator bubbles", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          userMessage("run the review", 1000),
+          userMessage(
+            "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
+            1001,
+            {
+              provenance: { kind: "internal_system", sourceTool: "cli_harness_context" },
+              __openclaw: {
+                id: "skill-meta-1",
+                importedFrom: "claude-cli",
+                cliSessionId: "cli-1",
+                externalId: "skill-meta-1",
+              },
+            },
+          ),
+          assistantMessage("review finished", 1002),
+        ],
+      }),
+    );
+
+    // The operator turn keeps its bubble; the injected turn becomes a
+    // collapsed system notice that does not start a new operator turn.
+    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "group"]);
+    expect(items[0]).toMatchObject({ kind: "group", role: "user" });
+    expect(items[1]).toMatchObject({
+      kind: "notice",
+      icon: "cpu",
+      label: "System · injected context",
+      collapsedBody: true,
+      text: "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
+      timestamp: 1001,
+    });
+    expect((items[1] as { startsTurn?: true }).startsTurn).toBeUndefined();
+    expect(items[2]).toMatchObject({ kind: "group", role: "assistant" });
   });
 
   it("attributes assistant groups to the latest user in multi-sender threads", () => {

@@ -21,8 +21,8 @@ import {
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   applySessionPatchProjection,
-  loadTranscriptEvents,
   preflightSessionTranscriptForManualCompact,
+  readTranscriptStatsSync,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -244,13 +244,13 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         return;
       }
     } else {
-      const transcriptEvents = await loadTranscriptEvents({
+      const transcriptStats = readTranscriptStatsSync({
         agentId: target.agentId,
         sessionId,
         sessionKey: compactTarget.primaryKey,
         storePath,
       });
-      if (transcriptEvents.length === 0) {
+      if (transcriptStats.eventCount === 0) {
         respond(
           true,
           {
@@ -471,13 +471,13 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          const transcriptEvents = await loadTranscriptEvents({
+          const transcriptStats = readTranscriptStatsSync({
             agentId: target.agentId,
             sessionId,
             sessionKey: compactTarget.primaryKey,
             storePath,
           });
-          if (transcriptEvents.length === 0) {
+          if (transcriptStats.eventCount === 0) {
             respond(
               true,
               {

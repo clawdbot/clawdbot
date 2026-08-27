@@ -14,9 +14,6 @@ export type GatewayModelThinkingProfile = {
   thinkingDefault: ThinkLevel;
 };
 
-// Store-target shapes live on a registry-free leaf (session-utils-store-target.ts)
-// so spawn/runtime can import them without pulling the session-utils barrel.
-
 export type SessionActorProfileIdentity = {
   label?: string;
   avatarUrl?: string;

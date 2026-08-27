@@ -36,7 +36,7 @@ suite.define(() => {
   });
 
   it("keeps mobile picker panels above an attachment-expanded composer", async () => {
-    await suite.withPage({ viewport: { width: 667, height: 375 } }, async ({ page }) => {
+    await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
@@ -49,6 +49,7 @@ suite.define(() => {
         buffer: Buffer.from("mobile composer attachment"),
       });
       await composer.locator(".chat-attachments-preview").waitFor({ state: "visible" });
+      const mobileModelSettings = composer.locator('[data-chat-model-settings="true"]');
 
       for (const picker of [
         {
@@ -60,13 +61,22 @@ suite.define(() => {
           trigger: '[data-chat-thinking-select="true"]',
         },
       ]) {
-        await composer.locator(picker.trigger).click();
+        if (picker.menu === ".chat-controls__effort-menu") {
+          await mobileModelSettings.click();
+          await composer.locator(".chat-controls__mobile-effort-option").click();
+        } else {
+          await composer.locator(picker.trigger).click();
+        }
         await page.waitForTimeout(100);
+        const visibleTrigger =
+          picker.menu === ".chat-controls__effort-menu"
+            ? mobileModelSettings
+            : composer.locator(picker.trigger);
         const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
           composer.boundingBox(),
           composer.locator(".agent-chat__composer-footer").boundingBox(),
           page.locator(picker.menu).boundingBox(),
-          composer.locator(picker.trigger).boundingBox(),
+          visibleTrigger.boundingBox(),
         ]);
         expect(composerBox).not.toBeNull();
         expect(footerBox).not.toBeNull();
@@ -76,19 +86,42 @@ suite.define(() => {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
         expect(menuBox.x).toBeGreaterThanOrEqual(12);
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(655);
-        expect(menuBox.width).toBeGreaterThanOrEqual(642);
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(381);
+        expect(menuBox.width).toBeGreaterThanOrEqual(368);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
-        expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
-        expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(376);
-        await composer.locator(picker.trigger).click();
+        expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(853);
+        expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(853);
+        await page.keyboard.press("Escape");
       }
+      await mobileModelSettings.press("Enter");
+      const mobileEffortOption = composer.locator(".chat-controls__mobile-effort-option");
+      await expect.poll(() => mobileEffortOption.isVisible()).toBe(true);
+      await mobileEffortOption.press("Enter");
+      const focusedEffortControl = composer.locator(
+        "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-toggle]:not([disabled])",
+      );
+      await expect
+        .poll(() =>
+          focusedEffortControl.first().evaluate((node) => node === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => mobileModelSettings.evaluate((node) => node === document.activeElement))
+        .toBe(true);
     });
   });
 
   it("keeps the model in the bottom bar, session settings in the header, and holds send beside the microphone in every input state", async () => {
-    await suite.withPage({ viewport: { width: 1920, height: 1080 } }, async ({ page }) => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const pageOptions = {
+      viewport: { width: 1920, height: 1080 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { width: 393, height: 852 } } }
+        : {}),
+    };
+    await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
         deferredMethods: ["chat.send"],
@@ -157,6 +190,7 @@ suite.define(() => {
                 label: "Main",
                 model: "gpt-5.5",
                 modelProvider: "openai",
+                permissionMode: "workspace",
                 status: "done",
                 totalTokens: 46_000,
                 totalTokensFresh: true,
@@ -179,6 +213,8 @@ suite.define(() => {
       const effort = composer.locator('[data-chat-thinking-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
       const contextUsage = composer.locator(".context-ring");
+      const permission = composer.locator('[data-chat-permission-select="true"]');
+      const permissionIcon = permission.locator(".chat-controls__permission-icon svg");
       const textarea = composer.locator("textarea");
       const attach = composer.locator(
         'button.agent-chat__input-btn--attach[aria-label="Add attachment"]',
@@ -188,8 +224,31 @@ suite.define(() => {
       const settings = page.locator(".chat-header-session-menu__trigger");
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
+      const mobileDictation = page.getByRole("button", { name: "Dictation" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
       const microphonePickerShell = page.locator(".chat-talk-input-picker");
+      const captureMobileState = async (fileName: string) => {
+        if (!artifactDir) {
+          return;
+        }
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: `${artifactDir}/${fileName}`,
+        });
+      };
+      const permissionIconCenterError = async () => {
+        const [triggerBox, iconBox] = await Promise.all([
+          permission.boundingBox(),
+          permissionIcon.boundingBox(),
+        ]);
+        if (!triggerBox || !iconBox) {
+          return Number.POSITIVE_INFINITY;
+        }
+        const x = iconBox.x + iconBox.width / 2 - (triggerBox.x + triggerBox.width / 2);
+        const y = iconBox.y + iconBox.height / 2 - (triggerBox.y + triggerBox.height / 2);
+        return Math.max(Math.abs(x), Math.abs(y));
+      };
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
@@ -228,6 +287,22 @@ suite.define(() => {
       await expect.poll(pickerWidth).toBe(0);
       await voice.hover();
       await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
+      const voiceBeforeHold = await voice.boundingBox();
+      expect(voiceBeforeHold).not.toBeNull();
+      await page.mouse.down();
+      await expect
+        .poll(() =>
+          voice.evaluate((node) => node.classList.contains("chat-send-btn--dictation-arming")),
+        )
+        .toBe(true);
+      await expect.poll(() => microphonePicker.isVisible()).toBe(true);
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
+      const voiceDuringHold = await voice.boundingBox();
+      expect(voiceDuringHold).not.toBeNull();
+      expect(Math.abs((voiceDuringHold?.x ?? 0) - (voiceBeforeHold?.x ?? 0))).toBeLessThanOrEqual(
+        1,
+      );
+      await page.mouse.up();
       await page.mouse.move(0, 0);
       await expect.poll(pickerWidth).toBe(0);
       await expect
@@ -527,6 +602,8 @@ suite.define(() => {
       });
       await expect.poll(() => followUp.isVisible()).toBe(true);
       await expect.poll(() => page.locator(".chat-send-btn--stop").count()).toBe(0);
+      await page.setViewportSize({ width: 393, height: 852 });
+      await captureMobileState("mobile-composer-active-follow-up.png");
 
       await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });
@@ -536,6 +613,17 @@ suite.define(() => {
       await expect
         .poll(() => stop.evaluate((node) => getComputedStyle(node).backgroundColor))
         .not.toBe(brandFill);
+      const mobileModelSettings = composer.locator('[data-chat-model-settings="true"]');
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      const [activeMobileSettingsBox, activeMobileStopBox] = await Promise.all([
+        mobileModelSettings.boundingBox(),
+        stop.boundingBox(),
+      ]);
+      expect(activeMobileSettingsBox?.width).toBeGreaterThanOrEqual(44);
+      expect(activeMobileSettingsBox?.height).toBeGreaterThanOrEqual(44);
+      expect(activeMobileStopBox?.width).toBeCloseTo(32, 2);
+      expect(activeMobileStopBox?.height).toBeCloseTo(32, 2);
+      await captureMobileState("mobile-composer-active-stop.png");
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
@@ -545,25 +633,23 @@ suite.define(() => {
       await expect.poll(() => stop.count()).toBe(0);
 
       await textarea.fill("");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
-        .toBe(true);
-      await expect.poll(() => emptySend.isVisible()).toBe(true);
-      await expect.poll(() => emptySend.isDisabled()).toBe(true);
+      await expect.poll(() => mobileDictation.isVisible()).toBe(true);
+      const mobileTalk = page.getByRole("button", { name: "Tap to talk" });
+      await expect.poll(() => mobileTalk.isVisible()).toBe(true);
+      await captureMobileState("mobile-composer-idle.png");
       // Send holds its place with nothing to send: it goes unavailable rather
       // than disappearing, so the composer never looks like it lost the control
       // that commits a turn.
       await expect
         .poll(async () => {
           const [voiceRect, sendRect] = await Promise.all([
-            voice.boundingBox(),
-            emptySend.boundingBox(),
+            mobileDictation.boundingBox(),
+            mobileTalk.boundingBox(),
           ]);
           return voiceRect && sendRect ? sendRect.x - (voiceRect.x + voiceRect.width) : null;
         })
         .toBeGreaterThanOrEqual(-1);
 
-      await page.setViewportSize({ width: 393, height: 852 });
       await expect.poll(() => camera.count()).toBe(0);
       expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(false);
       await expect
@@ -577,57 +663,67 @@ suite.define(() => {
           return settled ? settled.x + settled.width : Number.POSITIVE_INFINITY;
         })
         .toBeLessThanOrEqual(393);
-      const [mobileAttachBox, mobileModelBox, mobileSettingsBox, mobileContextBox, mobileVoiceBox] =
-        await Promise.all([
-          attach.boundingBox(),
-          model.boundingBox(),
-          settings.boundingBox(),
-          contextUsage.boundingBox(),
-          voice.boundingBox(),
-        ]);
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      await expect.poll(() => effort.isVisible()).toBe(false);
+      await permission.click();
+      await expect
+        .poll(() => composer.locator(".chat-controls__permission-option").first().isVisible())
+        .toBe(true);
+      await captureMobileState("mobile-composer-permissions-open.png");
+      await page.keyboard.press("Escape");
+      const [
+        mobileAttachBox,
+        mobileModelSettingsBox,
+        mobileSettingsBox,
+        mobileContextBox,
+        mobileVoiceBox,
+      ] = await Promise.all([
+        attach.boundingBox(),
+        mobileModelSettings.boundingBox(),
+        settings.boundingBox(),
+        contextUsage.boundingBox(),
+        mobileDictation.boundingBox(),
+      ]);
       expect(mobileAttachBox).not.toBeNull();
-      expect(mobileModelBox).not.toBeNull();
+      expect(mobileModelSettingsBox).not.toBeNull();
       expect(mobileSettingsBox).not.toBeNull();
       expect(mobileContextBox).not.toBeNull();
       expect(mobileVoiceBox).not.toBeNull();
       if (
         !mobileAttachBox ||
-        !mobileModelBox ||
+        !mobileModelSettingsBox ||
         !mobileSettingsBox ||
         !mobileContextBox ||
         !mobileVoiceBox
       ) {
         throw new Error("expected mobile composer controls to have layout boxes");
       }
-      await expect
-        .poll(() =>
-          model.evaluate((node) => {
-            const style = getComputedStyle(node);
-            return [style.paddingInlineStart, style.paddingInlineEnd];
-          }),
-        )
-        .toEqual(["0px", "0px"]);
-      await expect
-        .poll(() =>
-          effort.evaluate((node) => {
-            const style = getComputedStyle(node);
-            return [style.paddingInlineStart, style.paddingInlineEnd];
-          }),
-        )
-        .toEqual(["4px", "4px"]);
-      for (const control of [mobileModelBox, mobileContextBox]) {
+      expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(
+        mobileContextBox.x + mobileContextBox.width - 1,
+      );
+      for (const control of [mobileModelSettingsBox, mobileContextBox]) {
         expect(
-          Math.abs(control.y + control.height / 2 - (mobileModelBox.y + mobileModelBox.height / 2)),
+          Math.abs(
+            control.y +
+              control.height / 2 -
+              (mobileModelSettingsBox.y + mobileModelSettingsBox.height / 2),
+          ),
         ).toBeLessThanOrEqual(2);
       }
       expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
       expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);
       expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileVoiceBox.x + 1);
+      await page.setViewportSize({ width: 560, height: 852 });
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      await page.setViewportSize({ width: 393, height: 852 });
       await expect
         .poll(async () => {
           const [polledAttachBox, polledVoiceBox] = await Promise.all([
             attach.boundingBox(),
-            voice.boundingBox(),
+            mobileDictation.boundingBox(),
           ]);
           if (!polledAttachBox || !polledVoiceBox) {
             return Number.POSITIVE_INFINITY;
@@ -653,12 +749,14 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Send message" }).isVisible())
         .toBe(true);
+      await captureMobileState("mobile-composer-send-ready.png");
       await textarea.fill("");
       await expect.poll(() => camera.count()).toBe(0);
-      await model.click();
+      await mobileModelSettings.click();
       await expect
         .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
         .toBe(true);
+      await captureMobileState("mobile-composer-model-open.png");
       const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
@@ -666,7 +764,12 @@ suite.define(() => {
       }
       expect(mobilePickerBox.x).toBeGreaterThanOrEqual(0);
       expect(mobilePickerBox.x + mobilePickerBox.width).toBeLessThanOrEqual(393);
-      await model.click();
+      await composer.locator(".chat-controls__mobile-effort-option").click();
+      await expect
+        .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
+        .toBe(true);
+      await captureMobileState("mobile-composer-effort-open.png");
+      await page.keyboard.press("Escape");
       await settings.click();
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await settings.click();
@@ -684,7 +787,6 @@ suite.define(() => {
       await expect
         .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).borderLeftWidth))
         .toBe("0px");
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
         await composerShell.screenshot({
           animations: "disabled",

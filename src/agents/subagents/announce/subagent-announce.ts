@@ -332,6 +332,7 @@ export async function runSubagentAnnounceFlow(params: {
           findings: childCompletionFindings,
           announceId: wakeAnnounceId,
           isChildSessionEffectsAllowed: childSessionEffectsAllowed,
+          resolveGatewayContext: params.resolveGatewayContext,
           signal: params.signal,
         },
         subagentAnnounceDeps,

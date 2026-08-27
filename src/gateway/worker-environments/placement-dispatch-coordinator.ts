@@ -5,7 +5,9 @@ import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 /** Serializes reconciliation sweeps against dispatches and deduplicates exact requests. */
 export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
-): WorkerPlacementDispatchService {
+): WorkerPlacementDispatchService & {
+  isPlacementOperationInFlight(sessionId: string): boolean;
+} {
   type PlacementFence = { promise: Promise<void> };
   type ReconciliationSweep = PlacementFence & {
     predecessor: PlacementFence | undefined;
@@ -127,6 +129,8 @@ export function coordinateWorkerPlacementDispatch(
     return result;
   };
   return {
+    isPlacementOperationInFlight: (sessionId) =>
+      dispatchInFlight.has(sessionId) || moveInFlight.has(sessionId),
     dispatch: async (request, onTransition, authorize) => {
       const inFlight = dispatchInFlight.get(request.sessionId);
       if (inFlight) {
@@ -171,8 +175,8 @@ export function coordinateWorkerPlacementDispatch(
         }
       }
     },
-    reclaim: async (request, authorize) =>
-      await runExclusivePlacementOperation(() => service.reclaim(request, authorize)),
+    reclaim: async (request, authorize, beforeDrain) =>
+      await runExclusivePlacementOperation(() => service.reclaim(request, authorize, beforeDrain)),
     reconcile: (mode) => runReconciliation(() => service.reconcile(mode)),
     reconcileActive: (environmentId) =>
       environmentId === undefined

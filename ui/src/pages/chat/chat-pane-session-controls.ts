@@ -73,9 +73,7 @@ export function resolveChatModelCatalogState(
       : state.chatModelCatalogError
         ? "error"
         : state.chatModelsLoading
-          ? hasSnapshot
-            ? "refreshing"
-            : "loading"
+          ? "loading"
           : "ready",
   };
 }
@@ -120,6 +118,7 @@ export function renderChatPaneComposerControls(params: {
           modelOverrides: state.sessions.state.modelOverrides,
           modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
           modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
+          modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
           modelsLoading: state.chatModelsLoading,
           modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
@@ -139,6 +138,9 @@ export function renderChatPaneComposerControls(params: {
               ? switchChatContextWindow(state, next, targetSessionKey)
               : Promise.resolve(false),
           onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
+          onModelPickerOpenChange: (open) => {
+            state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
+          },
           onModelSelect: (next, targetSessionKey) =>
             modelAccess.allowed
               ? switchChatModel(state, next, targetSessionKey)
@@ -155,7 +157,6 @@ export function renderChatPaneComposerControls(params: {
       disabled: !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
       mode: selectedSession?.permissionMode,
-      sessionRoot: selectedSession?.sessionRoot,
       onSelect: async (permissionMode) => {
         if (!permissionAccess.allowed) {
           return;
@@ -174,7 +175,7 @@ export function renderChatPaneComposerControls(params: {
           state.connectionEpoch === connectionEpoch &&
           scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
         try {
-          state.chatError = null;
+          state.chatError = state.lastError = null;
           const patched = await patchChatSessionSettings(
             state,
             sessionKey,
@@ -203,7 +204,7 @@ export function renderChatPaneComposerControls(params: {
           if (!ownsSelection()) {
             return;
           }
-          state.chatError = t("chat.permissionControls.updateFailed", {
+          state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
             error: String(error),
           });
           state.requestUpdate?.();

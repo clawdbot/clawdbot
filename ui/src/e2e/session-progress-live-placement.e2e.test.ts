@@ -89,6 +89,9 @@ suite.define(() => {
                 key: sessionKey,
                 kind: "direct",
                 label: "Progress placement",
+                hasActiveRun: true,
+                activeRunIds: ["stale-run"],
+                status: "completed",
                 updatedAt,
               },
             ]),
@@ -100,19 +103,19 @@ suite.define(() => {
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
         const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-        const expectVisibleLastActivity = async (placement: "composer" | "dock" | "rail") => {
+        const expectVisibleLastActivity = async (placement: "composer") => {
           const card = visiblePane.locator(`[data-progress-card-placement="${placement}"]`);
           const timestamp = card.locator("time");
           await expect
             .poll(() => timestamp.getAttribute("datetime"))
             .toBe(new Date(updatedAt).toISOString());
-          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Last activity: /);
-          await expect.poll(() => timestamp.textContent()).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Updated /);
+          await expect.poll(() => timestamp.textContent()).toMatch(/^Updated /);
           await expect.poll(() => timestamp.isVisible()).toBe(true);
           const accessibleCard = placement === "composer" ? card.locator("summary") : card;
           await expect
             .poll(() => accessibleCard.getAttribute("aria-label"))
-            .toContain("Last activity:");
+            .not.toContain("Updated");
           const timestampBounds = await timestamp.boundingBox();
           const cardBounds = await card.boundingBox();
           if (!timestampBounds || !cardBounds) {
@@ -122,42 +125,25 @@ suite.define(() => {
             cardBounds.x + cardBounds.width,
           );
         };
-        // Wide enough for the composer gutter to hold the card: it docks beside
-        // the composer instead of stacking inside it.
         await page.setViewportSize({ height: 900, width: 1600 });
-        const dock = visiblePane.locator('[data-progress-card-placement="dock"]');
-        await expect.poll(() => dock.count()).toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
-          .toBe(0);
+          .toBe(1);
+        const pausedStep = visiblePane.locator(".session-progress-card__step--paused");
+        await expect.poll(() => pausedStep.getAttribute("aria-label")).toBe("Implement, paused");
         await expect
-          .poll(async () => {
-            const dockBounds = await dock.boundingBox();
-            const composerBounds = await visiblePane
-              .locator(".agent-chat__composer-shell")
-              .boundingBox();
-            const threadBounds = await visiblePane.locator(".chat-thread").boundingBox();
-            if (!dockBounds || !composerBounds || !threadBounds) {
-              return false;
-            }
-            // Clear of the centered composer, and anchored to the top of the
-            // conversation rather than floating above the composer.
-            return (
-              dockBounds.x >= composerBounds.x + composerBounds.width &&
-              dockBounds.y < threadBounds.y + threadBounds.height / 2
-            );
-          })
-          .toBe(true);
-        await expectVisibleLastActivity("dock");
-        await captureProof(page, "dock-beside-composer.png");
+          .poll(() => visiblePane.locator(".session-progress-card .session-run-spinner").count())
+          .toBe(0);
+        await expectVisibleLastActivity("composer");
+        await captureProof(page, "composer-attached-wide.png");
 
         await page.setViewportSize({ height: 900, width: 1280 });
         await openChatSidePanelType(page, "Side chat");
         await expect
-          .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
+          .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
           .toBe(1);
         await expect
-          .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
+          .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
 
@@ -169,8 +155,18 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator(".chat-thread").textContent())
           .not.toContain("Implementation is moving.");
-        await expectVisibleLastActivity("rail");
-        await captureProof(page, "rail-visible.png");
+        await expectVisibleLastActivity("composer");
+        await captureProof(page, "composer-with-side-chat.png");
+
+        const sidePanel = visiblePane.locator(".sidebar-region__right-runtime .side-panel");
+        await sidePanel.locator(".side-panel__expand").click();
+        await expect
+          .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
+          .toBe(1);
+        await expect
+          .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
+          .toBe(0);
+        await sidePanel.locator(".side-panel__expand").click();
 
         await page.setViewportSize({ height: 900, width: 560 });
         await expect
@@ -179,7 +175,6 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        const sidePanel = visiblePane.locator(".sidebar-region__right-runtime .side-panel");
         await sidePanel.locator(".side-panel__minimize").click();
         await sidePanel.waitFor({ state: "hidden" });
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
@@ -192,81 +187,7 @@ suite.define(() => {
     );
   });
 
-  it("stacks the docked card under a suggestion tray instead of letting it be covered", async () => {
-    const sessionKey = "agent:main:progress-stacked";
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1600 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "progressCard.get",
-            "taskSuggestions.list",
-            "taskSuggestions.accept",
-            "taskSuggestions.dismiss",
-          ],
-          methodResponses: {
-            "progressCard.get": {
-              card: {
-                revision: 1,
-                sessionKey,
-                steps: [
-                  { step: "Inspect", status: "completed" },
-                  { step: "Implement", status: "in_progress" },
-                ],
-                updatedAt: 1,
-              },
-            },
-            "taskSuggestions.list": {
-              suggestions: [
-                {
-                  id: "task_stacked",
-                  title: "Follow-up worth keeping",
-                  prompt: "Inspect the related implementation and tests.",
-                  tldr: "This tray must not cover the progress card.",
-                  cwd: "/projects/example",
-                  sessionKey: "main",
-                  agentId: "main",
-                  createdAt: 1,
-                },
-              ],
-            },
-            "sessions.list": chatSessionListResponse([
-              { key: sessionKey, kind: "direct", label: "Stacked progress", updatedAt: 1 },
-            ]),
-          },
-          sessionKey,
-        });
-
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-        const tray = visiblePane.locator(".task-suggestions");
-        const dock = visiblePane.locator('[data-progress-card-placement="dock"]');
-        await tray.waitFor({ state: "visible", timeout: 10_000 });
-        await expect.poll(() => dock.count()).toBe(1);
-        await expect
-          .poll(async () => {
-            const trayBounds = await tray.boundingBox();
-            const dockBounds = await dock.boundingBox();
-            if (!trayBounds || !dockBounds) {
-              return false;
-            }
-            // The card sits fully below the tray, not underneath it.
-            return dockBounds.y >= trayBounds.y + trayBounds.height;
-          })
-          .toBe(true);
-        await captureProof(page, "stacked-under-tray.png");
-      },
-    );
-  });
-
-  it("centers the completed marker and dismisses the card across disclosure and reload", async () => {
+  it("presents completed disclosure states and dismisses the card across reload", async () => {
     const sessionKey = "agent:main:progress-complete";
     const plan = [
       { step: "Inspected owner", status: "completed" },
@@ -334,7 +255,12 @@ suite.define(() => {
           };
           await expectMarkerCentered();
           await card.locator("summary").click();
-          await expectMarkerCentered();
+          await expect
+            .poll(() => card.locator(".session-progress-card__summary-title").isVisible())
+            .toBe(true);
+          await expect
+            .poll(() => card.locator(".session-progress-card__current-marker").isVisible())
+            .toBe(false);
           await captureProof(page, `completed-${colorScheme}-before.png`);
 
           await gateway.setMethodResponse("progressCard.put", {

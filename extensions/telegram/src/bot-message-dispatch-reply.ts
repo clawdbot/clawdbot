@@ -329,6 +329,7 @@ export async function deliverReply(
       const canRepresentAsTransientProgress =
         !reply.hasMedia &&
         telegramButtons === undefined &&
+        effectivePayload.channelData?.askUser === undefined &&
         !hasExecApprovalPayload(effectivePayload);
       const isFastModeProgressPayload = isFastModeAutoProgressPayload(effectivePayload);
       if (turn.streamMode === "progress") {

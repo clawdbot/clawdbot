@@ -4,9 +4,13 @@ import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/
 import { hasLiveOrRecentlyDispatchedContinuationWork } from "../../../auto-reply/continuation/work-store.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
+import { fenceScheduledGatewayContextResolver } from "../../../gateway/scheduled-run-gateway-context.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
@@ -38,6 +42,10 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
+import type {
+  RegisterSubagentRunParams,
+  SubagentRegistrationOwnership,
+} from "./subagent-registry-run-launch.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { clearSubagentRunsReadCacheForTest } from "./subagent-registry-state.js";
 import { SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP } from "./subagent-registry-suspended-delivery.js";
@@ -381,7 +389,8 @@ const subagentRestorer = createSubagentRegistryRestorer({
   runs: subagentRuns,
   resumedRuns,
   deps: () => subagentRegistryDeps,
-  getGatewayContextResolver: () => activeGatewayContextResolver,
+  getGatewayContextResolver: () =>
+    fenceScheduledGatewayContextResolver(activeGatewayContextResolver),
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
@@ -554,7 +563,16 @@ export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRun
 export const rollbackSubagentRunRegistration = subagentRunManager.rollbackSubagentRunRegistration;
 export const recordAcceptedSubagentSpawnRollback =
   subagentRunManager.recordAcceptedSubagentSpawnRollback;
-export const registerSubagentRun = subagentRunManager.registerSubagentRun;
+export function registerSubagentRun(
+  params: RegisterSubagentRunParams,
+): SubagentRegistrationOwnership {
+  return subagentRunManager.registerSubagentRun({
+    ...params,
+    gatewayContextResolver:
+      params.gatewayContextResolver ??
+      fenceScheduledGatewayContextResolver(activeGatewayContextResolver),
+  });
+}
 export const startQueuedSubagentRun = subagentRunManager.startQueuedSubagentRun;
 export const settleFailedQueuedSubagentLaunch = subagentRunManager.settleFailedQueuedSubagentLaunch;
 
@@ -689,9 +707,15 @@ export function initSubagentRegistry() {
   state.restorer.restoreOnce();
 }
 export function activateSubagentRegistry(resolveGatewayContext: GatewayContextResolver) {
+  const lifecycleGatewayContextResolver =
+    fenceScheduledGatewayContextResolver(resolveGatewayContext);
   activeGatewayContextResolver = resolveGatewayContext;
   for (const entry of subagentRuns.values()) {
-    bindGatewayContextResolver(entry, resolveGatewayContext);
+    // Deserialized rows have no in-memory owner. The activating Gateway may
+    // claim those rows once, but must not replace a live run's exact owner.
+    if (!getGatewayContextResolver(entry)) {
+      bindGatewayContextResolver(entry, lifecycleGatewayContextResolver);
+    }
   }
   subagentRestorer.activate();
   // Post-ready only: collector cleanup retains the canonical sessions.delete RPC owner.

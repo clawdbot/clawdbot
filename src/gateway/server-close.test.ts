@@ -172,7 +172,7 @@ function createGatewayCloseTestDeps(
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       worktreeCleanup: setInterval(() => undefined, 60_000),
       delegateArtifactCleanup: setInterval(() => undefined, 60_000),
-      skillCuratorCleanup: vi.fn(),
+      skillUsageCleanup: vi.fn(),
     },
     stopMediaCleanup: vi.fn(async () => "drained" as const),
     delegateArtifactCleanup: null,
@@ -2050,10 +2050,9 @@ describe("createGatewayCloseHandler", () => {
 
     await close({ reason: "  upgrade  ", restartExpectedMs: Number.NaN });
 
-    expect(deps.broadcast).toHaveBeenCalledWith("shutdown", {
-      reason: "upgrade",
-      restartExpectedMs: null,
-    });
+    // Non-restart shutdowns omit restartExpectedMs entirely: the schema declares
+    // an optional integer and clients key the restart presentation on presence.
+    expect(deps.broadcast).toHaveBeenCalledWith("shutdown", { reason: "upgrade" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

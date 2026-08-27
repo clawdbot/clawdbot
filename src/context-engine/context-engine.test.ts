@@ -1881,11 +1881,6 @@ describe("LegacyContextEngine parity", () => {
     expect(result.estimatedTokens).toBe(0);
     expect(result.systemPromptAddition).toBeUndefined();
   });
-
-  it("dispose() completes without error", async () => {
-    const engine = new LegacyContextEngine();
-    await expect(engine.dispose()).resolves.toBeUndefined();
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -69,7 +69,7 @@ function renderSidebarOwnerFilter(
   involvingMe: boolean,
   selfOwnerId: string | null,
 ) {
-  if (owners.length === 0) {
+  if (owners.length === 0 && ownerFilterId === null && !involvingMe) {
     return nothing;
   }
   return html`

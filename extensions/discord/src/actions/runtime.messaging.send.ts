@@ -1,3 +1,11 @@
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import {
+  assertMediaNotDataUrl,
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
 // Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
@@ -5,14 +13,6 @@ import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyReference,
 } from "../reply-reference.js";
-import {
-  assertMediaNotDataUrl,
-  jsonResult,
-  readBooleanParam,
-  readPositiveIntegerParam,
-  readStringArrayParam,
-  readStringParam,
-} from "../runtime-api.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
@@ -185,12 +185,12 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         required: true,
         label: "stickerIds",
       });
-      await discordMessagingActionRuntime.sendStickerDiscord(
+      const result = await discordMessagingActionRuntime.sendStickerDiscord(
         to,
         stickerIds,
         ctx.withOpts({ content, ...(ctx.params.silent === true ? { silent: true } : {}) }),
       );
-      return jsonResult({ ok: true });
+      return jsonResult({ ok: true, result });
     }
     case "sendMessage": {
       if (!ctx.isActionEnabled("messages")) {

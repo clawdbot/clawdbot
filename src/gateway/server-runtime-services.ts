@@ -20,6 +20,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
+import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import {
@@ -90,7 +91,7 @@ export async function clearGatewayMaintenanceHandles(
   await maintenance.stopMediaCleanup();
   clearInterval(maintenance.worktreeCleanup);
   clearInterval(maintenance.delegateArtifactCleanup);
-  maintenance.skillCuratorCleanup();
+  maintenance.skillUsageCleanup();
 }
 
 /** Schedules post-ready maintenance and cancels/cleans handles if shutdown wins the race. */
@@ -443,6 +444,16 @@ export function activateGatewayScheduledServices(params: {
       .child("heartbeat")
       .warn(
         "scheduled heartbeats are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
+      );
+  }
+  if (
+    !params.cronState.cronEnabled &&
+    resolveSkillWorkshopConfig(params.cfgAtStart).autonomous.mode === "auto"
+  ) {
+    params.log
+      .child("skill-workshop")
+      .warn(
+        "scheduled skill collection reviews are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
       );
   }
   // Scheduled heartbeat wakes fire from a timer with no Gateway request, so

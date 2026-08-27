@@ -1,8 +1,4 @@
-/**
- * Wrapped before_tool_call execution boundary.
- * Owns tool preparation/finalization, adjusted-param replay state, terminal
- * results, diagnostics around execution, and wrapper metadata.
- */
+/** Owns wrapped before_tool_call preparation, execution, replay, and diagnostics. */
 import {
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
@@ -13,13 +9,17 @@ import {
   freezeDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
+import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
   copyAgentToolSourceExecutionGuard,
   runAgentToolSourceExecutionGuard,
 } from "./agent-tool-source-execution-guard.js";
+import {
+  recordGenericToolActionDecision,
+  runWithGenericToolActionDecision,
+} from "./agent-tools.before-tool-call.decision.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
@@ -39,10 +39,11 @@ import {
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.policy.js";
 import {
-  adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   clearTrackedToolExecution,
+  MAX_TRACKED_ADJUSTED_PARAMS,
   preExecutionBlockedToolCallIds,
+  recordAdjustedParamsForToolCall,
   recordStructuredReplaySafeToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
@@ -72,7 +73,7 @@ import {
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
-import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
+import { getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
@@ -87,7 +88,6 @@ import {
   protectNetworkToolExecutionError,
   registerTrustedToolNoStartError,
 } from "./tool-result-error.js";
-import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type BeforeToolCallWrapperOptions = {
@@ -95,13 +95,11 @@ type BeforeToolCallWrapperOptions = {
   emitDiagnostics: boolean;
 };
 type ForwardedToolExecution = (...args: unknown[]) => ReturnType<AnyAgentTool["execute"]>;
-const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const INTERNAL_DISPOSED_RESULT = {
   content: [],
   details: { status: "skipped", deniedReason: "internal-dispose" },
 };
 
-/** Run tool-owned preparation while retaining the exact prepared object. */
 export async function prepareBeforeToolCallExecutionParams(params: {
   tool: AnyAgentTool;
   params: unknown;
@@ -119,7 +117,6 @@ export async function prepareBeforeToolCallExecutionParams(params: {
     : params.params;
 }
 
-/** Reconcile hook rewrites and restore tool-owned state before execution. */
 export function finalizeBeforeToolCallExecutionParams(params: {
   tool: AnyAgentTool;
   preparedParams: unknown;
@@ -194,7 +191,6 @@ function tagBeforeToolCallFailure(
   return tagged;
 }
 
-/** Return the closed terminal disposition carried by a before-tool failure. */
 export function getBeforeToolCallFailureDisposition(
   error: unknown,
 ): BeforeToolCallFailureDisposition | undefined {
@@ -205,35 +201,6 @@ export function getBeforeToolCallFailureDisposition(
   }
 }
 
-/** Remember hook-adjusted params for later adapter-side execution. */
-export function recordAdjustedParamsForToolCall(
-  toolCallId: string | undefined,
-  params: unknown,
-  runId?: string,
-): void {
-  if (!toolCallId) {
-    return;
-  }
-  const cloneResult = cloneParamsForAdjustedReplay(params);
-  if (!cloneResult.ok) {
-    return;
-  }
-  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  adjustedParamsByToolCallId.set(adjustedParamsKey, cloneResult.value);
-  pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
-}
-
-function cloneParamsForAdjustedReplay(
-  params: unknown,
-): { ok: true; value: unknown } | { ok: false } {
-  try {
-    return { ok: true, value: structuredClone(params) };
-  } catch {
-    return { ok: false };
-  }
-}
-
-/** Record that one concrete core-owned tool call may use structured replay classification. */
 export function recordStructuredReplayTrustForToolCall(
   toolCallId: string | undefined,
   tool: AnyAgentTool,
@@ -267,7 +234,6 @@ export function isPreExecutionBlockedToolResult(result: unknown): boolean {
   );
 }
 
-/** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;
@@ -389,7 +355,11 @@ export function wrapToolWithBeforeToolCallHook(
         reason: string;
         deniedReason: HookBlockedReason;
         toolParams: unknown;
+        genericDecision?: true;
       }) => {
+        if (blockedCall.genericDecision) {
+          recordGenericToolActionDecision(tool, toolCallId, "denied");
+        }
         const eventBase = buildEventBase(blockedCall.toolParams);
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEvent({
@@ -467,6 +437,7 @@ export function wrapToolWithBeforeToolCallHook(
           reason: outcome.reason,
           deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
           toolParams: outcome.params ?? hookParams,
+          genericDecision: outcome.genericDecision,
         });
       }
       let executeParams: unknown;
@@ -500,6 +471,7 @@ export function wrapToolWithBeforeToolCallHook(
       if (prepareControl) {
         const decision = await prepareControl.pause(executeParams);
         if (!decision.launch) {
+          recordGenericToolActionDecision(tool, toolCallId, "suppressed");
           return INTERNAL_DISPOSED_RESULT;
         }
         onImplementationStart = decision.start;
@@ -543,11 +515,13 @@ export function wrapToolWithBeforeToolCallHook(
               forwardedOnUpdate,
               ...executionArgs,
             );
-          // The start event synchronously prepares this exact tool span. Install
-          // its logical context only for implementation-owned child work.
-          result = await (trace
-            ? runWithDiagnosticTraceContext(trace, executeImplementation)
-            : executeImplementation());
+          const invoke = () =>
+            trace
+              ? runWithDiagnosticTraceContext(trace, executeImplementation)
+              : executeImplementation();
+          result = outcome.ownerDecision
+            ? await invoke()
+            : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
         } catch (error) {
           throw tool.resultContentSource === "network" &&
             getBeforeToolCallFailureDisposition(error) === undefined
@@ -689,9 +663,7 @@ export function wrapToolWithBeforeToolCallHook(
       prepared.dispose();
     }
   };
-  copyPluginToolMeta(tool, wrappedTool);
-  copyChannelAgentToolMeta(tool as never, wrappedTool as never);
-  copyToolTerminalPresentation(tool, wrappedTool);
+  copyBeforeToolCallWrapperMetadata(tool, wrappedTool);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
     enumerable: true,
@@ -711,7 +683,6 @@ export function wrapToolWithBeforeToolCallHook(
   return wrappedTool;
 }
 
-/** Rebuild a before_tool_call wrapper while preserving the original source tool. */
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -728,9 +699,7 @@ export function rewrapToolWithBeforeToolCallHook(
     execute: sourceTool.execute,
   };
   clearBeforeToolCallWrappedMarker(rewrapSource);
-  copyPluginToolMeta(tool, rewrapSource);
-  copyChannelAgentToolMeta(tool as never, rewrapSource as never);
-  copyToolTerminalPresentation(tool, rewrapSource);
+  copyBeforeToolCallWrapperMetadata(tool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }

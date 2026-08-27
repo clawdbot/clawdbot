@@ -358,6 +358,52 @@ describe("backupRestoreCommand", () => {
     );
   });
 
+  it("rejects a staging target inside a configured external live agent directory", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-restore-external-agent-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const agentDir = state.path("external-agent");
+        const targetPath = path.join(agentDir, "restore-target");
+        await fs.mkdir(agentDir, { recursive: true });
+        await state.writeConfig({ agents: { entries: { main: { agentDir } } } });
+
+        await expect(
+          backupRestoreCommand(createRuntime(), {
+            archive: state.path("missing-backup.tar.gz"),
+            target: targetPath,
+          }),
+        ).rejects.toThrow(/outside the live OpenClaw agent directory/iu);
+        await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+  });
+
+  it("keeps restore available when the live config is malformed", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-restore-invalid-config-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const archivePath = state.path("backup.tar.gz");
+        const targetPath = state.path("restore-target");
+        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+        const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+        await writeArchive({ archivePath, archiveRoot, payloadPath });
+        await fs.writeFile(state.configPath, '{"agents":{"entries":', "utf8");
+
+        await expect(
+          backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+        ).resolves.toMatchObject({ targetPath });
+      },
+    );
+  });
+
   it("verifies a corrupt archive before touching an empty target", async () => {
     await withOpenClawTestState(
       {

@@ -374,11 +374,12 @@ describe("subagent announce continuation chaining", () => {
       maxDelayMs: 10,
     });
 
-    // The delayed bracket delegate is durably enqueued under the CHILD session
-    // and armed via the shared hedge timer — NOT the old volatile per-requester
-    // continuation timer handle. A restart before the delay elapses recovers it
-    // from the durable store instead of dropping it.
-    expect(mocked.registerContinuationTimerHandleMock).not.toHaveBeenCalled();
+    // The shared hedge is child-owned; the durable row remains the source of
+    // truth, so restart recovery can re-arm it without requester-owned state.
+    expect(mocked.registerContinuationTimerHandleMock).toHaveBeenCalledWith(
+      "agent:main:subagent:worker-live-tolerance",
+      expect.anything(),
+    );
     expect(mocked.retainContinuationTimerRefMock).not.toHaveBeenCalledWith("agent:main:main");
 
     // The hedge matures the durable delegate after the (clamped) delay and spawns

@@ -3,9 +3,10 @@ import {
   buildChannelInboundEventContext,
   type PreparedInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { vi, type Mock } from "vitest";
-import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type {
   MatrixConfig,
   MatrixRoomConfig,

@@ -467,6 +467,10 @@ const mockedHasUsableCustomProviderApiKey = vi.fn(() => false);
 export const mockedMarkAuthProfileSuccess = vi.fn<typeof markAuthProfileSuccess>(async () => {});
 const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
+// No provider here means model resolution defaults to anthropic/test-model, which
+// the mocked codex harness does not claim: such runs select the built-in openclaw
+// host harness and pay its one-time source-compile cost. Suites proving plugin
+// harness behavior must pin provider "openai" (see run.session-permissions.test.ts).
 export const overflowBaseRunParams = {
   agentId: "main",
   sessionId: "test-session",

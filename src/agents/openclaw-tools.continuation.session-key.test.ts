@@ -38,6 +38,7 @@ describe("createOpenClawContinuationTools live session identity", () => {
     );
     expect(mocks.createContinueDelegateTool).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:live-session",
+      runId: "run-1",
     });
   });
 

@@ -22,6 +22,7 @@
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
     "session.sharing": "Session visibility/membership management is a Control UI operator surface; iOS reads visibility/sharingRole from session rows and has no sharing editor.",
+    "session.sharing.evidence": "Principal-less sharing evidence is a Control UI operator surface; iOS refreshes canonical session rows through sessions.changed.",
     "session.suggestion": "The suggestion queue is a Control UI collaboration surface; iOS does not render or resolve session suggestions.",
     "session.tool": "Session tool stream is not rendered by the iOS chat surface yet.",
     "session.typing": "Collaborative typing state is a Control UI-only ephemeral indicator; iOS does not render it.",
@@ -32,6 +33,7 @@
     "terminal.exit": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "ui.command": "Web Control UI-only layout commands; iOS does not consume them.",
     "update.available": "Gateway self-update notices do not apply to iOS; app updates ship via the App Store.",
+    "users.prefs.changed": "iOS resolves the profile accent through talk.config on connect and config refresh; live per-profile appearance push is a named follow-up.",
     "voicewake.routing.changed": "iOS only consumes voicewake.changed trigger updates; routing changes are not surfaced."
   },
   "android": {
@@ -58,6 +60,7 @@
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
     "session.sharing": "Session visibility/membership management is a Control UI operator surface; Android reads visibility/sharingRole from session rows and has no sharing editor.",
+    "session.sharing.evidence": "Principal-less sharing evidence is a Control UI operator surface; Android refreshes canonical session rows through sessions.changed.",
     "session.suggestion": "The suggestion queue is a Control UI collaboration surface; Android does not render or resolve session suggestions.",
     "session.tool": "Session tool stream is not rendered by the Android chat surface yet.",
     "session.typing": "Collaborative typing state is a Control UI-only ephemeral indicator; Android does not render it.",
@@ -68,6 +71,7 @@
     "terminal.data": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "ui.command": "Web Control UI-only layout commands; Android does not consume them.",
+    "users.prefs.changed": "Android resolves the profile accent through talk.config on connect and config refresh; live per-profile appearance push is a named follow-up.",
     "voicewake.routing.changed": "Android reads voicewake state on demand via voicewake.get; no push consumer yet."
   }
 }

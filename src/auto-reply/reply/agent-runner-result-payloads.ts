@@ -252,6 +252,7 @@ export async function prepareReplyAgentPayloads(state: {
     buildReplyPayloads({
       config: cfg,
       payloads,
+      conversationContext: sessionCtx.agentText ?? sessionCtx.BodyForAgent,
       isHeartbeat,
       didLogHeartbeatStrip,
       silentExpected: followupRun.run.silentExpected,

@@ -80,6 +80,7 @@ export async function runHeartbeatOnceCore(opts: HeartbeatRunOptions): Promise<H
   if (wake.kind === "skipped") {
     return { status: "skipped", reason: wake.reason };
   }
+
   const prepared = await prepareHeartbeatRunStage(wake);
   if (prepared.kind === "skipped") {
     return { status: "skipped", reason: prepared.reason };
@@ -162,6 +163,7 @@ export async function runHeartbeatOnceCore(opts: HeartbeatRunOptions): Promise<H
           return false;
         }
       }
+
       const send = await sendDurableMessageBatchCore({
         cfg,
         channel: delivery.channel,
@@ -232,3 +234,5 @@ export async function runHeartbeatOnceCore(opts: HeartbeatRunOptions): Promise<H
     heartbeatTyping?.onCleanup?.();
   }
 }
+
+export const runHeartbeatOnce = runHeartbeatOnceCore;

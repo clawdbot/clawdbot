@@ -3,24 +3,20 @@
 // memory, and must never re-seed roots that already hold content.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
-import {
-  createSandboxBrowserConfig,
-  createSandboxPruneConfig,
-  createSandboxSshConfig,
-} from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenShellSandboxBackendFactory } from "./backend.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
+import { createOpenShellBackendSandboxConfig } from "./openshell.test-support.js";
 
 const sdkMocks = vi.hoisted(() => ({
   runSshSandboxCommand: vi.fn(),
   disposeSshSandboxSession: vi.fn(),
+  prepareSshSandboxExec: vi.fn(),
 }));
 
 const cliMocks = vi.hoisted(() => ({
@@ -34,6 +30,7 @@ vi.mock("openclaw/plugin-sdk/sandbox", async (importOriginal) => {
     ...actual,
     runSshSandboxCommand: sdkMocks.runSshSandboxCommand,
     disposeSshSandboxSession: sdkMocks.disposeSshSandboxSession,
+    prepareSshSandboxExec: sdkMocks.prepareSshSandboxExec,
   };
 });
 
@@ -47,32 +44,6 @@ vi.mock("./cli.js", async (importOriginal) => {
 });
 
 const tempWorkspaces: TempWorkspace[] = [];
-
-function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"] {
-  return {
-    mode: "all",
-    backend: "openshell",
-    scope: "session",
-    workspaceAccess: "rw",
-    workspaceRoot: "/tmp/openclaw-sandboxes",
-    dockerTmpfsSource: "configured",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-      binds: [],
-      env: {},
-    },
-    ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
-    browser: createSandboxBrowserConfig(),
-    tools: { allow: ["*"], deny: [] },
-    prune: createSandboxPruneConfig(),
-  };
-}
 
 async function createAdoptedRemoteBackend(params: { probeStdout: string }) {
   const workspace = await tempWorkspace({
@@ -89,6 +60,10 @@ async function createAdoptedRemoteBackend(params: { probeStdout: string }) {
   // `sandbox get` succeeds: the sandbox was created by a previous gateway
   // process that died before the first exec could run the one-time seed.
   cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+  sdkMocks.prepareSshSandboxExec.mockResolvedValue({
+    argv: ["ssh", "openshell-test"],
+    cleanup: vi.fn(),
+  });
   sdkMocks.runSshSandboxCommand.mockImplementation(async ({ remoteCommand }) => ({
     stdout: String(remoteCommand).includes("ls -A")
       ? Buffer.from(params.probeStdout)
@@ -129,24 +104,36 @@ describe("openshell remote-mode seed across gateway restart", () => {
   it("seeds an adopted sandbox whose managed roots are empty", async () => {
     const backend = await createAdoptedRemoteBackend({ probeStdout: "0\n" });
 
-    await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
+    const execSpec = await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
 
     const uploads = seedUploadCalls();
     expect(uploads.length).toBeGreaterThan(0);
     expect(uploads[0]?.[0]).toMatchObject({
       args: expect.arrayContaining([expect.stringMatching(/\/seed\.txt$/), "/sandbox/"]),
     });
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
   });
 
   it("never re-seeds when a managed root already holds content", async () => {
     const backend = await createAdoptedRemoteBackend({ probeStdout: "1\n" });
 
-    await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
+    const execSpec = await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
 
     expect(seedUploadCalls()).toHaveLength(0);
     const wipeCalls = sdkMocks.runSshSandboxCommand.mock.calls.filter(([params]) =>
       String(params.remoteCommand).includes("rm -rf"),
     );
     expect(wipeCalls).toHaveLength(0);
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
   });
 });

@@ -290,6 +290,8 @@ export function enqueueSystemEventRaw(text: string, options: SystemEventOptions)
   return enqueueSystemEventEntryRaw(text, options) !== null;
 }
 
+export const enqueueSystemEvent = enqueueSystemEventRaw;
+
 /** Enqueues one occurrence and returns one-use removal ownership for its UUID. */
 export function enqueueSystemEventWithReceipt(
   text: string,

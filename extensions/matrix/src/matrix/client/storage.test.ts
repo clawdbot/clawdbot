@@ -6,9 +6,9 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
-import { cleanupMatrixTestStateDirs, installMatrixTestRuntime } from "../../test-runtime.js";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
 import {
   claimCurrentTokenStorageState,
@@ -95,38 +95,6 @@ describe("matrix client storage paths", () => {
       env: {},
     });
   }
-
-  describe("automatically generated state roots", () => {
-    const generatedStateDirs: string[] = [];
-
-    afterAll(() => {
-      expect(generatedStateDirs).toHaveLength(2);
-      for (const stateDir of generatedStateDirs) {
-        expect(fs.existsSync(stateDir)).toBe(false);
-      }
-    });
-
-    it("keeps default storage under a unique isolated root and cleans it afterward", () => {
-      const firstStateDir = installMatrixTestRuntime();
-      const secondStateDir = installMatrixTestRuntime();
-      generatedStateDirs.push(firstStateDir, secondStateDir);
-
-      const paths = resolveDefaultStoragePaths();
-      const relativeToStateDir = path.relative(secondStateDir, paths.rootDir);
-
-      expect(firstStateDir).not.toBe(secondStateDir);
-      expect(relativeToStateDir).not.toMatch(/^\.\.(?:[/\\]|$)/u);
-      expect(fs.existsSync(firstStateDir)).toBe(true);
-      expect(fs.existsSync(secondStateDir)).toBe(true);
-    });
-  });
-
-  it("supports deterministic cleanup before the test boundary", () => {
-    const stateDir = installMatrixTestRuntime();
-    expect(fs.existsSync(stateDir)).toBe(true);
-    cleanupMatrixTestStateDirs();
-    expect(fs.existsSync(stateDir)).toBe(false);
-  });
 
   function setupCurrentTokenBackfillScenario(params: {
     currentRootFiles: "thread-bindings" | "startup-verification";

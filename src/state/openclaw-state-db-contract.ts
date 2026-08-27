@@ -1,13 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 
+// v12 folds singleton state into config_machine_state and retires write-only cron epochs.
+// v11 retires the legacy skill curator lifecycle and write-only proposal origin runs.
 // v10 retires six dead tables that shipped without runtime owners.
 // v9 stores in-root agent database registry paths relative to the state dir.
 // v8 records cloud-placement execution mode and mode-aware turn claims.
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 10;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 12;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
@@ -50,9 +52,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "agent_provenance",
   "cron_run_receipts",
-  "cron_store_epochs",
   "config_revision_keys",
-  "model_catalog_remote",
   "secret_store_entries",
   "projects",
   "user_preferences",
@@ -60,10 +60,8 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "gateway_origin_device_tokens",
   "github_publication_requests",
   "device_pairing_join_codes",
-  "sidebar_sections",
   "skill_workshop_proposal_events",
   "skill_workshop_collection_reviews",
-  "skill_workshop_proposal_origin_runs",
   "skill_workshop_proposal_rollbacks",
   "skill_workshop_proposals",
   "worker_environment_ssh_fallback_ports",
@@ -104,6 +102,8 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "worker-placement-execution-mode-v8"
     | "agent-databases-relative-paths-v9"
     | "state-table-retirement-v10"
+    | "state-table-retirement-v11"
+    | "singleton-state-foldin-v12"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

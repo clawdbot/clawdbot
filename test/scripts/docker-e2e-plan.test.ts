@@ -144,6 +144,22 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("prepares the matching Codex package for candidate npm onboarding", () => {
+    const laneNames = [
+      "npm-onboard-channel-agent",
+      "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
+      "npm-onboard-discord-candidate-channel-agent",
+      "npm-onboard-slack-candidate-channel-agent",
+    ];
+    const lanes = laneNames.map((name) => findLaneByName(name));
+
+    expect(lanes.map((lane) => lane?.name)).toEqual(laneNames);
+    expect(requiredPrepublishPluginPackagesForLanes(lanes.flatMap((lane) => lane ?? []))).toEqual([
+      "@openclaw/codex",
+    ]);
+  });
+
   it("omits a package-script lane unavailable from the candidate", () => {
     const plan = planFor({
       candidatePackageRoot: writeCandidatePackage({}),
@@ -445,6 +461,24 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
     ]);
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("live-mcp-code-mode-gateway");
+  });
+
+  it("selects isolated packaged Gateway concurrency proof without widening release-core coverage", () => {
+    const targeted = planFor({ selectedLaneNames: ["gateway-concurrency"] });
+    const core = planFor({ profile: RELEASE_PATH_PROFILE, releaseChunk: "core" });
+
+    expect(targeted.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/gateway-concurrency-docker.sh",
+        imageKind: "functional",
+        live: false,
+        name: "gateway-concurrency",
+        resources: ["docker", "service"],
+        timeoutMs: 600_000,
+        weight: 3,
+      },
+    ]);
+    expect(core.lanes.map((lane) => lane.name)).not.toContain("gateway-concurrency");
   });
 
   it("plans Open WebUI only when release-path coverage requests it", () => {
@@ -1001,6 +1035,29 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "sqlite-volume",
       ),
     ]);
+  });
+
+  it("plans the prerelease registry survivor only when explicitly requested", () => {
+    const laneName = "published-upgrade-survivor-2026.7.1-2-prerelease-plugin-registry";
+    const explicitPlan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.7.1-2",
+      upgradeSurvivorScenarios: "prerelease-plugin-registry",
+    });
+
+    expect(explicitPlan.lanes.map(summarizeLane)).toEqual([
+      publishedUpgradeSurvivorLane(laneName, "openclaw@2026.7.1-2", "prerelease-plugin-registry"),
+    ]);
+
+    for (const aggregateScenario of ["reported-issues", "far-reaching"]) {
+      const aggregateLaneNames = planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: "2026.7.1-2",
+        upgradeSurvivorScenarios: aggregateScenario,
+      }).lanes.map((lane) => lane.name);
+
+      expect(aggregateLaneNames).not.toContain(laneName);
+    }
   });
 
   it("expands reported upgrade issue scenarios", () => {

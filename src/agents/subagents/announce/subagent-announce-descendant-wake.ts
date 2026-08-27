@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -82,6 +83,7 @@ export async function wakeSubagentRunAfterDescendants(
     findings: string;
     announceId: string;
     isChildSessionEffectsAllowed: () => boolean;
+    resolveGatewayContext?: GatewayContextResolver;
     signal?: AbortSignal;
   },
   deps: SubagentDescendantWakeDeps,
@@ -225,6 +227,7 @@ export async function wakeSubagentRunAfterDescendants(
           {
             operatorRoleActor: { kind: "system" },
             timeoutMs: announceTimeoutMs,
+            resolveGatewayContext: params.resolveGatewayContext,
           },
         );
       },

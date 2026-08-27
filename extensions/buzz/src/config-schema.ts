@@ -21,6 +21,7 @@ const RawBuzzConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    responsePrefix: z.string().optional(),
     markdown: MarkdownConfigSchema,
     relayUrl: z
       .string()

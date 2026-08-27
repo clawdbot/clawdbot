@@ -116,6 +116,7 @@ export function buildCliAgentSystemPrompt(params: {
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -175,6 +176,7 @@ export function buildCliAgentSystemPrompt(params: {
     memoryCitationsMode: params.config?.memory?.citations,
     continuationEnabled: params.config?.agents?.defaults?.continuation?.enabled === true,
     bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
 

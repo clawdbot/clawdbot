@@ -2,9 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { heartbeatLog } from "./heartbeat-runner-config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
-import { requestHeartbeatRaw } from "./heartbeat-wake.js";
-
-const TEST_SCHEDULER_SEED = "heartbeat-owner-resolution-test-seed";
+import { requestHeartbeat } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner ambient owner resolution", () => {
   afterEach(() => {
@@ -24,12 +22,8 @@ describe("startHeartbeatRunner ambient owner resolution", () => {
       },
     } as OpenClawConfig;
 
-    const runner = startHeartbeatRunner({
-      cfg,
-      runOnce,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
-    requestHeartbeatRaw({ source: "manual", intent: "manual", reason: "manual", coalesceMs: 0 });
+    const runner = startHeartbeatRunner({ cfg, runOnce });
+    requestHeartbeat({ source: "manual", intent: "manual", reason: "manual", coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
 
     expect(runOnce).toHaveBeenCalledOnce();
@@ -44,10 +38,7 @@ describe("startHeartbeatRunner ambient owner resolution", () => {
       agents: { ownership: "explicit", entries: { ops: {}, main: {} } },
     } as OpenClawConfig;
 
-    const runner = startHeartbeatRunner({
-      cfg,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
+    const runner = startHeartbeatRunner({ cfg });
     runner.updateConfig(cfg);
 
     expect(info).toHaveBeenCalledWith("heartbeat: disabled", { enabled: false });

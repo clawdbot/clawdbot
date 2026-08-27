@@ -93,10 +93,10 @@ function replayAgentTurnIfCached(params: {
   return true;
 }
 
-export function createAgentTurnService({
-  context,
-  isWebchatConnect,
-}: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">) {
+export function createAgentTurnService(
+  { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
+  assertContextCurrent?: () => void,
+) {
   const startTurn = async ({
     preflight,
     principal,
@@ -246,11 +246,11 @@ export function createAgentTurnService({
         | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
         | undefined;
       let sessionPersistedBeforeGatewayAdmission = false;
-      let bestEffortDeliver = requestedBestEffortDeliver ?? false;
+      let bestEffortDeliver = requestedBestEffortDeliver ?? false,
+        isNewSession = false;
       let cfgForAgent: OpenClawConfig | undefined;
       let resolvedSessionKey = requestedSessionKey;
       let resolvedSessionAgentId: string | undefined;
-      let isNewSession = false;
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
@@ -373,13 +373,11 @@ export function createAgentTurnService({
         sessionPersistedBeforeGatewayAdmission =
           preparedSession.sessionPersistedBeforeGatewayAdmission;
         isNewSession = preparedSession.isNewSession;
-        const sessionAgent = canonicalSessionAgentId;
         const requestDeliveryHint = normalizeDeliveryContext({
           channel: recipientChannel?.trim(),
           to,
           accountId: recipientAccountId?.trim(),
-          // Pass threadId directly — normalizeDeliveryContext handles both
-          // string and numeric threadIds (e.g., Matrix uses integers).
+          // normalizeDeliveryContext accepts string and numeric thread IDs.
           threadId: recipientThreadId,
         });
         const explicitSessionKey = normalizeOptionalString(request.sessionKey);
@@ -388,7 +386,7 @@ export function createAgentTurnService({
             freshEntry,
             initialEntry: entry,
             cfg: cfgLocal,
-            sessionAgentId: sessionAgent,
+            sessionAgentId: canonicalSessionAgentId,
             canonicalSessionKey: canonicalKey,
             storePath,
             normalizedSpawned,
@@ -591,6 +589,7 @@ export function createAgentTurnService({
       // This captures ambient root admission synchronously, then settles the final
       // frame on the existing detached chain after the router returns its acceptance.
       startAgentRunExecution({
+        assertContextCurrent,
         prepared: preparedDispatch,
         mainRestartRecoveryOwnerLease,
         request,

@@ -23,6 +23,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const delegateStoreMock = vi.hoisted(() => ({
+  pending: [] as Array<Record<string, unknown>>,
+}));
+
 // --- Mocks that DO intercept the SUT (non-barrel modules) ---
 
 vi.mock("./subagents/announce/subagent-announce.runtime.js", async (importOriginal) => ({
@@ -82,17 +86,25 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
 vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   annotateQueuedDelegatesChainTokensFold: vi.fn(() => 0),
   clearQueuedDelegatesChainTokensFold: vi.fn(() => 0),
-  consumePendingDelegates: vi.fn(() => []),
-  enqueuePendingDelegate: vi.fn(),
+  consumePendingDelegates: vi.fn(() => {
+    const due = delegateStoreMock.pending.filter((delegate) => !delegate.delayMs);
+    delegateStoreMock.pending = delegateStoreMock.pending.filter((delegate) => delegate.delayMs);
+    return due;
+  }),
+  enqueuePendingDelegate: vi.fn((_sessionKey: string, delegate: Record<string, unknown>) => {
+    delegateStoreMock.pending.push(delegate);
+    return { status: "queued" };
+  }),
   hasRecoverablePendingDelegate: vi.fn(() => false),
   markPendingDelegateFailed: vi.fn(),
-  markPendingDelegateSpawnAccepted: vi.fn(),
+  markPendingDelegateSpawnAccepted: vi.fn(() => true),
   peekEarliestQueuedDelegateDueAt: vi.fn(() => undefined),
+  revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true })),
 }));
 
 vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
   failStagedPostCompactionDelegatesForCleanup: vi.fn(() => 0),
-  stagePostCompactionDelegate: vi.fn(),
+  stagePostCompactionDelegate: vi.fn(() => ({ status: "queued" })),
 }));
 
 import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
@@ -111,6 +123,10 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import { saveLegacySessionStore as saveSessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { runSubagentAnnounceFlow } from "./subagents/announce/subagent-announce.js";
 import * as subagentSpawn from "./subagents/spawn/subagent-spawn.js";
+
+afterEach(() => {
+  delegateStoreMock.pending.length = 0;
+});
 
 type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
 
@@ -131,7 +147,7 @@ function makeConfig(
           maxChainLength: overrides.maxChainLength ?? 10,
           costCapTokens: overrides.costCapTokens ?? 500_000,
           minDelayMs: 0,
-          maxDelayMs: 0,
+          maxDelayMs: 30_000,
           crossSessionTargeting: overrides.crossSessionTargeting ?? "disabled",
         },
       },
@@ -175,6 +191,10 @@ describe("announce-path bracket delegate exactly-once dispatch", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
+    vi.mocked(enqueuePendingDelegate).mockClear();
+    vi.mocked(stagePostCompactionDelegate).mockClear();
+    vi.mocked(registerContinuationTimerHandle).mockClear();
+    vi.mocked(retainContinuationTimerRef).mockClear();
     await writeSessionStore({});
     setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({

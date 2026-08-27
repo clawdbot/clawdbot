@@ -847,6 +847,7 @@
               "type": "string"
             },
             "path": {
+              "description": "Required for config.schema.lookup; optional for config.get.",
               "type": "string"
             },
             "timeoutMs": {

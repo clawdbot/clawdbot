@@ -3564,6 +3564,49 @@ describe("agent event handler", () => {
     });
   });
 
+  it("tombstones cleared agent status and observer digest in lifecycle snapshots", async () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-finished",
+      kind: "direct",
+      updatedAt: 1_700,
+      status: "done",
+    });
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", {
+      sessionKey: "session-finished",
+      verboseLevel: "off",
+    });
+
+    emitAgentEvent(
+      handler,
+      "run-finished",
+      "lifecycle",
+      { phase: "end", endedAt: 1_700 },
+      { seq: 2, ts: 1_800 },
+    );
+
+    await waitForFast(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    const payload = requireRecord(
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the gateway JSON wire shape
+      JSON.parse(
+        JSON.stringify(requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload")),
+      ),
+      "serialized sessions changed payload",
+    );
+    expectRecordFields(payload, { agentStatus: null, observerDigest: null });
+    expectRecordFields(requireRecord(payload.session, "nested session"), {
+      agentStatus: null,
+      observerDigest: null,
+    });
+  });
+
   it("omits goal state from unscoped global lifecycle snapshots", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "global",
@@ -5032,14 +5075,17 @@ describe("agent event handler", () => {
     },
   );
 
-  it("does not project maintenance child lifecycle onto its parent session", () => {
-    const { handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-maintenance-parent",
-    });
+  it("does not project maintenance child events onto its selected parent session", () => {
+    const { broadcast, broadcastToConnIds, nodeSendToSession, sessionMessageSubscribers, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-maintenance-parent",
+      });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-maintenance-parent");
     registerAgentRunContext("run-maintenance-child", {
       isControlUiVisible: false,
       projectSessionActive: false,
       projectSessionLifecycle: false,
+      projectSessionMessages: false,
       sessionId: "session-parent",
       sessionKey: "session-maintenance-parent",
     });
@@ -5052,11 +5098,30 @@ describe("agent event handler", () => {
     });
     emitRuntimeAgentEvent({
       runId: "run-maintenance-child",
+      stream: "assistant",
+      data: { text: "Internal review output", delta: "Internal review output" },
+    });
+    emitRuntimeAgentEvent({
+      runId: "run-maintenance-child",
+      stream: "tool",
+      data: { phase: "start", name: "skill_workshop", toolCallId: "review-tool" },
+    });
+    emitRuntimeAgentEvent({
+      runId: "run-maintenance-child",
+      stream: "item",
+      data: { phase: "update", kind: "status", title: "Reviewing" },
+    });
+    emitRuntimeAgentEvent({
+      runId: "run-maintenance-child",
       stream: "lifecycle",
       data: { phase: "end", endedAt: 2_000 },
     });
     stop();
 
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    expect(nodeSendToSession).not.toHaveBeenCalled();
     expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 

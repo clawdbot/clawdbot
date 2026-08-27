@@ -312,6 +312,11 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
       providerOverride: "anthropic",
       originalProvider: "anthropic",
       modelOverride: "claude-sonnet-4.7",
+      modelRoutingProvenance: {
+        requestedProvider: "anthropic",
+        requestedModel: "claude-sonnet-4.7",
+        stage: "initial",
+      },
       cfg,
       sessionEntry,
       sessionId: sessionEntry.sessionId,

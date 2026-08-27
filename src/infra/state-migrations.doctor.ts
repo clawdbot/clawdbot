@@ -193,6 +193,10 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "agent database registry paths → state-relative storage";
     case "state-table-retirement-v10":
       return "retired shared-state tables → removed tables and indexes";
+    case "state-table-retirement-v11":
+      return "retired skill curator tables → removed tables and indexes";
+    case "singleton-state-foldin-v12":
+      return "singleton state tables → shared configuration state";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":

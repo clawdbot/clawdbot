@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { icons } from "../../components/icons.ts";
 import {
   renderChatPaneComposerControls,
   resolveChatModelCatalogState,
@@ -14,6 +15,12 @@ import { renderChatPermissionPicker } from "./components/chat-permission-picker.
 const { showToastMock } = vi.hoisted(() => ({ showToastMock: vi.fn() }));
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: showToastMock }));
+
+function iconMarkup(icon: unknown): string | undefined {
+  const container = document.createElement("div");
+  render(icon as never, container);
+  return container.querySelector("svg")?.innerHTML;
+}
 
 describe("chat model catalog state", () => {
   const cachedCatalog = [
@@ -37,14 +44,24 @@ describe("chat model catalog state", () => {
       expected: { hasSnapshot: true, status: "ready" },
     },
     {
-      label: "refreshing with a cached snapshot",
+      label: "ready with a cached snapshot",
       state: {
         chatModelCatalog: cachedCatalog,
+        chatModelCatalogError: null,
+        chatModelsLoading: false,
+        connected: true,
+      },
+      expected: { hasSnapshot: true, status: "ready" },
+    },
+    {
+      label: "loading without a cached snapshot",
+      state: {
+        chatModelCatalog: [],
         chatModelCatalogError: null,
         chatModelsLoading: true,
         connected: true,
       },
-      expected: { hasSnapshot: true, status: "refreshing" },
+      expected: { hasSnapshot: false, status: "loading" },
     },
     {
       label: "offline",
@@ -118,7 +135,26 @@ describe("chat pane composer controls", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it("patches a keyboard-selected mode, clears to default, and locks full access", async () => {
+  it("renders a distinct active icon for every permission mode", () => {
+    const activeIcons = new Set<string>();
+    for (const mode of [undefined, "read-only", "guarded", "workspace", "full"] as const) {
+      const container = document.createElement("div");
+      render(
+        renderChatPermissionPicker({
+          canSelectFull: true,
+          mode,
+          onSelect: () => undefined,
+        }),
+        container,
+      );
+      const icon = container.querySelector(".chat-controls__permission-icon svg");
+      expect(icon).not.toBeNull();
+      activeIcons.add(icon?.outerHTML ?? "");
+    }
+    expect(activeIcons.size).toBe(5);
+  });
+
+  it("patches a rootless session, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
     const patch = vi.fn(async () => ({}));
     const state = {
@@ -142,7 +178,6 @@ describe("chat pane composer controls", () => {
         key: "agent:main:permission-test",
         kind: "direct",
         permissionMode: "full",
-        sessionRoot: "/workspace/projects/openclaw",
       },
       agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" },
@@ -160,10 +195,27 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
+    const permissionIcons = {
+      default: icons.shieldCheck,
+      "read-only": icons.shieldEllipsis,
+      guarded: icons.shieldLock,
+      workspace: icons.shieldCog,
+      full: icons.shieldAlert,
+    };
+    for (const [mode, icon] of Object.entries(permissionIcons)) {
+      const renderedIcon = container.querySelector<SVGElement>(
+        `[data-chat-permission-option="${mode}"] .chat-controls__permission-option-icon svg`,
+      );
+      expect(renderedIcon?.innerHTML).toBe(iconMarkup(icon));
+      expect(renderedIcon?.getAttribute("fill")).toBe("none");
+      expect(renderedIcon?.getAttribute("stroke-width")).toBe("2");
+    }
     expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
-    expect(full?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
+    expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();
+    expect(full?.querySelector(".chat-controls__permission-lock")).not.toBeNull();
+    expect(full?.querySelector(".chat-controls__inline-select-check")).toBeNull();
     expect(full?.getAttribute("aria-label")).toContain("operator.admin");
 
     dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
@@ -413,48 +465,78 @@ describe("chat pane composer controls", () => {
     expect(state.requestUpdate).toHaveBeenCalledOnce();
   });
 
-  it("refreshes the configured model catalog when the picker opens", async () => {
-    const container = document.createElement("div");
-    const request = vi.fn(async () => ({ models: [] }));
-    const state = {
-      chatRunId: null,
-      connected: true,
-      connectionEpoch: 1,
-      client: { request },
-      chatLoading: false,
-      chatModelCatalog: [],
-      chatModelCatalogError: null,
-      sessions: { state: { modelOverrides: {} }, patch: vi.fn() },
-      chatModelSwitchPromises: {},
-      sessionKey: "main",
-      chatModelsLoading: false,
-      chatSending: false,
-      sessionsResult: null,
-      chatStream: null,
-      requestUpdate: vi.fn(),
-    } as unknown as ChatPageHost;
-    const controls = renderChatPaneComposerControls({
-      state,
-      selectedSession: undefined,
-      agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
-      canSelectFull: true,
-      toastAnchor: document.createElement("div"),
-      onModelSetup: vi.fn(),
-    });
-    render(controls.composerControls, container);
+  it.each([
+    {
+      label: "warm",
+      cachedModels: [{ id: "cached-model", name: "Cached Model", provider: "openai" }],
+    },
+    { label: "cold", cachedModels: [] },
+  ])(
+    "revalidates the $label configured model catalog when the picker opens",
+    async ({ cachedModels }) => {
+      const container = document.createElement("div");
+      const catalog = createDeferred<{ models: typeof cachedModels }>();
+      const request = vi.fn(() => catalog.promise);
+      const state = {
+        chatRunId: null,
+        connected: true,
+        connectionEpoch: 1,
+        client: { request },
+        chatLoading: false,
+        chatModelCatalog: cachedModels,
+        chatModelCatalogError: null,
+        sessions: {
+          state: { modelOverrides: {} },
+          patch: vi.fn(),
+          refresh: vi.fn().mockResolvedValue(undefined),
+        },
+        chatModelSwitchPromises: {},
+        sessionKey: "main",
+        chatModelsLoading: false,
+        chatSending: false,
+        sessionsResult: null,
+        chatStream: null,
+        requestUpdate: vi.fn(),
+      } as unknown as ChatPageHost;
+      const controlParams = {
+        state,
+        selectedSession: undefined,
+        agentDefaultModel: undefined,
+        modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
+        effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
+        permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
+        canSelectFull: true,
+        toastAnchor: document.createElement("div"),
+        onModelSetup: vi.fn(),
+      };
+      render(renderChatPaneComposerControls(controlParams).composerControls, container);
 
-    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
-    picker!.open = true;
-    picker!.dispatchEvent(new Event("toggle"));
+      const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+      picker!.open = true;
+      picker!.dispatchEvent(new Event("toggle"));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("models.list", {
-      view: "configured",
-      agentId: "main",
-      refresh: true,
-    });
-  });
+      expect(state.chatModelPickerOpenSessionKey).toBe("main");
+      expect(request).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith("models.list", {
+        view: "configured",
+        agentId: "main",
+        refresh: true,
+      });
+      expect(state.chatModelsLoading).toBe(cachedModels.length === 0);
+      render(renderChatPaneComposerControls(controlParams).composerControls, container);
+      if (cachedModels.length > 0) {
+        expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+        expect(
+          container.querySelector<HTMLButtonElement>("[data-chat-model-option]")?.disabled,
+        ).toBe(false);
+        expect(container.textContent).toContain("Cached Model");
+      } else {
+        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
+        expect(container.textContent).toContain("Loading models…");
+      }
+      const freshModels = [{ id: "fresh-model", name: "Fresh Model", provider: "openai" }];
+      catalog.resolve({ models: freshModels });
+      await vi.waitFor(() => expect(state.chatModelCatalog).toEqual(freshModels));
+    },
+  );
 });

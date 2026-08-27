@@ -7,8 +7,6 @@ import { requestHeartbeatRaw as requestHeartbeat } from "./heartbeat-wake.js";
 type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
 type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
 
-export const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
-
 export function useFakeHeartbeatTime() {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(0));
@@ -93,7 +91,6 @@ export async function expectWakeDispatch(params: {
   const runner = startHeartbeatRunner({
     cfg: params.cfg,
     runOnce: params.runSpy,
-    stableSchedulerSeed: TEST_SCHEDULER_SEED,
   });
 
   requestHeartbeat(params.wake);

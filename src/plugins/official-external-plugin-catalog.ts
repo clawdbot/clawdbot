@@ -16,6 +16,7 @@ import type {
   PluginPackageInstall,
 } from "./manifest.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
+import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -1358,10 +1359,6 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   }
 }
 
-function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
-  return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
-}
-
 function formatFeedInstallCandidateSpec(
   candidate: OfficialExternalPluginCatalogInstallCandidate,
 ): string | undefined {
@@ -1564,7 +1561,7 @@ export function resolveOfficialExternalPluginInstall(
   const npmSpec =
     manifestNpmSpec ?? (hasFeedInstallCandidates ? undefined : normalizeOptionalString(entry.name));
   const defaultChoice =
-    normalizeDefaultChoice(install?.defaultChoice) ??
+    normalizePluginInstallDefaultChoice(install?.defaultChoice) ??
     (npmSpec ? "npm" : clawhubSpec ? "clawhub" : localPath ? "local" : undefined);
   if (!clawhubSpec && !npmSpec && !localPath) {
     return null;

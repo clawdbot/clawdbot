@@ -4,10 +4,11 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
+import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "../infra/exec-approval-command-display.js";
+} from "../infra/exec-approval-text-sanitize.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
@@ -145,6 +146,7 @@ function createApprovalRuntime(params: {
           sanitizeExecApprovalWarningText(normalizeOptionalString(input.description) ?? ""),
           256,
         ),
+        scope: input.scope ? sanitizeApprovalScope(input.scope) : null,
         severity: input.severity ?? "warning",
         ...(input.allowedDecisions === undefined
           ? {}
@@ -190,7 +192,9 @@ function createApprovalRuntime(params: {
         decisionPromise,
         respond,
         context: params.context,
-        clientConnId: params.client?.connId,
+        // Internal calls retain the operator's connection as provenance; it is
+        // still a reviewer, not the transport requester to exclude from delivery.
+        clientConnId: params.client?.internal?.syntheticClient ? undefined : params.client?.connId,
         requestEventName: "plugin.approval.requested",
         requestEvent,
         twoPhase: false,

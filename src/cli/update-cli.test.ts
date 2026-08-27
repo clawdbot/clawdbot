@@ -12,7 +12,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { useHermeticOpenclawEnv } from "../../test/vitest/hermetic-openclaw-env.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import {
+  GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+} from "../daemon/constants.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../infra/clawhub-install-trust.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
@@ -46,6 +49,9 @@ const serviceLoaded = vi.fn();
 const serviceEnabled = vi.fn();
 const serviceStop = vi.fn();
 const serviceRestart = vi.fn();
+// A fixed Gateway PID can collide with the updater and trigger its self-stop safeguard.
+const gatewayFixturePid = process.pid + 1;
+const unrelatedGatewayFixturePid = process.pid + 2;
 const isDefaultInstallIdentity = vi.hoisted(() =>
   vi.fn<(env?: NodeJS.ProcessEnv, homedir?: () => string, platform?: NodeJS.Platform) => boolean>(
     () => true,
@@ -110,6 +116,7 @@ const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ]);
 
 vi.mock("@clack/prompts", () => ({
@@ -646,9 +653,13 @@ describe("update-cli", () => {
     programArguments: Array<string | undefined>,
     environment?: NodeJS.ProcessEnv,
   ): void => {
-    serviceReadCommand.mockResolvedValue({
+    const managedDefinition = {
       programArguments,
       ...(environment === undefined ? {} : { environment }),
+    };
+    serviceReadCommand.mockResolvedValue({
+      ...managedDefinition,
+      managedDefinition,
     });
   };
 
@@ -1344,7 +1355,11 @@ describe("update-cli", () => {
       },
     });
     serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
   };
 
   const mockStoppedManagedGitGateway = () => {
@@ -1357,7 +1372,11 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(false);
     serviceLoaded.mockResolvedValueOnce(true);
     serviceReadRuntime.mockResolvedValue({ status: "stopped", pid: null, state: "stopped" });
-    serviceReadRuntime.mockResolvedValueOnce({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
   };
 
   const expectFailedManagedGitRestart = (message: string) => {
@@ -1507,8 +1526,11 @@ describe("update-cli", () => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    for (const key of GATEWAY_SERVICE_SELECTOR_ENV_KEYS) {
+      delete process.env[key];
+    }
     restartHealthTestControl.snapshot = undefined;
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     serviceEnabled.mockResolvedValue(true);
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
     restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
@@ -1609,7 +1631,7 @@ describe("update-cli", () => {
     );
     serviceReadRuntime.mockResolvedValue({
       status: "running",
-      pid: 4242,
+      pid: gatewayFixturePid,
       state: "running",
     });
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
@@ -1618,7 +1640,7 @@ describe("update-cli", () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",
-      listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+      listeners: [{ pid: gatewayFixturePid, command: "openclaw-gateway" }],
       hints: [],
     });
     classifyPortListener.mockReturnValue("gateway");
@@ -1849,20 +1871,21 @@ describe("update-cli", () => {
     const managedRecords = {
       telegram: { source: "npm", spec: "@openclaw/telegram@beta" },
     } satisfies Record<string, PluginInstallRecord>;
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
-      environment: {
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19222",
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "7777",
-      },
+    primeServiceCommand(["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"], {
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      OPENCLAW_GATEWAY_PORT: "19222",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(unrelatedGatewayFixturePid),
     });
     serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
     vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
       process.env.OPENCLAW_PROFILE === "work" ? managedSnapshot : baseSnapshot,
     );
@@ -1971,17 +1994,18 @@ describe("update-cli", () => {
       }),
     );
     const managedState = path.join(fixtureRoot, "fallback-managed");
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
-      environment: {
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19222",
-      },
+    primeServiceCommand(["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"], {
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      OPENCLAW_GATEWAY_PORT: "19222",
     });
     serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(undefined);
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
@@ -2029,17 +2053,18 @@ describe("update-cli", () => {
         candidate === path.join(process.cwd(), "openclaw.mjs"),
     );
     const managedState = path.join(fixtureRoot, "restart-doctor-managed");
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
-      environment: {
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19222",
-      },
+    primeServiceCommand(["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"], {
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      OPENCLAW_GATEWAY_PORT: "19222",
     });
     serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
     prepareRestartScript.mockResolvedValue(null);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
     let doctorProfile: string | undefined;
@@ -2202,7 +2227,10 @@ describe("update-cli", () => {
   it("does not carry gateway service markers into the post-core update process", async () => {
     setupUpdatedRootRefresh();
 
-    await runWithGatewayServiceEnv({ yes: true }, { [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "7777" });
+    await runWithGatewayServiceEnv(
+      { yes: true },
+      { [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(unrelatedGatewayFixturePid) },
+    );
 
     const spawnEnv = spawnCall()?.[2]?.env;
     expect(spawnEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
@@ -4324,7 +4352,7 @@ describe("update-cli", () => {
     serviceReadCommand.mockResolvedValue(null);
     serviceReadRuntime.mockResolvedValueOnce({
       status: "running",
-      pid: 4242,
+      pid: gatewayFixturePid,
       state: "running",
     });
 
@@ -4345,7 +4373,9 @@ describe("update-cli", () => {
   it("refuses package updates from inside the active gateway process tree", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
     serviceLoaded.mockResolvedValue(true);
-    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 4242]));
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(
+      new Set<number>([process.pid, gatewayFixturePid]),
+    );
 
     await updateCommand({ yes: true });
 
@@ -4353,7 +4383,7 @@ describe("update-cli", () => {
     expect(errors).toContain(
       "openclaw update detected it is running inside the gateway process tree.",
     );
-    expect(errors).toContain("Gateway PID 4242 is an ancestor");
+    expect(errors).toContain(`Gateway PID ${gatewayFixturePid} is an ancestor`);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -4364,18 +4394,21 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({
       status: "running",
-      pid: 4242,
+      pid: gatewayFixturePid,
       state: "running",
     });
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
 
-    await runWithGatewayServiceEnv({ yes: true }, { [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "4242" });
+    await runWithGatewayServiceEnv(
+      { yes: true },
+      { [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(gatewayFixturePid) },
+    );
 
     const errors = getErrorOutput();
     expect(errors).toContain(
       "openclaw update detected it is running inside the gateway process tree.",
     );
-    expect(errors).toContain("Gateway PID 4242 is an ancestor");
+    expect(errors).toContain(`Gateway PID ${gatewayFixturePid} is an ancestor`);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -5177,7 +5210,7 @@ describe("update-cli", () => {
       });
       serviceReadRuntime.mockResolvedValue(
         runtimeStatus === "running"
-          ? { status: "running", state: "running", pid: 4242 }
+          ? { status: "running", state: "running", pid: gatewayFixturePid }
           : { status: "stopped", state: "stopped" },
       );
       suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
@@ -5264,7 +5297,7 @@ describe("update-cli", () => {
       portUsage: {
         port: 18789,
         status: "busy",
-        listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+        listeners: [{ pid: gatewayFixturePid, command: "openclaw-gateway" }],
         hints: [],
       },
       healthy: true,
@@ -6953,11 +6986,11 @@ describe("update-cli", () => {
     prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
     restartHealthTestControl.snapshot = {
-      runtime: { status: "running", pid: 4242 },
+      runtime: { status: "running", pid: gatewayFixturePid },
       portUsage: {
         port: 18789,
         status: "busy",
-        listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+        listeners: [{ pid: gatewayFixturePid, command: "openclaw-gateway" }],
         hints: [],
       },
       healthy: false,

@@ -2,12 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, vi } from "vitest";
@@ -16,7 +15,6 @@ import { setSignalRuntime } from "./runtime.js";
 import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
 
 type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
-type SignalReplyResolver = NonNullable<ChannelInboundTurnPlan["replyResolver"]>;
 
 type SignalToolResultTestMocks = {
   waitForTransportReadyMock: MockFn;
@@ -173,34 +171,6 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
-    "openclaw/plugin-sdk/channel-inbound",
-  );
-  return {
-    ...actual,
-    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
-      const resolveTurn = params.adapter.resolveTurn;
-      return await actual.runChannelInboundEvent({
-        ...params,
-        adapter: {
-          ...params.adapter,
-          resolveTurn: async (...args: Parameters<typeof resolveTurn>) => {
-            const turn = await resolveTurn(...args);
-            return "delivery" in turn
-              ? {
-                  ...turn,
-                  replyResolver: (...replyArgs: Parameters<SignalReplyResolver>) =>
-                    replyMock(...replyArgs),
-                }
-              : turn;
-          },
-        },
-      });
-    },
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
     "openclaw/plugin-sdk/session-store-runtime",
@@ -208,8 +178,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     resolveStorePath: vi.fn(() => signalToolResultSessionStore.path),
-    updateLastRoute: (...args: Parameters<typeof actual.updateLastRoute>) =>
-      updateLastRouteMock(...args),
+    updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
   };

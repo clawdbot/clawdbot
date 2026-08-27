@@ -95,9 +95,9 @@ export async function recoverEmbeddedRunOverflow(
     return { action: "none" };
   }
 
+  const terminal = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const providerPromptRejection =
-    contextOverflowError.source === "assistantError" ||
-    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "prompt"
+    contextOverflowError.source === "assistantError" || terminal.promptErrorSource === "prompt"
       ? markLastProviderPromptContextRejected(getProviderPromptState(input.runParams.runId))
       : undefined;
 
@@ -106,6 +106,14 @@ export async function recoverEmbeddedRunOverflow(
   const errorText = contextOverflowError.text;
   const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
   const preflightRecovery = input.attempt.preflightRecovery;
+  const preflightPromptBudget =
+    terminal.promptErrorSource === "precheck" &&
+    preflightRecovery?.source === "mid-turn" &&
+    typeof preflightRecovery.promptBudgetBeforeReserve === "number" &&
+    Number.isFinite(preflightRecovery.promptBudgetBeforeReserve) &&
+    preflightRecovery.promptBudgetBeforeReserve > 0
+      ? Math.floor(preflightRecovery.promptBudgetBeforeReserve)
+      : undefined;
   const preflightEstimatedPromptTokens =
     typeof preflightRecovery?.estimatedPromptTokens === "number" &&
     Number.isFinite(preflightRecovery.estimatedPromptTokens) &&
@@ -130,6 +138,11 @@ export async function recoverEmbeddedRunOverflow(
   );
 
   const isCompactionFailure = isCompactionFailureError(errorText);
+  // A parked code-mode run is bound to the session it started in and `wait`
+  // rejects any other session, so a compaction that adopts a successor cannot
+  // redeem parked nested work. The compaction itself stays committed (hooks and
+  // maintenance still run); only the mid-turn continuation is withheld.
+  let parkedWorkBlocksContinuation = false;
   if (
     !isCompactionFailure &&
     input.attemptCompactionCount > 0 &&
@@ -185,7 +198,7 @@ export async function recoverEmbeddedRunOverflow(
     await input.runOwnsCompactionBeforeHook("overflow recovery");
     try {
       const compaction = await compactEmbeddedRunForRecovery(input, {
-        tokenBudget: input.contextTokenBudget,
+        tokenBudget: preflightPromptBudget ?? input.contextTokenBudget,
         trigger: "overflow",
         diagId: overflowDiagId,
         attempt: input.state.overflowCompactionAttempts,
@@ -206,6 +219,18 @@ export async function recoverEmbeddedRunOverflow(
       } else if (compactResult.ok && compactResult.compacted) {
         previousSessionId = await input.adoptCompactionTranscript(compactResult);
         const adoptedSession = input.getActiveSession();
+        // Key off the recorded parked-run fact, not lifecycle counters: a local
+        // yield_control parks the exec without any nested lifecycle item.
+        parkedWorkBlocksContinuation =
+          previousSessionId !== undefined &&
+          preflightRecovery?.source === "mid-turn" &&
+          input.attempt.toolMetas.some((entry) => entry.codeModeSuspended === true);
+        if (parkedWorkBlocksContinuation) {
+          log.warn(
+            `[context-overflow-recovery] compaction rotated ${previousSessionId} -> ${adoptedSession.id} ` +
+              `while nested tool work was parked; not continuing mid-turn for ${input.provider}/${input.modelId}`,
+          );
+        }
         await runContextEngineMaintenance({
           contextEngine: input.contextEngine,
           sessionId: adoptedSession.id,
@@ -281,21 +306,30 @@ export async function recoverEmbeddedRunOverflow(
         }
       }
       input.state.autoCompactionCount += 1;
-      log.info(`auto-compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`);
       input.armPostCompactionGuard();
-      if (preflightRecovery?.source === "mid-turn") {
-        input.prepareCurrentTranscriptRetry();
+      if (parkedWorkBlocksContinuation) {
+        log.warn(
+          `auto-compaction succeeded for ${input.provider}/${input.modelId}, but parked nested tool work cannot follow the rotated session; surfacing overflow guidance`,
+        );
       } else {
-        await input.prepareCompactedTranscriptRetry();
+        log.info(
+          `auto-compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
+        );
+        if (preflightRecovery?.source === "mid-turn") {
+          input.prepareCurrentTranscriptRetry();
+        } else {
+          await input.prepareCompactedTranscriptRetry();
+        }
+        return { action: "retry" };
       }
-      return { action: "retry" };
+    } else {
+      log.warn(
+        `auto-compaction failed for ${input.provider}/${input.modelId}: ${compactResult.reason ?? "nothing to compact"}`,
+      );
     }
-    log.warn(
-      `auto-compaction failed for ${input.provider}/${input.modelId}: ${compactResult.reason ?? "nothing to compact"}`,
-    );
   }
 
-  if (!input.state.toolResultTruncationAttempted) {
+  if (!parkedWorkBlocksContinuation && !input.state.toolResultTruncationAttempted) {
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: input.contextTokenBudget,
     });

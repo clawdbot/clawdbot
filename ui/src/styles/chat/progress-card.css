@@ -2,7 +2,6 @@
   --session-progress-neutral: var(--muted);
   --session-progress-marker-size: 14px;
 
-  box-sizing: border-box;
   min-width: 0;
   color: var(--text);
 }
@@ -193,7 +192,6 @@
 .session-hovercard__creator-avatar,
 .session-hovercard__creator-avatar .viewer-avatar {
   display: block;
-  box-sizing: border-box;
   width: var(--session-hovercard-context-icon-size);
   height: var(--session-hovercard-context-icon-size);
   aspect-ratio: 1;
@@ -419,13 +417,6 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
-.session-progress-card--rail {
-  flex: 0 0 auto;
-  margin: 10px 14px 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
 .session-progress-card--board {
   padding: var(--space-3);
 }
@@ -493,7 +484,6 @@
 .session-progress-card__current-marker,
 .session-progress-card__step-marker {
   display: inline-flex;
-  box-sizing: border-box;
   width: var(--session-progress-marker-size);
   height: var(--session-progress-marker-size);
   align-items: center;
@@ -535,13 +525,6 @@
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-progress-card__count {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
 }
 
 .session-progress-card__dismiss {
@@ -628,7 +611,8 @@
   color: var(--session-progress-neutral);
 }
 
-.session-progress-card__step--pending .session-progress-card__step-marker {
+.session-progress-card__step--pending .session-progress-card__step-marker,
+.session-progress-card__step--paused .session-progress-card__step-marker {
   color: var(--session-progress-neutral);
 }
 

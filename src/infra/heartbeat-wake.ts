@@ -37,6 +37,14 @@ export {
   getActiveHeartbeatWakeContext,
   getHeartbeatWakeAbortSignal,
 } from "./heartbeat-wake-lifecycle.js";
+export type {
+  HeartbeatRunResult,
+  HeartbeatScheduledTask,
+  HeartbeatWakeHandler,
+  HeartbeatWakeIntent,
+  HeartbeatWakeRequest,
+  HeartbeatWakeSource,
+} from "./heartbeat-wake-contracts.js";
 export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_NO_PENDING_EVENT = "no-pending-event";
@@ -700,6 +708,11 @@ export function requestHeartbeatRaw(opts: {
     });
     schedule(coalesceMs);
   });
+}
+
+/** Canonical scheduler-facing heartbeat entry point. */
+export function requestHeartbeat(opts: Parameters<typeof requestHeartbeatRaw>[0]) {
+  requestHeartbeatRaw(opts);
 }
 
 export function requestHeartbeatNow(opts?: {

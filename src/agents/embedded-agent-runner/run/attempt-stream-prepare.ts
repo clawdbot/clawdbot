@@ -100,6 +100,7 @@ export function prepareEmbeddedAttemptStream(input: {
     coreBuiltinToolNames?: ReadonlySet<string>;
     replaySafeToolNames: ReadonlySet<string>;
     trustedLocalMediaToolNames: ReadonlySet<string>;
+    codeModeExecToolNames?: ReadonlySet<string>;
   };
   sideEffectToolOwners?: ReadonlyMap<string, string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;

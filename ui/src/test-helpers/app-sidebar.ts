@@ -58,6 +58,9 @@ export type SidebarLifecycleState = HTMLElement & {
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
+  restartPending: boolean;
+  queuedOutboxCount: number;
+  lastError: string | null;
   outboxAttentionCountForSession: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
@@ -70,6 +73,7 @@ export type SidebarLifecycleState = HTMLElement & {
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
+  readonly sessionOwnerFilterId: string | null;
   sessionKey: string;
   onNavigate: (
     routeId: string,
@@ -570,6 +574,7 @@ export async function mountSidebar(
     sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
   };
   await Promise.all([
+    import("../components/app-sidebar-session-narration.ts"),
     sidebarWithPreloads.preloadCatalogRenderer(),
     sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
   ]);

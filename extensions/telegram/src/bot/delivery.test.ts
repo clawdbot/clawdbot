@@ -420,6 +420,100 @@ describe("deliverReplies", () => {
     expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "🔥" }]);
   });
 
+  it.each([
+    {
+      name: "a nested reaction target with default reply threading disabled",
+      nestedReplyToId: "456",
+      replyToMode: "off" as const,
+    },
+    {
+      name: "a numeric nested reaction target",
+      nestedReplyToId: 456,
+      replyToMode: "off" as const,
+    },
+    {
+      name: "a nested reaction target instead of a different outer reply",
+      nestedReplyToId: "456",
+      outerReplyToId: "789",
+      replyToMode: "all" as const,
+    },
+    {
+      name: "a nested reaction target without enabling native text replies",
+      nestedReplyToId: "456",
+      outerReplyToId: "789",
+      replyToMode: "off" as const,
+      text: "Done",
+    },
+    {
+      name: "a nested reaction target while preserving a different native text reply",
+      nestedReplyToId: "456",
+      outerReplyToId: "789",
+      replyToMode: "all" as const,
+      text: "Done",
+    },
+  ])("honors $name", async ({ nestedReplyToId, outerReplyToId, replyToMode, text }) => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn().mockResolvedValue(true);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 901, chat: { id: "123" } });
+    const bot = createBot({ sendMessage, setMessageReaction });
+
+    const result = await deliverWith({
+      replies: [
+        {
+          ...(text ? { text } : {}),
+          ...(outerReplyToId ? { replyToId: outerReplyToId } : {}),
+          channelData: { telegram: { reaction: { emoji: "🔥", replyToId: nestedReplyToId } } },
+        },
+      ],
+      replyToMode,
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: true });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "🔥" }]);
+    if (text) {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      if (replyToMode === "off") {
+        expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_to_message_id");
+      } else {
+        expect(mockCallArg(sendMessage, 0, 2)).toMatchObject({ reply_to_message_id: 789 });
+      }
+    } else {
+      expect(sendMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["0", "-1", "12.5", "9007199254740992", "invalid"])(
+    "rejects invalid explicit nested reaction target %s without using the outer reply",
+    async (nestedReplyToId) => {
+      const runtime = createRuntime(false);
+      const setMessageReaction = vi.fn().mockResolvedValue(true);
+      const sendMessage = vi.fn().mockResolvedValue({ message_id: 901, chat: { id: "123" } });
+
+      const result = await deliverWith({
+        replies: [
+          {
+            text: "Done",
+            replyToId: "789",
+            channelData: { telegram: { reaction: { emoji: "🔥", replyToId: nestedReplyToId } } },
+          },
+        ],
+        replyToMode: "all",
+        runtime,
+        bot: createBot({ sendMessage, setMessageReaction }),
+      });
+
+      expect(result).toEqual({ delivered: false });
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("requires a reply target"),
+      );
+      expect(setMessageReaction).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not mark rejected reaction-only replies as delivered", async () => {
     const runtime = createRuntime(false);
     const setMessageReaction = vi.fn().mockRejectedValue(new Error("REACTION_INVALID"));
@@ -1870,6 +1964,34 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(3);
   });
 
+  it("maps a supergroup migration rejection without rewriting the streaming target", async () => {
+    const chatId = "-123456789";
+    const migratedChatId = -1_001_234_567_890;
+    const terminal = Object.assign(
+      new Error("400: Bad Request: group chat was upgraded to a supergroup chat"),
+      {
+        name: "GrammyError",
+        error_code: 400,
+        description: "Bad Request: group chat was upgraded to a supergroup chat",
+        parameters: { migrate_to_chat_id: migratedChatId },
+      },
+    );
+    const sendMessage = vi.fn().mockRejectedValue(terminal);
+
+    const observed = await sendTelegramText(
+      createBot({ sendMessage }),
+      chatId,
+      "hello",
+      createRuntime(),
+    ).catch((error: unknown) => error);
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(observed).toMatchObject({ cause: terminal, retryable: false });
+    expect(observed).toMatchObject({ message: expect.stringContaining(String(migratedChatId)) });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(firstMockCallArg(sendMessage, 0)).toBe(chatId);
+  });
+
   it("keeps broad 421-shaped streaming send errors ambiguous", async () => {
     const edgeError = Object.assign(new Error("421 Misdirected Request"), { status: 421 });
     const sendMessage = vi.fn().mockRejectedValue(edgeError);
@@ -2769,10 +2891,46 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 1)).toContain("Hidden voice fallback");
-    expect(transcriptMirror).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Hidden voice fallback" }),
-    );
+    expect(transcriptMirror).toHaveBeenCalledWith({
+      text: "Hidden voice fallback",
+      mediaUrls: undefined,
+    });
   });
+
+  it.each(["before", "after"])(
+    "mirrors accepted media %s a rejected voice without the rejected attachment",
+    async (position) => {
+      const voiceUrl = "https://example.com/note.ogg";
+      const photoUrl = "https://example.com/photo.jpg";
+      const mediaUrls = position === "before" ? [photoUrl, voiceUrl] : [voiceUrl, photoUrl];
+      const sendVoice = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+      const sendPhoto = vi.fn().mockResolvedValue({ message_id: 7, chat: { id: "123" } });
+      const sendMessage = vi.fn().mockResolvedValue({ message_id: 8, chat: { id: "123" } });
+      const transcriptMirror = vi.fn();
+      for (const url of mediaUrls) {
+        mockMediaLoad(
+          url === voiceUrl ? "note.ogg" : "photo.jpg",
+          url === voiceUrl ? "audio/ogg" : "image/jpeg",
+          "media",
+        );
+      }
+
+      await deliverWith({
+        replies: [{ mediaUrls, audioAsVoice: true, spokenText: "Voice fallback" }],
+        runtime: createRuntime(),
+        bot: createBot({ sendVoice, sendPhoto, sendMessage }),
+        transcriptMirror,
+      });
+
+      expect(sendVoice).toHaveBeenCalledOnce();
+      expect(sendPhoto).toHaveBeenCalledOnce();
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(transcriptMirror).toHaveBeenCalledWith({
+        text: "Voice fallback",
+        mediaUrls: [photoUrl],
+      });
+    },
+  );
 
   it("runs message_sending hooks over spokenText voice fallback content", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");

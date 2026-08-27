@@ -47,11 +47,9 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
   if (item.kind === "stream-run") {
     return item.runId;
   }
-  const runIds = itemGroups(item).map((group) => group.runId);
-  const uniqueRunIds = new Set(runIds.filter((value) => value !== undefined));
-  return runIds.length > 0 && uniqueRunIds.size === 1 && runIds.every(Boolean)
-    ? uniqueRunIds.values().next().value
-    : undefined;
+  const groups = itemGroups(item);
+  const runId = groups[0]?.runId;
+  return runId && groups.every((group) => group.runId === runId) ? runId : undefined;
 }
 
 function messageIsInterrupted(message: unknown): boolean {

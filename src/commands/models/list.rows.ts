@@ -404,7 +404,7 @@ export async function loadListModelCatalogSnapshot(
       cfg: context.cfg,
       ...(context.agentId ? { agentId: context.agentId } : {}),
       agentDir: context.agentDir,
-      inheritedAuthDir: context.inheritedAuthDir ?? context.agentDir,
+      ...(context.inheritedAuthDir ? { inheritedAuthDir: context.inheritedAuthDir } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
       providerIds: context.providerDiscoveryProviderIds,
       runtimeProviderIds: context.providerRuntimeDiscoveryProviderIds,

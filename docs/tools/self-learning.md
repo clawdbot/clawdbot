@@ -23,7 +23,12 @@ approval. Choose `propose` to review every capture before it becomes active, or
 
 When the foreground agent discovers that a skill it used is wrong or incomplete,
 it reads the current live skill and drafts a targeted patch through Skill
-Workshop in the same turn. A runtime usage receipt prevents foreground repair of
+Workshop in the same turn. If the complete skill does not fit the selected
+model's read budget, `prepare_patch` can authorize one non-empty unique exact
+span and return bounded surrounding context. The next `patch` must quote that
+same span, and the authorization expires after one attempt or any target change.
+A second `prepare_patch` for that skill is rejected until the active authorization
+is consumed or invalidated. A runtime usage receipt prevents foreground repair of
 skills that the run did not use. Autonomous mode controls the outcome: `off`
 disables the repair, `propose` leaves it pending for explicit review and apply,
 and `auto` scans and applies it immediately. The repair still goes through
@@ -75,12 +80,15 @@ read or command-invoked, plus a bounded workspace skill list. It prefers a used
 writable skill when that skill governs the learning, then another existing
 skill, and creates a new skill only when nothing covers the class.
 
-Before changing an existing skill, the reviewer reads its current body. Both
-update forms bind the proposal to that content hash. An oversized skill can be
-rewritten only when the result is shorter. Autonomous `SKILL.md` results stay at
-or below 10,000 characters. Longer reference and examples move into bundled
-files. The reviewer sees the foreground tool schemas, but only `skill_workshop`
-can execute. The reviewed transcript is evidence, not instructions.
+Before changing an existing skill, the reviewer reads its current body. If the
+complete body is omitted, it can call `prepare_patch` for one non-empty unique
+exact span and then patch that span. Reading and preparing do not spend the
+review's single mutation. Both update forms bind the proposal to the current
+content hash. An oversized skill can be rewritten only when the result is
+shorter. Autonomous `SKILL.md` results stay at or below 10,000 characters.
+Longer reference and examples move into bundled files. The reviewer sees the
+foreground tool schemas, but only `skill_workshop` can execute. The reviewed
+transcript is evidence, not instructions.
 
 Workshop-authored skills can apply automatically. Updates to user-authored skills
 stay pending with a reason for operator review. Each review gets one attempt.
@@ -211,12 +219,15 @@ with model fallbacks disabled. Provider pricing and data-handling terms apply to
 the additional run.
 
 Weekly collection review also uses the configured agent model. It receives the
-names, descriptions, and ownership state of eligible workspace skills, then reads each
-skill it intends to change before one atomic call listing only changes. Disabled and
-agent-filtered skills stay untouched. Shared workspaces use the union of each
-agent's allowed skills only when provider, model, and resolved auth identity
-match. Reconciliation must leave every sharing agent at least one visible skill.
-It has no message tool or general agent tools. Skill bodies are treated as
+names, descriptions, ownership state, and available usage counts and last-used
+recency of eligible workspace skills, then reads each skill it intends to change
+before one atomic call listing only changes. Usage is supporting evidence: heavy
+use favors preserving a skill's procedure, while no recorded use alone never
+justifies dropping it. Disabled and agent-filtered skills stay untouched. Shared
+workspaces use the union of each agent's allowed skills only when provider,
+model, and resolved auth identity match. Reconciliation must leave every
+sharing agent at least one visible skill. It has no message tool or general
+agent tools. Skill bodies are treated as
 untrusted evidence, not as instructions. A persisted per-workspace attempt time
 prevents Gateway restarts from repeating a failed or successful review within 7 days. The
 foreground agent can restore the one retained collection backup when asked to
@@ -299,7 +310,9 @@ Check the following:
 An eligible experience review can still abstain. No proposal is the expected
 result when the evidence does not clear the reusable-procedure bar.
 Use `openclaw skills curator status` to inspect the last collection and
-experience review outcomes.
+experience review outcomes alongside live skill usage. Age-based curation is
+retired; the `curator pin`, `unpin`, and `restore` commands return an error
+explaining that weekly collection review manages the skill collection.
 
 ### Doctor reports that Workshop is hidden
 

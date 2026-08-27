@@ -17,12 +17,13 @@ export const STATE_SECRET_TABLE_NAMES = [
   "mcp_oauth_pending_authorizations",
   "mcp_oauth_stores",
   "native_hook_relay_bridges",
-  "node_host_config",
   "secret_store_entries",
   "web_push_subscriptions",
-  "web_push_vapid_keys",
   "worker_environment_credentials",
 ] as const;
+
+/** Secret-redacted Git backups must never carry machine-state values under these prefixes. */
+export const STATE_SECRET_CONFIG_STATE_KEY_PREFIXES = ["nodeHost.", "webPush.vapidKeys"] as const;
 
 /** Redaction policy surface for credential-bearing per-agent database tables. */
 export const AGENT_SECRET_TABLE_NAMES = [

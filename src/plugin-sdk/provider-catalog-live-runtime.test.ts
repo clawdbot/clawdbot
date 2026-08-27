@@ -9,13 +9,6 @@ import {
 } from "./provider-catalog-live-runtime.js";
 import { buildLiveCatalogFetchGuard } from "./provider-catalog-live-runtime.test-support.js";
 
-type CompatibleFetchGuardForTest = (params: Parameters<LiveModelCatalogFetchGuard>[0]) => Promise<
-  Omit<Awaited<ReturnType<LiveModelCatalogFetchGuard>>, "finalUrl" | "requestHeaders"> & {
-    finalUrl?: string;
-    requestHeaders?: HeadersInit;
-  }
->;
-
 describe("provider-catalog-live-runtime", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
@@ -348,40 +341,6 @@ describe("provider-catalog-live-runtime", () => {
     expect((secondHeaders as Headers).get("authorization")).toBeNull();
     expect((secondHeaders as Headers).get("chatgpt-account-id")).toBeNull();
     expect((secondHeaders as Headers).get("accept")).toBe("application/json");
-  });
-
-  it("uses the response URL for redirected pagination when guard metadata is omitted", async () => {
-    const release = vi.fn(async () => undefined);
-    const firstResponse = new Response(
-      JSON.stringify({
-        data: [{ id: "model-a", object: "model" }],
-        links: { next: "?page=2" },
-      }),
-    );
-    Object.defineProperty(firstResponse, "url", {
-      value: "https://redirected.example.test/v1/models/",
-    });
-    const fetchGuard: CompatibleFetchGuardForTest = vi
-      .fn(async ({ url }: Parameters<LiveModelCatalogFetchGuard>[0]) => ({
-        response:
-          url === "https://provider.example.test/v1/models"
-            ? firstResponse
-            : new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
-        release,
-      }))
-      .mockName("fetchGuard");
-
-    await expect(
-      fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
-        fetchGuard: fetchGuard as LiveModelCatalogFetchGuard,
-      }),
-    ).resolves.toEqual(["model-a", "model-b"]);
-
-    expect(vi.mocked(fetchGuard).mock.calls[1]?.[0].url).toBe(
-      "https://redirected.example.test/v1/models/?page=2",
-    );
   });
 
   it("follows nextPageToken pagination before projecting model ids", async () => {

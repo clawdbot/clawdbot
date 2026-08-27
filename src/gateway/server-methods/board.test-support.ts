@@ -11,6 +11,32 @@ type BoardMcpAppDependencies = {
   mintFromTranscript: NonNullable<BoardHandlerDependencies["mintFromTranscript"]>;
 };
 
+const boardWidgetPermissionCases = [
+  { permissionMode: "full", grantState: "granted" },
+  { permissionMode: "workspace", reviewDecision: "allow-once", grantState: "granted" },
+  {
+    permissionMode: "workspace",
+    reviewDecision: "allow-once",
+    reviewRisk: "high",
+    grantState: "rejected",
+  },
+  { permissionMode: "workspace", reviewDecision: "ask", grantState: "rejected" },
+  { permissionMode: "workspace", reviewFailure: true, grantState: "rejected" },
+  { permissionMode: "guarded", grantState: "pending" },
+  { permissionMode: "read-only", grantState: "rejected" },
+  { mode: "full", grantState: "granted" },
+  { mode: "auto", reviewDecision: "allow-once", grantState: "granted" },
+  { mode: "auto", reviewDecision: "ask", grantState: "rejected" },
+  { mode: "ask", grantState: "pending" },
+  { mode: "allowlist", grantState: "rejected" },
+  { mode: "deny", grantState: "rejected" },
+  { grantState: "granted" },
+] as const;
+
+export const boardWidgetContentPermissionCases = boardWidgetPermissionCases.flatMap((permission) =>
+  (["html", "mcp-app"] as const).map((contentKind) => Object.assign({ contentKind }, permission)),
+);
+
 export function createMcpAppDependencies(): BoardMcpAppDependencies {
   let lease = 0;
   const runtime = { getCatalog: vi.fn() };
@@ -72,11 +98,12 @@ export function createBoardHarness(
         getRuntimeConfig: () => ({
           agents: { list: [{ id: "main" }] },
           mcp: { apps: { enabled: true } },
+          tools: { exec: { mode: "ask" } },
         }),
         ...contextOverrides,
       } as unknown as GatewayRequestContext,
     });
     return respond;
   };
-  return { store, broadcast, invoke, mcpApp };
+  return { store, broadcast, handlers, invoke, mcpApp };
 }

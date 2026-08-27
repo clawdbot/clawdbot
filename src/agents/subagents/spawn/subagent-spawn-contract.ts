@@ -1,4 +1,5 @@
 import type { FastMode } from "../../../shared/fast-mode.js";
+import type { SpawnedToolContext } from "../../spawned-context.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -77,7 +78,7 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = {
+export type SpawnSubagentContext = SpawnedToolContext & {
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
@@ -89,15 +90,7 @@ export type SpawnSubagentContext = {
   currentMessagingTarget?: string;
   currentChannelId?: string;
   currentMessageId?: string | number;
-  agentGroupId?: string | null;
-  agentGroupChannel?: string | null;
-  agentGroupSpace?: string | null;
-  agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
-  /** Explicit workspace directory for subagent to inherit (optional). */
-  workspaceDir?: string;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
   requesterRunId?: string;
   continuationDelegateAdmission?: SpawnSubagentAdmissionAuthority;
 };

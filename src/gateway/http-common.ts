@@ -1,6 +1,7 @@
 // Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
 // body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
 import { closeRequestAfterResponse } from "../infra/http-body.js";
 import {
@@ -8,6 +9,7 @@ import {
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
 import type { GatewayAuthResult } from "./auth.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 import { readJsonBody } from "./hooks.js";
 import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
 
@@ -36,9 +38,23 @@ export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
     return;
   }
   if (!res.headersSent) {
-    res.statusCode = 500;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Internal Server Error");
+    // Replace representation metadata, not request-owned security or CORS headers.
+    for (const header of [
+      "Content-Encoding",
+      "Content-Disposition",
+      "Content-Range",
+      "Content-Language",
+      "Content-Location",
+      "ETag",
+      "Last-Modified",
+      "Transfer-Encoding",
+      "Trailer",
+    ]) {
+      res.removeHeader(header);
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.statusMessage = "Internal Server Error";
+    respondPlainText(res, 500, res.statusMessage);
     return;
   }
 
@@ -52,15 +68,9 @@ export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function sendText(res: ServerResponse, status: number, body: string) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end(body);
-}
-
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);
-  sendText(res, 405, "Method Not Allowed");
+  respondPlainText(res, 405, "Method Not Allowed");
 }
 
 export function sendUnauthorized(res: ServerResponse) {
@@ -103,6 +113,23 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },
   });
+}
+
+export function parseGatewayJsonRequest<T extends z.ZodType>(
+  res: ServerResponse,
+  body: unknown,
+  schema: T,
+): z.output<T> | undefined {
+  const parsed = schema.safeParse(body);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  const issue = parsed.error.issues[0];
+  sendInvalidRequest(
+    res,
+    issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body",
+  );
+  return undefined;
 }
 
 function buildMissingScopeForbiddenBody(

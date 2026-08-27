@@ -1,6 +1,8 @@
 // Runtime task-flow tests cover plugin task-flow registration and execution behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CONTINUATION_DELEGATE_CONTROLLER_ID } from "../../auto-reply/continuation/delegate-flow-store.js";
+import { createAcpTaskBackingDetailForTest } from "../../tasks/task-backing-authority.test-support.js";
+import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
 import {
   createManagedTaskFlow,
   createTaskFlowForTask,
@@ -122,6 +124,17 @@ describe("runtime TaskFlow", () => {
 
     expect(otherTaskFlow.get(created.flowId)).toBeUndefined();
     expect(otherTaskFlow.list()).toStrictEqual([]);
+
+    createRunningTaskRunCore({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "runtime-taskflow-child",
+      task: "Inspect PR 1",
+      startedAt: 10,
+      detail: createAcpTaskBackingDetailForTest("instance:runtime-taskflow-child"),
+    });
 
     const child = ownerTaskFlow.runTask({
       flowId: created.flowId,

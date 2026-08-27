@@ -36,6 +36,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       hookRunner,
       markSourceReplyDelivered,
       replaySafeTools,
+      codeModeExecToolNames,
       sideEffectToolOwners,
       setActiveSessionSystemPrompt,
       settingsManager,
@@ -204,7 +205,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     hasDeliveredSourceReply,
     markSourceReplyDelivered,
     sandboxSessionKey: input.setup.sandboxSessionKey,
-    subscriptionToolTrust,
+    subscriptionToolTrust: {
+      ...subscriptionToolTrust,
+      codeModeExecToolNames,
+    },
     sideEffectToolOwners,
     diagnosticOwner,
   });

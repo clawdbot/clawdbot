@@ -3,6 +3,9 @@
  * The adapter and wrapper both consult this map so later execution can use the
  * normalized payload selected by hook processing.
  */
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+
+export const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
@@ -15,6 +18,24 @@ export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: str
     return `${params.runId}:${params.toolCallId}`;
   }
   return params.toolCallId;
+}
+
+export function recordAdjustedParamsForToolCall(
+  toolCallId: string | undefined,
+  params: unknown,
+  runId?: string,
+): void {
+  if (!toolCallId) {
+    return;
+  }
+  let clonedParams: unknown;
+  try {
+    clonedParams = structuredClone(params);
+  } catch {
+    return;
+  }
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), clonedParams);
+  pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
 }
 
 /** Consume and remove hook-adjusted params for a completed tool call. */

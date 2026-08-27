@@ -15,7 +15,6 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
 import {
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   requestHeartbeatRaw as requestHeartbeat,
@@ -30,7 +29,6 @@ import {
 describe("stale exec heartbeat wakes", () => {
   type WakeRequest = Parameters<typeof requestHeartbeat>[0];
   type WakeHandler = Parameters<typeof setRuntimeHeartbeatWakeHandler>[0];
-  const schedulerSeed = "stale-exec-heartbeat-test";
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let currentHandlerDisposer: (() => void) | undefined;
 
@@ -123,7 +121,6 @@ describe("stale exec heartbeat wakes", () => {
       reason: "interval",
       agentId: "main",
       scheduledEveryMs: 5 * 60_000,
-      scheduledAnchorMs: 42_000,
       coalesceMs: 100,
     });
     requestHeartbeat({
@@ -143,7 +140,6 @@ describe("stale exec heartbeat wakes", () => {
       reason: "exec-event",
       agentId: "main",
       scheduledEveryMs: 5 * 60_000,
-      scheduledAnchorMs: 42_000,
     });
   });
 
@@ -153,7 +149,6 @@ describe("stale exec heartbeat wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: schedulerSeed,
     });
 
     requestHeartbeat({
@@ -302,7 +297,6 @@ describe("stale exec heartbeat wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: schedulerSeed,
     });
 
     requestHeartbeat({
@@ -331,15 +325,7 @@ describe("stale exec heartbeat wakes", () => {
 
   it("does not move cadence when a stale exec wake defers for min-spacing", async () => {
     vi.useFakeTimers();
-    const intervalMs = 5 * 60_000;
-    const phaseMs = resolveHeartbeatPhaseMs({
-      schedulerSeed,
-      agentId: "main",
-      intervalMs,
-    });
-    const updateAtMs = phaseMs === 0 ? intervalMs - 1 : phaseMs - 1;
-    const initialNowMs = updateAtMs - 100;
-    vi.setSystemTime(initialNowMs);
+    vi.setSystemTime(0);
 
     const runSpy = vi
       .fn()
@@ -349,7 +335,6 @@ describe("stale exec heartbeat wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: schedulerSeed,
     });
 
     requestHeartbeat({
@@ -382,15 +367,7 @@ describe("stale exec heartbeat wakes", () => {
 
   it("does not move cadence when a stale exec wake defers for flood", async () => {
     vi.useFakeTimers();
-    const intervalMs = 5 * 60_000;
-    const phaseMs = resolveHeartbeatPhaseMs({
-      schedulerSeed,
-      agentId: "main",
-      intervalMs,
-    });
-    const updateAtMs = phaseMs === 0 ? intervalMs - 1 : phaseMs - 1;
-    const initialNowMs = updateAtMs - 100;
-    vi.setSystemTime(initialNowMs);
+    vi.setSystemTime(0);
 
     const runSpy = vi
       .fn()
@@ -404,7 +381,6 @@ describe("stale exec heartbeat wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: schedulerSeed,
     });
 
     for (let index = 0; index < 5; index += 1) {
@@ -447,7 +423,6 @@ describe("stale exec heartbeat wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: schedulerSeed,
     });
 
     const requestExecWake = () =>

@@ -80,14 +80,26 @@ it.each([
 });
 
 describe("CI changed Node test plan", () => {
-  it("routes Control UI style changes through source-scanning policy tests", () => {
-    const shards = createChangedNodeTestShards(["ui/src/styles/chat/layout.css"]);
+  it.each([
+    {
+      source: "ui/src/styles/chat/layout.css",
+      targets: [
+        "ui/src/styles/base-theme-tokens.node.test.ts",
+        "ui/src/styles/cursor-policy.node.test.ts",
+      ],
+    },
+    {
+      source: "ui/public/themes/tide.css",
+      targets: [
+        "ui/src/styles/base-theme-tokens.node.test.ts",
+        "ui/src/styles/base-theme-contrast.node.test.ts",
+      ],
+    },
+  ])("routes $source through source-scanning policy tests", ({ source, targets: expected }) => {
+    const shards = createChangedNodeTestShards([source]);
     const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
 
-    expect(targets).toEqual([
-      "ui/src/styles/base-theme-tokens.node.test.ts",
-      "ui/src/styles/cursor-policy.node.test.ts",
-    ]);
+    expect(targets).toEqual(expected);
   });
 
   it("routes cron alert sanitization changes through alert policy suites", () => {

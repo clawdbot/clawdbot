@@ -20,6 +20,7 @@ const PROFILE_KEYS = new Set([
   "setup",
   "setupEnv",
   "ttl",
+  "warmImage",
 ]);
 const GO_DURATION_PATTERN = /^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/u;
 const GO_DURATION_TOKEN_PATTERN = /(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/gu;
@@ -47,6 +48,7 @@ type CrabboxProfile = {
   ttl: string;
   setup?: string;
   setupEnv?: string[];
+  warmImage: boolean;
 };
 
 const CRABBOX_FALLBACK_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
@@ -181,6 +183,10 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
       "Crabbox desktop profiles support only AWS and coordinator-backed Hetzner",
     );
   }
+  const warmImage = profile.warmImage;
+  if (warmImage !== undefined && typeof warmImage !== "boolean") {
+    throw new WorkerProviderError("Crabbox profile warmImage must be a boolean");
+  }
   return {
     binary,
     class: machineClass,
@@ -195,6 +201,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     setup,
     setupEnv,
     ttl,
+    warmImage: warmImage ?? false,
   };
 }
 

@@ -23,7 +23,7 @@ async function stopMaintenanceTimers(timers: {
   stopMediaCleanup: () => Promise<"drained" | "timed-out">;
   worktreeCleanup: NodeJS.Timeout;
   delegateArtifactCleanup: NodeJS.Timeout;
-  skillCuratorCleanup: () => void;
+  skillUsageCleanup: () => void;
 }) {
   clearInterval(timers.tickInterval);
   clearInterval(timers.healthInterval);
@@ -31,7 +31,7 @@ async function stopMaintenanceTimers(timers: {
   clearInterval(timers.worktreeCleanup);
   clearInterval(timers.delegateArtifactCleanup);
   await timers.stopMediaCleanup();
-  timers.skillCuratorCleanup();
+  timers.skillUsageCleanup();
 }
 
 describe("delegate artifact gateway maintenance", () => {
@@ -113,7 +113,7 @@ describe("delegate artifact gateway maintenance", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(1);
-    timers.skillCuratorCleanup();
+    timers.skillUsageCleanup();
     releaseBatch?.(100);
     await Promise.resolve();
     await Promise.resolve();

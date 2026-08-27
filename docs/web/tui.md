@@ -107,6 +107,11 @@ Core:
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`; `default` clears the session override)
 
+Gateway-connected model updates honor the optional
+[`agents.defaults.modelSelectionScope`](/gateway/config-agents#agentsdefaultsmodelselectionscope)
+setting. When it is unset, they retain their existing configured-default behavior
+for admins. The embedded local TUI stays session-only regardless of this setting.
+
 Session controls:
 
 - `/think <off|minimal|low|medium|high|default>` (higher tiers may add levels like `xhigh`/`max` depending on the model; `default` clears the session override)

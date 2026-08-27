@@ -58,6 +58,7 @@ type NormalizeReplyOptions = {
   onHeartbeatStrip?: () => void;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  conversationContext?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -143,8 +144,11 @@ export function normalizeReplyPayloadOutcome(
 
   if (text) {
     text = payload.isError
-      ? renderUserFacingText(text, { errorContext: true })
-      : sanitizeUserFacingText(text);
+      ? renderUserFacingText(text, {
+          errorContext: true,
+          conversationContext: opts.conversationContext,
+        })
+      : sanitizeUserFacingText(text, { conversationContext: opts.conversationContext });
   }
   if (!hasContent(text)) {
     return suppress("empty");

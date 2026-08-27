@@ -152,6 +152,11 @@ describe("subagent CONTINUE_WORK token self-continuation (token-form parity)", (
       providerOverride: "anthropic",
       originalProvider: "anthropic",
       modelOverride: "claude-sonnet-4.7",
+      modelRoutingProvenance: {
+        requestedProvider: "anthropic",
+        requestedModel: "claude-sonnet-4.7",
+        stage: "initial",
+      },
       cfg,
       sessionEntry,
       sessionId: sessionEntry.sessionId,

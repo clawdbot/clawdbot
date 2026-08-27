@@ -22,6 +22,7 @@ import {
   isChromeReachable,
   launchOpenClawChrome,
   ManagedChromeCleanupError,
+  stopOwnedOpenClawChrome,
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -50,6 +51,7 @@ import {
 import type {
   BrowserServerState,
   ContextOptions,
+  ProfileContext,
   ProfileRuntimeState,
 } from "./server-context.types.js";
 
@@ -63,7 +65,7 @@ type AvailabilityDeps = {
 
 type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
-  isTransportAvailable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+  isTransportAvailable: ProfileContext["isTransportAvailable"];
   isReachable: (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
@@ -196,17 +198,11 @@ export function createProfileAvailability({
       // but do not seed a new persistent session as a side effect of read-only status calls.
       assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { countChromeMcpTabs } = await getChromeMcpModule();
-      const callOptions: { timeoutMs?: number; ephemeral?: boolean; signal?: AbortSignal } = {};
-      if (timeoutMs != null) {
-        callOptions.timeoutMs = timeoutMs;
-      }
-      if (options?.ephemeral) {
-        callOptions.ephemeral = true;
-      }
-      if (options?.signal) {
-        callOptions.signal = options.signal;
-      }
-      await countChromeMcpTabs(profile.name, profile, callOptions);
+      await countChromeMcpTabs(profile.name, profile, {
+        ...(timeoutMs != null ? { timeoutMs } : {}),
+        ...(options?.ephemeral ? { ephemeral: true } : {}),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      });
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -218,7 +214,11 @@ export function createProfileAvailability({
     );
   };
 
-  const isTransportAvailable = async (timeoutMs?: number, signal?: AbortSignal) => {
+  const isTransportAvailable: AvailabilityOps["isTransportAvailable"] = async (
+    timeoutMs,
+    signal,
+    pageProbe,
+  ) => {
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
@@ -226,6 +226,7 @@ export function createProfileAvailability({
         ephemeral: true,
         timeoutMs,
         signal,
+        ...(pageProbe ? { pageProbe } : {}),
       });
       return true;
     }
@@ -624,14 +625,24 @@ export function createProfileAvailability({
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
-    assertProfileLifecycleContext({ state: state(), runtime, configRevision });
+    const current = state();
+    assertProfileLifecycleContext({ state: current, runtime, configRevision });
     resetManagedLaunchFailure(runtime);
+    let stoppedOwnedProcess = false;
     const result = await beginProfileTransition({
-      state: state(),
+      state: current,
       runtime,
       reason: "stop requested",
+      afterCleanup: async () => {
+        if (profile.attachOnly || capabilities.mode !== "local-managed") {
+          return;
+        }
+        stoppedOwnedProcess = await stopOwnedOpenClawChrome(current.resolved, profile);
+      },
     });
-    return { stopped: result.stopped || profile.attachOnly || capabilities.isRemote };
+    return {
+      stopped: result.stopped || stoppedOwnedProcess || profile.attachOnly || capabilities.isRemote,
+    };
   };
 
   return {

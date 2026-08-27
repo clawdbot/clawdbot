@@ -47,6 +47,7 @@ import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-run
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   clearCliSessionInStore as clearCliSessionInStoreImpl,
+  normalizeSessionTokenCount,
   recordCliCompactionInStore as recordCliCompactionInStoreImpl,
 } from "./session-store.js";
 
@@ -170,15 +171,8 @@ export function resetCliCompactionTestDeps(): void {
   });
 }
 
-function resolvePositiveInteger(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 function resolveSessionTokenSnapshot(sessionEntry: SessionEntry | undefined): number | undefined {
-  return resolvePositiveInteger(resolveFreshSessionTotalTokens(sessionEntry));
+  return normalizeSessionTokenCount(resolveFreshSessionTotalTokens(sessionEntry));
 }
 
 function isNativeHarnessCompactionSession(
@@ -594,7 +588,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   extraSystemPrompt?: string;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
 }): Promise<SessionEntry | undefined> {
-  const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
+  const contextTokenBudget = normalizeSessionTokenCount(params.sessionEntry?.contextTokens);
   if (!params.storePath || !contextTokenBudget) {
     return params.sessionEntry;
   }

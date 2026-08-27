@@ -302,7 +302,7 @@ export async function withProfileOperationLease<T>(params: {
   // skipped between observing an old settled tail and lease admission.
   for (;;) {
     const ready = actor.tail;
-    await ready;
+    await waitForProfileOperation(ready, params.signal);
     if (actor.tail === ready) {
       break;
     }

@@ -1698,6 +1698,12 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it("registers the target agent id for cross-agent task attribution", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
     hoisted.configOverride = createConfigOverride({
       session: {
         scope: "global",
@@ -1730,11 +1736,16 @@ describe("spawnSubagentDirect seam flow", () => {
       {
         agentSessionKey: "global",
         requesterAgentIdOverride: "main",
+        sessionPermissionPolicy: { mode: "guarded", root: "/tmp/workspace-main" },
       },
     );
 
     expect(result.status).toBe("accepted");
     expect(result.childSessionKey).toMatch(/^agent:worker:subagent:/);
+    expect(persistedStore?.[result.childSessionKey as string]).toMatchObject({
+      permissionMode: "guarded",
+      sessionRoot: resolveUserPath("/tmp/workspace-worker"),
+    });
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput.childSessionKey).toBe(result.childSessionKey);
     expect(registerInput.agentId).toBe("worker");
@@ -1994,6 +2005,43 @@ describe("spawnSubagentDirect seam flow", () => {
       }),
     );
   });
+
+  it.each([
+    { label: "default", mode: undefined },
+    { label: "read-only", mode: "read-only" },
+    { label: "guarded", mode: "guarded" },
+    { label: "workspace", mode: "workspace" },
+    { label: "full", mode: "full" },
+  ] as const)(
+    "inherits the parent's $label permission mode in a hidden child",
+    async ({ mode }) => {
+      const sessionRoot = resolveUserPath("/tmp/workspace-main");
+      let persistedStore: Record<string, Record<string, unknown>> | undefined;
+      installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+        onStore: (store) => {
+          persistedStore = store;
+        },
+      });
+
+      const result = await spawnSubagentDirect(
+        { task: "inherit the parent permission policy" },
+        {
+          agentSessionKey: "agent:main:main",
+          workspaceDir: sessionRoot,
+          ...(mode ? { sessionPermissionPolicy: { mode, root: sessionRoot } } : {}),
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      const childEntry = persistedStore?.[result.childSessionKey as string];
+      if (mode) {
+        expect(childEntry).toMatchObject({ permissionMode: mode, sessionRoot });
+      } else {
+        expect(childEntry).not.toHaveProperty("permissionMode");
+        expect(childEntry).not.toHaveProperty("sessionRoot");
+      }
+    },
+  );
 
   it.each(inheritedSpawnPreferenceCases)(
     "$name",

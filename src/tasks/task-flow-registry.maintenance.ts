@@ -14,7 +14,7 @@ import {
   listTaskFlowRecords,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 
 const TASK_FLOW_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
@@ -54,16 +54,6 @@ export function assertTaskFlowRegistryMaintenanceReady(): void {
   }
 }
 
-function isTerminalFlow(flow: TaskFlowRecord): boolean {
-  return (
-    flow.status === "succeeded" ||
-    (flow.status === "blocked" && flow.endedAt != null) ||
-    flow.status === "failed" ||
-    flow.status === "cancelled" ||
-    flow.status === "lost"
-  );
-}
-
 function hasActiveLinkedTasks(flowId: string): boolean {
   return listTasksForFlowId(flowId).some(isTaskFlowCancellationPending);
 }
@@ -73,7 +63,7 @@ function resolveTerminalAt(flow: TaskFlowRecord): number {
 }
 
 function shouldPruneFlow(flow: TaskFlowRecord, now: number): boolean {
-  if (!isTerminalFlow(flow)) {
+  if (!isTerminalTaskFlow(flow)) {
     return false;
   }
   if (hasActiveLinkedTasks(flow.flowId)) {
@@ -89,7 +79,7 @@ function shouldFinalizeCancelledFlow(flow: TaskFlowRecord): boolean {
   if (flow.syncMode !== "managed") {
     return false;
   }
-  if (flow.cancelRequestedAt == null || isTerminalFlow(flow)) {
+  if (flow.cancelRequestedAt == null || isTerminalTaskFlow(flow)) {
     return false;
   }
   return !hasActiveLinkedTasks(flow.flowId);
@@ -126,7 +116,7 @@ function finalizeCancelledFlow(flow: TaskFlowRecord, now: number): boolean {
 }
 
 function shouldRepairTerminalMirroredFlowTimestamp(flow: TaskFlowRecord): boolean {
-  if (flow.syncMode !== "task_mirrored" || !isTerminalFlow(flow)) {
+  if (flow.syncMode !== "task_mirrored" || !isTerminalTaskFlow(flow)) {
     return false;
   }
   if (flow.endedAt == null || flow.endedAt < flow.createdAt) {

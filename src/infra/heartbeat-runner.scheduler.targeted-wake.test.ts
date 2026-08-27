@@ -11,7 +11,6 @@ import {
   expectWakeDispatch,
   getRunCall,
   heartbeatConfig,
-  TEST_SCHEDULER_SEED,
   useFakeHeartbeatTime,
   wake,
 } from "./heartbeat-runner.scheduler.test-support.js";
@@ -91,7 +90,6 @@ describe("startHeartbeatRunner targeted wakes", () => {
         { id: "ops", heartbeat: { every: "15m" } },
       ]),
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat(
@@ -271,7 +269,6 @@ describe("startHeartbeatRunner targeted wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     // First exec-event wake: agent just woke from a backgrounded tool exit.
@@ -319,7 +316,6 @@ describe("startHeartbeatRunner targeted wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({
@@ -364,7 +360,6 @@ describe("startHeartbeatRunner targeted wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     // Three 'wake' requests with 200ms between them — none should be deferred.
@@ -394,7 +389,6 @@ describe("startHeartbeatRunner targeted wakes", () => {
         },
       } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({
@@ -425,7 +419,6 @@ describe("startHeartbeatRunner targeted wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: { agents: { list: [{ id: "main", heartbeat: { every: "30m" } }] } } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({
@@ -451,7 +444,6 @@ describe("startHeartbeatRunner targeted wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     for (let i = 0; i < 3; i++) {
@@ -476,7 +468,6 @@ describe("startHeartbeatRunner targeted wakes", () => {
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({

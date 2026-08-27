@@ -35,6 +35,7 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/browser/openclaw/user-data/SingletonSocket`, true],
     [`${stateDir}/sandbox/skills-workspaces/workspace-main`, true],
     [`${stateDir}/sandbox/skills-workspaces/workspace-main/skills/demo`, true],
+    [`${stateDir}/cache/control-ui-assets/generation/assets/app.js`, true],
 
     // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],
@@ -48,6 +49,7 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/browser/openclaw/SingletonSocket`, false],
     [`${stateDir}/sandbox/registry.json`, false],
     [`${stateDir}/sandbox/workspaces/workspace-main/README.md`, false],
+    [`${stateDir}/cache/other-product/artifact.bin`, false],
     // non-volatile: plain config
     [`${stateDir}/config.json`, false],
     // non-volatile: workspace files outside state

@@ -5,6 +5,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   OpenBlobStoreOptions,
   OpenKeyedStoreOptions,
@@ -16,9 +17,22 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, vi } from "vitest";
-import type { PluginRuntime } from "./runtime-api.js";
+import { afterAll, vi } from "vitest";
 import { setMatrixRuntime } from "./runtime.js";
+
+const defaultStateDir = fs.realpathSync(
+  fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-test-state-")),
+);
+
+afterAll(() => {
+  resetPluginStateStoreForTests();
+  fs.rmSync(defaultStateDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 20,
+  });
+});
 
 type MatrixTestRuntimeOptions = {
   cfg?: Record<string, unknown>;
@@ -36,23 +50,6 @@ type MatrixRuntimeStub = {
     "openBlobStore" | "openKeyedStore" | "openSyncKeyedStore" | "resolveStateDir"
   >;
 };
-
-const autoStateDirs = new Set<string>();
-
-export function cleanupMatrixTestStateDirs(): void {
-  resetPluginStateStoreForTests();
-  for (const stateDir of autoStateDirs) {
-    fs.rmSync(stateDir, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 20,
-    });
-  }
-  autoStateDirs.clear();
-}
-
-afterEach(cleanupMatrixTestStateDirs);
 
 function createMatrixRuntimeMediaMock(
   overrides: Partial<NonNullable<PluginRuntime["channel"]>["media"]> = {},
@@ -79,19 +76,12 @@ function createMatrixRuntimeMediaMock(
   };
 }
 
-export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): string {
-  const isolatedStateDir =
-    options.stateDir ??
-    fs.realpathSync(
-      fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-test-state-")),
-    );
-  if (!options.stateDir) {
-    autoStateDirs.add(isolatedStateDir);
-  }
+export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): void {
+  const stateDir = options.stateDir ?? defaultStateDir;
   const defaultStateDirResolver: NonNullable<PluginRuntime["state"]>["resolveStateDir"] = (
     _env,
     _homeDir,
-  ) => isolatedStateDir;
+  ) => stateDir;
   const resolvePluginStateEnv = (storeOptions: OpenKeyedStoreOptions): NodeJS.ProcessEnv => ({
     ...(storeOptions.env ?? process.env),
     OPENCLAW_STATE_DIR:
@@ -139,7 +129,6 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
   };
 
   setMatrixRuntime(runtime as unknown as PluginRuntime);
-  return isolatedStateDir;
 }
 
 type MatrixMonitorTestRuntimeOptions = Pick<MatrixTestRuntimeOptions, "cfg" | "stateDir"> & {

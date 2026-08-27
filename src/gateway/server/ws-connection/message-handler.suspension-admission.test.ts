@@ -273,44 +273,62 @@ describe("WebSocket connect suspension admission", () => {
     suspension?.rollback();
   });
 
-  it("accepts a validated connect while suspension is prepared", async () => {
+  it.each(["draining", "prepared"] as const)(
+    "accepts an authenticated operator reconnect while suspension is %s",
+    async (phase) => {
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(phase === "draining" ? suspension?.drain() : suspension?.commit()).toBe(true);
+      const harness = attachHarness();
+
+      harness.sendConnect();
+
+      await vi.waitFor(() => {
+        expect(harness.setClient).toHaveBeenCalledOnce();
+      });
+      expect(harness.client).not.toBeNull();
+      expect(harness.close).not.toHaveBeenCalled();
+      suspension?.release();
+    },
+  );
+
+  it.each(["draining", "prepared"] as const)(
+    "rejects a node connect while suspension is %s",
+    async (phase) => {
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(phase === "draining" ? suspension?.drain() : suspension?.commit()).toBe(true);
+      const harness = attachHarness();
+
+      harness.sendNodeConnect();
+
+      await vi.waitFor(() => {
+        expect(harness.socketSend).toHaveBeenCalledOnce();
+      });
+      const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
+        error?: { details?: Record<string, unknown> };
+      };
+      expect(response.error?.details).toMatchObject({
+        method: "connect",
+        reason: "gateway-suspending",
+        phase,
+      });
+      expect(harness.setClient).not.toHaveBeenCalled();
+      expect(upsertPresenceMock).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress");
+      });
+      suspension?.release();
+    },
+  );
+
+  it("rejects worker identity while suspension is draining", async () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
+    expect(suspension?.drain()).toBe(true);
     const harness = attachHarness();
 
-    harness.sendConnect();
+    harness.sendWorkerConnect();
 
-    await vi.waitFor(() => {
-      expect(harness.setClient).toHaveBeenCalledOnce();
-    });
-    expect(harness.client).not.toBeNull();
-    expect(harness.close).not.toHaveBeenCalled();
-    suspension?.release();
-  });
-
-  it("rejects a node connect while suspension is prepared", async () => {
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-    const harness = attachHarness();
-
-    harness.sendNodeConnect();
-
-    await vi.waitFor(() => {
-      expect(harness.socketSend).toHaveBeenCalledOnce();
-    });
-    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
-      error?: { details?: Record<string, unknown> };
-    };
-    expect(response.error?.details).toMatchObject({
-      method: "connect",
-      reason: "gateway-suspending",
-      phase: "prepared",
-    });
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"));
     expect(harness.setClient).not.toHaveBeenCalled();
-    expect(upsertPresenceMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress");
-    });
     suspension?.release();
   });
 

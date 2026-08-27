@@ -122,7 +122,8 @@ const providerPolicySurfaceMock = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => manifestNormalizationSnapshot,
 }));
 
@@ -1509,9 +1510,6 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
-      expect(result.automaticFallbackKeys).toEqual(
-        new Set(["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"]),
-      );
       expect(result.allowAny).toBe(false);
     });
 
@@ -1529,7 +1527,7 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
     });
 
-    it("prefers per-agent fallback overrides when agentId is provided", () => {
+    it("keeps per-agent fallback overrides out of explicit selection", () => {
       const cfg = createAgentFallbackConfig({
         fallbacks: ["google/gemini-3-pro"],
         agentFallbacks: ["anthropic/claude-sonnet-4-6"],
@@ -1546,7 +1544,6 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
-      expect(result.automaticFallbackKeys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
       expect(result.allowAny).toBe(false);
     });
   });

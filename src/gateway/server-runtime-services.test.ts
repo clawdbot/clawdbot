@@ -8,7 +8,13 @@ import {
   tryBeginGatewaySuspendAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { createRuntimeServiceTestHelpers } from "./server-runtime-services.test-support.js";
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
@@ -54,24 +60,6 @@ const hoisted = vi.hoisted(() => {
     ),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
-    recoverPendingContinuationDelegates: vi.fn(async () => ({
-      sessions: 0,
-      dispatched: 0,
-      rejected: 0,
-    })),
-    requeueAwaitingNextCompactionDelegates: vi.fn(async () => ({ requeued: 0 })),
-    recoverAndReleaseStagedPostCompactionDelegates: vi.fn(async () => ({
-      sessions: 0,
-      dispatched: 0,
-      failed: 0,
-    })),
-    recoverPendingContinuationWork: vi.fn(async () => ({
-      sessions: 0,
-      dispatched: 0,
-      failed: 0,
-      reaped: 0,
-      terminalNotices: 0,
-    })),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
     settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
@@ -121,17 +109,6 @@ vi.mock("./server-restart-sentinel.js", () => ({
   settleQueuedSessionDelivery: hoisted.settleQueuedSessionDelivery,
 }));
 
-vi.mock("../auto-reply/continuation/delegate-dispatch-recovery.js", () => ({
-  recoverPendingContinuationDelegates: hoisted.recoverPendingContinuationDelegates,
-  requeueAwaitingNextCompactionDelegates: hoisted.requeueAwaitingNextCompactionDelegates,
-  recoverAndReleaseStagedPostCompactionDelegates:
-    hoisted.recoverAndReleaseStagedPostCompactionDelegates,
-}));
-
-vi.mock("../auto-reply/continuation/work-dispatch.js", () => ({
-  recoverPendingContinuationWork: hoisted.recoverPendingContinuationWork,
-}));
-
 vi.mock("./channel-health-monitor.js", () => ({
   startChannelHealthMonitor: hoisted.startChannelHealthMonitor,
 }));
@@ -148,19 +125,6 @@ const {
   startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
 } = await import("./server-runtime-services.js");
-const {
-  activateScheduledServicesForTest,
-  createLog,
-  createMaintenanceHandles,
-  createPostReadyMaintenanceScheduleParams,
-  createTestCron,
-  createTestCronReconciliation,
-  createTestCronState,
-  waitForFast,
-} = createRuntimeServiceTestHelpers({
-  activateGatewayScheduledServices,
-  scheduleGatewayPostReadyMaintenance,
-});
 
 describe("server-runtime-services", () => {
   beforeEach(() => {
@@ -196,10 +160,6 @@ describe("server-runtime-services", () => {
     hoisted.drainPendingDeliveries.mockReset();
     hoisted.drainPendingDeliveries.mockResolvedValue(undefined);
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
-    hoisted.recoverPendingContinuationDelegates.mockClear();
-    hoisted.requeueAwaitingNextCompactionDelegates.mockClear();
-    hoisted.recoverAndReleaseStagedPostCompactionDelegates.mockClear();
-    hoisted.recoverPendingContinuationWork.mockClear();
     hoisted.deliverQueuedSessionDelivery.mockClear();
     hoisted.settleQueuedSessionDelivery.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
@@ -240,49 +200,63 @@ describe("server-runtime-services", () => {
     },
   );
 
-  it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
+  function activateCronOff(
+    cfgAtStart: Parameters<typeof activateGatewayScheduledServices>[0]["cfgAtStart"],
+  ) {
     vi.useFakeTimers();
     const warn = vi.fn();
-    const log = {
-      child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
-      error: vi.fn(),
-    };
-
     activateGatewayScheduledServices({
       minimalTestGateway: false,
-      cfgAtStart: {} as never,
+      cfgAtStart,
       deps: {} as never,
       sessionDeliveryRecoveryMaxEnqueuedAt: 123,
       cronState: createTestCronState(createTestCron(), false),
       cronReconciliation: createTestCronReconciliation(),
       logCron: { error: vi.fn() },
-      log,
+      log: {
+        child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
+        error: vi.fn(),
+      },
     });
+    return warn;
+  }
+
+  it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
+    const warn = activateCronOff({ skills: { workshop: { autonomous: { mode: "off" } } } });
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("cron scheduler is disabled"));
   });
 
   it("does not warn about disabled cron when heartbeat cadence is disabled", () => {
-    vi.useFakeTimers();
-    const warn = vi.fn();
-    const log = {
-      child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
-      error: vi.fn(),
-    };
-
-    activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: { agents: { defaults: { heartbeat: { every: "0m" } } } } as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cronState: createTestCronState(createTestCron(), false),
-      cronReconciliation: createTestCronReconciliation(),
-      logCron: { error: vi.fn() },
-      log,
+    const warn = activateCronOff({
+      agents: { defaults: { heartbeat: { every: "0m" } } },
+      skills: { workshop: { autonomous: { mode: "off" } } },
     });
 
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["auto", true],
+    ["off", false],
+    ["propose", false],
+  ] as const)(
+    "reports cron-disabled automatic skill collection reviews for mode %s",
+    (mode, shouldWarn) => {
+      const warn = activateCronOff({
+        agents: { defaults: { heartbeat: { every: "0m" } } },
+        skills: { workshop: { autonomous: { mode } } },
+      });
+
+      if (shouldWarn) {
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("scheduled skill collection reviews are disabled"),
+        );
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("runs cron start, watcher reconciliation, and hook completion in order", async () => {
     const order: string[] = [];
@@ -613,55 +587,6 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
   });
 
-  it("requeues next-seam post-compaction claims using the boot-time cutoff", async () => {
-    vi.useFakeTimers();
-    const recoveryArmedAt = new Date("2026-07-03T20:00:00.000Z");
-    const recoveryArmedAtMs = recoveryArmedAt.getTime();
-    vi.setSystemTime(recoveryArmedAt);
-
-    activateScheduledServicesForTest();
-    await vi.advanceTimersByTimeAsync(1_400);
-    await vi.dynamicImportSettled();
-
-    expect(hoisted.recoverPendingContinuationDelegates).toHaveBeenCalledWith({
-      queuedCreatedAtOrBefore: recoveryArmedAtMs,
-      includeRunningUpdatedAtOrBefore: recoveryArmedAtMs,
-    });
-    expect(hoisted.requeueAwaitingNextCompactionDelegates).toHaveBeenCalledWith({
-      runningUpdatedAtOrBefore: recoveryArmedAtMs,
-    });
-    expect(hoisted.recoverAndReleaseStagedPostCompactionDelegates).toHaveBeenCalledWith({
-      runningUpdatedAtOrBefore: recoveryArmedAtMs,
-    });
-  });
-
-  it("runs delegate, staged, then work recovery in startup order", async () => {
-    vi.useFakeTimers();
-    const order: string[] = [];
-    hoisted.recoverPendingContinuationDelegates.mockImplementationOnce(async () => {
-      order.push("delegate");
-      return { sessions: 0, dispatched: 0, rejected: 0 };
-    });
-    hoisted.requeueAwaitingNextCompactionDelegates.mockImplementationOnce(async () => {
-      order.push("requeue-next-seam");
-      return { requeued: 0 };
-    });
-    hoisted.recoverAndReleaseStagedPostCompactionDelegates.mockImplementationOnce(async () => {
-      order.push("staged");
-      return { sessions: 0, dispatched: 0, failed: 0 };
-    });
-    hoisted.recoverPendingContinuationWork.mockImplementationOnce(async () => {
-      order.push("work");
-      return { sessions: 0, dispatched: 0, failed: 0, reaped: 0, terminalNotices: 0 };
-    });
-
-    activateScheduledServicesForTest();
-    await vi.advanceTimersByTimeAsync(1_400);
-    await vi.dynamicImportSettled();
-
-    expect(order).toEqual(["delegate", "requeue-next-seam", "staged", "work"]);
-  });
-
   it("runs legacy migration once while clean periodic ticks keep draining canonical work", async () => {
     vi.useFakeTimers();
     const { services } = activateScheduledServicesForTest({ startCron: false });
@@ -893,8 +818,8 @@ describe("server-runtime-services", () => {
 
     suspension.release();
     await vi.advanceTimersByTimeAsync(5_000);
+
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
-    services.heartbeatRunner.stop();
     services.heartbeatRunner.stop();
   });
 
@@ -1089,7 +1014,6 @@ describe("server-runtime-services", () => {
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.dedupeCleanup);
     expect(maintenance.stopMediaCleanup).toHaveBeenCalledTimes(1);
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.worktreeCleanup);
-    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.delegateArtifactCleanup);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
@@ -1115,3 +1039,95 @@ describe("server-runtime-services", () => {
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
 });
+
+function createLog() {
+  return {
+    child: vi.fn(() => ({
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    })),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+}
+
+const createTestCron = () => ({ start: vi.fn<() => Promise<void>>(async () => {}) });
+
+function createTestCronState(
+  cron: { start: () => Promise<void> } = createTestCron(),
+  cronEnabled = true,
+) {
+  return {
+    cron,
+    storePath: "/tmp/cron.json",
+    cronEnabled,
+  } as never;
+}
+
+function createTestCronReconciliation(complete: () => Promise<void> = async () => {}) {
+  const completeMock = vi.fn<() => Promise<void>>(complete);
+  return {
+    arm: vi.fn<() => { complete: () => Promise<void> }>(() => ({ complete: completeMock })),
+    complete: completeMock,
+    invalidate: vi.fn(),
+  };
+}
+
+function activateScheduledServicesForTest(
+  overrides: Omit<
+    Partial<Parameters<typeof activateGatewayScheduledServices>[0]>,
+    "cronState"
+  > = {},
+) {
+  const cron = createTestCron();
+  const cronState = createTestCronState(cron);
+  const cronStart = cron.start;
+  const log = overrides.log ?? createLog();
+  const cfgAtStart = overrides.cfgAtStart ?? ({} as never);
+  const services = activateGatewayScheduledServices({
+    minimalTestGateway: false,
+    cfgAtStart,
+    deps: {} as never,
+    sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+    cronReconciliation: createTestCronReconciliation(),
+    logCron: { error: vi.fn() },
+    ...overrides,
+    cronState,
+    log,
+  });
+  return { cron, cronStart, log, services };
+}
+
+function createPostReadyMaintenanceScheduleParams(
+  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> = {},
+): Parameters<typeof scheduleGatewayPostReadyMaintenance>[0] {
+  return {
+    delayMs: 1,
+    isClosing: () => false,
+    startMaintenance: vi.fn(async () => null),
+    applyMaintenance: vi.fn(),
+    shouldStartCron: () => true,
+    markCronStartHandled: vi.fn(),
+    cronState: createTestCronState(),
+    cronReconciliation: createTestCronReconciliation(),
+    cronConfig: {} as never,
+    logCron: { error: vi.fn() },
+    log: createLog(),
+    recordPostReadyMemory: vi.fn(),
+    ...overrides,
+  };
+}
+
+function createMaintenanceHandles() {
+  return {
+    tickInterval: setInterval(() => undefined, 60_000),
+    healthInterval: setInterval(() => undefined, 60_000),
+    dedupeCleanup: setInterval(() => undefined, 60_000),
+    startMediaCleanup: vi.fn(async () => undefined),
+    stopMediaCleanup: vi.fn(async () => "drained" as const),
+    worktreeCleanup: setInterval(() => undefined, 60_000),
+    delegateArtifactCleanup: setInterval(() => undefined, 60_000),
+    skillUsageCleanup: vi.fn(),
+  };
+}

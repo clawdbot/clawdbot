@@ -30,12 +30,14 @@ import {
   resolveTestModelAliasFromPair,
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
+import type { FailoverReason } from "./failover/signal.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -763,7 +765,7 @@ type FallbackRunnerParams = {
   sessionId?: string;
   fallbacksOverride?: string[];
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
-  run: (provider: string, model: string) => Promise<unknown>;
+  run: (provider: string, model: string, options: ModelFallbackRunOptions) => Promise<unknown>;
   onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
   classifyResult?: (params: {
     provider: string;
@@ -773,6 +775,36 @@ type FallbackRunnerParams = {
     total: number;
   }) => unknown;
 };
+
+function runInitialFallbackAttempt(
+  params: FallbackRunnerParams,
+  provider = params.provider,
+  model = params.model,
+) {
+  return params.run(provider, model, {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      stage: "initial",
+    },
+  });
+}
+
+function runSubsequentFallbackAttempt(
+  params: FallbackRunnerParams,
+  provider: string,
+  model: string,
+  fallbackReason: FailoverReason,
+) {
+  return params.run(provider, model, {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      stage: "fallback",
+      fallbackReason,
+    },
+  });
+}
 
 type ModelSwitchOptions = ConstructorParameters<typeof LiveSessionModelSwitchError>[0];
 
@@ -808,7 +840,7 @@ function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
     if (invocation === 1) {
       throw new LiveSessionModelSwitchError(switchOptions);
     }
-    const result = await params.run(params.provider, params.model);
+    const result = await runInitialFallbackAttempt(params);
     return {
       result,
       provider: params.provider,
@@ -820,7 +852,7 @@ function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
 
 function setupSingleAttemptFallback() {
   state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-    const result = await params.run(params.provider, params.model);
+    const result = await runInitialFallbackAttempt(params);
     return {
       result,
       provider: params.provider,
@@ -1443,7 +1475,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     let invocation = 0;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       invocation++;
-      const result = await params.run(params.provider, params.model);
+      const result = await runInitialFallbackAttempt(params);
       if (invocation === 1) {
         throw new LiveSessionModelSwitchError({
           provider: "openai",
@@ -1474,7 +1506,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     let fallbackInvocation = 0;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       fallbackInvocation += 1;
-      const result = await params.run(params.provider, params.model);
+      const result = await runInitialFallbackAttempt(params);
       if (fallbackInvocation === 1) {
         throw new LiveSessionModelSwitchError({
           provider: "openai",
@@ -2586,8 +2618,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         model === "gpt-5.6-luna" && level === "ultra" ? "max" : level,
     );
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      await params.run(params.provider, params.model);
-      const result = await params.run("openai", "gpt-5.6-sol");
+      await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(params, "openai", "gpt-5.6-sol", "unknown");
       return {
         result,
         provider: "openai",
@@ -2675,8 +2707,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return { entries: [], routeVariants: [] };
     });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      await params.run(params.provider, params.model);
-      const result = await params.run("openai", "gpt-5.6-terra");
+      await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(
+        params,
+        "openai",
+        "gpt-5.6-terra",
+        "unknown",
+      );
       return {
         result,
         provider: "openai",
@@ -2767,8 +2804,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return "ultra";
     });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      await params.run(params.provider, params.model);
-      const result = await params.run("gmn", "gpt-5.4");
+      await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(params, "gmn", "gpt-5.4", "unknown");
       return { result, provider: "gmn", model: "gpt-5.4", attempts: [] };
     });
     state.runAgentAttemptMock.mockImplementation(
@@ -4041,7 +4078,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     };
     state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await runInitialFallbackAttempt(params);
       return {
         result,
         provider: params.provider,
@@ -4117,7 +4154,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         fallbackStepChainPosition: 1,
         fallbackStepFinalOutcome: "next_fallback",
       });
-      const result = await params.run(params.provider, params.model);
+      const result = await runInitialFallbackAttempt(params);
       return {
         result,
         provider: params.provider,
@@ -4149,8 +4186,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     };
     const attemptCalls: AttemptCall[] = [];
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const first = await params.run(params.provider, params.model);
-      const result = await params.run(params.provider, params.model);
+      const first = await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(
+        params,
+        params.provider,
+        params.model,
+        "unknown",
+      );
       return {
         result,
         provider: params.provider,
@@ -4188,8 +4230,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     };
     const attemptCalls: AttemptCall[] = [];
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const first = await params.run(params.provider, params.model);
-      const result = await params.run(params.provider, params.model);
+      const first = await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(
+        params,
+        params.provider,
+        params.model,
+        "unknown",
+      );
       return {
         result,
         provider: params.provider,
@@ -4221,8 +4268,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     };
     const attemptCalls: AttemptCall[] = [];
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const first = await params.run(params.provider, params.model);
-      const result = await params.run(params.provider, params.model);
+      const first = await runInitialFallbackAttempt(params);
+      const result = await runSubsequentFallbackAttempt(
+        params,
+        params.provider,
+        params.model,
+        "unknown",
+      );
       return {
         result,
         provider: params.provider,
@@ -4483,7 +4535,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionStoreMock = sessionStore;
     state.storePathMock = "/tmp/openclaw-session-store.json";
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await runInitialFallbackAttempt(params);
       sessionStore["agent:main:main"] = {
         sessionId: "session-1",
         updatedAt: Date.now(),
@@ -4532,7 +4584,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       state.persistSessionEntryMock.mockClear();
-      const result = await params.run("openai", "claude");
+      const result = await runSubsequentFallbackAttempt(params, "openai", "claude", "unknown");
       const currentEntry = expectDefined(
         (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"],
         '(state.sessionStoreMock as Record<string, SessionEntry>)[ "agent:main... test invariant',
@@ -4588,7 +4640,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       },
     };
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await runInitialFallbackAttempt(params);
       return {
         result,
         provider: params.provider,
@@ -4639,7 +4691,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       version: 99,
     });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await runInitialFallbackAttempt(params);
       return {
         result,
         provider: params.provider,
@@ -4667,7 +4719,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it("classifies empty embedded run results before model fallback accepts them", async () => {
     let observedClassification: unknown;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      const primaryResult = await params.run(params.provider, params.model);
+      const primaryResult = await runInitialFallbackAttempt(params);
       observedClassification = await params.classifyResult?.({
         provider: params.provider,
         model: params.model,
@@ -4675,7 +4727,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         attempt: 1,
         total: 2,
       });
-      const fallbackResult = await params.run("openai", "gpt-5.4");
+      const fallbackResult = await runSubsequentFallbackAttempt(
+        params,
+        "openai",
+        "gpt-5.4",
+        "format",
+      );
       return {
         result: fallbackResult,
         provider: "openai",
@@ -4755,7 +4812,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "exhausted",
-      result: await params.run("anthropic", "claude"),
+      result: await runInitialFallbackAttempt(params, "anthropic", "claude"),
       provider: "anthropic",
       model: "claude",
       attempts: [
@@ -4827,7 +4884,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "completed",
-      result: await params.run("anthropic", "claude"),
+      result: await runInitialFallbackAttempt(params, "anthropic", "claude"),
       provider: "anthropic",
       model: "claude",
       attempts: [],

@@ -14,7 +14,11 @@ export function buildRestartRecoverySuccessorEntry(params: {
   const source = params.source;
   const entry = mergeSessionEntry(undefined, {
     ...inheritSessionSelection(source),
-    ...buildSessionCreationStamp({ via: "operator", actor: params.actor }),
+    ...buildSessionCreationStamp({
+      via: "operator",
+      actor: params.actor,
+      ...(source.sandbox ? { sandbox: source.sandbox } : {}),
+    }),
     delivery: normalizeSessionDeliveryState(),
     sessionId: params.sessionId,
     previousSessionId: source.sessionId,

@@ -14,6 +14,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import {
+  isTerminalTaskFlow,
   TASK_FLOW_STATUSES,
   type TaskFlowRecord,
   type TaskFlowStatus,
@@ -23,7 +24,6 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
-import { isTerminalFlowStatus } from "../tasks/task-registry-common.js";
 import {
   formatTaskStatus,
   formatTaskStatusDetail,
@@ -128,9 +128,7 @@ function formatFlowListSummary(flows: TaskFlowRecord[]) {
     counts.waiting += Number(flow.status === "waiting");
     counts.blocked += Number(flow.status === "blocked");
     counts.issues += Number(flow.status === "failed" || flow.status === "lost");
-    counts.cancelRequested += Number(
-      flow.cancelRequestedAt != null && !isTerminalFlowStatus(flow.status),
-    );
+    counts.cancelRequested += Number(flow.cancelRequestedAt != null && !isTerminalTaskFlow(flow));
   }
   const waiting = counts.waiting ? ` · ${counts.waiting} waiting` : "";
   const issues = counts.issues ? ` · ${counts.issues} issues` : "";

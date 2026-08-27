@@ -19,7 +19,10 @@ import type {
   ContinuationWrappedRunResult,
   EmbeddedAgentRunResult,
 } from "./agent-runner-execution.types.js";
-import type { AgentFallbackCycleParams } from "./agent-runner-fallback-cycle.types.js";
+import type {
+  AgentFallbackCandidateCommonParams,
+  AgentFallbackCycleParams,
+} from "./agent-runner-fallback-cycle.types.js";
 import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-lifecycle.js";
 import {
   resolveModelFallbackOptions,
@@ -269,6 +272,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           candidateFastMode,
           runId: params.runId,
           runAbortSignal: params.runAbortSignal,
+          runLane,
           isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
           suppressQueuedUserPersistenceForCandidate:
             (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
@@ -292,13 +296,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => {
             params.state.pendingLifecycleTerminal = { provider, model, backstop };
           },
-        };
+        } satisfies AgentFallbackCandidateCommonParams;
         if (runtime.useCliExecution) {
           const candidate = await runCliFallbackCandidate({
             ...common,
             cliExecutionProvider: runtime.cliExecutionProvider,
             lifecycleGeneration: params.state.lifecycleGeneration,
-            runLane,
           });
           params.state.bootstrapPromptWarningSignaturesSeen =
             candidate.bootstrapPromptWarningSignaturesSeen;
@@ -306,7 +309,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         }
         const candidate = await runEmbeddedFallbackCandidate({
           ...common,
-          runLane,
           githubPublicationAvailable: await (githubPublicationAvailability ??=
             turn.sessionKey && params.effectiveRun.agentId
               ? prepareGitHubPublicationAvailability({

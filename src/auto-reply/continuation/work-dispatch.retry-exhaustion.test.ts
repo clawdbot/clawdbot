@@ -803,9 +803,11 @@ describe("continuation_work transient-error retry exhaustion", () => {
     expect(terminalEvent?.text).not.toContain(secret);
     expect(terminalEvent?.text).not.toContain("https://api.example");
     expect(terminalEvent?.text).not.toContain("provider rejected token");
-    // The detail is still recorded for operators: durable row + terminal log.
-    expect(workFlow()?.blockedSummary).toContain(secret);
-    expect(terminalExhaustionLogs()[0]).toContain(secret);
+    // Durable diagnostics and operator logs preserve the failure shape without
+    // retaining the credential-like token.
+    expect(workFlow()?.blockedSummary).not.toContain(secret);
+    expect(terminalExhaustionLogs()[0]).not.toContain(secret);
+    expect(workFlow()?.blockedSummary).toContain("sk-liv…2b7a");
   });
 
   it("leaves the sibling non-retryable skip outcome unchanged", async () => {

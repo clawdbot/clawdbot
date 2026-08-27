@@ -120,7 +120,7 @@ vi.mock("./inbound.js", () => ({
 }));
 
 import { startBuzzGatewayAccount } from "./gateway.js";
-import { openBuzzRecoveryWatermarkStore, resolveBuzzColdStartSince } from "./recovery-watermark.js";
+import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 import { resolveBuzzAccount } from "./types.js";
@@ -372,7 +372,7 @@ describe("Buzz gateway cold-start recovery", () => {
       { length: BUZZ_MAX_CONFIGURED_ROOMS },
       (_value, index) => `room-${index}`,
     );
-    const sinceByRoom = await resolveBuzzColdStartSince({
+    const sinceByRoom = await resolveBuzzRecoverySince({
       store,
       channelIds,
       nowSeconds: START_SECONDS,
@@ -389,7 +389,7 @@ describe("Buzz gateway cold-start recovery", () => {
     const retainedChannelId = channelIds[1] as string;
     const replacementChannelId = "replacement-room";
     const rotatedRooms = [...channelIds.slice(1), replacementChannelId];
-    const rotatedSinceByRoom = await resolveBuzzColdStartSince({
+    const rotatedSinceByRoom = await resolveBuzzRecoverySince({
       store,
       channelIds: rotatedRooms,
       nowSeconds: START_SECONDS + 60,
@@ -408,7 +408,7 @@ describe("Buzz gateway cold-start recovery", () => {
     await store.register(`room:${SECOND_CHANNEL_ID}`, { seconds: START_SECONDS - 60 });
     vi.spyOn(store, "lookup").mockRejectedValueOnce(new Error("first room cursor unavailable"));
     await expect(
-      resolveBuzzColdStartSince({
+      resolveBuzzRecoverySince({
         store,
         channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID],
         nowSeconds: START_SECONDS,
@@ -422,7 +422,7 @@ describe("Buzz gateway cold-start recovery", () => {
     await store.register(`room:${CHANNEL_ID}`, { seconds: "corrupt" } as never);
 
     await expect(
-      resolveBuzzColdStartSince({
+      resolveBuzzRecoverySince({
         store,
         channelIds: [CHANNEL_ID],
         nowSeconds: START_SECONDS,
@@ -455,7 +455,7 @@ describe("Buzz gateway cold-start recovery", () => {
         (_value, index) => `${accountId}-room-${index}`,
       );
       const store = openBuzzRecoveryWatermarkStore({ accountId });
-      const sinceByRoom = await resolveBuzzColdStartSince({
+      const sinceByRoom = await resolveBuzzRecoverySince({
         store,
         channelIds,
         nowSeconds: START_SECONDS,
@@ -480,13 +480,13 @@ describe("Buzz gateway cold-start recovery", () => {
   it("keeps room activation floors scoped to their account", async () => {
     const firstStore = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
     const secondStore = openBuzzRecoveryWatermarkStore({ accountId: SECOND_ACCOUNT_ID });
-    await resolveBuzzColdStartSince({
+    await resolveBuzzRecoverySince({
       store: firstStore,
       channelIds: [CHANNEL_ID],
       nowSeconds: START_SECONDS,
       lookbackSeconds: LOOKBACK_SECONDS,
     });
-    await resolveBuzzColdStartSince({
+    await resolveBuzzRecoverySince({
       store: secondStore,
       channelIds: [CHANNEL_ID],
       nowSeconds: START_SECONDS + 500,
@@ -555,13 +555,22 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(roomSubscriptionSince()).toBe(nowSeconds() - LOOKBACK_SECONDS);
   });
 
-  it("keeps the full backlog lookback on an in-process reconnect", async () => {
+  it("keeps pre-activation history excluded when the same process reconnects", async () => {
+    postRoomMessage("before-activation", START_SECONDS - 60);
+    relayMocks.connect.mockImplementationOnce(async () => {});
+    relayMocks.connect.mockImplementationOnce(async () => {
+      postRoomMessage("after-reconnect", START_SECONDS + 1);
+    });
     relayMocks.dropSubscriptionReason = "relay dropped the subscription";
     const process = startGatewayProcess();
-    await waitForSettled(() => relayMocks.messageFilters.length >= 2);
-    expect(relayMocks.messageFilters.at(1)?.since).toBe(nowSeconds() - LOOKBACK_SECONDS);
-    process.abort.abort();
-    await process.lifecycle;
+    try {
+      await waitForSettled(() => handled.includes("after-reconnect"));
+      expect(handled).not.toContain("before-activation");
+      expect(relayMocks.messageFilters.at(1)?.since).toBe(START_SECONDS);
+    } finally {
+      process.abort.abort();
+      await process.lifecycle;
+    }
   });
 
   it("recovers downtime messages after a sender supplies a future timestamp", async () => {

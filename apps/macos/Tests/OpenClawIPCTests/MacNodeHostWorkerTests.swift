@@ -740,4 +740,47 @@ struct MacNodeHostWorkerTests {
             throw error
         }
     }
+
+    // Regression: a worker that exits before its ready manifest must consume the
+    // crash retry budget and carry its stderr into the start error. Before this,
+    // startup-time CLI refusals (for example a state database schema mismatch)
+    // never notified the retry policy, so the coordinator respawned the broken
+    // CLI forever and the operator only ever saw "exited(1)" in os_log.
+    @Test func `startup exit consumes retry budget and surfaces worker stderr`() async throws {
+        let exitGate = AsyncTestGate()
+        let exitGeneration = OSAllocatedUnfairLock<UInt64?>(initialState: nil)
+        let worker = MacNodeHostWorker(
+            session: GatewayNodeSession(),
+            startupTimeout: 5,
+            onUnexpectedExit: { generation in
+                exitGeneration.withLock { $0 = generation }
+                exitGate.open()
+            })
+        let script = """
+        echo 'refused: state database uses newer schema version' >&2
+        sleep 0.2
+        exit 7
+        """
+
+        do {
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+                command: ["/bin/sh", "-c", script],
+                configurationGeneration: 3))
+            Issue.record("worker start unexpectedly succeeded")
+        } catch {
+            let workerError = try #require(error as? MacNodeHostWorker.WorkerError)
+            guard case let .unavailable(reason, diagnostic) = workerError else {
+                Issue.record("worker start did not report an unavailable error")
+                return
+            }
+            #expect(reason.contains("exited"))
+            #expect(!reason.contains("state database"))
+            #expect(diagnostic?.contains("state database uses newer schema version") == true)
+            #expect(error.localizedDescription.contains("state database uses newer schema version"))
+        }
+
+        await exitGate.wait()
+        #expect(exitGeneration.withLock { $0 } == 3)
+        await worker.stop()
+    }
 }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
@@ -32,6 +33,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
@@ -165,14 +169,21 @@ private fun QuestionSection(
       }
     }
     if (question.options.isEmpty() || question.isOther == true) {
+      // Secret answers must never render on screen or feed the keyboard's
+      // prediction/autocorrect stores; password transformation + keyboard type
+      // cover both, and single-line keeps the masked value one obscured run.
+      val secret = question.isSecret == true
       OutlinedTextField(
         value = draft.otherText[question.questionId].orEmpty(),
         onValueChange = { onDraftChanged(draft.setOther(question, it)) },
         modifier = Modifier.fillMaxWidth(),
         enabled = enabled,
-        label = { Text(nativeString("Other answer")) },
+        label = { Text(if (secret) nativeString("Secret value") else nativeString("Other answer")) },
+        visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions =
+          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
         minLines = 1,
-        maxLines = 4,
+        maxLines = if (secret) 1 else 4,
       )
     }
   }
@@ -229,8 +240,13 @@ internal fun terminalQuestionAnswer(
   if (status == ChatQuestionStatus.Cancelled) return nativeString("Skipped")
   if (status == ChatQuestionStatus.Expired) return nativeString("Expired")
   if (status == ChatQuestionStatus.Unavailable) return nativeString("Unavailable")
-  prompt.record.answers?.answers?.get(question.questionId)?.takeIf { it.isNotEmpty() }?.let {
-    return it.joinToString(", ")
+  // Secret questions never echo answer text into the persisted timeline; the
+  // record only carries a synthetic marker, but masking here keeps the summary
+  // honest for every secret producer, not just store-bound ones.
+  if (question.isSecret != true) {
+    prompt.record.answers?.answers?.get(question.questionId)?.takeIf { it.isNotEmpty() }?.let {
+      return it.joinToString(", ")
+    }
   }
   return if (status == ChatQuestionStatus.AnsweredElsewhere) nativeString("Answered elsewhere") else nativeString("Answered")
 }

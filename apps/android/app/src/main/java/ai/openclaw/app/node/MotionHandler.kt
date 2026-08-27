@@ -13,7 +13,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -378,12 +377,7 @@ class MotionHandler private constructor(
     if (paramsJson.isNullOrBlank()) {
       return MotionActivityRequest(startISO = null, endISO = null, limit = 200)
     }
-    val params =
-      try {
-        Json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
     // Keep the accepted gateway parameter even though Android can only return
     // one live classification sample for now.
     val limit = ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 200).coerceIn(1, 1000)
@@ -398,12 +392,7 @@ class MotionHandler private constructor(
     if (paramsJson.isNullOrBlank()) {
       return MotionPedometerRequest(startISO = null, endISO = null)
     }
-    val params =
-      try {
-        Json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
     return MotionPedometerRequest(
       startISO = parseJsonString(params, "startISO")?.trim()?.ifEmpty { null },
       endISO = parseJsonString(params, "endISO")?.trim()?.ifEmpty { null },

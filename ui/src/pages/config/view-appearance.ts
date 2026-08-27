@@ -17,7 +17,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import {
   renderChatPreferencesSection,
   renderLanguageSection,
@@ -58,6 +58,26 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
     id: "dash",
     labelKey: "configView.themes.dash.label",
     descriptionKey: "configView.themes.dash.description",
+  },
+  {
+    id: "absolutely",
+    labelKey: "configView.themes.absolutely.label",
+    descriptionKey: "configView.themes.absolutely.description",
+  },
+  {
+    id: "tide",
+    labelKey: "configView.themes.tide.label",
+    descriptionKey: "configView.themes.tide.description",
+  },
+  {
+    id: "beacon",
+    labelKey: "configView.themes.beacon.label",
+    descriptionKey: "configView.themes.beacon.description",
+  },
+  {
+    id: "phosphor",
+    labelKey: "configView.themes.phosphor.label",
+    descriptionKey: "configView.themes.phosphor.description",
   },
 ];
 
@@ -211,11 +231,6 @@ export function renderAppearanceSection(
                   >
                     ${renderThemeCardVisual(opt.id, props.theme)}
                     <span class="settings-theme-card__label">${opt.label}</span>
-                    ${opt.id === props.theme
-                      ? html`<span class="settings-theme-card__check" aria-hidden="true"
-                          >${icons.check}</span
-                        >`
-                      : nothing}
                   </button>
                 `,
               )}

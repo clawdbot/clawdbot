@@ -2426,6 +2426,9 @@ describe("gateway server chat", () => {
           },
         },
       });
+      agentDiscoveryMock.enabled = true;
+      agentDiscoveryMock.models = [{ id: "gpt-5", provider: "openai", reasoning: true }];
+      await prepareGatewayReplyRuntimeForTest({ force: true });
 
       const historyRes = await rpcReq<{
         thinkingLevel?: string;
@@ -2436,6 +2439,7 @@ describe("gateway server chat", () => {
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
       expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
+      Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
