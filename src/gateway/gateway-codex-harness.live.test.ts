@@ -1859,42 +1859,72 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
   sessionKey: string;
 }): Promise<void> {
   const runId = randomUUID();
-  const childToken = `CODEX-NATIVE-CHILD-${runId.slice(0, 6).toUpperCase()}`;
+  const waveOneToken = `CODEX-NATIVE-WAVE-1-${runId.slice(0, 6).toUpperCase()}`;
+  const waveTwoToken = `CODEX-NATIVE-WAVE-2-${runId.slice(0, 6).toUpperCase()}`;
   const parentToken = `CODEX-NATIVE-PARENT-${runId.slice(0, 6).toUpperCase()}`;
+  const finalReply = `${parentToken} ${waveOneToken} ${waveTwoToken}`;
   const { text, events } = await requestAgentTextWithEvents({
-    // Native Codex waiting pauses this parent turn; task delivery resumes it separately.
+    // Each native child resumes the requester in a later turn through sessions_yield.
     acceptYieldedTimeout: true,
     client: params.client,
     eventPrefix: "codex_app_server.",
     includeAllSessions: true,
     sessionKey: params.sessionKey,
     message: [
-      "Bridge probe.",
-      "You must use the Codex native spawn_agent tool exactly once before replying.",
-      `Give the subagent this exact instruction: Reply exactly ${childToken} and nothing else.`,
-      "Wait for the subagent result. Do not answer from your own knowledge.",
-      `After the subagent result returns, reply exactly ${parentToken} ${childToken} and nothing else.`,
+      "Sequential native bridge probe. Complete exactly two child waves.",
+      "Wave 1: use the Codex native spawn_agent tool exactly once with task_name=wave_one.",
+      `Give it this exact instruction: Reply exactly ${waveOneToken} and nothing else.`,
+      "After spawn_agent is accepted, do not call wait_agent and do not send a reply.",
+      "End the turn by calling openclaw_direct.sessions_yield.",
+      `When the Wave 1 completion containing ${waveOneToken} arrives in a later turn, start Wave 2.`,
+      "Wave 2: use the Codex native spawn_agent tool exactly once with task_name=wave_two.",
+      `Give it this exact instruction: Reply exactly ${waveTwoToken} and nothing else.`,
+      "After spawn_agent is accepted, do not call wait_agent and do not send a reply.",
+      "End that turn by calling openclaw_direct.sessions_yield again.",
+      `Only after the Wave 2 completion containing ${waveTwoToken} arrives, reply exactly ${finalReply} and nothing else.`,
+      `Never send ${parentToken} before both child completions are visible.`,
     ].join("\n"),
   });
   logCodexLiveStep("native-subagent-bridge-probe:initial-reply", { text });
+  expect(text).not.toContain(parentToken);
   expect(
     events.some((event) => event.stream === "codex_app_server.lifecycle"),
     `expected Codex lifecycle events; events=${JSON.stringify(events)}`,
   ).toBe(true);
-  let codexNativeTasks = await listCodexNativeTasks();
-  let deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
   const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
-  while (!deliveredTask && Date.now() < deadline) {
-    await delay(1_000);
-    codexNativeTasks = await listCodexNativeTasks();
-    deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
-  }
-  expect(
-    deliveredTask,
-    `expected delivered Codex-native subagent task with child result; initialText=${JSON.stringify(
-      text,
-    )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
-  ).toBeDefined();
+  const waveOneTask = await waitForDeliveredCodexNativeTask(waveOneToken);
+  logCodexLiveStep("native-subagent-bridge-probe:wave-1-delivered", {
+    taskId: waveOneTask.taskId,
+  });
+  const waveTwoTask = await waitForDeliveredCodexNativeTask(waveTwoToken);
+  logCodexLiveStep("native-subagent-bridge-probe:wave-2-delivered", {
+    taskId: waveTwoTask.taskId,
+  });
+  expect(waveTwoTask.createdAt).toBeGreaterThanOrEqual(
+    waveOneTask.endedAt ?? waveOneTask.createdAt,
+  );
+
+  const finalText = await waitForAssistantText({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    contains: parentToken,
+    timeoutMs: Math.max(1, deadline - Date.now()),
+  });
+  expect(finalText.trim()).toBe(finalReply);
+  const history: { messages?: unknown[] } = await params.client.request("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 100,
+  });
+  const parentReplies = extractAssistantTexts(history.messages ?? []).filter((reply) =>
+    normalizeAssistantTokenText(reply).includes(normalizeAssistantTokenText(parentToken)),
+  );
+  expect(parentReplies).toEqual([finalReply]);
+  expect(listCodexNativeTasks()).toHaveLength(2);
+  logCodexLiveStep("native-subagent-bridge-probe:complete", {
+    finalReply,
+    taskIds: [waveOneTask.taskId, waveTwoTask.taskId],
+  });
+  const deliveredTask = waveOneTask;
 
   const parentControlledChild = events.some(
     (event) => event.stream === "codex_app_server.item" && event.data?.type === "subAgentActivity",
@@ -1954,12 +1984,25 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
     return tasks.filter((entry) => entry.runtime === "subagent" && entry.kind === "codex-native");
   }
 
-  function findDeliveredCodexNativeTask(tasks: Awaited<ReturnType<typeof listCodexNativeTasks>>) {
-    return tasks.find(
-      (entry) =>
-        entry.status === "completed" &&
-        entry.deliveryStatus === "delivered" &&
-        entry.terminalSummary?.includes(childToken),
+  async function waitForDeliveredCodexNativeTask(token: string) {
+    while (Date.now() < deadline) {
+      const tasks = await listCodexNativeTasks();
+      const delivered = tasks.find(
+        (entry) =>
+          entry.status === "completed" &&
+          entry.deliveryStatus === "delivered" &&
+          entry.terminalSummary?.includes(token),
+      );
+      if (delivered) {
+        return delivered;
+      }
+      await delay(1_000);
+    }
+    const tasks = await listCodexNativeTasks();
+    throw new Error(
+      `expected delivered Codex-native task containing ${token}; initialText=${JSON.stringify(
+        text,
+      )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(tasks)}`,
     );
   }
 }
