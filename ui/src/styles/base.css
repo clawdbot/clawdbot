@@ -1026,16 +1026,21 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 .skeleton {
   position: relative;
   overflow: hidden;
-  background: var(--bg-muted);
+  background: var(--skeleton-base, var(--bg-muted));
   border-radius: var(--radius-md);
 }
 
 .skeleton::after {
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent 25%, var(--bg-hover) 50%, transparent 75%);
+  background: linear-gradient(
+    90deg,
+    transparent 25%,
+    var(--skeleton-highlight, var(--bg-hover)) 50%,
+    transparent 75%
+  );
   content: "";
-  animation: shimmer 1.5s ease-in-out infinite;
+  animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
   will-change: transform;
 }
 
