@@ -106,6 +106,70 @@ describe("compactWithSafetyTimeout", () => {
     await timeoutAssertion;
     expect(vi.getTimerCount()).toBe(0);
   });
+  it("lets a progress-reporting compaction run past the total budget", async () => {
+    // A slow-but-advancing compaction (e.g. reasoning-mode summarization of a
+    // large context) finishes even though its total runtime exceeds timeoutMs.
+    vi.useFakeTimers();
+    const TIMEOUT = 30;
+    let pulse: (() => void) | undefined;
+    const compactPromise = compactWithSafetyTimeout(
+      (_signal, onProgress) =>
+        new Promise<string>((resolve) => {
+          pulse = onProgress;
+          // One advance per 20ms; total runtime 4x the budget.
+          setTimeout(() => resolve("done"), 4 * TIMEOUT);
+        }),
+      TIMEOUT,
+    );
+
+    for (let elapsed = 0; elapsed <= 4 * TIMEOUT; elapsed += 20) {
+      await vi.advanceTimersByTimeAsync(20);
+      pulse?.();
+    }
+    await expect(compactPromise).resolves.toBe("done");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("times out a reporting compaction one budget after its last progress call", async () => {
+    // Progress stops => silence budget applies from the LAST pulse, not from start.
+    vi.useFakeTimers();
+    const TIMEOUT = 30;
+    let pulse: (() => void) | undefined;
+    const compactPromise = compactWithSafetyTimeout(
+      (_signal, onProgress) =>
+        new Promise<never>(() => {
+          pulse = onProgress;
+        }),
+      TIMEOUT,
+    );
+    const assertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
+
+    await vi.advanceTimersByTimeAsync(20);
+    pulse?.(); // re-arms: abort must NOT fire at the original 30ms mark
+    await vi.advanceTimersByTimeAsync(20);
+    pulse?.();
+    await vi.advanceTimersByTimeAsync(20); // 60ms since start, 20ms since last pulse: still live
+    await vi.advanceTimersByTimeAsync(TIMEOUT); // TIMEOUT of silence
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ignores progress pulses after settle", async () => {
+    vi.useFakeTimers();
+    let pulse: (() => void) | undefined;
+    const compactPromise = compactWithSafetyTimeout(
+      (_signal, onProgress) =>
+        new Promise<string>((resolve) => {
+          pulse = onProgress;
+          setTimeout(() => resolve("ok"), 10);
+        }),
+      30,
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(compactPromise).resolves.toBe("ok");
+    expect(() => pulse?.()).not.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe("resolveCompactionTimeoutMs", () => {
@@ -195,6 +259,33 @@ describe("compactContextEngineWithSafetyTimeout", () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it("forwards onProgress to the plugin compact() params as a stall budget", async () => {
+    // A reporting engine that advances steadily finishes past timeoutMs total.
+    vi.useFakeTimers();
+    const TIMEOUT = 30;
+    let pulse: (() => void) | undefined;
+    const result: CompactResult = {
+      ok: true,
+      compacted: true,
+      result: { tokensBefore: 1000, tokensAfter: 200 },
+    };
+    const compact = vi.fn<CompactFn>((params) => {
+      pulse = params.onProgress;
+      return new Promise<CompactResult>((resolve) => {
+        setTimeout(() => resolve(result), 4 * TIMEOUT);
+      });
+    });
+
+    const pending = compactContextEngineWithSafetyTimeout({ compact }, baseParams, TIMEOUT);
+    for (let elapsed = 0; elapsed < 4 * TIMEOUT; elapsed += 20) {
+      await vi.advanceTimersByTimeAsync(20);
+      pulse?.();
+    }
+    await expect(pending).resolves.toBe(result);
+    expect(typeof compact.mock.calls[0]?.[0].onProgress).toBe("function");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("bounds a hung plugin compact() and rejects with a timeout error", async () => {
