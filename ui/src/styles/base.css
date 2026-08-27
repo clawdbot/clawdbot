@@ -837,6 +837,11 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
+.learn-more-link,
+.learn-more-link:hover {
+  text-decoration: none;
+}
+
 /* Web Awesome defaults checked switches to brand blue. Keep every switch on
    the Control UI accent, matching native check controls and custom switches. */
 wa-switch {

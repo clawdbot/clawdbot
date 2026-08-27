@@ -10,7 +10,6 @@ import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  renderDocsLink,
   renderSettingsDefaultDescription,
   renderSettingsRow,
   renderSettingsSegmented,
@@ -28,8 +27,6 @@ import {
   renderSidebarPreferencesSection,
 } from "./view-appearance-preferences.ts";
 import type { ConfigProps } from "./view-types.ts";
-
-const APPEARANCE_DOCS_URL = "https://docs.openclaw.ai/web/control-ui";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -196,10 +193,6 @@ export function renderAppearanceSection(
         });
   return html`
     <div class="settings-page">
-      <p class="settings-page__intro">
-        ${t("configView.appearance.intro")}
-        ${renderDocsLink(APPEARANCE_DOCS_URL, t("common.learnMore"))}
-      </p>
       ${renderLanguageSection(props)}
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <div class="settings-section__header">

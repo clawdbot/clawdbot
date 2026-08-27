@@ -112,14 +112,14 @@
   min-width: 0;
 }
 
-/* Header and description indent to var(--space-4) so the eyebrow label lines
-   up with the row content inside the group surface below it. */
+/* Section copy aligns to the group surface, while rows own their internal
+   content inset. */
 .settings-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: 0 var(--space-4);
+  padding: 0;
 }
 
 .settings-section__heading {
@@ -133,7 +133,7 @@
 
 .settings-section__desc {
   margin: calc(-1 * var(--space-2)) 0 0;
-  padding: 0 var(--space-4);
+  padding: 0;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
