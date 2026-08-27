@@ -1,4 +1,3 @@
-import path from "node:path";
 /**
  * pdf built-in tool.
  *
