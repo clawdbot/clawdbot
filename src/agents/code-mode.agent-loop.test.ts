@@ -16,7 +16,12 @@ import {
 import { installCodeModeOutcomeHook } from "./embedded-agent-runner/run/code-mode-outcome.js";
 import { Agent } from "./runtime/index.js";
 import { isToolResultError } from "./tool-result-error.js";
-import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
+import {
+  jsonResult,
+  ToolAuthorizationError,
+  ToolInputError,
+  type AnyAgentTool,
+} from "./tools/common.js";
 
 const model: Model = {
   id: "test-model",
@@ -135,6 +140,50 @@ describe("Code Mode agent-loop error recovery", () => {
     );
     expect(terminal.execute).not.toHaveBeenCalled();
     expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "recovered" }],
+    });
+  });
+
+  it("recovers a denied-host exec without locking into read-only reconciliation", async () => {
+    // Mirrors bash-tools.resolveExecTarget: a host-policy denial raised during
+    // parameter preparation, which must settle as a trusted no-start failure —
+    // never as a partially-applied mutation.
+    const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () =>
+      jsonResult({ unexpected: true }),
+    );
+    terminal.prepareBeforeToolCallParams = () => {
+      throw new ToolAuthorizationError(
+        "exec host not allowed (requested gateway; configured host is auto; set tools.exec.host=gateway to allow this override).",
+      );
+    };
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [terminal, recover],
+      programs: ["return await terminal({});", "return await recover_task({});"],
+    });
+
+    expect(terminal.execute).not.toHaveBeenCalled();
+    expect(providerContexts[1]?.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "exec",
+        isError: true,
+        details: expect.objectContaining({
+          status: "failed",
+          failurePhase: "bridge",
+          bridgeDispatchStarted: true,
+          error: expect.stringContaining("exec host not allowed"),
+        }),
+      }),
+    );
+    // The denied call never started work, so no reconciliation candidate is
+    // recorded and the next turn keeps its normal tool surface.
     expect(reconciliationCandidates).toBe(0);
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: "assistant",
