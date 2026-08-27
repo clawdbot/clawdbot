@@ -124,7 +124,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onSlashIntent?: () => void | Promise<void>;
   onSlashCommand?: (command: string) => void;
   onSend: (followUpModeOverride?: "steer", submissionAction?: Event) => void;
-  onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;

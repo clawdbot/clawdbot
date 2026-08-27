@@ -350,14 +350,14 @@
 .settings-accent-theme--knot {
   --theme-chip-bg: #080808;
   --theme-chip-accent: #e5243b;
-  --theme-chip-accent-2: #8b1a2b;
+  --theme-chip-accent-2: #b8bdc4;
 }
 
 .settings-theme-card--dash,
 .settings-accent-theme--dash {
   --theme-chip-bg: #1a1210;
-  --theme-chip-accent: #b47840;
-  --theme-chip-accent-2: #a88050;
+  --theme-chip-accent: #cf8b4d;
+  --theme-chip-accent-2: #dcb878;
 }
 
 .settings-theme-card--absolutely,
@@ -397,13 +397,13 @@
 :root[data-theme-mode="light"] :is(.settings-theme-card--knot, .settings-accent-theme--knot) {
   --theme-chip-bg: #f9f9fb;
   --theme-chip-accent: #c41e30;
-  --theme-chip-accent-2: #7a1420;
+  --theme-chip-accent-2: #5a626e;
 }
 
 :root[data-theme-mode="light"] :is(.settings-theme-card--dash, .settings-accent-theme--dash) {
   --theme-chip-bg: #f7f2ec;
-  --theme-chip-accent: #6e4828;
-  --theme-chip-accent-2: #6a4e30;
+  --theme-chip-accent: #8a512c;
+  --theme-chip-accent-2: #7d6027;
 }
 
 :root[data-theme-mode="light"]

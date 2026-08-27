@@ -37,6 +37,7 @@ import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
+import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
@@ -141,10 +142,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     options.nodeDesktopCarrier ||
     options.nodePortalCarrier
       ? {
-          stop: async (environmentId: string, ownerEpoch?: number) => {
+          stop: async (
+            environmentId: string,
+            ownerEpoch?: number,
+            reason?: WorkerTunnelStopReason,
+          ) => {
             await Promise.all([
               options.tunnelManager?.stop(environmentId, ownerEpoch),
-              options.nodeTunnelManager?.stop(environmentId, ownerEpoch),
+              options.nodeTunnelManager?.stop(environmentId, ownerEpoch, reason),
               options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
               options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
               options.closeWorkerPortals?.(environmentId, ownerEpoch),
@@ -239,6 +244,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const next = store.transition({
       environmentId: record.environmentId,
       from: record.state,
+      expectedOwnerEpoch: record.ownerEpoch,
       to,
       patch,
     });

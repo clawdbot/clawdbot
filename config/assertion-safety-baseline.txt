@@ -1709,7 +1709,7 @@ src/agents/bash-tools.exec-approval-request.ts	2
 src/agents/bash-tools.exec-host-node-phases.ts	3
 src/agents/bash-tools.exec-host-node.ts	2
 src/agents/bash-tools.exec-request-preparation.ts	7
-src/agents/bash-tools.exec-run.ts	2
+src/agents/bash-tools.exec-run.ts	1
 src/agents/bash-tools.exec-runtime.ts	2
 src/agents/bash-tools.exec-script-preflight.ts	2
 src/agents/bash-tools.process.ts	6
@@ -1908,7 +1908,7 @@ src/agents/harness/lifecycle-hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
 src/agents/harness/native-hook-relay-state.ts	1
-src/agents/harness/selection.ts	6
+src/agents/harness/selection.ts	5
 src/agents/harness/support.ts	1
 src/agents/harness/tool-result-middleware.ts	1
 src/agents/identity.ts	8
@@ -2276,7 +2276,7 @@ src/channels/message/adapter.ts	1
 src/channels/message/capabilities.ts	2
 src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
-src/channels/message/ingress-monitor.ts	6
+src/channels/message/ingress-monitor.ts	4
 src/channels/message/ingress-queue.ts	6
 src/channels/message/outbound-bridge.ts	2
 src/channels/message/outbound-echo-state.ts	2
@@ -2802,12 +2802,9 @@ src/cron/service/timer.ts	1
 src/cron/session-reaper.ts	1
 src/cron/stagger.ts	1
 src/cron/store.ts	1
-src/cron/store/delivery-codec.ts	3
-src/cron/store/failure-alert-codec.ts	2
-src/cron/store/payload-codec.ts	3
+src/cron/store/delivery-codec.ts	2
 src/cron/store/quarantine.ts	1
-src/cron/store/row-codec.ts	7
-src/cron/store/state-codec.ts	3
+src/cron/store/row-codec.ts	4
 src/cron/store/transaction-hooks.ts	1
 src/cron/task-run-detail.ts	2
 src/cron/task-run-history.ts	1
@@ -3084,7 +3081,6 @@ src/gateway/worker-environments/inference-control.ts	1
 src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/inference-store.ts	1
 src/gateway/worker-environments/live-event-projection.ts	1
-src/gateway/worker-environments/node-worker-tunnel.ts	6
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/node-workspace-transfer-service.ts	1
 src/gateway/worker-environments/placement-state.ts	3
@@ -3097,7 +3093,6 @@ src/gateway/worker-environments/store.ts	9
 src/gateway/worker-environments/transcript-commit.ts	6
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
-src/gateway/worker-environments/worker-turn-payload.ts	4
 src/gateway/worker-environments/workspace-accepted-publication.ts	1
 src/gateway/worker-environments/workspace-manifest.ts	14
 src/gateway/worker-environments/workspace-path-exclusions.ts	2
@@ -3418,7 +3413,6 @@ src/node-host/invoke-payload.ts	5
 src/node-host/invoke.ts	7
 src/node-host/mcp.ts	3
 src/node-host/node-worker-bundle-installer.ts	1
-src/node-host/node-worker-supervisor.ts	1
 src/node-host/node-worker-transfer-client.ts	3
 src/node-host/node-worker-transfer-http.ts	2
 src/node-host/node-worker-tree-control.ts	2
@@ -3552,7 +3546,7 @@ src/plugins/installed-plugin-index-install-owner.ts	2
 src/plugins/installed-plugin-index-policy.ts	1
 src/plugins/installed-plugin-index-record-builder.ts	1
 src/plugins/installed-plugin-index-record-state.ts	1
-src/plugins/installed-plugin-index-store.ts	3
+src/plugins/installed-plugin-index-store.ts	2
 src/plugins/interactive-state.ts	3
 src/plugins/interactive.ts	4
 src/plugins/lazy-service-module.ts	1
@@ -3789,7 +3783,7 @@ src/state/openclaw-quarantine-store.ts	2
 src/state/openclaw-schema-versions.ts	7
 src/state/openclaw-state-db-audit-migration.ts	5
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
-src/state/openclaw-state-db-legacy-backfills.ts	7
+src/state/openclaw-state-db-legacy-backfills.ts	5
 src/state/openclaw-state-db-maintenance.ts	3
 src/state/openclaw-state-db-operator-approval-migration.ts	1
 src/state/openclaw-state-db-readonly.ts	1

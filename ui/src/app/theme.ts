@@ -40,18 +40,16 @@ const VALID_THEME_NAMES = new Set<ThemeName>([
 ]);
 
 const THEME_FONT_STYLESHEET_ID = "openclaw-theme-fonts";
-/* Themes that ship their own faces. The stylesheet is fetched only while such a
-   theme is active, so every other theme pays nothing for fonts it never paints.
-   Loading with the app bundle (not the first-paint boot script) costs one
-   font-display: swap on a cold load and keeps the theme->asset mapping in one
-   place. Values are bundle-relative asset names: the href is resolved against
-   the configured Control UI mount, and the stylesheet's own url() references
-   are relative to it, so both levels follow a non-root base path. */
-const THEME_FONT_STYLESHEETS: Partial<Record<ThemeName, ControlUiFontStylesheet>> = {
-  absolutely: "fonts/absolutely.css",
-  beacon: "fonts/beacon.css",
-  phosphor: "fonts/phosphor.css",
-};
+/* Every built-in family ships its own faces from fonts/<theme>.css; imported
+   custom themes stay on the system stack. The stylesheet is fetched only while
+   its theme is active, so no theme pays for another theme's fonts. Loading
+   with the app bundle (not the first-paint boot script) costs one
+   font-display: swap on a cold load. The href is resolved against the
+   configured Control UI mount, and the stylesheet's own url() references are
+   relative to it, so both levels follow a non-root base path. */
+function themeFontStylesheet(theme: ThemeName): ControlUiFontStylesheet | undefined {
+  return theme === "custom" ? undefined : `fonts/${theme}.css`;
+}
 type ControlUiFontStylesheet = `fonts/${string}.css`;
 
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
@@ -97,7 +95,7 @@ export function syncThemeFontStylesheet(theme: ThemeName): void {
   if (typeof document === "undefined") {
     return;
   }
-  const asset = THEME_FONT_STYLESHEETS[theme];
+  const asset = themeFontStylesheet(theme);
   const existing = document.getElementById(THEME_FONT_STYLESHEET_ID);
   if (!asset) {
     existing?.remove();

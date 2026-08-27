@@ -121,7 +121,15 @@ describe("gateway worker environment startup", () => {
             "device-environment",
           ]);
           expect(startup.store.getCredential("device-environment")).toBeUndefined();
-          expect(startup.store.get("device-environment")?.state).toBe("orphaned");
+          expect(startup.store.get("device-environment")).toMatchObject({
+            state: "failed",
+            leaseId: null,
+            nodeDeviceId: null,
+            attachedSessionIds: [],
+            destroyRequestedAtMs: expect.any(Number),
+            teardownTerminalState: "failed",
+            lastError: "Worker provider no longer recognizes the lease",
+          });
         } finally {
           await service.stop();
         }

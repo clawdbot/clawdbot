@@ -212,7 +212,7 @@ export async function resetSessionEntryLifecycle(
         deletedEntries: deletedOwners,
         commit: async () => {
           const shouldAppendResetBoundary =
-            params.resetBoundaryReason &&
+            params.resetBoundary &&
             current?.entry.sessionId &&
             !sqliteSessionEntriesEqual(current.entry, nextEntry);
           const mutation: ResetSessionEntryLifecycleMutation = {
@@ -222,14 +222,10 @@ export async function resetSessionEntryLifecycle(
           };
           runOpenClawAgentWriteTransaction((transactionDb) => {
             assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
-            if (
-              shouldAppendResetBoundary &&
-              current?.entry.sessionId &&
-              params.resetBoundaryReason
-            ) {
+            if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
               const event = buildSessionResetBoundaryEvent({
                 events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId),
-                reason: params.resetBoundaryReason,
+                ...params.resetBoundary,
               });
               const appended = appendTranscriptEventsInTransaction(
                 transactionDb,

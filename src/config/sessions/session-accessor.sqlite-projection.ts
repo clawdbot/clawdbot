@@ -371,7 +371,7 @@ export async function applySessionEntryLifecycleMutation(params: {
         entry,
         expectedEntry,
         routeContext,
-        resetBoundaryReason,
+        resetBoundary,
       } of projected.upsertedEntries) {
         const sameKeyRemoval = validatedRemovals.find(
           (removal) => removal.sessionKey === sessionKey,
@@ -394,10 +394,10 @@ export async function applySessionEntryLifecycleMutation(params: {
         if (sameKeyRemoval && !shouldRemoveSessionEntry(currentEntry, sameKeyRemoval.removal)) {
           throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
         }
-        if (resetBoundaryReason && expectedEntry?.sessionId) {
+        if (resetBoundary && expectedEntry?.sessionId) {
           const event = buildSessionResetBoundaryEvent({
             events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId),
-            reason: resetBoundaryReason,
+            ...resetBoundary,
           });
           const appended = appendTranscriptEventsInTransaction(
             transactionDb,

@@ -292,41 +292,47 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it("publishes and retires negotiated portal-stream capability without exposing a private command", async () => {
-    const inventoryChanged = vi.fn();
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
-    const client = createWorkerSupervisorNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
-    const publish = async (portalStream: boolean) => {
-      await runnerInventoryHandler(
-        runnerInventoryOptions({
-          nodeRegistry: runtime.nodeRegistry,
-          client,
-          declaration: {
-            ...availableHost,
-            workerHost: {
-              ...availableHost.workerHost,
-              ...(portalStream ? { portalStream: 1 } : {}),
+  it.each([
+    ["portalStream", "worker.portal.stream.v1"],
+    ["environmentSession", "worker.environment.stop.v1"],
+  ] as const)(
+    "publishes and retires negotiated %s without exposing %s",
+    async (capability, command) => {
+      const inventoryChanged = vi.fn();
+      const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+      setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
+      const client = createWorkerSupervisorNodeClient();
+      runtime.nodeRegistry.register(client, {
+        pairingIdentity: "identity-1",
+        pairingGeneration: "generation-1",
+      });
+      const publish = async (supported: boolean) => {
+        await runnerInventoryHandler(
+          runnerInventoryOptions({
+            nodeRegistry: runtime.nodeRegistry,
+            client,
+            declaration: {
+              ...availableHost,
+              workerHost: {
+                ...availableHost.workerHost,
+                ...(supported ? { [capability]: 1 } : {}),
+              },
             },
-          },
-        }),
-      );
-      const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
-      return proof;
-    };
+          }),
+        );
+        const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+        return proof;
+      };
 
-    expect((await publish(false))?.workerHost.portalStream).toBeUndefined();
-    const supported = await publish(true);
-    expect(supported?.workerHost.portalStream).toBe(1);
-    expect(supported?.commands).not.toContain("worker.portal.stream.v1");
-    expect((await publish(false))?.workerHost.portalStream).toBeUndefined();
-    expect(inventoryChanged).toHaveBeenCalledTimes(3);
-    runtime.nodeRegistry.unregister("conn-1");
-  });
+      expect((await publish(false))?.workerHost[capability]).toBeUndefined();
+      const supported = await publish(true);
+      expect(supported?.workerHost[capability]).toBe(1);
+      expect(supported?.commands).not.toContain(command);
+      expect((await publish(false))?.workerHost[capability]).toBeUndefined();
+      expect(inventoryChanged).toHaveBeenCalledTimes(3);
+      runtime.nodeRegistry.unregister("conn-1");
+    },
+  );
 
   it("requires a fresh current-generation publication after same-connection promotion", async () => {
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());

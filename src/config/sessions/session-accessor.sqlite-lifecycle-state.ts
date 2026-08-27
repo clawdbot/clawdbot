@@ -373,7 +373,7 @@ export async function projectSessionEntryLifecycleMutation(
       continue;
     }
     const expectedEntry = store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined;
-    if (upsert.resetBoundaryReason && !expectedEntry) {
+    if (upsert.resetBoundary && !expectedEntry) {
       throw new Error(
         `Cannot append reset boundary without an existing session row: ${sessionKey}`,
       );
@@ -397,7 +397,7 @@ export async function projectSessionEntryLifecycleMutation(
       sessionKey,
       entry: cloned,
       ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
-      ...(upsert.resetBoundaryReason ? { resetBoundaryReason: upsert.resetBoundaryReason } : {}),
+      ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
     });
   }
   const referencedSessionIds = collectProjectedReferencedSessionIds({

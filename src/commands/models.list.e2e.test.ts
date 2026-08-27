@@ -192,7 +192,6 @@ vi.mock("../agents/agent-model-discovery.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderNativeStreamingUsageCompatWithPlugin: vi.fn(() => undefined),
   buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
   normalizeProviderConfigWithPlugin: vi.fn(() => undefined),
   normalizeProviderResolvedModelWithPlugin,

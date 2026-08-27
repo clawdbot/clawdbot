@@ -20,6 +20,7 @@ import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   type NodeWorkerCapacitySnapshot,
@@ -291,9 +292,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   let consecutivePermanentGatewayRejections = 0;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
-  let gatewaySupportsBundleRetention = false;
-  let gatewaySupportsBundleStatus = false;
-  let gatewaySupportsPortalStream = false;
+  let gatewayCapabilities: ReadonlySet<string> = new Set();
   let optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -310,9 +309,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     gatewayConnectionGeneration += 1;
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
-    gatewaySupportsBundleRetention = false;
-    gatewaySupportsBundleStatus = false;
-    gatewaySupportsPortalStream = false;
+    gatewayCapabilities = new Set();
     retireOptionalPublications();
   };
 
@@ -511,14 +508,18 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
                 enabled: true,
                 capacity: workerCapacity,
                 bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
-                ...(gatewaySupportsBundleRetention
+                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION)
                   ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
                   : {}),
-                ...(gatewaySupportsBundleRetention && gatewaySupportsBundleStatus
+                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) &&
+                gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS)
                   ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
                   : {}),
-                ...(gatewaySupportsPortalStream
+                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM)
                   ? { portalStream: NODE_WORKER_PORTAL_STREAM_VERSION }
+                  : {}),
+                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION)
+                  ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
                   : {}),
               }
             : { enabled: false },
@@ -598,15 +599,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
-      gatewaySupportsBundleRetention =
-        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) ===
-        true;
-      gatewaySupportsBundleStatus =
-        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS) ===
-        true;
-      gatewaySupportsPortalStream =
-        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM) ===
-        true;
+      gatewayCapabilities = new Set(hello.features?.capabilities);
       retireOptionalPublications();
       optionalPublicationStates = new Map();
       if (opts.stopAfterFirstConnect) {
