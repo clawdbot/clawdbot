@@ -3916,7 +3916,7 @@ ui/src/app-route-paths.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
 ui/src/app/app-host.ts	1
-ui/src/app/app-shell-chrome.ts	4
+ui/src/app/app-shell-chrome.ts	2
 ui/src/app/app-shell-gateway.ts	1
 ui/src/app/assistant-identity.ts	2
 ui/src/app/browser.ts	1
