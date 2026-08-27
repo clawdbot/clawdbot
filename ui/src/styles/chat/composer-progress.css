@@ -18,8 +18,7 @@
     inset-inline: 0;
     isolation: isolate;
     min-height: var(--chat-mobile-pane-header-height);
-    padding-inline:
-      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px))
+    padding-inline: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px))
       max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px));
     overflow: visible;
     background: transparent;
