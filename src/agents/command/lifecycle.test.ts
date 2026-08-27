@@ -293,6 +293,7 @@ describe("createAgentCommandLifecycle", () => {
   it("publishes only allowlisted fields from valid terminal receipts", () => {
     emitAgentEvent.mockClear();
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+    const successfulToolNames = Object.assign(["read"], { secret });
     const lifecycle = createAgentCommandLifecycle({
       runId: "bounded-receipt-owner",
       lifecycleGeneration: () => "test-generation",
@@ -317,7 +318,7 @@ describe("createAgentCommandLifecycle", () => {
             responseModel: "model-1",
             secret,
           },
-          successfulToolNames: ["read"],
+          successfulToolNames,
           rerouted: false,
           terminalDisposition: "visible",
           secret,
@@ -337,6 +338,9 @@ describe("createAgentCommandLifecycle", () => {
       rerouted: false,
       terminalDisposition: "visible",
     });
+    successfulToolNames.push("mutated-after-publication");
+    expect(event.data.terminalReceipt.successfulToolNames).not.toHaveProperty("secret");
+    expect(event.data.terminalReceipt.successfulToolNames).toEqual(["read"]);
     expect(JSON.stringify(event)).not.toContain(secret);
   });
 

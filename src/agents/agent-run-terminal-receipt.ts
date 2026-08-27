@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 type AgentRunTerminalModelRef = { provider: string; model: string };
 
 export type AgentRunTerminalReceipt = {
@@ -12,12 +14,21 @@ export type AgentRunTerminalReceipt = {
   terminalDisposition?: "visible" | "not-visible";
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function isModelRef(value: unknown): value is AgentRunTerminalModelRef {
   return isRecord(value) && typeof value.provider === "string" && typeof value.model === "string";
+}
+
+function isEffectiveModelRef(
+  value: unknown,
+): value is AgentRunTerminalModelRef & { responseModel: string } {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.provider === "string" &&
+    typeof value.model === "string" &&
+    typeof value.responseModel === "string"
+  );
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -36,8 +47,7 @@ export function normalizeAgentRunTerminalReceipt(
     typeof receipt.sessionId !== "string" ||
     typeof receipt.turnId !== "string" ||
     !isModelRef(receipt.requested) ||
-    !isModelRef(receipt.effective) ||
-    typeof receipt.effective.responseModel !== "string" ||
+    !isEffectiveModelRef(receipt.effective) ||
     !isStringArray(receipt.successfulToolNames) ||
     typeof receipt.rerouted !== "boolean"
   ) {
@@ -63,7 +73,7 @@ export function normalizeAgentRunTerminalReceipt(
       model: receipt.effective.model,
       responseModel: receipt.effective.responseModel,
     },
-    successfulToolNames: receipt.successfulToolNames,
+    successfulToolNames: [...receipt.successfulToolNames],
     rerouted: receipt.rerouted,
     ...(receipt.terminalDisposition !== undefined
       ? { terminalDisposition: receipt.terminalDisposition }
