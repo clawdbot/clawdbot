@@ -502,6 +502,12 @@ class SidebarAttention extends OpenClawLightDomElement {
     }
   }
 
+  dismissPanel(): boolean {
+    const wasOpen = this.panelOpen;
+    this.closePanel(false);
+    return wasOpen;
+  }
+
   private readonly syncOverflowCue = () => {
     const list = this.querySelector<HTMLElement>(".sidebar-issues-panel__list");
     const above = Boolean(list && list.scrollTop > 2);

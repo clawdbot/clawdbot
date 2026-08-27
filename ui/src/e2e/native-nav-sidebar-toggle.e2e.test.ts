@@ -179,6 +179,12 @@ suite.define(() => {
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
     await toggle.click();
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+
+    await page.locator(".sidebar-issues-button").click();
+    const desktopInbox = page.locator("#sidebar-issues-panel");
+    await desktopInbox.waitFor();
+    await expect.poll(() => desktopInbox.getAttribute("aria-modal")).toBeNull();
+    await page.keyboard.press("Escape");
   });
 
   it("keeps pointer-triggered sidebar focus from opening its tooltip", async () => {
@@ -680,7 +686,11 @@ suite.define(() => {
       .poll(() => trigger.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
+    await trigger.click();
+    await navigation.locator(".sidebar-issues-button").click();
+    await attentionDialog.waitFor();
     await page.setViewportSize({ width: 1280, height: 900 });
+    await expect.poll(() => attentionDialog.count()).toBe(0);
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
     await expect.poll(() => navigation.getAttribute("class")).not.toContain("nav-drawer");
   });

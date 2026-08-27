@@ -64,6 +64,10 @@ type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
 
+type SidebarAttentionElement = HTMLElement & {
+  dismissPanel: () => boolean;
+};
+
 type DebugOverlayElement = HTMLElement & {
   toggle: () => void;
 };
@@ -382,10 +386,11 @@ export class ShellChromeOwner {
   };
 
   dismissSidebarTransientMenus(): boolean {
-    return (
-      this.host.querySelector<AppSidebarElement>("openclaw-app-sidebar")?.dismissTransientMenus() ??
-      false
-    );
+    const sidebar = this.host.querySelector<AppSidebarElement>("openclaw-app-sidebar");
+    const dismissedPanel = sidebar
+      ?.querySelector<SidebarAttentionElement>("openclaw-sidebar-attention")
+      ?.dismissPanel();
+    return Boolean(sidebar?.dismissTransientMenus() || dismissedPanel);
   }
 
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
