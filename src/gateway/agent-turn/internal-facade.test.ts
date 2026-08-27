@@ -344,6 +344,43 @@ describe("createInternalAgentTurnFacade", () => {
     }
   });
 
+  it("rejects when terminal dedupe readiness expires", async () => {
+    vi.useFakeTimers();
+    startTurn.mockImplementation(async ({ io }) => {
+      io.emitAcceptance([true, { runId: "run-readiness-timeout", status: "in_flight" }, undefined]);
+    });
+    waitForTurn.mockResolvedValue({ runId: "run-readiness-timeout", status: "ok" });
+    waitForAgentTerminalDedupe.mockImplementationOnce(
+      async ({ timeoutMs }: { timeoutMs: number }) =>
+        await new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), timeoutMs);
+        }),
+    );
+
+    try {
+      const outcome = createFacade()
+        .dispatchRaw(
+          { message: "test", idempotencyKey: "readiness-timeout" },
+          { expectFinal: true },
+        )
+        .then(
+          () => ({ status: "resolved" as const }),
+          (error: unknown) => ({ error, status: "rejected" as const }),
+        );
+      await vi.waitFor(() => expect(waitForAgentTerminalDedupe).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(outcome).resolves.toMatchObject({
+        status: "rejected",
+        error: { message: "gateway request timeout for agent" },
+      });
+      expect(startTurn).toHaveBeenCalledOnce();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a cached replay in flight when the wait reaches a nonterminal timeout", async () => {
     startTurn.mockImplementation(async ({ io }) => {
       io.emitAcceptance([true, { runId: "run-pending", status: "in_flight" }, undefined], {

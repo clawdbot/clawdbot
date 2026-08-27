@@ -59,6 +59,10 @@ export function resolveRemainingGatewayDispatchTimeoutMs(deadlineMs?: number): n
     : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
 }
 
+export function createGatewayDispatchTimeoutError(method: string): Error {
+  return new Error(`gateway request timeout for ${method}`);
+}
+
 function resolveDispatchAbortError(method: string, signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
@@ -93,7 +97,7 @@ export async function waitForGatewayDispatchDeadline<T>(
     const cancellation = new Promise<never>((_resolve, reject) => {
       if (remainingTimeoutMs !== undefined) {
         timeout = setTimeout(() => {
-          reject(new Error(`gateway request timeout for ${method}`));
+          reject(createGatewayDispatchTimeoutError(method));
         }, remainingTimeoutMs);
       }
       if (signal) {
