@@ -635,14 +635,8 @@ suite.define(() => {
     await expect.poll(() => sessionMenu.count()).toBe(0);
     await expect.poll(() => dialog.isVisible()).toBe(true);
 
-    await page.locator(".chat-pane-cache__pane--visible").evaluate((pane) => {
-      const details = document.createElement("details");
-      details.className = "chat-controls__inline-select";
-      details.id = "drawer-underlying-details-probe";
-      details.open = true;
-      pane.append(details);
-    });
-    const pageDetails = page.locator("#drawer-underlying-details-probe");
+    const pageDetails = page.locator(".chat-controls__model-picker").first();
+    await pageDetails.evaluate((element) => ((element as HTMLDetailsElement).open = true));
     await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
     await page.keyboard.press("Escape");
     await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
