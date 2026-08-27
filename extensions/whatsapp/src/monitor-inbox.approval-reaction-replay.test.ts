@@ -19,21 +19,13 @@ import {
 
 const resolverMocks = vi.hoisted(() => ({
   resolveWhatsAppApproval: vi.fn(),
-  isApprovalNotFoundError: vi.fn(() => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolveWhatsAppApproval,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
-    "openclaw/plugin-sdk/error-runtime",
-  );
-  return {
-    ...actual,
-    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-  };
-});
+// error-runtime stays real: the injected "gateway 503" Error is genuinely not
+// an approval-not-found, so the real classifier drives the transient path.
 
 installWebMonitorInboxUnitTestHooks();
 
@@ -68,8 +60,6 @@ describe("WhatsApp approval reaction durable replay", () => {
   beforeEach(() => {
     clearWhatsAppApprovalReactionTargetsForTest();
     resolverMocks.resolveWhatsAppApproval.mockReset();
-    resolverMocks.isApprovalNotFoundError.mockReset();
-    resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
   it(
@@ -130,7 +120,9 @@ describe("WhatsApp approval reaction durable replay", () => {
         // resolves nothing and delivers nothing new. Give the upsert fast
         // path and the admission dedupe check time to settle, then assert.
         sock.ev.emit("messages.upsert", buildApprovalReactionUpsert());
-        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 1_500);
+        });
         expect(resolverMocks.resolveWhatsAppApproval).toHaveBeenCalledTimes(2);
         expect(onMessage).toHaveBeenCalledTimes(1);
       } finally {
