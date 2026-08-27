@@ -1681,6 +1681,173 @@ describe("frv continuation controller", () => {
     ).toBe(true);
   });
 
+  it("rereads a stable existing tooling ref immediately before one dispatch", async () => {
+    const branch = continuationBranchName("77", SHA);
+    const mutations: string[][] = [];
+    let refReads = 0;
+    let runLists = 0;
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path.startsWith("contents/")) {
+          return { content: Buffer.from("continuation_plan_json:").toString("base64") };
+        }
+        if (path.startsWith("git/ref/")) {
+          refReads += 1;
+          return { object: { sha: SHA } };
+        }
+        if (path.startsWith("actions/workflows/")) {
+          runLists += 1;
+          return {
+            workflow_runs:
+              runLists === 1
+                ? []
+                : [
+                    {
+                      event: "workflow_dispatch",
+                      head_branch: branch,
+                      head_sha: SHA,
+                      id: 88,
+                    },
+                  ],
+          };
+        }
+        if (path === "actions/runs/88") {
+          return {
+            conclusion: null,
+            event: "workflow_dispatch",
+            head_branch: branch,
+            head_sha: SHA,
+            id: 88,
+            path: ".github/workflows/full-release-validation.yml",
+            repository: { full_name: "openclaw/openclaw" },
+            status: "in_progress",
+          };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+      loadExecutionPlan: async () => undefined,
+      mutate: async (args: string[]) => {
+        mutations.push(args);
+        return "";
+      },
+    });
+    await expect(
+      client.dispatchContinuation(continuationPlan([child("normalCi", "101")])),
+    ).resolves.toMatchObject({ branch, runId: "88" });
+    expect(refReads).toBe(2);
+    expect(runLists).toBe(2);
+    expect(mutations).toHaveLength(1);
+    expect(mutations[0]?.slice(0, 3)).toEqual(["workflow", "run", "full-release-validation.yml"]);
+  });
+
+  it("rereads a newly created tooling ref immediately before dispatch", async () => {
+    const branch = continuationBranchName("77", SHA);
+    const mutations: string[][] = [];
+    let refReads = 0;
+    let runLists = 0;
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path.startsWith("contents/")) {
+          return { content: Buffer.from("continuation_plan_json:").toString("base64") };
+        }
+        if (path.startsWith("git/ref/")) {
+          refReads += 1;
+          if (refReads === 1) {
+            throw new Error("HTTP 404: Not Found");
+          }
+          return { object: { sha: SHA } };
+        }
+        if (path.startsWith("actions/workflows/")) {
+          runLists += 1;
+          return {
+            workflow_runs:
+              runLists === 1
+                ? []
+                : [
+                    {
+                      event: "workflow_dispatch",
+                      head_branch: branch,
+                      head_sha: SHA,
+                      id: 88,
+                    },
+                  ],
+          };
+        }
+        if (path === "actions/runs/88") {
+          return {
+            conclusion: null,
+            event: "workflow_dispatch",
+            head_branch: branch,
+            head_sha: SHA,
+            id: 88,
+            path: ".github/workflows/full-release-validation.yml",
+            repository: { full_name: "openclaw/openclaw" },
+            status: "in_progress",
+          };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+      loadExecutionPlan: async () => undefined,
+      mutate: async (args: string[]) => {
+        mutations.push(args);
+        return "";
+      },
+    });
+    await expect(
+      client.dispatchContinuation(continuationPlan([child("normalCi", "101")])),
+    ).resolves.toMatchObject({ branch, runId: "88" });
+    expect(refReads).toBe(2);
+    expect(runLists).toBe(2);
+    expect(mutations.map((args) => args[0])).toEqual(["api", "workflow"]);
+  });
+
+  it.each([
+    ["moved", () => ({ object: { sha: "f".repeat(40) } }), "moved before dispatch"],
+    [
+      "deleted",
+      () => {
+        throw new Error("HTTP 404: Not Found");
+      },
+      "is missing before dispatch",
+    ],
+  ])("rejects a %s tooling ref without dispatch or recreation", async (_label, reread, message) => {
+    const mutations: string[][] = [];
+    let refReads = 0;
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path.startsWith("contents/")) {
+          return { content: Buffer.from("continuation_plan_json:").toString("base64") };
+        }
+        if (path.startsWith("git/ref/")) {
+          refReads += 1;
+          return refReads === 1 ? { object: { sha: SHA } } : reread();
+        }
+        if (path.startsWith("actions/workflows/")) {
+          return { workflow_runs: [] };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+      mutate: async (args: string[]) => {
+        mutations.push(args);
+        throw new Error("HTTP 422 mutation must not run");
+      },
+    });
+    await expect(
+      client.dispatchContinuation(continuationPlan([child("normalCi", "101")])),
+    ).rejects.toThrow(message);
+    expect(refReads).toBe(2);
+    expect(mutations).toEqual([]);
+  });
+
   it("rejects genuine child identity drift while accepting equivalent child order", async () => {
     const selected = requiredContinuationChildren().toReversed();
     const reviewed = {
@@ -1804,6 +1971,7 @@ describe("frv continuation controller", () => {
     const branch = continuationBranchName("77", SHA);
     const mutations: string[][] = [];
     const reports: string[] = [];
+    let refReads = 0;
     const client = createClient("openclaw/openclaw", {
       apiJson: async (path: string) => {
         if (path === `compare/${SHA}...main`) {
@@ -1813,6 +1981,7 @@ describe("frv continuation controller", () => {
           return { content: Buffer.from("continuation_plan_json:").toString("base64") };
         }
         if (path.startsWith("git/ref/")) {
+          refReads += 1;
           return { object: { sha: SHA } };
         }
         if (path.startsWith("actions/workflows/")) {
@@ -1853,6 +2022,7 @@ describe("frv continuation controller", () => {
       runId: "88",
     });
     expect(mutations).toEqual([]);
+    expect(refReads).toBe(1);
     expect(reports).toEqual([expect.stringContaining("adopting exact continuation parent 88")]);
   });
 
@@ -1996,6 +2166,7 @@ describe("frv continuation controller", () => {
   ])("reconciles an exact parent after a %s dispatch response", async (_label, message) => {
     const branch = continuationBranchName("77", SHA);
     let dispatched = false;
+    let refReads = 0;
     let runLists = 0;
     const reports: string[] = [];
     const client = createClient("openclaw/openclaw", {
@@ -2007,6 +2178,7 @@ describe("frv continuation controller", () => {
           return { content: Buffer.from("continuation_plan_json:").toString("base64") };
         }
         if (path.startsWith("git/ref/")) {
+          refReads += 1;
           return { object: { sha: SHA } };
         }
         if (path.startsWith("actions/workflows/")) {
@@ -2050,6 +2222,7 @@ describe("frv continuation controller", () => {
     await expect(
       client.dispatchContinuation(continuationPlan([child("normalCi", "101")])),
     ).resolves.toMatchObject({ branch, runId: "88" });
+    expect(refReads).toBe(2);
     expect(runLists).toBe(2);
     expect(reports).toEqual([expect.stringContaining("adopting exact continuation parent 88")]);
   });

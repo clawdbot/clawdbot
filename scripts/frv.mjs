@@ -874,6 +874,20 @@ export function createClient(repository, dependencies = {}) {
         );
       }
     },
+    async assertWorkflowRef(branch, workflowSha) {
+      let existing;
+      try {
+        existing = await apiJson(refApiPath(branch));
+      } catch (error) {
+        if (githubNotFound(error)) {
+          throw new Error("continuation tooling ref is missing before dispatch", { cause: error });
+        }
+        throw error;
+      }
+      if (existing.object?.sha !== workflowSha) {
+        throw new Error("continuation tooling ref moved before dispatch");
+      }
+    },
     async dispatchContinuation(plan, operationDeadline = createOperationDeadline()) {
       validateOperationDeadline(operationDeadline);
       remainingOperationTime(operationDeadline, "FRV continuation dispatch");
@@ -951,6 +965,7 @@ export function createClient(repository, dependencies = {}) {
       }
       let dispatchError;
       if (!existing) {
+        await client.assertWorkflowRef(branch, workflowSha);
         remainingOperationTime(operationDeadline, "FRV continuation dispatch");
         try {
           await mutate(args);
