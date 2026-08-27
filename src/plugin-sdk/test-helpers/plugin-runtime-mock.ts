@@ -1015,6 +1015,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSessionMessages: vi.fn(),
       deleteSession: vi.fn(),
     },
+    hooks: {
+      dispatchHookAgentTurn: vi.fn(),
+    },
     sandbox: {
       resolveWorkspaceAuthority: vi.fn(),
       prepareWorkspaceAuthority: vi.fn(),

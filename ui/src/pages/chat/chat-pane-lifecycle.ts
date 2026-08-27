@@ -92,6 +92,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     },
     pending: this.pendingPanelToggleRequests,
     requestUpdate: () => this.requestUpdate(),
+    updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
   });
 
   private chatRouteReadyReported = false;
@@ -313,7 +314,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
       }
-      state.updateSidebarLayout(
+      this.commitSidebarLayout(
         visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
       );
     };

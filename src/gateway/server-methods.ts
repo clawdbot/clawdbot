@@ -6,6 +6,10 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../packages/gateway-protocol/src/restart-unavailable.js";
+import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
@@ -596,7 +600,9 @@ export async function runWithGatewayRequestEnvelope<T>(
           retryAfterMs: 1_000,
           details: {
             method,
-            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
+            reason: restartDraining
+              ? GATEWAY_RESTART_UNAVAILABLE_REASON
+              : GATEWAY_SUSPEND_UNAVAILABLE_REASON,
             phase: getGatewaySuspendAdmissionPhase(),
           },
         },

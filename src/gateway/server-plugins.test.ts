@@ -410,6 +410,12 @@ async function createSubagentRuntime(
   return createRuntimeFromLastGatewayLoad().subagent;
 }
 
+async function createRequestScopedSubagentRuntime(): Promise<PluginRuntime["subagent"]> {
+  loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+  loadGatewayStartupPluginsForTest({ resolveGatewayContext: undefined });
+  return createRuntimeFromLastGatewayLoad().subagent;
+}
+
 function createRuntimeFromLastGatewayLoad(): PluginRuntime {
   const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as
     | Parameters<PluginRuntimeModule["createPluginRuntime"]>[0]
@@ -1341,7 +1347,7 @@ describe("loadGatewayPlugins", () => {
 
   test("honors trusted plugin node scopes inside a narrower Gateway request", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "opencode" }));
-    loadGatewayStartupPluginsForTest();
+    loadGatewayStartupPluginsForTest({ resolveGatewayContext: undefined });
     const scope = {
       context: createTestContext("nodes-invoke-read-caller"),
       client: {
@@ -1415,7 +1421,7 @@ describe("loadGatewayPlugins", () => {
 
   test("does not inherit admin scope for trusted plugin gateway requests", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
-    loadGatewayStartupPluginsForTest();
+    loadGatewayStartupPluginsForTest({ resolveGatewayContext: undefined });
     const scope = {
       context: createTestContext("plugin-gateway-request-admin-caller"),
       client: {
@@ -1943,8 +1949,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("forwards provider and model overrides when the request scope is authorized", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
+    const runtime = await createRequestScopedSubagentRuntime();
     const scope = {
       context: createTestContext("request-scope-forward-overrides"),
       client: {
@@ -2138,7 +2143,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("clears inherited additive grants when a scoped plugin run requests none", async () => {
-    const runtime = await createSubagentRuntime(serverPluginsModule);
+    const runtime = await createRequestScopedSubagentRuntime();
     const scope = {
       context: createTestContext("clear-tools-also-allow"),
       client: {
@@ -2521,8 +2526,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("allows session deletion when the request scope already has admin", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
+    const runtime = await createRequestScopedSubagentRuntime();
     const scope = {
       context: createTestContext("request-scope-delete-session"),
       client: {
@@ -2546,8 +2550,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("keeps plugin owner metadata on admin-scoped plugin session cleanup", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
+    const runtime = await createRequestScopedSubagentRuntime();
     const scope = {
       context: createTestContext("request-scope-plugin-delete-session"),
       client: {

@@ -970,6 +970,7 @@ module.exports = {
   id: "machine-output-cli",
   register(api) {
     api.registerCli(() => {}, {
+      commands: [" machine-output-cli ", "machine-output-cli", "additional-cli"],
       descriptors: [{
         name: "machine-output-cli",
         description: "Machine output CLI",
@@ -979,6 +980,7 @@ module.exports = {
     });
     api.registerCli(() => {}, {
       parentPath: ["nodes"],
+      commands: ["nested-machine-output", " nested-machine-output "],
       descriptors: [{
         name: "nested-machine-output",
         description: "Nested metadata",
@@ -999,6 +1001,10 @@ module.exports = {
     const metadataRegistry = await loadOpenClawPluginCliRegistry({ cache: false, config });
     const fullRegistry = loadOpenClawPlugins({ cache: false, config });
     for (const registry of [metadataRegistry, fullRegistry]) {
+      expect(registry.cliRegistrars[0]?.commands).toEqual(["machine-output-cli", "additional-cli"]);
+      expect(
+        registry.plugins.find((entry) => entry.id === "machine-output-cli")?.cliCommands,
+      ).toEqual(["machine-output-cli", "additional-cli", "nodes nested-machine-output"]);
       const resolver = registry.cliRegistrars[0]?.descriptors[0]?.machineOutput;
       expect(
         resolver?.({ argv: ["node", "openclaw", "machine-output-cli"], stdoutIsTTY: false }),
@@ -1010,6 +1016,7 @@ module.exports = {
         }),
       ).toBe(true);
       const nested = registry.cliRegistrars.find((entry) => entry.parentPath.length > 0);
+      expect(nested?.commands).toEqual(["nested-machine-output"]);
       expect(nested?.descriptors[0]).not.toHaveProperty("machineOutput");
     }
   });

@@ -209,6 +209,7 @@ export const defaultControlUiFeatureMethods = [
   "device.scopes.waitUpgrade",
   "session.members.add",
   "session.members.list",
+  "session.members.listEvidence",
   "session.members.remove",
   "session.visibility.set",
   "sessions.abort",
@@ -274,6 +275,8 @@ export type ControlUiMockGatewayScenario = {
   featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
+  /** Hold every request until resolveDeferred/rejectDeferred releases the method. */
+  heldMethods?: string[];
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
   /** Exact immutable Control UI artifact served by the mocked Gateway. */
@@ -345,6 +348,8 @@ export type ControlUiMockGatewayScenario = {
   cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
+  /** Local media preview roots served in the bootstrap config; tilde sources expand against these. */
+  localMediaPreviewRoots?: string[];
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -881,6 +886,7 @@ function normalizeScenario(
     featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
+    heldMethods: scenario.heldMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
     gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
@@ -918,6 +924,7 @@ function normalizeScenario(
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
+    localMediaPreviewRoots: scenario.localMediaPreviewRoots ?? [],
   };
 }
 
@@ -932,7 +939,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     basePath: normalizedScenario.basePath,
     devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
-    localMediaPreviewRoots: [],
+    localMediaPreviewRoots: normalizedScenario.localMediaPreviewRoots,
     serverVersion: normalizedScenario.serverVersion,
     serverBuildId: normalizedScenario.serverBuildId,
     terminalEnabled: normalizedScenario.terminalEnabled,
@@ -1055,6 +1062,7 @@ function installControlUiMockGateway(
     // Opaque initial documents may not expose storage; the target page will.
   }
   const deferredMethods: DeferredMethod[] = scenario.deferredMethods.map((method) => ({ method }));
+  const heldMethods = new Set(scenario.heldMethods);
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
@@ -1399,6 +1407,9 @@ function installControlUiMockGateway(
       patch.lastReadAt = sessionPatchTimestamp;
       patch.markedUnreadAt = undefined;
     }
+    if (hasOwn(params, "model")) {
+      patch.modelOverrideSource = params.model == null ? null : "user";
+    }
     if (scenario.sessionArchiveFiltering && hasOwn(params, "archived")) {
       patch.archived = params.archived;
     }
@@ -1574,6 +1585,7 @@ function installControlUiMockGateway(
       label: "Main",
       model: "gpt-5.5",
       modelProvider: "openai",
+      modelOverrideSource: null,
       status: "done",
       totalTokens: 0,
       updatedAt: Date.now(),
@@ -2061,6 +2073,9 @@ function installControlUiMockGateway(
   }
 
   function shouldDefer(method: string, params: unknown): boolean {
+    if (heldMethods.has(method)) {
+      return true;
+    }
     const index = deferredMethods.findIndex(
       (candidate) => candidate.method === method && paramsMatch(params, candidate.match),
     );
@@ -2069,6 +2084,25 @@ function installControlUiMockGateway(
     }
     deferredMethods.splice(index, 1);
     return true;
+  }
+
+  function takeDeferredResponses(method: string): DeferredResponse[] {
+    const index = deferredResponses.findIndex((response) => response.method === method);
+    if (index < 0) {
+      throw new Error(`No deferred mock Gateway response for ${method}`);
+    }
+    if (!heldMethods.delete(method)) {
+      return deferredResponses.splice(index, 1);
+    }
+    // Startup can replace a request when connection scope settles. A held
+    // catalog releases every admitted request, not only its retired predecessor.
+    const responses = deferredResponses.filter((response) => response.method === method);
+    for (let i = deferredResponses.length - 1; i >= 0; i -= 1) {
+      if (deferredResponses[i]?.method === method) {
+        deferredResponses.splice(i, 1);
+      }
+    }
+    return responses;
   }
 
   function parseFrame(raw: string | ArrayBufferLike | Blob | ArrayBufferView): BrowserFrame | null {
@@ -2238,52 +2272,40 @@ function installControlUiMockGateway(
       return method ? requests.filter((request) => request.method === method) : [...requests];
     },
     rejectDeferred(method, error) {
-      const index = deferredResponses.findIndex((response) => response.method === method);
-      if (index < 0) {
-        throw new Error(`No deferred mock Gateway response for ${method}`);
+      for (const response of takeDeferredResponses(method)) {
+        response.socket.deliver({
+          error: {
+            code: error?.code ?? "INVALID_REQUEST",
+            message: error?.message ?? "mock Gateway rejected request",
+            ...(error?.details ? { details: error.details } : {}),
+            ...(error?.retryable ? { retryable: true } : {}),
+          },
+          id: response.id,
+          ok: false,
+          type: "res",
+        });
       }
-      const [response] = deferredResponses.splice(index, 1);
-      if (!response) {
-        throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
-      }
-      response.socket.deliver({
-        error: {
-          code: error?.code ?? "INVALID_REQUEST",
-          message: error?.message ?? "mock Gateway rejected request",
-          ...(error?.details ? { details: error.details } : {}),
-          ...(error?.retryable ? { retryable: true } : {}),
-        },
-        id: response.id,
-        ok: false,
-        type: "res",
-      });
     },
     requests,
     resolveDeferred(method, payload) {
-      const index = deferredResponses.findIndex((response) => response.method === method);
-      if (index < 0) {
-        throw new Error(`No deferred mock Gateway response for ${method}`);
+      for (const response of takeDeferredResponses(method)) {
+        const resolvedPayload = applyScenarioAgentModel(
+          response.method,
+          payload ?? buildResponse(response.method, response.params),
+        );
+        if (
+          response.method === "sessions.create" ||
+          response.method === "sessions.catalog.continue"
+        ) {
+          recordMaterializedSession(response.params, resolvedPayload);
+        }
+        response.socket.deliver({
+          id: response.id,
+          ok: true,
+          payload: resolvedPayload,
+          type: "res",
+        });
       }
-      const [response] = deferredResponses.splice(index, 1);
-      if (!response) {
-        throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
-      }
-      const resolvedPayload = applyScenarioAgentModel(
-        response.method,
-        payload ?? buildResponse(response.method, response.params),
-      );
-      if (
-        response.method === "sessions.create" ||
-        response.method === "sessions.catalog.continue"
-      ) {
-        recordMaterializedSession(response.params, resolvedPayload);
-      }
-      response.socket.deliver({
-        id: response.id,
-        ok: true,
-        payload: resolvedPayload,
-        type: "res",
-      });
     },
     setOnline(nextOnline) {
       online = nextOnline;
@@ -2373,7 +2395,16 @@ function installControlUiMockGateway(
   (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
   const RoutedWebSocket = function (url: string | URL, protocols?: string | string[]) {
     const resolvedUrl = String(url);
-    if (scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))) {
+    // Vite's dev client must keep its real socket: the mock would fake the
+    // open handshake, and a later setOnline(false) close would make the client
+    // believe the dev server restarted and reload the page mid-test.
+    const isViteHmr = Array.isArray(protocols)
+      ? protocols.includes("vite-hmr")
+      : protocols === "vite-hmr";
+    if (
+      isViteHmr ||
+      scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))
+    ) {
       return protocols === undefined
         ? new NativeWebSocket(resolvedUrl)
         : new NativeWebSocket(resolvedUrl, protocols);

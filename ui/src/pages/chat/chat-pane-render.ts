@@ -21,6 +21,7 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -225,21 +226,16 @@ export class ChatPane extends ChatPaneLayoutRender {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const {
-      backgroundTasks,
-      closePanelSlot,
-      openPanelSlot,
-      progressCardPlacement,
-      sessionWorkspace,
-    } = createChatPaneRails({
-      state,
-      sidebarLayout,
-      paneWidth: this.paneWidth,
-      presentationId: this.presentationId,
-      presented: this.presented,
-      gatewaySnapshot,
-      setObserverVisibility: this.setSessionObserverVisibility,
-    });
+    const { backgroundTasks, closePanelSlot, openPanelSlot, sessionWorkspace } =
+      createChatPaneRails({
+        state,
+        sidebarLayout,
+        presentationId: this.presentationId,
+        presented: this.presented,
+        gatewaySnapshot,
+        setObserverVisibility: this.setSessionObserverVisibility,
+        updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+      });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -320,8 +316,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
-      progressCard:
-        progressCardPlacement === "rail" || !this.progressCard.card ? null : this.progressCard.card,
+      progressCard: this.progressCard.card,
+      progressCardHasActiveRun: Boolean(
+        state.chatRunId || (selectedSession && isSessionRunActive(selectedSession)),
+      ),
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
@@ -538,6 +536,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       onRequestUpdate: state.requestUpdate,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
+      onSlashCommand:
+        suggestionViewer || catalogKey
+          ? undefined
+          : (command) => void state.handleSendChat(command),
       showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
@@ -650,8 +652,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       currentAgentId,
       board,
       sidebarLayout,
-      progressCardPlacement,
-      onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps: props,

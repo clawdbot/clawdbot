@@ -15,9 +15,9 @@ import {
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
-import { resolveDispatchTimeoutMs, startNodeInvokeBudget } from "./node-registry.invoke-budget.js";
 import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
 import {
   normalizeSystemRunInvokeParams,
@@ -243,6 +243,11 @@ async function invokeNodeRegistryCore(
   params: NodeInvokeParams,
   allowPrivateCommand: boolean,
 ): Promise<NodeInvokeResult> {
+  let timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
+  // Explicit budgets include pairing and serialization; omitted budgets retain
+  // the post-dispatch default, and zero keeps long-lived invokes unbounded.
+  const deadlineAtMs =
+    Number.isFinite(params.timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
   if (isPrivateNodeInvokeCommand(params.command) && !allowPrivateCommand) {
     return {
       ok: false,
@@ -252,7 +257,6 @@ async function invokeNodeRegistryCore(
   if (params.signal?.aborted) {
     return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
   }
-  const budget = startNodeInvokeBudget(params.timeoutMs);
   let node = state.context.getNode(params.nodeId);
   if (!node) {
     return { ok: false, error: { code: "NOT_CONNECTED", message: "node not connected" } };
@@ -283,7 +287,14 @@ async function invokeNodeRegistryCore(
     };
   }
   if (expectedPairingGeneration && state.context.hasCurrentPairingStateResolver) {
-    const resolution = await state.context.resolvePairingLease(node);
+    const pairingNode = node;
+    const resolution = await awaitWithinDeadline(
+      () => state.context.resolvePairingLease(pairingNode),
+      deadlineAtMs,
+    );
+    if (resolution === ABSOLUTE_DEADLINE_EXPIRED) {
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+    }
     if (resolution.status === "unavailable") {
       return {
         ok: false,
@@ -304,6 +315,27 @@ async function invokeNodeRegistryCore(
       };
     }
   }
+  const requestId = randomUUID();
+  const invokeParams = normalizeSystemRunInvokeParams({
+    command: params.command,
+    params: params.params,
+  });
+  const payload = {
+    id: requestId,
+    nodeId: params.nodeId,
+    command: params.command,
+    paramsJSON:
+      "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
+    timeoutMs,
+    idempotencyKey: params.idempotencyKey,
+    sessionKey: normalizeOptionalString(params.sessionKey),
+  };
+  const systemRunEvent = resolvePendingSystemRunEvent({
+    command: params.command,
+    params: invokeParams,
+  });
+  // Serialization can consume the budget or close caller-owned authority.
+  // Revalidate both before arming pending state and handing off to transport.
   if (params.isDispatchAuthorized?.() === false) {
     return {
       ok: false,
@@ -313,32 +345,13 @@ async function invokeNodeRegistryCore(
       },
     };
   }
-  const requestId = randomUUID();
-  const invokeParams = normalizeSystemRunInvokeParams({
-    command: params.command,
-    params: params.params,
-  });
-  // Tool parameters are unbounded, so serializing them is as much of a budget
-  // spender as the awaits above.
-  const paramsJSON =
-    "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null;
-  const systemRunEvent = resolvePendingSystemRunEvent({
-    command: params.command,
-    params: invokeParams,
-  });
-  const timeoutMs = resolveDispatchTimeoutMs(budget);
-  if (budget.dispatchDeadlineAtMs !== undefined && timeoutMs === 0) {
-    return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+  if (deadlineAtMs !== undefined) {
+    timeoutMs = Math.max(0, deadlineAtMs - Date.now());
+    if (timeoutMs === 0) {
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+    }
+    payload.timeoutMs = timeoutMs;
   }
-  const payload = {
-    id: requestId,
-    nodeId: params.nodeId,
-    command: params.command,
-    paramsJSON,
-    timeoutMs,
-    idempotencyKey: params.idempotencyKey,
-    sessionKey: normalizeOptionalString(params.sessionKey),
-  };
   const result = new Promise<NodeInvokeResult>((resolve, reject) => {
     const pending: PendingInvoke = {
       nodeId: params.nodeId,

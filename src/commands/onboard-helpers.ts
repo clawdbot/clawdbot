@@ -187,10 +187,15 @@ export function applyWizardMetadata(
 }
 
 /** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
-export function formatControlUiSshHint(params: { port: number; basePath?: string }): string {
+export function formatControlUiSshHint(params: {
+  port: number;
+  basePath?: string;
+  tlsEnabled: boolean;
+}): string {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
-  const localUrl = `http://localhost:${params.port}${uiPath}`;
+  const protocol = params.tlsEnabled ? "https" : "http";
+  const localUrl = `${protocol}://localhost:${params.port}${uiPath}`;
   const sshTarget = resolveSshTargetHint();
   return [
     "No GUI detected. Open from your computer:",

@@ -244,11 +244,28 @@ describe("renderChatComposer controls", () => {
     expect(stopVoice.classList.contains("chat-send-btn--voice-live")).toBe(true);
     expect(stopVoice.classList.contains("chat-send-btn--stop")).toBe(false);
     expect(stopGeneration.classList.contains("chat-send-btn--stop")).toBe(true);
+    expect(stopGeneration.closest(".chat-mobile-primary-action")).not.toBeNull();
     expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
     stopVoice.click();
     stopGeneration.click();
     expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
     expect(onAbort).toHaveBeenCalledOnce();
+  });
+
+  it("keeps mobile voice controls disabled while the composer is busy", () => {
+    const { container } = renderComposer({
+      sending: true,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+
+    const mobileDictation = container.querySelector<HTMLButtonElement>(
+      ".chat-mobile-dictation-action .chat-send-btn--voice",
+    );
+    expect(mobileDictation?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>(".chat-mobile-talk-action .chat-send-btn")
+        ?.disabled,
+    ).toBe(true);
   });
 
   it("queues ordinary drafts offline but disables live voice", () => {

@@ -254,6 +254,9 @@
       "openclaw/plugin-sdk/channel-contract-testing": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-contract-testing.d.ts"
       ],
+      "openclaw/plugin-sdk/channel-ingress-test-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-ingress-test-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/dangerous-name-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/dangerous-name-runtime.d.ts"
       ],

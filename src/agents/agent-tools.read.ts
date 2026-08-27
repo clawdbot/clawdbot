@@ -955,6 +955,7 @@ type SandboxToolParams = {
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  modelHasVision?: boolean;
 };
 
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
@@ -965,6 +966,7 @@ export function createSandboxedReadTool(
     (params.createTool ?? createReadTool)(params.root, {
       operations: createSandboxReadOperations(params),
       maxBytes: resolveAdaptiveReadMaxBytes(params),
+      modelHasVision: params.modelHasVision,
     }),
   );
   return createOpenClawReadTool(base, {

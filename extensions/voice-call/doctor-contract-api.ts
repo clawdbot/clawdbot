@@ -65,7 +65,7 @@ function resolveUserPath(input: string, env: NodeJS.ProcessEnv): string {
     return trimmed;
   }
   if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, resolveHome(env)));
+    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, () => resolveHome(env)));
   }
   return path.resolve(trimmed);
 }
@@ -148,6 +148,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "retired shared-state tables -> removed tables and indexes";
     case "state-table-retirement-v11":
       return "retired skill curator tables -> removed tables and indexes";
+    case "singleton-state-foldin-v12":
+      return "singleton state tables -> shared configuration state";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":

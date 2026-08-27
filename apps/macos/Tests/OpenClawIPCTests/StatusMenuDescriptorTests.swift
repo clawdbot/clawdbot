@@ -9,7 +9,6 @@ struct StatusMenuDescriptorTests {
     @Test func `connected menu preserves section and entry order`() {
         let snapshot = StatusMenuDescriptor.Snapshot(
             quickChatEnabled: true,
-            canvasEnabled: true,
             debugEnabled: true,
             updateReady: true,
             hasUsage: true,
@@ -25,7 +24,6 @@ struct StatusMenuDescriptorTests {
             "action.dashboard",
             "action.quickChat",
             "action.talkMode",
-            "action.canvas",
             "summary.automations",
             "summary.usage",
             "summary.devices",

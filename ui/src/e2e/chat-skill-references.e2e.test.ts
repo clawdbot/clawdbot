@@ -120,6 +120,13 @@ suite.define(() => {
 
         await composer.fill("Print $HOME");
         await expect.poll(() => picker.count()).toBe(0);
+        await composer.fill("Review this with /auto");
+        const slashPicker = page.getByRole("listbox", { name: "Slash commands" });
+        await slashPicker.waitFor({ state: "visible" });
+        await expect.poll(() => slashPicker.getByRole("option").count()).toBe(1);
+        await composer.press("Enter");
+        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+
         await composer.fill("/");
         await page.getByRole("listbox", { name: "Slash commands" }).waitFor({ state: "visible" });
         await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(2);

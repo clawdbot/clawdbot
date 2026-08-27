@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceSyncRequest, WorkerWorkspaceSyncResult } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   resolveWorkerWorkspaceGitAuthor,
   validateWorkspaceSyncRequest,
@@ -61,8 +63,20 @@ export function recordNodeSyncPath(
 }
 
 async function localGit(root: string, args: string[]): Promise<string> {
+  // Inspection runs inside the Gateway process against a user checkout, so
+  // checkout-configured hook/fsmonitor commands must never execute here.
   const result = await runCommandWithTimeout(
-    ["git", ...GIT_NONINTERACTIVE_ARGS, "-C", root, ...args],
+    [
+      "git",
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "core.fsmonitor=false",
+      ...GIT_NONINTERACTIVE_ARGS,
+      "-C",
+      root,
+      ...args,
+    ],
     {
       timeoutMs: GIT_TIMEOUT_MS,
       maxOutputBytes: 256 * 1024,
@@ -160,7 +174,34 @@ function succeeded(result: SpawnResult): boolean {
 
 /** Optional published-origin fast path; HTTPS transfer remains the canonical fallback. */
 export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
+  const capture = async (dir: string, base: string | null, reference?: string) =>
+    await exec({
+      argv: [
+        "node",
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        dir,
+        ...(base ? [base, "eligible"] : ["", "all"]),
+        ...(reference ? [reference.slice("sha256:".length)] : []),
+      ],
+      timeoutMs: GIT_TIMEOUT_MS,
+      transportRetry: "idempotent",
+    });
   return {
+    async captureManifest(dir: string, base: string | null, reference: string) {
+      const captured = await capture(dir, base, reference);
+      const manifestRef = captured.stdout.trim();
+      if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
+        const detail = boundedWorkerError(
+          captured.stderr.trim() ||
+            (!succeeded(captured)
+              ? `${captured.termination} (exit code ${captured.code}, signal ${captured.signal})`
+              : "invalid manifest reference"),
+        );
+        throw new Error(`Node workspace manifest capture failed: ${detail}`);
+      }
+      return manifestRef;
+    },
     async trySyncWorkspace(
       request: WorkerWorkspaceSyncRequest,
       expectedManifestRef: string,
@@ -206,18 +247,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
       if (!succeeded(checkedOut) || checkedOut.workspaceDir !== cloned.workspaceDir) {
         return { kind: "fallback", reason: "checkout-failed" };
       }
-      const captured = await exec({
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_MANIFEST_JS,
-          checkedOut.workspaceDir,
-          identity.commit,
-          "eligible",
-        ],
-        timeoutMs: GIT_TIMEOUT_MS,
-        transportRetry: "idempotent",
-      });
+      const captured = await capture(checkedOut.workspaceDir, identity.commit);
       const manifestRef = captured.stdout.trim();
       if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
         return { kind: "fallback", reason: "manifest-capture-failed" };

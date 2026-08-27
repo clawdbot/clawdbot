@@ -2124,11 +2124,18 @@ describe("handleSendChat", () => {
     expect(patchCount).toBe(2);
   });
 
-  it("rolls a failed queued picker back to the preceding slash model value", async () => {
+  it("retires a failed queued picker back to the preceding confirmed session row", async () => {
     const firstPatch = createDeferred<unknown>();
     let patchCount = 0;
     const host = makeChatHost({
       requestHandlers: {
+        "sessions.list": createSessionsResult([
+          row("agent:main", {
+            model: "gpt-5-mini",
+            modelProvider: "openai",
+            modelOverrideSource: "user",
+          }),
+        ]),
         "sessions.patch": () => {
           patchCount += 1;
           if (patchCount === 1) {
@@ -2138,29 +2145,23 @@ describe("handleSendChat", () => {
         },
       },
     });
-    host.sessions.setModelOverride(host.sessionKey, "openai/gpt-old");
 
-    const slash = patchChatSessionSettings(
-      host,
-      host.sessionKey,
-      { model: "openai/gpt-5-mini" },
-      {
-        deferModelOverride: true,
-        reconcile: () => {
-          host.sessions.setModelOverride(host.sessionKey, "openai/gpt-5-mini");
-        },
-      },
-    );
+    const slash = patchChatSessionSettings(host, host.sessionKey, { model: "openai/gpt-5-mini" });
     await waitForFast(() => expect(patchCount).toBe(1));
     const picker = patchChatSessionSettings(host, host.sessionKey, {
       model: "openai/gpt-5",
     });
 
-    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-old");
+    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-5-mini");
     firstPatch.resolve(createResolvedModelPatch("gpt-5-mini", "openai"));
     await expect(slash).resolves.toBeTruthy();
     await expect(picker).rejects.toThrow("picker rejected");
-    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-5-mini");
+    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBeUndefined();
+    expect(host.sessions.state.result?.sessions[0]).toMatchObject({
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+    });
   });
 
   it("keeps waiting when a late picker barrier cannot be persisted", async () => {
@@ -3384,7 +3385,7 @@ describe("handleSendChat", () => {
     await foreground;
   });
 
-  it("keeps slash-command model changes in sync with the chat header cache", async () => {
+  it("keeps slash-command model changes in the canonical row and refreshes tools", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>().mockResolvedValue(createJsonResponse({}, { ok: false })),
@@ -3405,9 +3406,15 @@ describe("handleSendChat", () => {
         "sessions.list": {
           ts: 0,
           path: "",
-          count: 0,
+          count: 1,
           defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-          sessions: [],
+          sessions: [
+            row("main", {
+              model: "gpt-5-mini",
+              modelProvider: "openai",
+              modelOverrideSource: "user",
+            }),
+          ],
         },
         "models.list": {
           models: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
@@ -3424,7 +3431,12 @@ describe("handleSendChat", () => {
       key: "main",
       model: "gpt-5-mini",
     });
-    expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5-mini");
+    expect(host.sessions.state.modelOverrides.main).toBeUndefined();
+    expect(host.sessions.state.result?.sessions[0]).toMatchObject({
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+    });
     expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
 
@@ -5060,9 +5072,7 @@ describe("handleSendChat", () => {
       action: "refresh",
       content: "Model set to `gpt-5-mini`.",
       pendingCurrentRun: true,
-      sessionPatch: {
-        modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
-      },
+      modelChanged: true,
       trackRunId: "stale-command-run",
     });
     await draining;
@@ -5084,6 +5094,7 @@ describe("handleSendChat", () => {
     const item = createQueuedLocalCommand("reconnected-model-command", "/model gpt-5-mini", {
       sessionKey: "agent:main:first",
     });
+    const refreshTools = vi.fn(async () => undefined);
     const host = makeChatHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(item.sessionKey),
@@ -5091,8 +5102,8 @@ describe("handleSendChat", () => {
       connectionEpoch: 1,
       chatQueue: [item],
       sessionKey: item.sessionKey,
+      refreshCurrentSessionTools: refreshTools,
     });
-    const setModelOverride = vi.spyOn(host.sessions, "setModelOverride");
     expect(admitQueuedMessageForSession(host, item.sessionKey, item)).toBe(true);
 
     const draining = retryReconnectableQueuedChatSends(host);
@@ -5103,13 +5114,11 @@ describe("handleSendChat", () => {
     command.resolve({
       action: "refresh",
       content: "Model set to `gpt-5-mini`.",
-      sessionPatch: {
-        modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
-      },
+      modelChanged: true,
     });
     await draining;
 
-    expect(setModelOverride).not.toHaveBeenCalled();
+    expect(refreshTools).not.toHaveBeenCalled();
     expect(host.sessions.state.modelOverrides[item.sessionKey]).toBeUndefined();
   });
 
@@ -5118,7 +5127,7 @@ describe("handleSendChat", () => {
     { sessionKey: "agent:work:main", mainKey: "main" },
     { sessionKey: "agent:work:home", mainKey: "home" },
   ])(
-    "does not apply a late selected-global model result after the selected agent changes for $sessionKey",
+    "refreshes model tools only for the still-visible target after an agent selection change ($sessionKey)",
     async ({ sessionKey, mainKey }) => {
       const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
       executeSlashCommandMock.mockImplementationOnce(() => command.promise);
@@ -5126,6 +5135,7 @@ describe("handleSendChat", () => {
       const item = createQueuedLocalCommand("switched-global-model-command", "/model gpt-5-mini", {
         sessionKey,
       });
+      const refreshTools = vi.fn(async () => undefined);
       const host = makeChatHost({
         requestHandlers: {
           "chat.history": () => idleChatHistory(item.sessionKey),
@@ -5134,8 +5144,8 @@ describe("handleSendChat", () => {
         agentsList: { defaultId: "main", mainKey },
         chatQueue: [item],
         sessionKey: item.sessionKey,
+        refreshCurrentSessionTools: refreshTools,
       });
-      const setModelOverride = vi.spyOn(host.sessions, "setModelOverride");
       expect(admitQueuedMessageForSession(host, item.sessionKey, item)).toBe(true);
 
       const draining = retryReconnectableQueuedChatSends(host);
@@ -5145,13 +5155,11 @@ describe("handleSendChat", () => {
       command.resolve({
         action: "refresh",
         content: "Model set to `gpt-5-mini`.",
-        sessionPatch: {
-          modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
-        },
+        modelChanged: true,
       });
       await draining;
 
-      expect(setModelOverride).not.toHaveBeenCalled();
+      expect(refreshTools).toHaveBeenCalledTimes(sessionKey === "global" ? 0 : 1);
       expect(host.sessions.state.modelOverrides[item.sessionKey]).toBeUndefined();
     },
   );

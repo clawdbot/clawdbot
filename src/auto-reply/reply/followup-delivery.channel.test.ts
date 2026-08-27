@@ -168,10 +168,17 @@ describe("follow-up delivery channel boundary", () => {
   it("dedupes later Slack replies against their actual first-mode transport thread", () => {
     const slack = createChannelPlugin("slack");
     slack.threading = {
-      resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
-        threadId: null,
-        replyToId: replyToIsExplicit ? replyToId : threadId == null ? undefined : String(threadId),
-      }),
+      resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => {
+        const inheritedThread = threadId == null ? undefined : String(threadId);
+        // First-mode can clear replyToId; Slack still falls back to the inherited thread.
+        return {
+          threadId: null,
+          replyToId:
+            replyToIsExplicit === false
+              ? (inheritedThread ?? replyToId)
+              : (replyToId ?? inheritedThread),
+        };
+      },
     };
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "slack", plugin: slack, source: "test" }]),

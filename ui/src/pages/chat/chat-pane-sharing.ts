@@ -9,7 +9,7 @@ import type {
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
-  SessionMembersListResult,
+  SessionMembersListEvidenceResult as SessionSharingResult,
   SessionVisibility,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -38,6 +38,7 @@ import {
 } from "./components/chat-session-sharing.ts";
 
 type HeaderScope = ChatPaneConnectionScope;
+const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
 export abstract class ChatPaneSharing extends ChatPaneBase {
   protected readonly clearSessionCompanion = async () => {
@@ -100,7 +101,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       !scope ||
       !currentRow ||
       !readSessionMethodAccess(scope.context.gateway.snapshot, {
-        method: "session.members.list",
+        method: SESSION_MEMBERS_LIST_METHOD,
         requiredScope: "operator.read",
       }).allowed
     ) {
@@ -129,7 +130,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     };
     this.setSessionSharingState(cacheKey, loadingState);
     try {
-      const result = await scope.client.request<SessionMembersListResult>("session.members.list", {
+      const result = await scope.client.request<SessionSharingResult>(SESSION_MEMBERS_LIST_METHOD, {
         sessionKey: currentRow.key,
         ...(this.sessionSharingAgentId(currentRow.key)
           ? { agentId: this.sessionSharingAgentId(currentRow.key) }

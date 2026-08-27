@@ -207,33 +207,29 @@ async function readProxyErrorData(
 }
 
 async function readProxySseChunk(
-  reader: Pick<SseByteGuard, "read" | "cancel">,
+  reader: Pick<SseByteGuard, "read">,
   readIdleTimeoutMs: number,
+  cancel: (reason?: unknown) => Promise<void>,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   return await new Promise((resolve, reject) => {
     const timeoutError = new Error(
       `Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`,
     );
-    timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       timedOut = true;
-      void reader.cancel(timeoutError);
+      void cancel(timeoutError);
       reject(timeoutError);
     }, readIdleTimeoutMs);
     void reader.read().then(
       (result) => {
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
+        clearTimeout(timeoutId);
         if (!timedOut) {
           resolve(result);
         }
       },
       (error: unknown) => {
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
+        clearTimeout(timeoutId);
         if (!timedOut) {
           reject(error instanceof Error ? error : new Error(String(error)));
         }
@@ -242,19 +238,12 @@ async function readProxySseChunk(
   });
 }
 
-function assertProxySsePendingBufferWithinLimit(
-  buffer: string,
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): void {
+function assertProxySsePendingBufferWithinLimit(buffer: string): void {
   const size = new TextEncoder().encode(buffer).byteLength;
   if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
     return;
   }
-  const error = new Error(
-    `Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`,
-  );
-  void reader.cancel(error).catch(() => undefined);
-  throw error;
+  throw new Error(`Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`);
 }
 
 export function streamProxy(
@@ -285,17 +274,14 @@ export function streamProxy(
     };
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let readerReachedEof = false;
+    let cancellation: Promise<void> | undefined;
+    let cleanupReason: unknown;
     const readIdleTimeoutMs = resolveProxyReadIdleTimeoutMs(options.timeoutMs);
-
-    const abortHandler = () => {
-      if (reader) {
-        reader.cancel("Request aborted by user").catch(() => {});
-      }
-    };
-
-    if (options.signal) {
-      options.signal.addEventListener("abort", abortHandler);
-    }
+    const cancelReader = (reason?: unknown) =>
+      reader ? (cancellation ??= reader.cancel(reason).catch(() => undefined)) : Promise.resolve();
+    const abortHandler = () => void cancelReader("Request aborted by user");
+    options.signal?.addEventListener("abort", abortHandler);
 
     try {
       const requestAbort = buildProxyRequestAbort(options.signal, readIdleTimeoutMs);
@@ -355,28 +341,29 @@ export function streamProxy(
       let terminalEventSeen = false;
       const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
 
-      const processSseLine = (line: string) => {
+      const processSseLine = (line: string): boolean => {
         // The SSE spec makes the space after "data:" optional; accept both
         // `data:{...}` and `data: {...}`, mirroring provider-transport-fetch.
         if (!line.startsWith("data:")) {
-          return;
+          return false;
         }
         const data = line.slice("data:".length).trim();
         if (!data) {
-          return;
+          return false;
         }
         const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
         const event = processProxyEvent(proxyEvent, partial, toolArgumentPreviewSchedules);
         if (!event) {
-          return;
+          return false;
         }
-        terminalEventSeen = event.type === "done" || event.type === "error";
         stream.push(event);
+        return event.type === "done" || event.type === "error";
       };
 
-      while (true) {
-        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs);
+      while (!terminalEventSeen) {
+        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs, cancelReader);
         if (done) {
+          readerReachedEof = cancellation === undefined;
           break;
         }
 
@@ -387,19 +374,24 @@ export function streamProxy(
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        assertProxySsePendingBufferWithinLimit(buffer, reader);
+        assertProxySsePendingBufferWithinLimit(buffer);
 
         for (const line of lines) {
-          processSseLine(line);
+          terminalEventSeen = processSseLine(line);
+          if (terminalEventSeen) {
+            break;
+          }
         }
       }
 
       if (options.signal?.aborted) {
         throw new Error("Request aborted by user");
       }
-      buffer += decoder.decode();
-      if (buffer.trim()) {
-        processSseLine(buffer);
+      if (readerReachedEof) {
+        buffer += decoder.decode();
+        if (buffer.trim()) {
+          terminalEventSeen = processSseLine(buffer);
+        }
       }
       if (!terminalEventSeen) {
         throw new Error("Proxy stream ended before terminal event");
@@ -407,6 +399,7 @@ export function streamProxy(
 
       stream.end();
     } catch (error) {
+      cleanupReason = error;
       const errorMessage = error instanceof Error ? error.message : String(error);
       const reason = options.signal?.aborted ? "aborted" : "error";
       partial.stopReason = reason;
@@ -419,14 +412,16 @@ export function streamProxy(
       stream.end();
     } finally {
       try {
+        if (reader && !readerReachedEof) {
+          // Upstream cancellation may never settle; it must not prevent reader release.
+          void cancelReader(cleanupReason);
+        }
         reader?.releaseLock();
       } catch {
         // Stream handling above already pushed the terminal proxy event;
         // cleanup failures must not replace it with a secondary release error.
       }
-      if (options.signal) {
-        options.signal.removeEventListener("abort", abortHandler);
-      }
+      options.signal?.removeEventListener("abort", abortHandler);
     }
   })();
 

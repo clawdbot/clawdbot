@@ -342,6 +342,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
+      restartPending: gatewaySnapshot.restartPending === true,
+      queuedOutboxCount: storedOutboxes?.total ?? 0,
+      lastError: gatewaySnapshot.lastError,
       outboxAttentionCountForSession,
       hasSessionDraft,
       terminalAvailable,
@@ -380,6 +383,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         activeSearch: host.routeState.location?.search ?? "",
         activeHash: host.routeState.location?.hash ?? "",
         offline: gatewaySnapshot.offlineStable,
+        restartPending: gatewaySnapshot.restartPending,
         queuedOutboxCount: storedOutboxes?.total ?? 0,
         lastError: gatewaySnapshot.lastError,
         gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
@@ -439,7 +443,8 @@ export function renderApplicationShell(host: ShellViewHost) {
     ${renderLazyElementModal(host.lazyCustomElements)}
     ${isOptionalElementDefined(host.commandPaletteElement)
       ? html`<openclaw-command-palette
-          .onNavigate=${(routeId: RouteId) => host.navigate(routeId)}
+          .onNavigate=${(routeId: RouteId, options?: ApplicationNavigationOptions) =>
+            host.navigate(routeId, options)}
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
         ></openclaw-command-palette>`

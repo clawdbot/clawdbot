@@ -20,6 +20,7 @@ import type {
 } from "../plugins/doctor-contract-registry.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
@@ -31,17 +32,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
-  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { loadApnsRegistration } from "./push-apns.js";
 import {
   createWebPushVapidKeyPair,
@@ -184,7 +180,6 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
 
-type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
 type CurrentConversationBindingsDatabase = Pick<
@@ -269,26 +264,13 @@ const createTempDir = () => tempDirs.make("openclaw-state-migrations-test-");
 
 function readUpdateCheckState(env: NodeJS.ProcessEnv):
   | {
-      last_checked_at: string | null;
-      last_available_version: string | null;
-      last_available_tag: string | null;
-      auto_install_id: string | null;
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+      lastAvailableTag?: string;
+      autoInstallId?: string;
     }
   | undefined {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("update_check_state")
-      .select([
-        "last_checked_at",
-        "last_available_version",
-        "last_available_tag",
-        "auto_install_id",
-      ])
-      .where("state_key", "=", "default"),
-  );
+  return readConfigMachineState("update.checkState", { env });
 }
 
 function readConfigHealthRows(env: NodeJS.ProcessEnv): Array<{
@@ -487,39 +469,14 @@ function seedSchemaOnlyLegacyAgentDatabase(
   return databasePath;
 }
 
-type VoiceWakeRoutingTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "voicewake_routing_config" | "voicewake_routing_routes"
->;
-
 function seedCanonicalVoiceWakeRouting(stateDir: string, trigger: string): void {
-  const updatedAtMs = Date.now();
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const routingDb = getNodeSqliteKysely<VoiceWakeRoutingTestDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        routingDb.insertInto("voicewake_routing_config").values({
-          config_key: "default",
-          version: 1,
-          default_target_mode: "current",
-          default_target_agent_id: null,
-          default_target_session_key: null,
-          updated_at_ms: updatedAtMs,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        routingDb.insertInto("voicewake_routing_routes").values({
-          config_key: "default",
-          position: 0,
-          trigger,
-          target_mode: "agent",
-          target_agent_id: "main",
-          target_session_key: null,
-          updated_at_ms: updatedAtMs,
-        }),
-      );
+  writeConfigMachineState(
+    "voicewake.routing",
+    {
+      version: 1,
+      defaultTarget: { mode: "current" },
+      routes: [{ trigger, target: { agentId: "main" } }],
+      updatedAtMs: Date.now(),
     },
     { env: createEnv(stateDir) },
   );
@@ -3750,10 +3707,10 @@ describe("state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Migrated update-check state → shared SQLite state");
     expect(readUpdateCheckState(env)).toMatchObject({
-      last_checked_at: "2026-01-17T09:30:00.000Z",
-      last_available_version: "2.0.0",
-      last_available_tag: "latest",
-      auto_install_id: "install-1",
+      lastCheckedAt: "2026-01-17T09:30:00.000Z",
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "latest",
+      autoInstallId: "install-1",
     });
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("2.0.0");
@@ -3772,7 +3729,7 @@ describe("state migrations", () => {
     expect(conflictResult.notices).toEqual([
       expect.stringContaining("Kept shared SQLite update-check state because legacy cache differs"),
     ]);
-    expect(readUpdateCheckState(env)?.last_available_version).toBe("2.0.0");
+    expect(readUpdateCheckState(env)?.lastAvailableVersion).toBe("2.0.0");
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated.2`, "utf8")).resolves.toContain("3.0.0");
 

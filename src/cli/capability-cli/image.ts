@@ -26,7 +26,6 @@ import {
 } from "../../media-understanding/runtime.js";
 import { getImageMetadata } from "../../media/media-services.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatHumanList } from "../../shared/human-list.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { readInputFiles, writeOutputAsset } from "../media-output.js";
@@ -49,8 +48,6 @@ import {
 
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
-const IMAGE_QUALITIES = ["low", "medium", "high", "auto"] as const;
-const IMAGE_OPENAI_MODERATIONS = ["low", "auto"] as const;
 
 async function runImageGenerate(params: {
   capability: "image.generate" | "image.edit";
@@ -235,20 +232,60 @@ async function runImageDescribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
-function normalizeImageOption<T extends string>(
+function normalizeImageOutputFormat(
   raw: string | undefined,
-  values: readonly T[],
-  label: string,
-): T | undefined {
+): ImageGenerationOutputFormat | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(raw);
   if (!normalized) {
     return undefined;
   }
-  const match = values.find((value) => value === normalized);
-  if (match) {
-    return match;
+  if ((IMAGE_OUTPUT_FORMATS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOutputFormat;
   }
-  throw new Error(`${label} must be one of ${formatHumanList(values)}`);
+  throw new Error("--output-format must be one of png, jpeg, or webp");
+}
+
+function normalizeImageBackground(
+  raw: string | undefined,
+  label = "--background",
+): ImageGenerationBackground | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if ((IMAGE_BACKGROUNDS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationBackground;
+  }
+  throw new Error(`${label} must be one of transparent, opaque, or auto`);
+}
+
+function normalizeImageQuality(raw: string | undefined): ImageGenerationQuality | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "auto"
+  ) {
+    return normalized;
+  }
+  throw new Error("--quality must be one of low, medium, high, or auto");
+}
+
+function normalizeOpenAIModeration(
+  raw: string | undefined,
+): ImageGenerationOpenAIModeration | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "low" || normalized === "auto") {
+    return normalized;
+  }
+  throw new Error("--openai-moderation must be one of low or auto");
 }
 
 function resolveImageDescribeInput(filePath: string): string {
@@ -277,6 +314,11 @@ function addImageGenerationOptions(command: Command): Command {
     .option("--json", "Output JSON", false);
 }
 
+function readStringOption(opts: Record<string, unknown>, key: string): string | undefined {
+  const value = opts[key];
+  return typeof value === "string" ? value : undefined;
+}
+
 function resolveImageGenerationOptions(opts: Record<string, unknown>, command: Command) {
   return {
     agent: resolveCapabilityAgentOption(command, opts.agent),
@@ -285,27 +327,14 @@ function resolveImageGenerationOptions(opts: Record<string, unknown>, command: C
     size: opts.size as string | undefined,
     aspectRatio: opts.aspectRatio as string | undefined,
     resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
-    outputFormat: normalizeImageOption(
-      opts.outputFormat as string | undefined,
-      IMAGE_OUTPUT_FORMATS,
-      "--output-format",
-    ),
-    background: normalizeImageOption(
-      opts.background as string | undefined,
-      IMAGE_BACKGROUNDS,
-      "--background",
-    ),
-    openaiBackground: normalizeImageOption(
+    outputFormat: normalizeImageOutputFormat(readStringOption(opts, "outputFormat")),
+    background: normalizeImageBackground(readStringOption(opts, "background")),
+    openaiBackground: normalizeImageBackground(
       opts.openaiBackground as string | undefined,
-      IMAGE_BACKGROUNDS,
       "--openai-background",
     ),
-    openaiModeration: normalizeImageOption(
-      opts.openaiModeration as string | undefined,
-      IMAGE_OPENAI_MODERATIONS,
-      "--openai-moderation",
-    ),
-    quality: normalizeImageOption(opts.quality as string | undefined, IMAGE_QUALITIES, "--quality"),
+    openaiModeration: normalizeOpenAIModeration(readStringOption(opts, "openaiModeration")),
+    quality: normalizeImageQuality(readStringOption(opts, "quality")),
     timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined),
     output: opts.output as string | undefined,
   };

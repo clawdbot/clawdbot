@@ -293,12 +293,18 @@ const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 const QA_RESTART_CHECKPOINT_COUNT = 3;
 const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
+// Code Mode uses this read-only continuation after an uncertain tool effect.
+const QA_CODE_MODE_RECONCILIATION_PROMPT_RE =
+  /the previous Code Mode mutation may have partially applied/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-// Keep each real provider request active long enough for retries to span the
-// unchanged five-minute recovery bound while remaining below first-byte timeout.
-const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
+// Complete ordinary retries inside their diagnostic request allowance, then
+// leave the fifth request active so recovery can honor both the cumulative
+// no-progress bound and the current request's own allowance.
+const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
+const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
+const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -1040,9 +1046,10 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
+  const isCodeModeReconciliation = QA_CODE_MODE_RECONCILIATION_PROMPT_RE.test(prompt);
   const isActiveFailedToolTerminalRecovery =
     QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
-    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+    ((prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) || isCodeModeReconciliation) &&
       QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
@@ -1373,8 +1380,14 @@ async function buildResponsesPayload(
     return buildAssistantEvents("");
   }
   if (isActiveFailedToolTerminalRecovery) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      if (!allInputText.includes("If a tool failed, say so; never claim completion or success.")) {
+    if (
+      allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) ||
+      isCodeModeReconciliation
+    ) {
+      if (
+        !isCodeModeReconciliation &&
+        !allInputText.includes("If a tool failed, say so; never claim completion or success.")
+      ) {
         return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
       }
       const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
@@ -2509,6 +2522,7 @@ export async function startQaMockOpenAiServer(params?: {
       subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
       subagentFanoutPhase: 0,
       subagentHandoffSpawned: false,
+      repeatedRequestRecoveryAttempts: 0,
       toolLoopReadAttempts: 0,
     };
     scenarioStates.set(key, state);
@@ -2698,6 +2712,12 @@ export async function startQaMockOpenAiServer(params?: {
       toolOutputCallId: extractToolOutputCallId(input) || undefined,
       ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
     });
+    const repeatedRequestRecovery =
+      QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
+      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt);
+    if (repeatedRequestRecovery) {
+      scenarioState.repeatedRequestRecoveryAttempts += 1;
+    }
     return {
       events,
       model,
@@ -2714,9 +2734,13 @@ export async function startQaMockOpenAiServer(params?: {
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
-      ...(QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
-      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)
-        ? { responsePauseMs: QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS }
+      ...(repeatedRequestRecovery
+        ? {
+            responsePauseMs:
+              scenarioState.repeatedRequestRecoveryAttempts >= QA_REPEATED_REQUEST_STALL_ATTEMPT
+                ? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS
+                : QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS,
+          }
         : {}),
     };
   };

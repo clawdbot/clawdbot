@@ -31,6 +31,10 @@ You can answer from any supported conversation surface:
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
+Never answer `ask_user` with a credential. When the agent needs an API key it
+uses the [`secrets` tool](/tools/secrets), whose masked prompt stores the value
+without it entering the chat, the transcript, or the model's context.
+
 ## Platform behavior
 
 Answers work on every supported conversation surface. The web Control UI uses a

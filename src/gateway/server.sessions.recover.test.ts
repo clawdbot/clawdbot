@@ -13,7 +13,10 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
@@ -239,6 +242,120 @@ test("sessions.recover settles its active placement before archiving a real sess
   ).resolves.toMatchObject({ ok: true, payload: { key: recovered.payload?.key } });
   expect(reclaim).toHaveBeenCalledOnce();
 });
+
+test.each(["before-interrupt", "before-drain"] as const)(
+  "automatic reclaim rechecks eligibility after waiting %s",
+  async (phase) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const sessionKey = `agent:main:dashboard:idle-reclaim-${phase}`;
+    const sessionId = `idle-reclaim-${phase}`;
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("gateway test state directory is unavailable");
+    }
+    const repoRoot = await initializeManagedWorktreeTestRepository(dir);
+    const worktree = await materializeManagedWorktreeFixture({
+      env: process.env,
+      name: sessionId,
+      now: Date.now(),
+      ownerKind: "session",
+      ownerId: sessionKey,
+      repoRoot,
+      stateDir,
+    });
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(sessionId, {
+          spawnedCwd: worktree.path,
+          worktree: {
+            id: worktree.id,
+            branch: worktree.branch,
+            repoRoot,
+            canonicalWorkspaceDir: repoRoot,
+          },
+        }),
+      },
+    });
+    const placement = recoveryWorkerPlacement({ sessionId, sessionKey, state: "active" });
+    if (placement.state !== "active") {
+      throw new Error("expected active worker placement");
+    }
+    const enteredWait = createDeferredCore();
+    const releaseWait = createDeferredCore();
+    const wait = async () => {
+      enteredWait.resolve();
+      await releaseWait.promise;
+    };
+    const onInterrupt = vi.fn();
+    let releaseAdmission = () => {};
+    const admission =
+      phase === "before-interrupt"
+        ? await beginSessionWorkAdmission({
+            scope: storePath,
+            identities: [sessionId, sessionKey],
+            assertAllowed: () => {},
+            onInterrupt: () => {
+              onInterrupt();
+              releaseAdmission();
+            },
+          })
+        : undefined;
+    releaseAdmission = () => admission?.release();
+    const begin = vi.fn(() => ({ ...placement, state: "draining" as const }));
+    const reclaim = vi.fn(async () => {
+      throw new Error("ineligible worker must not be reclaimed");
+    });
+    const barriers = createGatewayWorkerPlacementReclaimBarriers({
+      placements: {
+        get: () => placement,
+        waitForTurnClaimRelease: async () => {
+          if (phase === "before-drain") {
+            await wait();
+          }
+        },
+      },
+      loadSessionRuntime: async () => {
+        if (phase === "before-interrupt") {
+          await wait();
+        }
+        return {
+          managedWorktrees,
+          resolveCanonicalSessionEntryFromStoreKeys,
+          resolveGatewaySessionStoreTargetWithStore,
+        };
+      },
+      revokeSessionAuthority: vi.fn(),
+    });
+    let eligible = true;
+    const eligibilityError = new Error("worker is no longer idle");
+    const reclaiming = barriers.runReclaimBarrier({
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      beforeDrain: () => {
+        if (!eligible) {
+          throw eligibilityError;
+        }
+      },
+      begin,
+      reclaim,
+    });
+    const rejected = expect(reclaiming).rejects.toBe(eligibilityError);
+    try {
+      await enteredWait.promise;
+      eligible = false;
+      releaseWait.resolve();
+      await rejected;
+      expect(onInterrupt).not.toHaveBeenCalled();
+      expect(begin).not.toHaveBeenCalled();
+      expect(reclaim).not.toHaveBeenCalled();
+    } finally {
+      releaseWait.resolve();
+      admission?.release();
+      await Promise.allSettled([reclaiming]);
+    }
+  },
+);
 
 test.each(["rejected", "unavailable", "stale-result"] as const)(
   "sessions.recover leaves its source and successor untouched when cloud reclaim is %s",

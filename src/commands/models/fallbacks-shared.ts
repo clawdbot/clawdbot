@@ -85,7 +85,6 @@ export async function addFallbackCommand(
   params: {
     label: string;
     key: DefaultsFallbackKey;
-    logPrefix: string;
   },
   modelRaw: string,
   runtime: RuntimeEnv,
@@ -110,7 +109,7 @@ export async function addFallbackCommand(
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
 /** Removes a fallback model by resolving aliases to the canonical provider/model key. */
@@ -119,7 +118,6 @@ export async function removeFallbackCommand(
     label: string;
     key: DefaultsFallbackKey;
     notFoundLabel: string;
-    logPrefix: string;
   },
   modelRaw: string,
   runtime: RuntimeEnv,
@@ -156,7 +154,7 @@ export async function removeFallbackCommand(
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
 /** Clears all fallback model refs for the selected defaults key. */

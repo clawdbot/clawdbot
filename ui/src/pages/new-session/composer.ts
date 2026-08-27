@@ -439,8 +439,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     paneId: skillMenuHost.paneId,
     getDraft: skillMenuHost.getDraft,
     commitDraft: skillMenuHost.commitDraft,
+    getTextarea: skillMenuHost.getTextarea,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
+    canRunInlineCommand: () => false,
     refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
@@ -457,6 +459,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
+      updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.requestUpdate);
       updateSkillMenu(
         target.value,
         target.selectionStart,
@@ -518,7 +521,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       @dragover=${attachmentDropHandlers.onDragover}
     >
       <div
-        class="agent-chat__input${options.dictationActive ? " agent-chat__input--dictating" : ""}"
+        class="agent-chat__input agent-chat__input--mobile-toolbar${options.dictationActive
+          ? " agent-chat__input--dictating"
+          : ""}"
       >
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
@@ -539,6 +544,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               ${ref(options.textareaController.ref)}
               class="new-session-page__message"
               rows="1"
+              ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
               ?disabled=${options.submitting || options.messageLocked}
               ?readonly=${options.dictationActive}
               placeholder=${animatedPlaceholder}

@@ -27,6 +27,7 @@ export const NODE_WORKER_WORKSPACE_EXEC_COMMAND = "worker.workspace.exec.v1";
 export const NODE_WORKER_WORKSPACE_RETAIN_COMMAND = "worker.workspace.retain.v1";
 export const NODE_WORKER_DESKTOP_STREAM_COMMAND = "worker.desktop.stream.v1";
 export const NODE_WORKER_DESKTOP_LAUNCH_COMMAND = "worker.desktop.launch.v1";
+export const NODE_WORKER_PORTAL_STREAM_COMMAND = "worker.portal.stream.v1";
 export const NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE = "WORKER_CAPACITY_EXHAUSTED";
 export const NODE_WORKER_PRIVATE_COMMANDS = [
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -37,6 +38,7 @@ export const NODE_WORKER_PRIVATE_COMMANDS = [
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
   NODE_WORKER_DESKTOP_STREAM_COMMAND,
   NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+  NODE_WORKER_PORTAL_STREAM_COMMAND,
 ] as const;
 
 const PRIVATE_NODE_INVOKE_COMMAND_SET = new Set<string>(NODE_WORKER_PRIVATE_COMMANDS);
@@ -84,12 +86,6 @@ export function isBrowserProxyNodeInvokeCommand(command: unknown): boolean {
 export const NODE_MCP_TOOL_CALL_TIMEOUT_MS = 120_000;
 export const NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_MCP_TOOL_CALL_TIMEOUT_MS + 5_000;
 
-// Plain node plugin tool calls used to send no budget, so the Gateway armed no
-// invocation deadline over pairing, wake, and policy work and the node registry fell
-// back to its own 30s pending timer that only starts at dispatch. The caller's default
-// 30s wait starts earlier, so it always expired first and the agent saw a generic
-// client-side gateway timeout instead of the Gateway answer that carries the
-// nodeCommandDispatched retry-safety provenance. Keep the same node budget, but send
-// it explicitly and give the caller the +5s grace the MCP path already uses.
 export const NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS = 30_000;
+// Leave the Gateway time to return the node's structured timeout and dispatch status.
 export const NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS + 5_000;

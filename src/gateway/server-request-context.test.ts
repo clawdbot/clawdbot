@@ -27,7 +27,6 @@ function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
     storePath: "/tmp/cron",
     cronEnabled: true,
     reconcileExitWatchers: vi.fn(async () => {}),
-    stopExitWatchers: vi.fn(),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
     reconcileHeartbeatJobs: vi.fn(async () => {}),

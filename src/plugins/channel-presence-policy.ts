@@ -12,7 +12,6 @@ import {
 import { hasChannelPackageState } from "../channels/plugins/package-state-probes.js";
 import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   createPluginActivationSource,
@@ -72,15 +71,6 @@ function normalizeChannelIds(channelIds: Iterable<string>): string[] {
       return normalized ? [normalized] : [];
     }),
   );
-}
-
-function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
-  if (!isSafeChannelEnvVarTriggerName(key)) {
-    return false;
-  }
-  const trimmed = key.trim();
-  const value = env[trimmed] ?? env[trimmed.toUpperCase()];
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 /** True when config contains meaningful enabled channel settings. */
@@ -175,27 +165,20 @@ function listManifestEnvConfiguredChannelSignals(params: {
         continue;
       }
       contractChannelIds.add(normalizedChannelId);
-      if (hasModuleContract) {
-        if (
-          !params.envSignalChannelIds.has(normalizedChannelId) ||
-          !packageChannel ||
-          !hasChannelPackageState({
-            entry: {
-              pluginId: record.id,
-              origin: record.origin,
-              rootDir: record.rootDir,
-              channel: packageChannel,
-            },
-            metadataKey: "configuredState",
-            cfg: params.config,
-            env: params.env,
-          })
-        ) {
-          continue;
-        }
-      } else if (
-        !allOf.every((envVar) => hasNonEmptyEnvValue(params.env, envVar)) ||
-        (anyOf.length > 0 && !anyOf.some((envVar) => hasNonEmptyEnvValue(params.env, envVar)))
+      if (
+        (hasModuleContract && !params.envSignalChannelIds.has(normalizedChannelId)) ||
+        !packageChannel ||
+        !hasChannelPackageState({
+          entry: {
+            pluginId: record.id,
+            origin: record.origin,
+            rootDir: record.rootDir,
+            channel: packageChannel,
+          },
+          metadataKey: "configuredState",
+          cfg: params.config,
+          env: params.env,
+        })
       ) {
         continue;
       }

@@ -2259,6 +2259,52 @@ describe("tui session actions", () => {
     expect(clearAll).not.toHaveBeenCalled();
   });
 
+  it.each(["success", "failure"] as const)(
+    "discards an in-flight session-info %s after an external same-key reset",
+    async (outcome) => {
+      const sessionInfo = createDeferred<TuiSessionList>();
+      const addSystem = vi.fn();
+      const state = createBaseState({
+        currentSessionId: "session-before-reset",
+        sessionGeneration: 4,
+        sessionInfo: { model: "model-before-reset", updatedAt: 10 },
+      });
+      const { refreshSessionInfo } = createTestSessionActions({
+        client: makeTuiBackend({ listSessions: vi.fn(() => sessionInfo.promise) }),
+        chatLog: makeChatLog({ addSystem }),
+        state,
+      });
+
+      const staleSessionInfo = refreshSessionInfo();
+      state.sessionGeneration = 5;
+      state.currentSessionId = "session-after-reset";
+      state.sessionInfo = { model: "model-after-reset", updatedAt: 20 };
+      if (outcome === "failure") {
+        sessionInfo.reject(new Error("private previous-session details"));
+      } else {
+        sessionInfo.resolve(
+          makeTuiSessionList({
+            defaults: {},
+            sessions: [
+              {
+                key: "agent:main:main",
+                sessionId: "session-before-reset",
+                model: "private-old-model",
+                updatedAt: 10,
+              },
+            ],
+          }),
+        );
+      }
+
+      await staleSessionInfo;
+
+      expect(state.currentSessionId).toBe("session-after-reset");
+      expect(state.sessionInfo.model).toBe("model-after-reset");
+      expect(addSystem).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not clear the selected session for another session's reset result", () => {
     const addSystem = vi.fn();
     const clearAll = vi.fn();

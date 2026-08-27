@@ -190,6 +190,7 @@ suite.define(() => {
                 label: "Main",
                 model: "gpt-5.5",
                 modelProvider: "openai",
+                permissionMode: "workspace",
                 status: "done",
                 totalTokens: 46_000,
                 totalTokensFresh: true,
@@ -212,6 +213,8 @@ suite.define(() => {
       const effort = composer.locator('[data-chat-thinking-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
       const contextUsage = composer.locator(".context-ring");
+      const permission = composer.locator('[data-chat-permission-select="true"]');
+      const permissionIcon = permission.locator(".chat-controls__permission-icon svg");
       const textarea = composer.locator("textarea");
       const attach = composer.locator(
         'button.agent-chat__input-btn--attach[aria-label="Add attachment"]',
@@ -221,6 +224,7 @@ suite.define(() => {
       const settings = page.locator(".chat-header-session-menu__trigger");
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
+      const mobileDictation = page.getByRole("button", { name: "Dictation" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
       const microphonePickerShell = page.locator(".chat-talk-input-picker");
       const captureMobileState = async (fileName: string) => {
@@ -232,6 +236,18 @@ suite.define(() => {
           fullPage: true,
           path: `${artifactDir}/${fileName}`,
         });
+      };
+      const permissionIconCenterError = async () => {
+        const [triggerBox, iconBox] = await Promise.all([
+          permission.boundingBox(),
+          permissionIcon.boundingBox(),
+        ]);
+        if (!triggerBox || !iconBox) {
+          return Number.POSITIVE_INFINITY;
+        }
+        const x = iconBox.x + iconBox.width / 2 - (triggerBox.x + triggerBox.width / 2);
+        const y = iconBox.y + iconBox.height / 2 - (triggerBox.y + triggerBox.height / 2);
+        return Math.max(Math.abs(x), Math.abs(y));
       };
 
       await expect.poll(() => model.isVisible()).toBe(true);
@@ -617,11 +633,9 @@ suite.define(() => {
       await expect.poll(() => stop.count()).toBe(0);
 
       await textarea.fill("");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
-        .toBe(true);
-      await expect.poll(() => emptySend.isVisible()).toBe(true);
-      await expect.poll(() => emptySend.isDisabled()).toBe(true);
+      await expect.poll(() => mobileDictation.isVisible()).toBe(true);
+      const mobileTalk = page.getByRole("button", { name: "Tap to talk" });
+      await expect.poll(() => mobileTalk.isVisible()).toBe(true);
       await captureMobileState("mobile-composer-idle.png");
       // Send holds its place with nothing to send: it goes unavailable rather
       // than disappearing, so the composer never looks like it lost the control
@@ -629,8 +643,8 @@ suite.define(() => {
       await expect
         .poll(async () => {
           const [voiceRect, sendRect] = await Promise.all([
-            voice.boundingBox(),
-            emptySend.boundingBox(),
+            mobileDictation.boundingBox(),
+            mobileTalk.boundingBox(),
           ]);
           return voiceRect && sendRect ? sendRect.x - (voiceRect.x + voiceRect.width) : null;
         })
@@ -651,6 +665,12 @@ suite.define(() => {
         .toBeLessThanOrEqual(393);
       await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
       await expect.poll(() => effort.isVisible()).toBe(false);
+      await permission.click();
+      await expect
+        .poll(() => composer.locator(".chat-controls__permission-option").first().isVisible())
+        .toBe(true);
+      await captureMobileState("mobile-composer-permissions-open.png");
+      await page.keyboard.press("Escape");
       const [
         mobileAttachBox,
         mobileModelSettingsBox,
@@ -662,7 +682,7 @@ suite.define(() => {
         mobileModelSettings.boundingBox(),
         settings.boundingBox(),
         contextUsage.boundingBox(),
-        voice.boundingBox(),
+        mobileDictation.boundingBox(),
       ]);
       expect(mobileAttachBox).not.toBeNull();
       expect(mobileModelSettingsBox).not.toBeNull();
@@ -680,6 +700,7 @@ suite.define(() => {
       }
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
       expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(
         mobileContextBox.x + mobileContextBox.width - 1,
       );
@@ -695,11 +716,14 @@ suite.define(() => {
       expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
       expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);
       expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileVoiceBox.x + 1);
+      await page.setViewportSize({ width: 560, height: 852 });
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      await page.setViewportSize({ width: 393, height: 852 });
       await expect
         .poll(async () => {
           const [polledAttachBox, polledVoiceBox] = await Promise.all([
             attach.boundingBox(),
-            voice.boundingBox(),
+            mobileDictation.boundingBox(),
           ]);
           if (!polledAttachBox || !polledVoiceBox) {
             return Number.POSITIVE_INFINITY;

@@ -56,6 +56,13 @@ export const SessionsCreateParamsSchema = closedObject({
       description: "Start in a registered project; operator.write.",
     }),
   ),
+  projectGitUrl: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 2048,
+      description: "Prepare a remote project before the initial agent turn; operator.write.",
+    }),
+  ),
   worktree: Type.Optional(Type.Boolean()),
   worktreeBaseRef: Type.Optional(
     Type.String({

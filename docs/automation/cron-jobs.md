@@ -718,6 +718,8 @@ Keep hook endpoints behind loopback, tailnet, or a trusted reverse proxy.
 
 Wire Gmail inbox triggers to OpenClaw via Google PubSub.
 
+Not on Gmail? The [IMAP email trigger plugin](/automation/imap) watches an existing IMAP mailbox without Google PubSub or a public webhook.
+
 <Note>
 **Prerequisites:** `gcloud` CLI, `gog` (gogcli), OpenClaw hooks enabled, Tailscale for the public HTTPS endpoint, and a working sandbox backend. The example below uses the default Docker backend; build its image first by following [Sandbox images and setup](/gateway/sandboxing#images-and-setup), or configure another supported backend.
 </Note>

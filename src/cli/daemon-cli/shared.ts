@@ -19,7 +19,6 @@ import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
-export { resolveDaemonContainerContext };
 
 /** Create install action context with JSON flag normalization. */
 export function createDaemonInstallActionContext(jsonFlag: unknown) {

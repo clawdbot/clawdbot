@@ -78,6 +78,7 @@ function resolveChatSlashCommandArgOptions(
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
+  state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -173,10 +174,14 @@ export function renderChatComposer(props: ChatComposerProps) {
           ? t("chat.composer.runDone")
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const commitMenuDraft = (next: string) => {
+    commitComposerDraft(props, next);
+    props.onTypingChange?.(Boolean(next.trim()), next);
+  };
   const skillMenuHost: SkillMenuHost = {
     paneId: props.paneId,
     getDraft: () => state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft,
-    commitDraft: (next) => commitComposerDraft(props, next),
+    commitDraft: commitMenuDraft,
     getTextarea: () => state.composerTextarea,
     refreshCommands: props.onSlashIntent,
   };
@@ -184,8 +189,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     paneId: props.paneId,
     getDraft: skillMenuHost.getDraft,
     commitDraft: skillMenuHost.commitDraft,
+    getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: () => props.onSend(),
+    canRunInlineCommand: () => state.slashCommandDispatchConnected && Boolean(props.onSlashCommand),
+    runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
   };
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
@@ -355,6 +363,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
+    updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
     updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
@@ -375,12 +384,15 @@ export function renderChatComposer(props: ChatComposerProps) {
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }
-    const normalizedDraft = normalizeChatComposerDraft(target.value);
-    if (target.value !== normalizedDraft) {
-      target.value = normalizedDraft;
-      adjustTextareaHeight(target);
+    // Dictation owns the read-only preview; blur must not commit discarded speech.
+    if (!state.dictation?.locksComposer) {
+      const normalizedDraft = normalizeChatComposerDraft(target.value);
+      if (target.value !== normalizedDraft) {
+        target.value = normalizedDraft;
+        adjustTextareaHeight(target);
+      }
+      commitComposerDraft(props, normalizedDraft);
     }
-    commitComposerDraft(props, normalizedDraft);
     props.onTypingChange?.(false);
   };
   const handleSend = (submissionAction?: Event) => {
@@ -458,10 +470,10 @@ export function renderChatComposer(props: ChatComposerProps) {
       const selection = state.dictationSelection ?? {
         start: target?.selectionStart ?? visibleDraft.length,
         end: target?.selectionEnd ?? visibleDraft.length,
+        value: props.getDraft?.() ?? props.draft,
       };
-      const currentDraft = target?.value ?? props.getDraft?.() ?? props.draft;
       const insertion = insertComposerDictation(
-        currentDraft,
+        selection.value,
         transcript,
         selection.start,
         selection.end,
@@ -516,12 +528,17 @@ export function renderChatComposer(props: ChatComposerProps) {
       requestUpdate();
     }
     const target = state.composerTextarea;
-    state.dictationSelection = {
+    const selection = {
       start: target?.selectionStart ?? visibleDraft.length,
       end: target?.selectionEnd ?? visibleDraft.length,
+      value: target?.value ?? visibleDraft,
     };
-    if (dictation?.handlePointerDown(event) && target) {
-      target.readOnly = true;
+    if (dictation?.handlePointerDown(event)) {
+      // Stop also emits pointerdown; only a new gesture owns a draft snapshot.
+      state.dictationSelection = selection;
+      if (target) {
+        target.readOnly = true;
+      }
     }
   };
   const runControlsProps: ChatRunControlsProps = {

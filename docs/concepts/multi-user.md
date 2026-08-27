@@ -46,7 +46,7 @@ The sidebar's session filter menu gains an **Owners** section when ownership is 
 - A specific person or agent shows the sessions they currently own.
 - **Involving me** shows sessions you own plus sessions where you have prompted at least once. This filter is evaluated by the Gateway against the full participant history and matches only your authenticated profile identity — channel-native sender ids are display-only and never match, so a numeric channel id cannot collide with your profile.
 
-**Involving me** requires a signed-in Gateway profile. The **People** sort mode groups sessions by current owner and orders the groups by name.
+**Involving me** requires a signed-in Gateway profile. When the loaded sessions have multiple owners, **Group by Person** creates a section for each current owner, and the **Owners** sort mode orders those owner groups by name.
 
 ## Reading the avatars
 

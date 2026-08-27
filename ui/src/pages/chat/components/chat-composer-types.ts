@@ -74,6 +74,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
+  progressCardHasActiveRun?: boolean;
   onDismissProgressCard?: (card: ProgressCard) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
@@ -121,6 +122,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
+  onSlashCommand?: (command: string) => void;
   onSend: (followUpModeOverride?: "steer", submissionAction?: Event) => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
@@ -173,5 +175,5 @@ export type ChatComposerState = SkillMenuState &
     dictation: ComposerDictationController | null;
     dictationDraftKey: string | null;
     dictationError: string | null;
-    dictationSelection: { start: number; end: number } | null;
+    dictationSelection: { start: number; end: number; value: string } | null;
   };

@@ -558,8 +558,8 @@ keeping opaque callback data private:
   `webApp` / `web_app`** inputs render the URL text alongside the button label,
   since the URL is user-facing. Hosted-widget-only actions render label-only on
   channels without a native widget launch.
-- **Select options** render as label-only. The underlying option value is not
-  exposed in fallback text.
+- **Select options** follow the same rule: typed commands include the command
+  text; opaque callback actions and legacy values remain label-only.
 
 Channel adapters that add manual-command guidance in their fallback UI (e.g.
 Feishu document-comment instructions) must derive the command-present check

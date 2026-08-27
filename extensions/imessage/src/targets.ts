@@ -1,10 +1,5 @@
 // Imessage plugin module implements targets behavior.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isIMessagePhoneLikeHandle,
-  normalizeBareIMessageChatIdentifier,
-} from "./target-identifiers.js";
 import {
   type ChatSenderAllowParams,
   createAllowedChatSenderMatcher,
@@ -12,7 +7,12 @@ import {
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedChatTarget,
   resolveServicePrefixedOrChatAllowTarget,
-} from "./target-parsing-helpers.js";
+} from "openclaw/plugin-sdk/channel-targets";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isIMessagePhoneLikeHandle,
+  normalizeBareIMessageChatIdentifier,
+} from "./target-identifiers.js";
 
 export type IMessageService = "imessage" | "sms" | "auto";
 

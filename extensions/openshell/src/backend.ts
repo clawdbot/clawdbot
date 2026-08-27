@@ -11,6 +11,7 @@ import type {
   SandboxBackendCommandResult,
   SandboxBackendFactory,
   SandboxBackendManager,
+  SandboxFsBridge,
   SshSandboxSession,
 } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -24,7 +25,7 @@ import {
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenShellSandboxBackend } from "./backend.types.js";
+import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import {
   buildValidatedExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
@@ -359,31 +360,39 @@ class OpenShellSandboxBackendImpl {
               sandbox,
               runtime: handle,
             })
-          : createOpenShellFsBridge({
-              sandbox,
-              backend: handle,
-            }),
+          : this.createMirrorFsBridge(sandbox),
       runRemoteShellScript: async (command) =>
         await this.runWorkspaceOperation(async () => await this.runRemoteShellScript(command)),
-      mkdirpRemotePath: async (remotePath, signal) =>
-        await this.runWorkspaceOperation(
-          async () => await this.mkdirpRemotePath(remotePath, signal),
-        ),
-      removeRemotePath: async (remotePath, removeParams) =>
-        await this.runWorkspaceOperation(
-          async () => await this.removeRemotePath(remotePath, removeParams),
-        ),
-      renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
-        await this.runWorkspaceOperation(
-          async () => await this.renameRemotePath(fromRemotePath, toRemotePath, signal),
-        ),
-      syncLocalPathToRemote: async (localPath, remotePath) =>
-        await this.runWorkspaceOperation(
-          async () => await this.syncLocalPathToRemote(localPath, remotePath),
-        ),
     };
     this.handle = handle;
     return handle;
+  }
+
+  private createMirrorFsBridge(sandbox: OpenShellFsBridgeContext): SandboxFsBridge {
+    const bridge = createOpenShellFsBridge({
+      sandbox,
+      backend: {
+        remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
+        mkdirpRemotePath: (remotePath, signal) => this.mkdirpRemotePath(remotePath, signal),
+        removeRemotePath: (remotePath, params) => this.removeRemotePath(remotePath, params),
+        renameRemotePath: (from, to, signal) => this.renameRemotePath(from, to, signal),
+        syncLocalPathToRemote: (localPath, remotePath) =>
+          this.syncLocalPathToRemote(localPath, remotePath),
+      },
+    });
+    // Hold one lease across validation and both commits, not just the remote step.
+    // Otherwise exec publication can erase a successful file-tool write or expose partial reads.
+    return {
+      resolvePath: (params) => bridge.resolvePath(params),
+      readFile: (params) => this.runWorkspaceOperation(() => bridge.readFile(params)),
+      writeFile: (params) => this.runWorkspaceOperation(() => bridge.writeFile(params)),
+      createFileExclusive: (params) =>
+        this.runWorkspaceOperation(() => bridge.createFileExclusive(params)),
+      mkdirp: (params) => this.runWorkspaceOperation(() => bridge.mkdirp(params)),
+      remove: (params) => this.runWorkspaceOperation(() => bridge.remove(params)),
+      rename: (params) => this.runWorkspaceOperation(() => bridge.rename(params)),
+      stat: (params) => this.runWorkspaceOperation(() => bridge.stat(params)),
+    };
   }
 
   private async runWorkspaceOperation<T>(operation: () => Promise<T>): Promise<T> {

@@ -191,11 +191,22 @@ class NodeWorkerSupervisor {
       const startup = this.starting.get(input.launchId);
       return startup && claim.receipt.state === "pending" ? await startup : claim.receipt;
     }
-    const startup = this.startClaimed({ input, descriptor, planHash, supervisor });
+    let cancellation: Promise<NodeWorkerLaunchReceipt | undefined> | undefined;
+    const cancelClaimed = () => {
+      cancellation ??= this.cancel(claimInput);
+      void cancellation.catch(() => undefined);
+    };
+    signal?.addEventListener("abort", cancelClaimed, { once: true });
+    const startup = this.startClaimed({ input, descriptor, planHash, supervisor, signal });
     this.starting.set(input.launchId, startup);
+    if (signal?.aborted) {
+      cancelClaimed();
+    }
     try {
-      return await startup;
+      const receipt = await startup;
+      return cancellation ? ((await cancellation) ?? receipt) : receipt;
     } finally {
+      signal?.removeEventListener("abort", cancelClaimed);
       if (this.starting.get(input.launchId) === startup) {
         this.starting.delete(input.launchId);
       }
@@ -279,10 +290,7 @@ class NodeWorkerSupervisor {
   ): Promise<NodeWorkerLaunchReceipt | undefined> {
     await this.initialize();
     const receipt = this.store.getMatching(expected);
-    if (!receipt || receipt.state === "completed" || receipt.state === "failed") {
-      return receipt;
-    }
-    if (receipt.state === "interrupted" || receipt.state === "cancelled") {
+    if (!receipt || (receipt.state !== "pending" && receipt.state !== "running")) {
       return receipt;
     }
     const active = this.active.get(expected.launchId);
@@ -404,13 +412,7 @@ class NodeWorkerSupervisor {
     this.capacity.close();
     const operation = (async () => {
       const errors: unknown[] = [];
-      if (this.initializationPromise) {
-        try {
-          await this.initializationPromise;
-        } catch (error) {
-          errors.push(error);
-        }
-      }
+      await this.initializationPromise?.catch((error: unknown) => errors.push(error));
       await Promise.allSettled(this.starting.values());
       const stopped = await Promise.allSettled(
         [...this.active.values()]
@@ -444,25 +446,20 @@ class NodeWorkerSupervisor {
   }
 
   private reconcileActiveTerminal(active: NodeWorkerObservedTerminal): NodeWorkerLaunchReceipt {
-    try {
-      const receipt = this.capacity.finish({
-        launchId: active.launchId,
-        planHash: active.planHash,
-        supervisor: active.supervisor,
-        worker: active.worker,
-        ...active.outcome,
-      });
-      if (receipt.state === "pending" || receipt.state === "running") {
-        throw new Error(`node worker launch ${active.launchId} terminal state was not persisted`);
-      }
-      if (this.active.get(active.launchId) === active) {
-        this.active.delete(active.launchId);
-      }
-      return receipt;
-    } catch (error) {
-      active.persistenceError = error;
-      throw error;
+    const receipt = this.capacity.finish({
+      launchId: active.launchId,
+      planHash: active.planHash,
+      supervisor: active.supervisor,
+      worker: active.worker,
+      ...active.outcome,
+    });
+    if (receipt.state === "pending" || receipt.state === "running") {
+      throw new Error(`node worker launch ${active.launchId} terminal state was not persisted`);
     }
+    if (this.active.get(active.launchId) === active) {
+      this.active.delete(active.launchId);
+    }
+    return receipt;
   }
 
   private async recoverRunning(
@@ -483,6 +480,7 @@ class NodeWorkerSupervisor {
     descriptor: WorkerLaunchDescriptor;
     planHash: string;
     supervisor: NodeWorkerProcessIdentity;
+    signal?: AbortSignal;
   }): Promise<NodeWorkerLaunchReceipt> {
     const credential = params.descriptor.admission.credential;
     const endpoint = params.descriptor.connectionEndpoint;
@@ -628,8 +626,8 @@ class NodeWorkerSupervisor {
       }
       return running;
     }
-    if (this.closed) {
-      await this.stopChild(active, "interrupted");
+    if (this.closed || params.signal?.aborted) {
+      await this.stopChild(active, this.closed ? "interrupted" : "cancelled");
       return this.store.get(active.launchId) ?? running;
     }
     try {

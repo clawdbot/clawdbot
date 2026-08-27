@@ -92,6 +92,21 @@ export default definePluginEntry({
   description: "Fetch, list, and write files on paired nodes via dedicated node commands.",
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
+    api.registerCli(
+      async ({ program }) => {
+        const { registerFileTransferCli } = await import("./src/cli.js");
+        registerFileTransferCli(program);
+      },
+      {
+        descriptors: [
+          {
+            name: "file-transfer",
+            description: "Review file-transfer standing approvals",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
     api.registerNodeInvokePolicy(createLazyFileTransferNodeInvokePolicy());
     api.registerTool(
       createLazyTool(FILE_FETCH_TOOL_DESCRIPTOR, async () => {

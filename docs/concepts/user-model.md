@@ -30,6 +30,12 @@ OpenClaw supplies exact trailers and the ordered contributor list in the model c
 
 Turning **Git co-author credit** off stops attribution for future runs. It does not rewrite commits that already contain the public trailer.
 
+## Profile appearance preferences
+
+When a Control UI connection is bound to an authenticated Gateway profile, its theme, theme mode, and accent color are stored per profile in the existing `user_preferences` table in the shared state database. Those choices follow that person across devices without changing appearance for other people on the same Gateway.
+
+Profile theme and theme mode preferences override their gateway-wide `ui.prefs` settings and otherwise fall back to the active theme's defaults. The imported custom theme is the exception: its palette lives only in the browser that imported it, so selecting it stays browser-local and never follows the profile. Accent precedence is the profile's `ui.accent` preference, gateway-wide `ui.prefs.accent`, `ui.seamColor`, and finally the active theme's default accent. Restoring a default clears only the profile preference. Connections without an authenticated profile, including token, password, or unauthenticated connections, keep the existing gateway-wide appearance behavior unchanged. Language, chat preferences, and sidebar entries continue using gateway configuration.
+
 ## Write directives, not observations
 
 Each entry has a metadata line followed by one imperative directive:

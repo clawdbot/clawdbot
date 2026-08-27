@@ -3,11 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/channel-inbound";
-import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {

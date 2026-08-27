@@ -11,17 +11,19 @@ import {
   openMemoryCoreStateStore,
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
-import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
 import {
   SHORT_TERM_LOCK_STALE_MS,
   deleteShortTermLockEntryIfCurrent,
   isProcessLikelyAlive,
   parseLockOwnerPid,
+  resolveLockPath,
+  withMemoryWorkspaceLock,
+} from "./memory-workspace-lock.js";
+import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
+import {
   readPhaseSignalStore,
   readStore,
-  resolveLockPath,
   resolveStorePath,
-  withShortTermLock,
   writePhaseSignalStore,
   writeStore,
 } from "./short-term-promotion-store.js";
@@ -191,7 +193,7 @@ export async function repairShortTermPromotionArtifacts(params: {
     }
   }
 
-  await withShortTermLock(workspaceDir, async () => {
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
     const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
       namespace: SHORT_TERM_RECALL_NAMESPACE,
       workspaceDir,
@@ -297,7 +299,7 @@ export async function removeGroundedShortTermCandidates(params: {
   const nowIso = new Date().toISOString();
   let removed = 0;
 
-  await withShortTermLock(workspaceDir, async () => {
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
       readStore(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),

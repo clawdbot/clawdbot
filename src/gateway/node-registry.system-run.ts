@@ -1,29 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PendingSystemRunEvent } from "./node-registry.invoke-stream.js";
-
-/** Normalize system.run timeout values, preserving null for no expiry. */
-function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const timeoutMs = Math.trunc(value);
-  return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
-}
 
 export function resolvePendingSystemRunEvent(params: {
   command: string;
   params?: unknown;
 }): PendingSystemRunEvent | undefined {
-  if (params.command !== "system.run" || !params.params || typeof params.params !== "object") {
+  const obj = asOptionalObjectRecord(params.params);
+  if (params.command !== "system.run" || !obj) {
     return undefined;
   }
-  // SAFETY: the guard above rejects every non-object params payload.
-  const obj = params.params as Record<string, unknown>;
   const runId = normalizeOptionalString(obj.runId) ?? "";
   if (!runId) {
     return undefined;
@@ -41,16 +29,10 @@ export function normalizeSystemRunInvokeParams(params: {
   command: string;
   params?: unknown;
 }): unknown {
-  if (
-    params.command !== "system.run" ||
-    !params.params ||
-    typeof params.params !== "object" ||
-    Array.isArray(params.params)
-  ) {
+  if (params.command !== "system.run" || !isRecord(params.params)) {
     return params.params;
   }
-  // SAFETY: the guard above rejects every non-object and array params payload.
-  const obj = params.params as Record<string, unknown>;
+  const obj = params.params;
   const normalized: Record<string, unknown> = {
     ...obj,
     runId: normalizeOptionalString(obj.runId) || randomUUID(),
@@ -62,4 +44,16 @@ export function normalizeSystemRunInvokeParams(params: {
     normalized.timeoutMs = timeoutMs;
   }
   return normalized;
+}
+
+/** Normalize system.run timeout values, preserving null for no expiry. */
+function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const timeoutMs = Math.trunc(value);
+  return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
 }

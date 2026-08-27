@@ -13,6 +13,7 @@ import {
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -52,6 +53,7 @@ import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type MemorySyncProviderGenerationBase = {
+  database: DatabaseSync;
   providerKey: string;
   identities: MemoryIndexProviderIdentity[];
 };
@@ -622,13 +624,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
       closeMemoryDatabase(tempDb);
       tempDbClosed = true;
-      await publishMemoryDatabaseTables({
-        targetDb: originalDb,
-        sourcePath: tempDbPath,
-        metaKey: MEMORY_INDEX_META_KEY,
-        expectedRevision: originalRevision,
-        vectorExtensionPath: this.vector.extensionPath,
-      });
+      await withMemoryWorkspaceLock(this.workspaceDir, () =>
+        publishMemoryDatabaseTables({
+          targetDb: originalDb,
+          sourcePath: tempDbPath,
+          metaKey: MEMORY_INDEX_META_KEY,
+          expectedRevision: originalRevision,
+          vectorExtensionPath: this.vector.extensionPath,
+        }),
+      );
 
       this.db = originalDb;
       if (vectorIndexComplete) {

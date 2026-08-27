@@ -39,6 +39,8 @@ type ChatModelPickerParams = {
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
+  /** Recorded user pin, so the footer never offers a reset for an inherited default. */
+  sessionModelPinned: boolean;
   sessionKey: string;
   triggerModelLabel: string;
   triggerStatusLabel?: string;
@@ -101,6 +103,9 @@ function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined
   }
 }
 
+// Numbers follow the filtered order because digit selection reads that same row list.
+// A focused search input owns the digits instead (handleModelPickerKeydown bails on input
+// targets), and the :focus-within rule in styles/chat/layout.css withdraws these keycaps there.
 function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
     shortcut.hidden = true;
@@ -613,45 +618,40 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       ${params.contextWindow
                         ? renderContextWindowControl(params.contextWindow, params.sessionKey)
                         : nothing}
-                      ${params.modelOptions.length > 0 && params.selectedModelValue !== ""
+                      ${params.sessionModelPinned && params.modelOptions.length > 0
                         ? html`<footer class="chat-controls__model-provenance">
-                            <span>${t("chat.modelControls.sessionOverride")}</span>
-                            <openclaw-tooltip
-                              .content=${t("chat.modelControls.resetToDefault", {
-                                model: defaultModelOption?.label ?? params.triggerModelLabel,
-                              })}
+                            <span>${t("chat.modelControls.onlyForSession")}</span>
+                            <button
+                              class="chat-controls__model-reset"
+                              data-chat-model-reset="true"
+                              type="button"
+                              ?disabled=${params.disabled}
+                              @click=${(event: MouseEvent) => {
+                                event.stopPropagation();
+                                if (params.disabled) {
+                                  event.preventDefault();
+                                  return;
+                                }
+                                commitModel("");
+                                const resetButton = event.currentTarget;
+                                if (!(resetButton instanceof HTMLElement)) {
+                                  return;
+                                }
+                                const details = resetButton.closest<HTMLDetailsElement>("details");
+                                if (details) {
+                                  details.open = false;
+                                  if (event.detail === 0) {
+                                    details
+                                      .querySelector<HTMLElement>("summary")
+                                      ?.focus({ preventScroll: true });
+                                  }
+                                }
+                              }}
                             >
-                              <button
-                                class="chat-controls__model-reset"
-                                data-chat-model-reset="true"
-                                type="button"
-                                ?disabled=${params.disabled}
-                                @click=${(event: MouseEvent) => {
-                                  event.stopPropagation();
-                                  if (params.disabled) {
-                                    event.preventDefault();
-                                    return;
-                                  }
-                                  commitModel("");
-                                  const resetButton = event.currentTarget;
-                                  if (!(resetButton instanceof HTMLElement)) {
-                                    return;
-                                  }
-                                  const details =
-                                    resetButton.closest<HTMLDetailsElement>("details");
-                                  if (details) {
-                                    details.open = false;
-                                    if (event.detail === 0) {
-                                      details
-                                        .querySelector<HTMLElement>("summary")
-                                        ?.focus({ preventScroll: true });
-                                    }
-                                  }
-                                }}
-                              >
-                                ${t("chat.modelControls.useDefault")}
-                              </button>
-                            </openclaw-tooltip>
+                              ${t("chat.modelControls.useDefaultModel", {
+                                model: params.defaultModelLabel,
+                              })}
+                            </button>
                           </footer>`
                         : nothing}
                     `

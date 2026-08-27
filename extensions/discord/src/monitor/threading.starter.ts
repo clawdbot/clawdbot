@@ -11,15 +11,16 @@ import {
   resolveDiscordChannelParentIdSafe,
   resolveDiscordChannelParentSafe,
 } from "./channel-access.js";
-import { formatDiscordMediaText } from "./message-media.js";
 import {
   resolveDiscordChannelInfo,
+  resolveDiscordMessageChannelId,
+} from "./message-channel-info.js";
+import type { DiscordChannelInfo, DiscordChannelInfoClient } from "./message-channel-info.js";
+import { formatDiscordMediaText } from "./message-media.js";
+import {
   resolveDiscordEmbedText,
   resolveDiscordForwardedMessagesTextFromSnapshots,
-  resolveDiscordMessageChannelId,
-  type DiscordChannelInfo,
-  type DiscordChannelInfoClient,
-} from "./message-utils.js";
+} from "./message-text.js";
 import { getCachedThreadStarter, setCachedThreadStarter } from "./threading.cache.js";
 import type {
   DiscordMessageEvent,

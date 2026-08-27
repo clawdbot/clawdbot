@@ -242,12 +242,25 @@ export const en: TranslationMap = {
     widgetUnavailable: "Session progress is unavailable.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
-    lastActivity: "Last activity: {time}",
+    activity: {
+      updated: "Updated {time}",
+      completed: "Completed {time}",
+      failed: "Failed {time}",
+      stopped: "Stopped {time}",
+    },
+    outcome: {
+      completed: "Completed",
+      failed: "Failed",
+      stopped: "Stopped",
+    },
     stepLabel: "{step}, {status}",
     status: {
       completed: "completed",
+      failed: "failed",
       inProgress: "in progress",
+      paused: "paused",
       pending: "pending",
+      stopped: "stopped",
     },
     receipt: {
       updating: "Updating progress",
@@ -1821,6 +1834,18 @@ export const en: TranslationMap = {
         label: "Absolutely",
         description: "Clay on graphite",
       },
+      tide: {
+        label: "Tide",
+        description: "Slate & steel",
+      },
+      beacon: {
+        label: "Beacon",
+        description: "Maximum contrast",
+      },
+      phosphor: {
+        label: "Phosphor",
+        description: "Green on glass",
+      },
     },
     textSizes: {
       small: "Small",
@@ -1829,6 +1854,7 @@ export const en: TranslationMap = {
       xl: "XL",
       xxl: "XXL",
     },
+    profileSyncedHint: "Saved to your profile — follows you on every device.",
     syncedHint: "Synced across your devices through the gateway.",
     syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {
@@ -4251,8 +4277,10 @@ export const en: TranslationMap = {
     eventStale: "Stale session",
   },
   connection: {
+    disconnectedTitle: "Disconnected",
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
+    restarting: "Restarting…",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     sessionOperationCompletedPreviousConnection:
@@ -5557,6 +5585,10 @@ export const en: TranslationMap = {
       gatewayRestarted: {
         label: "System · gateway restarted",
       },
+      cliHarnessContext: {
+        label: "System · injected context",
+      },
+      showContent: "Show content",
     },
     progressLabels: {
       shelling: "Shelling",
@@ -5704,6 +5736,10 @@ export const en: TranslationMap = {
       eyebrow: "Question",
       summaryLabel: "Question outcome",
       ownAnswerFor: "Your own answer for {header}",
+      storeRequestedBy: "Requested by {agent} · {session}",
+      storeEntry: "Stores {name} as {kind}",
+      storeReplacement: "Replaces {name} — last updated {updated}",
+      storeReplacementBy: "Replaces {name} — last updated {updated} by {updatedBy}",
       submitting: "Submitting…",
       submitFailed: "Could not submit: {error}",
       answered: "Answered",
@@ -5779,9 +5815,8 @@ export const en: TranslationMap = {
       fastMode: "Fast mode",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      sessionOverride: "Session override",
-      resetToDefault: "Reset to default ({model})",
-      useDefault: "Use default",
+      onlyForSession: "Only for this session",
+      useDefaultModel: "Use default ({model})",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",

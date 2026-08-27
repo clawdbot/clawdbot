@@ -26,7 +26,7 @@ describe("memory index", () => {
         provider: {
           id: string;
           model: string;
-          embedQuery: () => Promise<number[]>;
+          embed: () => Promise<number[]>;
           embedBatch: (texts: string[]) => Promise<number[][]>;
           close: () => Promise<void>;
         };
@@ -34,7 +34,7 @@ describe("memory index", () => {
     ).provider = {
       id: "local",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         throw providerFixture.createLocalWorkerExitError();
       },
       embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
@@ -74,7 +74,7 @@ describe("memory index", () => {
         provider: {
           id: string;
           model: string;
-          embedQuery: (text: string) => Promise<number[]>;
+          embed: (text: string) => Promise<number[]>;
           embedBatch: (texts: string[]) => Promise<number[][]>;
           close: () => Promise<void>;
         };
@@ -83,7 +83,7 @@ describe("memory index", () => {
       fields.provider = {
         id: "mock",
         model: "new-embed",
-        embedQuery: async () => {
+        embed: async () => {
           throw providerFixture.createLocalWorkerExitError();
         },
         embedBatch: async () => {
@@ -117,7 +117,7 @@ describe("memory index", () => {
         provider: {
           id: string;
           model: string;
-          embedQuery: () => Promise<number[]>;
+          embed: () => Promise<number[]>;
           embedBatch: () => Promise<number[][]>;
           close: () => Promise<void>;
         };
@@ -125,7 +125,7 @@ describe("memory index", () => {
     ).provider = {
       id: "local",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         throw providerFixture.createLocalWorkerExitError();
       },
       embedBatch: async () => {
@@ -176,7 +176,7 @@ describe("memory index", () => {
         provider: {
           id: string;
           model: string;
-          embedQuery: (text: string) => Promise<number[]>;
+          embed: (text: string) => Promise<number[]>;
           embedBatch: (texts: string[]) => Promise<number[][]>;
           close: () => Promise<void>;
         };
@@ -191,7 +191,7 @@ describe("memory index", () => {
       fields.provider = {
         id: "fallback-provider",
         model: "new-embed",
-        embedQuery: async () => [1, 0, 0, 0],
+        embed: async () => [1, 0, 0, 0],
         embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
         close: async () => {},
       };
@@ -236,7 +236,7 @@ describe("memory index", () => {
       const provider = {
         id: "local",
         model: "test-model.gguf",
-        embedQuery: vi.fn(async () => [1, 0, 0, 0]),
+        embed: vi.fn(async () => [1, 0, 0, 0]),
         embedBatch: vi.fn(async (texts: string[]) => texts.map(() => [1, 0, 0, 0])),
       };
       Object.defineProperty(provider, Symbol.for("openclaw.localEmbeddingRuntimeFacts"), {

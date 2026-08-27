@@ -8,6 +8,10 @@ import {
   tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
 import {
+  readPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
+import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../config/legacy.default-agent-owner.js";
@@ -106,6 +110,12 @@ vi.mock("../wizard/clack-prompter.js", () => ({
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
 
 const runtime = createTestRuntime();
+const sharedAuthStore = {
+  version: 1,
+  profiles: {
+    "test-provider:shared": { type: "api_key", provider: "test-provider", key: "test-shared-key" },
+  },
+};
 
 function gatewayTransportError(kind: "closed" | "timeout", code?: number): GatewayTransportError {
   return new GatewayTransportError({
@@ -223,7 +233,9 @@ describe("agents delete command", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
-    fsSafeMocks.movePathToTrash.mockClear();
+    fsSafeMocks.movePathToTrash
+      .mockReset()
+      .mockImplementation(async (targetPath: string) => `${targetPath}.trashed`);
     workspaceStateMocks.deleteWorkspaceState.mockClear();
     processMocks.runCommandWithTimeout.mockClear();
     gatewayMocks.callGateway.mockReset();
@@ -284,6 +296,7 @@ describe("agents delete command", () => {
         deletedAgentId: "main",
         sessions,
       });
+      writePersistedAuthProfileStoreRaw(sharedAuthStore, path.join(stateDir, "agents/main/agent"));
       await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
 
       expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
@@ -301,6 +314,7 @@ describe("agents delete command", () => {
       ]);
       expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
       expectSessionStore(cfg, sessions, "main");
+      expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
     });
   });
 
@@ -315,6 +329,7 @@ describe("agents delete command", () => {
         },
       };
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      writePersistedAuthProfileStoreRaw(sharedAuthStore);
       await arrangeAgentsDeleteTest({
         stateDir,
         cfg,
@@ -331,12 +346,21 @@ describe("agents delete command", () => {
           ops: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
         },
       });
+      fsSafeMocks.movePathToTrash.mockImplementation(async (targetPath: string) => {
+        const trashPath = `${targetPath}.trashed`;
+        await fs.rename(targetPath, trashPath);
+        return trashPath;
+      });
 
       await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
 
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalledWith(1);
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
+      await expect(fs.access(path.join(stateDir, "agents/main/agent"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
       expectSessionStore(cfg, {}, "main");
       expect(readExecApprovalsSnapshot().file.agents).toEqual({
         "*": { security: "deny" },

@@ -170,9 +170,7 @@ describe("plain node plugin tool invocation deadline", () => {
         // Without the payload budget the Gateway arms no deadline and this reads
         // "gateway timeout after 30000ms" instead, with no provenance to inspect.
         expect(message).toContain("node invoke timed out");
-        expect(
-          (failure as { details?: { nodeCommandDispatched?: boolean } }).details,
-        ).toMatchObject({ nodeCommandDispatched: true });
+        expect(failure).toMatchObject({ details: { nodeCommandDispatched: true } });
       } finally {
         gatewayUrlEnv.restore();
         await node.stopAndWait();

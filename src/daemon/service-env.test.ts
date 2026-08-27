@@ -970,6 +970,11 @@ describe("resolveGatewayStateDir", () => {
     expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/openclaw-state"));
   });
 
+  it("does not interpret $ patterns in HOME when expanding ~ in OPENCLAW_STATE_DIR", () => {
+    const env = { HOME: "/home/$&user", OPENCLAW_STATE_DIR: "~/openclaw-state" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/home/$&user/openclaw-state"));
+  });
+
   it("preserves Windows absolute paths without HOME", () => {
     const env = { OPENCLAW_STATE_DIR: "C:\\State\\openclaw" };
     expect(resolveGatewayStateDir(env)).toBe("C:\\State\\openclaw");

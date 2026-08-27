@@ -67,7 +67,16 @@ describe("dir.fetch process wrapper", () => {
     });
     expect(runCommandBufferedMock).toHaveBeenCalledOnce();
     expect(runCommandBufferedMock).toHaveBeenCalledWith(
-      [process.platform !== "win32" ? "/usr/bin/tar" : "tar", "-czf", "-", "-C", tmpRoot, "."],
+      [
+        process.execPath,
+        "-e",
+        expect.any(String),
+        tmpRoot,
+        tmpRoot,
+        expect.any(String),
+        expect.any(String),
+        process.platform !== "win32" ? "/usr/bin/tar" : "tar",
+      ],
       expect.objectContaining({
         discardOutput: { stderr: true },
         maxOutputBytes: { stdout: 1024, stderr: 64 * 1024 },

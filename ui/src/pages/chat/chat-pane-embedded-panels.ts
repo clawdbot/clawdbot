@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ProgressCard } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
@@ -40,8 +39,6 @@ type SidebarPanelDefinitionParams = {
   startedAt: number | undefined;
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
-  progressCard: ProgressCard | null;
-  onDismissProgressCard?: (card: ProgressCard) => void;
   companion: ChatSessionCompanionThread;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
@@ -50,6 +47,7 @@ type SidebarPanelDefinitionParams = {
   pendingQuestion: string | null;
   onClearCompanion: () => void;
   discussion: SessionDiscussionPanelConfig | null;
+  discussionAvailable: boolean;
   discussionOpenUrl: string | null;
   discussionSourceGeneration: number;
 };
@@ -125,8 +123,6 @@ export function sidebarPanelDefinitions(
         .activeRunId=${params.activeRunId}
         .startedAt=${params.startedAt}
         .lastReadAt=${params.lastReadAt}
-        .progressCard=${params.progressCard}
-        .onDismissProgressCard=${params.onDismissProgressCard}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
@@ -233,7 +229,7 @@ export function sidebarPanelDefinitions(
         : {}),
     }),
     definePanel("discussion", "discussion", icons.messageSquare, discussion, {
-      available: discussion !== null,
+      available: discussion !== null && params?.discussionAvailable === true,
       ...(params?.discussionOpenUrl
         ? {
             headerAction: html`<a

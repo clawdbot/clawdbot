@@ -109,6 +109,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     compactionStatus?: CompactionStatus | null;
     fallbackStatus?: FallbackStatus | null;
     progressCard?: ProgressCard | null;
+    progressCardHasActiveRun?: boolean;
     onDismissProgressCard?: (card: ProgressCard) => void;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
     onGatewayQuestionChange?: () => void;
@@ -224,6 +225,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onRequestUpdate?: () => void;
     onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     onSlashIntent?: () => void | Promise<void>;
+    onSlashCommand?: (command: string) => void;
     onSend: ChatComposerProps["onSend"];
     onCompact?: () => void | Promise<void>;
     onOpenSessionCheckpoints?: () => void | Promise<void>;
@@ -428,6 +430,7 @@ export function renderChat(props: ChatProps) {
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
     progressCard: props.progressCard,
+    progressCardHasActiveRun: props.progressCardHasActiveRun,
     onDismissProgressCard: props.onDismissProgressCard,
     gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
@@ -476,6 +479,7 @@ export function renderChat(props: ChatProps) {
     onRequestUpdate: requestUpdate,
     onHistoryKeydown: props.onHistoryKeydown,
     onSlashIntent: props.onSlashIntent,
+    onSlashCommand: props.onSlashCommand,
     onSend: props.onSend,
     onCompact: props.suggestionComposer ? undefined : props.onCompact,
     onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,

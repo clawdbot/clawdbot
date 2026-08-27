@@ -33,7 +33,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
-import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
+import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createApplicationConfigCapability } from "./config.ts";
@@ -238,7 +238,7 @@ function createApplicationNavigationPreferences(
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
-  readonly documentMode: ApprovalDocumentMode | null;
+  readonly documentMode: ControlUiDocumentMode | null;
   readonly focusLocation: ControlUiFocusLocation | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
@@ -268,7 +268,7 @@ export function bootstrapApplication(
   const [basePath, resourceBasePath] = resolveControlUiPaths(
     startupLocation.pathname || globalThis.location?.pathname || "/",
   );
-  const documentMode = resolveApprovalDocumentMode(startupLocation.pathname, basePath);
+  const documentMode = resolveControlUiDocumentMode(startupLocation.pathname, basePath);
   const persistedSettings = loadSettings();
   const initialSettings = documentMode
     ? resolvePageGatewaySettings(persistedSettings)
