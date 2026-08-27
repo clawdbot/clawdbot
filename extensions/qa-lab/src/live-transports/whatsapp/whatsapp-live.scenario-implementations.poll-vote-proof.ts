@@ -89,7 +89,9 @@ async function waitForHookEvent(params: { hookEventsPath: string; pollMessageId?
     if (Date.now() >= deadline) {
       throw new Error("timed out waiting for the poll_vote_received hook fixture output");
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
 }
 
@@ -119,7 +121,7 @@ async function writePollVoteProofArtifacts(
     `poll_send=accepted message_id=${digest(params.pollMessageId) ?? "missing"}`,
     `awaiting_vote poll_question=${redactText(params.pollQuestion)}`,
     `driver_observation=kind:${params.pollVote.kind} poll_message_id=${digest(readPollVoteMessageId(params.pollVote)) ?? "missing"} selected_options=${params.pollVote.pollVote?.selectedOptions.join(",") ?? "missing"}`,
-    `hook_fixture=observed event:${String(params.hookEvent.event ?? "unknown")} selected_options=${Array.isArray(params.hookEvent.selectedOptions) ? params.hookEvent.selectedOptions.join(",") : "missing"}`,
+    `hook_fixture=observed event:${typeof params.hookEvent.event === "string" ? params.hookEvent.event : "unknown"} selected_options=${Array.isArray(params.hookEvent.selectedOptions) ? params.hookEvent.selectedOptions.join(",") : "missing"}`,
   ]
     .map(redactText)
     .join("\n");
