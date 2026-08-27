@@ -63,6 +63,9 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
   </Accordion>
   <Accordion title="Task reconciliation">
     Automation task reconciliation is runtime-owned first, durable-history-backed second: an active automation task stays live while the automations runtime still tracks that job as running, even if an old child session row still exists. Once the runtime stops owning the job and a 5-minute grace window expires, maintenance checks persisted run logs and job state for the matching `cron:<jobId>:<startedAt>` run. A terminal result there finalizes the task ledger; otherwise Gateway-owned maintenance can mark the task `lost`. Offline CLI audit can recover from durable history, but its own empty in-process active-job set is not proof a Gateway-owned run is gone.
+
+    Restart recovery matches finalized results to the run identity, never just a coincident start time. A verified live process keeps its run receipt. If a foreign process exists but its start identity cannot be verified, its receipt becomes recoverable after more than two hours from the queued or running start. Recovery revokes that receipt before admitting another run; it cannot undo external side effects already in flight. An interrupted one-shot remains disabled for inspection unless the operator already rescheduled it.
+
   </Accordion>
 </AccordionGroup>
 

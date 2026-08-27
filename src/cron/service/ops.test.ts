@@ -1199,7 +1199,7 @@ describe("cron service ops seam coverage", () => {
             expect(receiptRow).toEqual({
               status: "interrupted",
               finishedAtMs: now,
-              error: "cron: job interrupted by owner process exit",
+              error: "cron: job interrupted because owner is unavailable",
             });
           }
           expect(events.filter((event) => event.action === "finished")).toEqual([
