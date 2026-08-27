@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
+import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
   TEXT_SCALE_STOPS,
   UI_APPEARANCE_DEFAULTS,
@@ -187,7 +188,7 @@ export function renderAppearanceSection(
   const selectedAccentPreset = ACCENT_PRESETS.find((preset) => preset.hex === props.accent);
   const accentSelectionStatus =
     props.accent == null
-      ? t("configView.appearance.usingDefaultTheme")
+      ? t("configView.appearance.usingInheritedAccent")
       : t("configView.appearance.usingAccent", {
           value: selectedAccentPreset
             ? t(selectedAccentPreset.labelKey)
@@ -354,9 +355,7 @@ export function renderAppearanceSection(
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.accent")}</h2>
         </div>
-        <p class="settings-section__desc">
-          ${t("configView.appearance.accentHint")}
-        </p>
+        <p class="settings-section__desc">${t("configView.appearance.accentHint")}</p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-accent-swatches">
@@ -398,6 +397,9 @@ export function renderAppearanceSection(
                   : ""}"
                 style=${styleMap({
                   "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[1].hex,
+                  "--settings-accent-swatch-ink": controlUiAccentInk(
+                    props.accent ?? ACCENT_PRESETS[1].hex,
+                  ),
                 })}
               >
                 <input
@@ -405,6 +407,7 @@ export function renderAppearanceSection(
                   class="settings-accent-swatch__input"
                   data-accent-custom
                   aria-label=${t("configView.appearance.customAccent")}
+                  aria-describedby="settings-accent-status"
                   title=${t("configView.appearance.customAccent")}
                   .value=${props.accent ?? ACCENT_PRESETS[1].hex}
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
@@ -417,7 +420,7 @@ export function renderAppearanceSection(
             </div>
           </div>
         </div>
-        <p class="settings-section__desc settings-accent-status">
+        <p id="settings-accent-status" class="settings-section__desc settings-accent-status">
           <span class="settings-accent-status__selection">${accentSelectionStatus}</span>
           <span class="settings-accent-status__scope">${accentProvenance}</span>
         </p>

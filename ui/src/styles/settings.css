@@ -379,6 +379,11 @@
 }
 
 @media (min-width: 769px) {
+  .settings-row--stacked-on-narrow,
+  .settings-row--stacked-on-narrow .settings-row__control {
+    width: auto;
+  }
+
   .settings-row--stacked-on-narrow {
     flex-direction: row;
     align-items: center;

@@ -17,6 +17,8 @@ const ACCENT_CSS_VARIABLES = [
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
 
+import { controlUiAccentInk } from "./accent-contrast.ts";
+
 export function applyControlUiAccent(userAccent?: string): void {
   userAccentOverride = userAccent;
   const root = document.documentElement;
@@ -29,14 +31,7 @@ export function applyControlUiAccent(userAccent?: string): void {
     return;
   }
 
-  const linearChannel = (offset: number) => {
-    const channel = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
-    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-  };
-  const luminance =
-    0.2126 * linearChannel(1) + 0.7152 * linearChannel(3) + 0.0722 * linearChannel(5);
-  // Black and white reach equal WCAG contrast at relative luminance 0.179.
-  const ink = luminance > 0.179 ? "#000000" : "#ffffff";
+  const ink = controlUiAccentInk(color);
   const mix = (variable: string, amount: number) =>
     `color-mix(in srgb, var(${variable}) ${amount}%, transparent)`;
 
