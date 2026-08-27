@@ -16,6 +16,7 @@ import {
 import { installCodeModeOutcomeHook } from "./embedded-agent-runner/run/code-mode-outcome.js";
 import { Agent } from "./runtime/index.js";
 import { isToolResultError } from "./tool-result-error.js";
+import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import {
   jsonResult,
   ToolAuthorizationError,
@@ -107,6 +108,64 @@ async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAg
 
 describe("Code Mode agent-loop error recovery", () => {
   afterEach(() => resetCodeModeTestState());
+
+  it("recovers a denied-host exec without locking into read-only reconciliation", async () => {
+    // Production-composed: the hidden tool's preparation invokes the REAL
+    // exec target resolver, whose refusal mints the trusted no-start fact in
+    // production code (bash-tools deniedBeforeStart).
+    const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () =>
+      jsonResult({ unexpected: true }),
+    );
+    terminal.prepareBeforeToolCallParams = () => {
+      try {
+        resolveExecTarget({
+          configuredTarget: "auto",
+          requestedTarget: "gateway",
+          elevatedRequested: false,
+          sandboxRequired: false,
+          sandboxAvailable: true,
+        });
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message.startsWith("exec host not allowed")
+        ) {
+          throw err;
+        }
+        throw new Error(`unexpected resolver outcome: ${String(err)}`);
+      }
+      throw new Error("resolver unexpectedly allowed the request");
+    };
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [terminal, recover],
+      programs: ["return await terminal({});", "return await recover_task({});"],
+    });
+
+    expect(terminal.execute).not.toHaveBeenCalled();
+    expect(providerContexts[1]?.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "exec",
+        isError: true,
+        details: expect.objectContaining({
+          status: "failed",
+          failurePhase: "bridge",
+          bridgeDispatchStarted: true,
+          error: expect.stringContaining("exec host not allowed"),
+        }),
+      }),
+    );
+    expect(reconciliationCandidates).toBe(0);
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "recovered" }],
+    });
+  });
 
   it("returns a trusted no-start tool failure to the model for ordinary recovery", async () => {
     const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () =>
