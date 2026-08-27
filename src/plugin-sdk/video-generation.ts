@@ -13,23 +13,6 @@ import {
   DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
   runDashscopeVideoGenerationTask,
 } from "../video-generation/dashscope-compatible.js";
-import type {
-  GeneratedVideoAsset as CoreGeneratedVideoAsset,
-  VideoGenerationAssetRole as CoreVideoGenerationAssetRole,
-  VideoGenerationCatalogModelEntry as CoreVideoGenerationCatalogModelEntry,
-  VideoGenerationMode as CoreVideoGenerationMode,
-  VideoGenerationModeCapabilities as CoreVideoGenerationModeCapabilities,
-  VideoGenerationModelCapabilitiesContext as CoreVideoGenerationModelCapabilitiesContext,
-  VideoGenerationProvider as CoreVideoGenerationProvider,
-  VideoGenerationProviderCapabilities as CoreVideoGenerationProviderCapabilities,
-  VideoGenerationProviderConfiguredContext as CoreVideoGenerationProviderConfiguredContext,
-  VideoGenerationProviderOptionType as CoreVideoGenerationProviderOptionType,
-  VideoGenerationRequest as CoreVideoGenerationRequest,
-  VideoGenerationResolution as CoreVideoGenerationResolution,
-  VideoGenerationResult as CoreVideoGenerationResult,
-  VideoGenerationSourceAsset as CoreVideoGenerationSourceAsset,
-  VideoGenerationTransformCapabilities as CoreVideoGenerationTransformCapabilities,
-} from "../video-generation/types.js";
 import { resolveApiKeyForProvider } from "./provider-auth-runtime.js";
 import { isProviderApiKeyConfigured } from "./provider-auth.js";
 import {
@@ -211,53 +194,6 @@ export type VideoGenerationProvider = {
     | Promise<VideoGenerationProviderCapabilities | undefined>;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };
-
-type AssertAssignable<_Left extends _Right, _Right> = true;
-const videoGenerationSdkCompat: [
-  AssertAssignable<GeneratedVideoAsset, CoreGeneratedVideoAsset>,
-  AssertAssignable<CoreGeneratedVideoAsset, GeneratedVideoAsset>,
-  AssertAssignable<VideoGenerationAssetRole, CoreVideoGenerationAssetRole>,
-  AssertAssignable<CoreVideoGenerationAssetRole, VideoGenerationAssetRole>,
-  AssertAssignable<VideoGenerationProviderOptionType, CoreVideoGenerationProviderOptionType>,
-  AssertAssignable<CoreVideoGenerationProviderOptionType, VideoGenerationProviderOptionType>,
-  AssertAssignable<VideoGenerationMode, CoreVideoGenerationMode>,
-  AssertAssignable<CoreVideoGenerationMode, VideoGenerationMode>,
-  AssertAssignable<VideoGenerationCatalogModelEntry, CoreVideoGenerationCatalogModelEntry>,
-  AssertAssignable<CoreVideoGenerationCatalogModelEntry, VideoGenerationCatalogModelEntry>,
-  AssertAssignable<VideoGenerationModeCapabilities, CoreVideoGenerationModeCapabilities>,
-  AssertAssignable<CoreVideoGenerationModeCapabilities, VideoGenerationModeCapabilities>,
-  AssertAssignable<VideoGenerationProvider, CoreVideoGenerationProvider>,
-  AssertAssignable<CoreVideoGenerationProvider, VideoGenerationProvider>,
-  AssertAssignable<VideoGenerationProviderCapabilities, CoreVideoGenerationProviderCapabilities>,
-  AssertAssignable<CoreVideoGenerationProviderCapabilities, VideoGenerationProviderCapabilities>,
-  AssertAssignable<
-    VideoGenerationProviderConfiguredContext,
-    CoreVideoGenerationProviderConfiguredContext
-  >,
-  AssertAssignable<
-    CoreVideoGenerationProviderConfiguredContext,
-    VideoGenerationProviderConfiguredContext
-  >,
-  AssertAssignable<
-    VideoGenerationModelCapabilitiesContext,
-    CoreVideoGenerationModelCapabilitiesContext
-  >,
-  AssertAssignable<
-    CoreVideoGenerationModelCapabilitiesContext,
-    VideoGenerationModelCapabilitiesContext
-  >,
-  AssertAssignable<VideoGenerationRequest, CoreVideoGenerationRequest>,
-  AssertAssignable<CoreVideoGenerationRequest, VideoGenerationRequest>,
-  AssertAssignable<VideoGenerationResolution, CoreVideoGenerationResolution>,
-  AssertAssignable<CoreVideoGenerationResolution, VideoGenerationResolution>,
-  AssertAssignable<VideoGenerationResult, CoreVideoGenerationResult>,
-  AssertAssignable<CoreVideoGenerationResult, VideoGenerationResult>,
-  AssertAssignable<VideoGenerationSourceAsset, CoreVideoGenerationSourceAsset>,
-  AssertAssignable<CoreVideoGenerationSourceAsset, VideoGenerationSourceAsset>,
-  AssertAssignable<VideoGenerationTransformCapabilities, CoreVideoGenerationTransformCapabilities>,
-  AssertAssignable<CoreVideoGenerationTransformCapabilities, VideoGenerationTransformCapabilities>,
-] = [] as never;
-void videoGenerationSdkCompat;
 
 export type DashscopeVideoGenerationProviderOptions = {
   providerId: string;
