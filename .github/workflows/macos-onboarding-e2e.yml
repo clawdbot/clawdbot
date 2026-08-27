@@ -1,0 +1,98 @@
+name: macOS Onboarding E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - ".github/workflows/macos-onboarding-e2e.yml"
+      - "apps/macos/**"
+      - "extensions/*/openclaw.plugin.json"
+      - "src/commands/onboard-inference*.ts"
+      - "src/gateway/server-methods/system-agent.ts"
+      - "src/system-agent/setup-inference*.ts"
+      - "scripts/install-cli.sh"
+      - "scripts/macos-onboarding-e2e.mjs"
+      - "scripts/package-mac-app.sh"
+      - "scripts/prewarmed-plugin-cache.mjs"
+      - "scripts/stage-macos-prewarmed-plugin-cache.mts"
+      - "scripts/verify-macos-prewarmed-runtime.mts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-onboarding-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  onboarding:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node and dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: read-write
+          dependency-cache: "true"
+          build-all-cache-scope: macos-onboarding-e2e
+
+      - name: Restore Swift build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/macos/.build
+          key: macos-onboarding-e2e-swift-${{ runner.arch }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
+          restore-keys: |
+            macos-onboarding-e2e-swift-${{ runner.arch }}-
+
+      - name: Package prewarmed app
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          started_at=$SECONDS
+          SKIP_PNPM_INSTALL=1 \
+            OPENCLAW_SKIP_MLX_TTS=1 \
+            OPENCLAW_BUNDLE_PREWARMED_RUNTIME=1 \
+            BUILD_ARCHS="$(uname -m)" \
+            ./scripts/package-mac-app.sh
+          elapsed=$((SECONDS - started_at))
+          echo "seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "### macOS onboarding E2E timing" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Package: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run onboarding
+        id: onboarding
+        shell: bash
+        run: |
+          set -euo pipefail
+          started_at=$SECONDS
+          node scripts/macos-onboarding-e2e.mjs | tee "$RUNNER_TEMP/macos-onboarding-e2e.json"
+          elapsed=$((SECONDS - started_at))
+          echo "seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "- Onboarding: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Total measured: $((elapsed + ${{ steps.package.outputs.seconds }}))s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-onboarding-e2e-${{ github.sha }}
+          path: |
+            ~/Library/Logs/OpenClaw/
+            ~/.openclaw-onboarde2e*/logs/
+            ${{ runner.temp }}/macos-onboarding-e2e.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Save Swift build cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/macos/.build
+          key: macos-onboarding-e2e-swift-${{ runner.arch }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
