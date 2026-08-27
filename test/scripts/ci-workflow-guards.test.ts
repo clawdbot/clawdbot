@@ -4382,7 +4382,7 @@ NODE
       const tarball = path.join(registry, "cache-proof-dep-1.0.0.tgz");
       const registryScript = String.raw`
 const { createHash } = require("node:crypto");
-const { readFileSync, writeFileSync } = require("node:fs");
+const { readFileSync, renameSync, writeFileSync } = require("node:fs");
 const { createServer } = require("node:http");
 const tarballPath = process.argv[1];
 const readyPath = process.argv[2];
@@ -4417,7 +4417,12 @@ const server = createServer((request, response) => {
   response.statusCode = 404;
   response.end();
 });
-server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.address().port)));
+server.listen(0, "127.0.0.1", () => {
+  // Publish the complete port before existence can signal readiness to the parent.
+  const pendingPath = readyPath + ".tmp";
+  writeFileSync(pendingPath, String(server.address().port));
+  renameSync(pendingPath, readyPath);
+});
 `;
       const registryServer = spawn(process.execPath, ["-e", registryScript, tarball, readyFile], {
         stdio: "ignore",
