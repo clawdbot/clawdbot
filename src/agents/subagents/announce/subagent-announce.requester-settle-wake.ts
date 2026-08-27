@@ -163,7 +163,8 @@ function deferRequesterSettleWakeBatch(params: {
     completeRequesterSettleWakeBatch({
       runIds: params.batchRunIds,
       state: params.state,
-      completeBatch: params.completeBatch,
+      completeBatch: (runIds, rearmGeneration, delivery) =>
+        params.completeBatch(runIds, rearmGeneration, delivery),
       delivery: {
         delivered: false,
         path: "none",

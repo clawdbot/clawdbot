@@ -4606,7 +4606,7 @@ describe("requester settle wake trigger", () => {
     entry.cleanupCompletedAt = undefined;
     entry.cleanupHandled = false;
     entry.wakeOnDescendantSettle = true;
-    runSubagentAnnounceFlow.mockClear();
+    vi.mocked(runSubagentAnnounceFlow).mockClear();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
 
     pendingDescendantRuns = 1;
