@@ -70,10 +70,14 @@ function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): stri
 
 function configuredCandidates(
   config: ProviderAppGuidedSetupContext["config"],
+  scope: "detection" | "setup",
 ): LlamaCppChatCandidate[] {
   const existing = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  const managedExisting = existing?.localService ? existing : undefined;
   const provider = buildLlamaCppProviderConfig({
-    existing: existing?.localService ? existing : undefined,
+    existing: managedExisting,
+    // Detection reports persisted inventory; interactive setup may still offer the default.
+    ...(managedExisting && scope === "detection" ? { modelInventory: managedExisting.models } : {}),
   });
   const primary = readPrimaryModel(config);
   const primaryId = primary?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)
@@ -174,7 +178,7 @@ export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
   ) {
     return null;
   }
-  for (const candidate of configuredCandidates(ctx.config)) {
+  for (const candidate of configuredCandidates(ctx.config, "detection")) {
     if (await resolveCachedCandidate(candidate)) {
       return {
         modelRef: `${LLAMA_CPP_PROVIDER_ID}/${candidate.model.id}`,
@@ -218,6 +222,21 @@ function hasLocalMemoryIntent(config: ProviderAuthContext["config"]): boolean {
   );
 }
 
+function routesToLlamaCpp(
+  model: string | { primary?: string; fallbacks?: string[] } | undefined,
+): boolean {
+  const refs = typeof model === "string" ? [model] : [model?.primary, ...(model?.fallbacks ?? [])];
+  return refs.some((ref) => ref?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`) === true);
+}
+
+function hasLlamaCppChatRoute(config: ProviderAuthContext["config"]): boolean {
+  return (
+    routesToLlamaCpp(config.agents?.defaults?.model) ||
+    Object.values(config.agents?.entries ?? {}).some((agent) => routesToLlamaCpp(agent.model)) ||
+    config.agents?.list?.some((agent) => routesToLlamaCpp(agent.model)) === true
+  );
+}
+
 async function resolveSetupPlan(
   ctx: ProviderAuthContext,
   candidates: LlamaCppChatCandidate[],
@@ -249,9 +268,12 @@ async function resolveSetupPlan(
   }
 
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  if (localMemoryIntent && existing && !existing.localService) {
+  if (
+    localMemoryIntent &&
+    ((existing && !existing.localService) || hasLlamaCppChatRoute(ctx.config))
+  ) {
     await ctx.prompter.note(
-      "Embedding-only setup cannot replace your existing llama.cpp server without changing its chat routes. Move those routes to another provider and remove the existing server config, then retry llama.cpp setup.",
+      "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
       "Setup skipped",
     );
     return undefined;
@@ -275,7 +297,7 @@ async function resolveSetupPlan(
 export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const managedExisting = existing?.localService ? existing : undefined;
-  const candidates = configuredCandidates(ctx.config);
+  const candidates = configuredCandidates(ctx.config, "setup");
   const plan = await resolveSetupPlan(ctx, candidates);
   if (!plan) {
     return { profiles: [] };

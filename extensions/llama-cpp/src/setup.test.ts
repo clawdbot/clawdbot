@@ -25,6 +25,7 @@ vi.mock("./managed-server.js", async (importOriginal) => ({
 }));
 
 import {
+  DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
   DEFAULT_LLAMA_CPP_MODEL_ID,
   DEFAULT_LLAMA_CPP_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
@@ -32,7 +33,7 @@ import {
   LLAMA_CPP_PROVIDER_ID,
   meetsLlamaCppDefaultModelRamFloor,
 } from "./defaults.js";
-import { detectLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
+import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
 const GIB = 1024 ** 3;
 let tempRoot: string;
@@ -181,6 +182,36 @@ describe("llama.cpp managed setup", () => {
     });
   });
 
+  it("does not detect chat from a cached model when the managed inventory is empty", async () => {
+    const command = path.join(tempRoot, "llama-server");
+    const preset = path.join(tempRoot, "models.ini");
+    const cachedDefault = path.join(tempRoot, DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE);
+    await Promise.all([
+      fs.writeFile(command, "binary"),
+      fs.writeFile(preset, "version = 1"),
+      fs.writeFile(cachedDefault, "GGUF"),
+    ]);
+    const cfg = config();
+    const provider = cfg.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    if (!provider) {
+      throw new Error("missing fixture provider");
+    }
+    provider.localService = {
+      command,
+      args: ["--models-preset", preset],
+      healthUrl: "http://127.0.0.1:19432/health",
+    };
+
+    await expect(detectLlamaCppSetup({ config: cfg, env: {} })).resolves.toBeNull();
+    await expect(
+      prepareLlamaCppSetup({
+        config: cfg,
+        env: {},
+        modelRef: `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`,
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("does not offer the default download below the RAM floor", async () => {
     vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
     const ctx = authContext(true);
@@ -300,6 +331,45 @@ describe("llama.cpp managed setup", () => {
       );
       expect(mocks.ensureModel).not.toHaveBeenCalledWith(
         expect.objectContaining({ download: true }),
+      );
+      expect(ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toBe(provider);
+    },
+  );
+
+  it.each(externalChatRoutes.slice(0, 2))(
+    "does not replace a managed llama.cpp provider used as $name",
+    async ({ agents }) => {
+      vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+      const ctx = authContext(true);
+      ctx.config.memory = { search: { provider: "local" } };
+      ctx.config.agents = agents;
+      const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+      if (!provider) {
+        throw new Error("missing managed provider fixture");
+      }
+      provider.localService = {
+        command: path.join(tempRoot, "llama-server"),
+        args: ["--models-preset", path.join(tempRoot, "models.ini")],
+        healthUrl: "http://127.0.0.1:19432/health",
+      };
+      provider.models = [
+        {
+          id: "external-chat",
+          name: "Managed chat",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 2048,
+        },
+      ];
+
+      await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+      expect(ctx.prompter.confirm).not.toHaveBeenCalled();
+      expect(ctx.prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("chat routes"),
+        "Setup skipped",
       );
       expect(ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toBe(provider);
     },
