@@ -6184,6 +6184,24 @@ button.chat-pr__diff {
   overflow: hidden;
 }
 
+.chat-controls__permission-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.chat-controls__permission-learn-more {
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.chat-controls__permission-learn-more:hover {
+  color: var(--text-strong);
+}
+
 .chat-controls__permission-option {
   display: flex;
   align-items: center;
