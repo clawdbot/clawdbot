@@ -118,11 +118,25 @@ describe("extractArchiveInPrivateDestinationWithRegularFileAliases", () => {
   it("aborts a stalled alias copy at the shared absolute deadline", async () => {
     const fixture = await createArchiveCase();
     let stalledCopies = 0;
+    let releaseDestroy: () => void = () => undefined;
+    const destroyReleased = new Promise<void>((resolve) => {
+      releaseDestroy = resolve;
+    });
+    let reportDestroyStarted: () => void = () => undefined;
+    const destroyStarted = new Promise<void>((resolve) => {
+      reportDestroyStarted = resolve;
+    });
     const destinations = ["libexample.so"];
     Object.defineProperty(destinations, Symbol.iterator, {
       *value() {
         stalledCopies += 1;
         const stalledStream = new PassThrough();
+        Object.defineProperty(stalledStream, "_destroy", {
+          value: (error: Error | null, callback: (error?: Error | null) => void) => {
+            reportDestroyStarted();
+            void destroyReleased.then(() => callback(error));
+          },
+        });
         vi.spyOn(fsSync, "createReadStream").mockImplementation(
           () => stalledStream as unknown as fsSync.ReadStream,
         );
@@ -130,14 +144,33 @@ describe("extractArchiveInPrivateDestinationWithRegularFileAliases", () => {
       },
     });
 
-    await expect(
-      extractCase({
-        ...fixture,
-        timeoutMs: 500,
-        regularFileAliases: [["libexample.so.1", destinations]],
-      }),
-    ).rejects.toThrow(/regular-file aliases timed out/u);
+    const extraction = extractCase({
+      ...fixture,
+      timeoutMs: 500,
+      regularFileAliases: [["libexample.so.1", destinations]],
+    });
+    let settled = false;
+    void extraction.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await destroyStarted;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(settled).toBe(false);
+
+    releaseDestroy();
+    await expect(extraction).rejects.toThrow(/regular-file aliases timed out/u);
     expect(stalledCopies).toBe(1);
+    await fs.rm(fixture.destination, { recursive: true, force: true });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     await expect(
       fs.lstat(path.join(fixture.destination, "package", "libexample.so")),
     ).rejects.toThrow();

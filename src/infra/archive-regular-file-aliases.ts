@@ -264,8 +264,11 @@ async function copyPlannedAlias(alias: PlannedAlias, deadline: OperationDeadline
     flags: "wx",
     mode: alias.mode,
   });
+  // The pipeline promise joins stream destruction after cancellation. Keep this promise in scope
+  // through error cleanup so the private destination cannot be discarded while a copy is alive.
+  const copyOperation = pipeline(readable, writable, { signal: deadline.signal });
   try {
-    await pipeline(readable, writable, { signal: deadline.signal });
+    await copyOperation;
     deadline.check();
     const destinationStat = await deadline.wait(() => fs.lstat(alias.destinationPath));
     if (
@@ -278,6 +281,7 @@ async function copyPlannedAlias(alias: PlannedAlias, deadline: OperationDeadline
       );
     }
   } catch (error) {
+    await copyOperation.catch(() => undefined);
     await fs.rm(alias.destinationPath, { force: true }).catch(() => undefined);
     deadline.check();
     throw error;
