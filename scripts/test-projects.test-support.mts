@@ -2287,6 +2287,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "full-release-validation-at-sha",
       "find-reusable-release-validation",
       "openclaw-npm-extended-stable-full-validation-workflow",
+      "release-no-push-workflow",
       "release-ci-summary",
       packageAcceptance,
       pluginPrerelease,

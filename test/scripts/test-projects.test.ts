@@ -504,6 +504,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/full-release-validation-at-sha.test.ts",
         "test/scripts/find-reusable-release-validation.test.ts",
         "test/scripts/openclaw-npm-extended-stable-full-validation-workflow.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-ci-summary.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
