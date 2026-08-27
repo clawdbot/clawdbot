@@ -93,6 +93,8 @@ type PreparedReplyDispatchPublicationHost = Readonly<{
   isGatewayLifecycleActive: () => boolean;
   getPendingOwnerPublication: (agentId: string) => Promise<unknown> | undefined;
   getPendingReplacement: () => Promise<void> | undefined;
+  /** Waits for an agent-scoped auth publication after its old projection was removed. */
+  getPendingAgentPublication?: (agentId: string) => Promise<void> | undefined;
 }>;
 
 /** Reads one immutable configured Gateway dispatch generation without activating an owner. */
@@ -160,6 +162,11 @@ export class PreparedReplyDispatchPublicationOwner {
       }
       const matches = this.#publication.runtimes.filter((runtime) => runtime.agentId === agentId);
       if (matches.length !== 1) {
+        const agentPublication = this.host.getPendingAgentPublication?.(agentId);
+        if (agentPublication) {
+          await agentPublication;
+          continue;
+        }
         throw new PreparedModelRuntimeOwnerNotPublishedError(
           `prepared reply dispatch runtime owner was not published for ${agentId}`,
         );
