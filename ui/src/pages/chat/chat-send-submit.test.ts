@@ -442,15 +442,26 @@ describe("handleSendChat browser annotation context", () => {
 
 describe("handleSendChat immediate local commands", () => {
   it.each(["/export-session", "/export"])(
-    "preserves staged attachments while %s exports the chat",
+    "shows an empty export outcome and preserves staged attachments for %s",
     async (command) => {
       const attachment = createStagedAttachment("export-att");
-      const exportCurrentChat = vi.fn();
-      const host = createImmediateCommandHost(command, attachment, { exportCurrentChat });
+      const exportCurrentChat = vi.fn(() => "empty" as const);
+      const afterCommit = vi.fn(() => () => undefined);
+      const host = createImmediateCommandHost(command, attachment, {
+        exportCurrentChat,
+        renderLifecycle: { invalidate: vi.fn(), afterCommit },
+      });
 
       await handleSendChat(host);
 
       expect(exportCurrentChat).toHaveBeenCalledOnce();
+      expect(host.chatMessages).toEqual([
+        expect.objectContaining({
+          role: "system",
+          content: "There are no messages to export yet.",
+        }),
+      ]);
+      expect(afterCommit).toHaveBeenCalledOnce();
       expect(host.chatMessage).toBe("");
       expect(host.chatAttachments).toEqual([attachment]);
       expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);

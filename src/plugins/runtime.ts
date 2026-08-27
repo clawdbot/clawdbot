@@ -200,16 +200,34 @@ export function restoreActivePluginRegistrySnapshot(
   });
 }
 
+/** Rolls back a staged registry without reactivating the prior committed generation. */
+export function rollbackStagedPluginRegistry(
+  snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>,
+): void {
+  installActivePluginRegistry({
+    registry: snapshot.activeRegistry,
+    key: snapshot.key,
+    runtimeSubagentMode: snapshot.runtimeSubagentMode,
+    workspaceDir: snapshot.workspaceDir,
+    // Staging never retired the prior registry. Reactivating it here would mint a
+    // new epoch and revoke closures that remained authoritative through rollback.
+    activateRegistry: false,
+  });
+}
+
 function installActivePluginRegistry(params: {
   registry: PluginRegistry | null;
   key: string | null;
   runtimeSubagentMode: RegistryState["runtimeSubagentMode"];
   workspaceDir: string | null;
   retirePrevious?: boolean;
+  activateRegistry?: boolean;
 }): void {
   const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = params.registry;
-  markPluginRegistryActive(params.registry);
+  if (params.activateRegistry !== false) {
+    markPluginRegistryActive(params.registry);
+  }
   state.activeVersion += 1;
   if (params.registry) {
     settlePreparedMessageToolCatalog(params.registry, state.activeVersion);

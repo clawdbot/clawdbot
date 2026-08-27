@@ -123,6 +123,32 @@ Provider capability truth (verified in source, 2026-08-14):
   CDP browser tool into user Chrome with explicit connect consent. Missing vs v2:
   middle/triple click, held input, cursor position, recording.
 
+## Status update 2026-08-25/26
+
+- **CUA live vertical PASSED on production** (2026-08-25): headless node host on
+  steipete-studio-sf (current-main build, bundled cua-driver v0.22.1, TCC via the
+  Aqua terminal chain) registered on the production clawstudio Gateway as
+  `prov=cua-computer` with `computer.act`; `list_windows` (300 windows),
+  `get_window_state` (AXTextArea projected with elementRef + value), then a
+  background `type` into a non-frontmost TextEdit returned `effect=confirmed`
+  `route=accessibility` with `value_readback`; re-observation showed the typed
+  text and TextEdit was never frontmost. Raw `nodes invoke` requires an
+  `executionId` the agent tool normally supplies.
+- **macOS node-channel silent failure fixed** (#129925, af9b0c7): a node-host
+  worker that exits at startup no longer silently kills the node channel forever
+  (startup exits now consume the retry budget and latch; the channel dials
+  without the worker surface; node-channel state + failure reason render in the
+  menu). Root cause was captured from live os_log: the managed node CLI refused
+  the machine's newer state-DB schema and the app respawned it invisibly every
+  ~14s.
+- **Managed node-CLI schema drift repaired fleet-wide** (2026-08-26): dev-main
+  apps migrate shared state DBs past every npm-published CLI (schema 10 vs 8),
+  so the managed `openclaw-mac-node` channel on all five Macs was rebuilt from
+  current main (`pnpm pack` for workspace-dep rewrite -> `npm install -g
+--prefix releases/<sha>` -> version stamp -> atomic `current` flip). Follow-ups
+  open: roll the fixed app build to the fleet; webview auth=none with stale
+  cached webchat; gateway rows reporting connected with no live socket.
+
 ## Workstreams and tracker
 
 Waves follow RFC 0025's implementation plan, compressed by the no-compat ruling.

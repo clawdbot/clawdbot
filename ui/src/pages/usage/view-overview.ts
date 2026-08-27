@@ -4,10 +4,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import {
   buildUsageCostWindows,
@@ -787,7 +787,7 @@ function renderSessionsCard(
   sessionSortDir: "asc" | "desc",
   recentSessions: string[],
   sessionsTab: "all" | "recent",
-  onSelectSession: (key: string, shiftKey: boolean) => void,
+  onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void,
   onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void,
   onSessionSortDirChange: (dir: "asc" | "desc") => void,
   onSessionsTabChange: (tab: "all" | "recent") => void,
@@ -887,7 +887,11 @@ function renderSessionsCard(
     0,
   );
 
-  const renderSessionBarRow = (s: UsageSessionEntry, isSelected: boolean) => {
+  const renderSessionBarRow = (
+    s: UsageSessionEntry,
+    isSelected: boolean,
+    orderedKeys: string[],
+  ) => {
     const value = getSessionValue(s);
     const displayLabel = formatSessionListLabel(s);
     const meta = buildSessionMeta(s);
@@ -898,7 +902,7 @@ function renderSessionsCard(
           if ((event.target as Element | null)?.closest("button")) {
             return;
           }
-          onSelectSession(s.key, event.shiftKey);
+          onSelectSession(s.key, event.shiftKey, orderedKeys);
         }}
         title="${s.key}"
       >
@@ -907,7 +911,7 @@ function renderSessionsCard(
           class="session-bar-selection"
           aria-label=${displayLabel}
           aria-pressed=${isSelected ? "true" : "false"}
-          @click=${(event: MouseEvent) => onSelectSession(s.key, event.shiftKey)}
+          @click=${(event: MouseEvent) => onSelectSession(s.key, event.shiftKey, orderedKeys)}
         >
           <span class="session-bar-label">
             <span class="session-bar-title">${displayLabel}</span>
@@ -922,10 +926,10 @@ function renderSessionsCard(
             class="btn btn--sm btn--ghost"
             @click=${(e: MouseEvent) => {
               e.stopPropagation();
-              void copyToClipboard(formatSessionListLabel(s));
+              void handleCopyButton(e, formatSessionListLabel(s), t("usage.sessions.copy"));
             }}
           >
-            ${t("usage.sessions.copy")}
+            <span data-copy-label>${t("usage.sessions.copy")}</span>
           </button>
           <div class="session-bar-value">
             ${isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value)}
@@ -942,6 +946,13 @@ function renderSessionsCard(
   const recentEntries = recentSessions
     .map((key) => sessionMap.get(key))
     .filter((entry): entry is UsageSessionEntry => Boolean(entry));
+  const renderSessionBarRows = (entries: UsageSessionEntry[]) => {
+    // Selection follows this rendered group, before a click reorders recently viewed sessions.
+    const orderedKeys = entries.map((entry) => entry.key);
+    return entries.map((entry) =>
+      renderSessionBarRow(entry, selectedSet.has(entry.key), orderedKeys),
+    );
+  };
 
   return renderSettingsSection(
     { title: t("usage.sessions.title") },
@@ -1018,16 +1029,14 @@ function renderSessionsCard(
             ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
             : html`
                 <div class="session-bars session-bars--recent">
-                  ${recentEntries.map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+                  ${renderSessionBarRows(recentEntries)}
                 </div>
               `
           : sessions.length === 0
             ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
             : html`
                 <div class="session-bars">
-                  ${sortedWithDir
-                    .slice(0, 50)
-                    .map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+                  ${renderSessionBarRows(sortedWithDir.slice(0, 50))}
                   ${sessions.length > 50
                     ? html`
                         <div class="usage-more-sessions">
@@ -1044,7 +1053,7 @@ function renderSessionsCard(
                   ${t("usage.sessions.selected", { count: String(selectedCount) })}
                 </div>
                 <div class="session-bars session-bars--selected">
-                  ${selectedEntries.map((s) => renderSessionBarRow(s, true))}
+                  ${renderSessionBarRows(selectedEntries)}
                 </div>
               </div>
             `

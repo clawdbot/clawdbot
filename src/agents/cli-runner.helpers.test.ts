@@ -830,6 +830,19 @@ describe("resolveCliRunQueueKey", () => {
     ).toBe("claude-cli:owner:abcd1234");
   });
 
+  it("keeps third-party live sessions serialized on their exact owner even when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "acme-cli",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-third-party-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "third-party-owner",
+      }),
+    ).toBe("acme-cli:owner:third-party-owner");
+  });
+
   it("keeps resumed Claude live sessions on the owner lane", () => {
     expect(
       resolveCliRunQueueKey({

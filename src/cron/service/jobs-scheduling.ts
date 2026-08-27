@@ -323,8 +323,13 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     if (everyMs < 1) {
       return undefined;
     }
+    const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;
+    const anchorMs = resolveEveryAnchorMs({
+      schedule: job.schedule,
+      fallbackAnchorMs,
+    });
     const lastRunAtMs = job.state.lastRunAtMs;
-    if (isFiniteTimestamp(lastRunAtMs)) {
+    if (isFiniteTimestamp(lastRunAtMs) && lastRunAtMs >= anchorMs) {
       const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
       if (!isFiniteTimestamp(nextFromLastRun)) {
         return undefined;
@@ -333,11 +338,6 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
         return nextFromLastRun;
       }
     }
-    const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;
-    const anchorMs = resolveEveryAnchorMs({
-      schedule: job.schedule,
-      fallbackAnchorMs,
-    });
     const next = computeNextRunAtMs({ ...job.schedule, everyMs, anchorMs }, nowMs);
     return isFiniteTimestamp(next) ? next : undefined;
   }

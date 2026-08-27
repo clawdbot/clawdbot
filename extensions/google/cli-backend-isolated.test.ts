@@ -66,7 +66,7 @@ describe("Gemini CLI isolated completion", () => {
           provider: "vercel-ai-gateway",
           key: "vercel-key",
         },
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionCwd: workspaceDir,
         isolatedCompletionModelId: "gemini-3.1-flash-lite",
         isolatedCompletionPrompt: "Return JSON.",
@@ -132,7 +132,7 @@ describe("Gemini CLI isolated completion", () => {
         GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath,
         GEMINI_WRITE_SYSTEM_MD: inheritedSystemPromptWritePath,
       };
-      context.toolAvailability = { native: [], openClaw: [], mcp: [] };
+      context.toolAvailability = { native: [], openClaw: [] };
       context.isolatedCompletionCwd = isolatedCompletionCwd;
       context.isolatedCompletionModelId = "gemini-3.1-flash-preview";
       context.isolatedCompletionPrompt = "TASK:\nReturn one JSON object.";
@@ -229,7 +229,7 @@ describe("Gemini CLI isolated completion", () => {
       await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
         const context: GeminiPrepareContext = {
           ...buildGeminiApiKeyPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionSystemPrompt: systemPrompt,
         };
@@ -255,7 +255,7 @@ describe("Gemini CLI isolated completion", () => {
       await expect(
         buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiApiKeyPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionPrompt: prompt,
           isolatedCompletionSystemPrompt: "Return only JSON.",
@@ -271,7 +271,7 @@ describe("Gemini CLI isolated completion", () => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
         ...buildGeminiApiKeyPrepareContext(workspaceDir),
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionModelId: "gemini-3.1-flash-preview",
         isolatedCompletionPrompt: `Read ${"\\".repeat(backslashes)}@secret.txt`,
         isolatedCompletionSystemPrompt: "Return only JSON.",
@@ -286,7 +286,7 @@ describe("Gemini CLI isolated completion", () => {
       await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
         const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiApiKeyPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionPrompt: prompt,
           isolatedCompletionSystemPrompt: "Return only JSON.",
@@ -300,7 +300,7 @@ describe("Gemini CLI isolated completion", () => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
         ...buildGeminiApiKeyPrepareContext(workspaceDir),
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionModelId: "gemini-3.1-flash-preview",
         isolatedCompletionPrompt: " \n/memory show",
         isolatedCompletionSystemPrompt: "Return only JSON.",
@@ -327,7 +327,7 @@ describe("Gemini CLI isolated completion", () => {
             workspaceDir,
             provider: "google-gemini-cli",
             modelId: "gemini-3.1-flash-preview",
-            toolAvailability: { native: [], openClaw: [], mcp: [] },
+            toolAvailability: { native: [], openClaw: [] },
             isolatedCompletionModelId: "gemini-3.1-flash-preview",
             isolatedCompletionSystemPrompt: "Return only JSON.",
           } as GeminiPrepareContext),
@@ -363,7 +363,7 @@ describe("Gemini CLI isolated completion", () => {
             GEMINI_CLI_HOME: ambientHome,
             GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
           },
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionSystemPrompt: "Return only JSON.",
         } as GeminiPrepareContext),
@@ -404,7 +404,7 @@ describe("Gemini CLI isolated completion", () => {
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-flash-preview",
           env: { GEMINI_CLI_HOME: preparedHome },
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionSystemPrompt: "Return only JSON.",
         } as GeminiPrepareContext);

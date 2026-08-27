@@ -112,12 +112,12 @@ export async function runCliWithExitFinalization(params: {
 
 export function requestExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
-  exitCode = 0,
+  exitCode?: number,
 ): boolean {
   if (runtime !== defaultRuntime) {
     return false;
   }
-  requestedExitCode = exitCode;
+  requestedExitCode = exitCode ?? "process";
   return true;
 }
 

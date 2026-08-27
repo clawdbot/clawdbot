@@ -7,31 +7,24 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   mergeScopedSearchConfig,
-  readCachedSearchPayload,
   readConfiguredSecretString,
   readProviderEnvValue,
   resolveProviderWebSearchPluginConfig,
-  resolveSearchCacheTtlMs,
-  resolveSearchTimeoutSeconds,
   type SearchConfigRecord,
   withTrustedWebSearchEndpoint,
-  writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildParallelCacheKey,
-  buildParallelSearchPayload,
+  executeParallelSearchRequest,
   normalizeParallelClientModel,
   normalizeParallelObjective,
   normalizeParallelResults,
-  normalizeParallelSearchRequest,
   normalizeParallelSearchQueries,
   normalizeParallelSessionId,
-  PARALLEL_SESSION_ID_MAX_LENGTH,
   type ParallelSearchResponse,
   resolveParallelSearchCount,
-  stripParallelGeneratedSessionId,
 } from "./parallel-search-normalize.js";
 
 const PARALLEL_BASE_URL = "https://api.parallel.ai";
@@ -200,57 +193,22 @@ export async function executeParallelWebSearchProviderTool(
   }
   const endpoint = endpointResult.endpoint;
 
-  const request = normalizeParallelSearchRequest(
-    args,
-    searchConfig?.maxResults,
-    PARALLEL_SESSION_ID_MAX_LENGTH,
-  );
-  if ("error" in request) {
-    return request.error;
-  }
-  const { objective, searchQueries, count, sessionId, clientModel } = request;
-  // Always pass max_results so Parallel matches the openclaw web_search default
-  // of 5 instead of Parallel's own default of 10.
-  const cacheKey = buildParallelCacheKey({
-    endpoint,
-    objective,
-    searchQueries,
-    count,
-    sessionId,
-    clientModel,
-  });
-  const cached = readCachedSearchPayload(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const start = Date.now();
-  const response = await runParallelSearch({
-    apiKey,
-    endpoint,
-    objective,
-    searchQueries,
-    maxResults: count,
-    sessionId,
-    clientModel,
-    timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
-    signal,
-  });
-  signal?.throwIfAborted();
-  const payload = buildParallelSearchPayload({
+  return executeParallelSearchRequest({
     provider: "parallel",
-    objective,
-    searchQueries,
-    response,
-    start,
+    endpoint,
+    args,
+    searchConfig,
+    signal,
+    search: ({ count, ...request }, timeoutSeconds) =>
+      runParallelSearch({
+        ...request,
+        apiKey,
+        endpoint,
+        maxResults: count,
+        timeoutSeconds,
+        signal,
+      }),
   });
-
-  // Don't persist a Parallel-generated session id into the shared cache:
-  // identical queries from unrelated tasks would otherwise share that id.
-  // Caller-supplied session ids are already part of the cache key.
-  const cachePayload = sessionId ? payload : stripParallelGeneratedSessionId(payload);
-  writeCachedSearchPayload(cacheKey, cachePayload, resolveSearchCacheTtlMs(searchConfig));
-  return payload;
 }
 
 export const testing = {

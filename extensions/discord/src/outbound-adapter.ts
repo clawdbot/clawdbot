@@ -256,11 +256,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
           reply: options.reply?.scope === "all" ? options.reply : undefined,
         });
         const threadId = captionResult.receipt?.threadId;
-        if (!threadId) {
-          return toDiscordOutboundDeliveryResult(mediaResult);
-        }
         return toDiscordOutboundDeliveryResult({
-          ...captionResult,
+          ...(threadId ? captionResult : mediaResult),
           receipt: createDiscordSendReceiptFromResults({
             results: [captionResult, mediaResult],
             threadId,

@@ -1,6 +1,5 @@
 // Assistant transcript annotations are produced after Markdown inline parsing and text joining.
-import type MarkdownIt from "markdown-it";
-import type Token from "markdown-it/lib/token.mjs";
+import type { MarkdownIt, StateCore, Token } from "markdown-it";
 import {
   findAssistantTranscriptRoleHeaderSpans,
   type AssistantTranscriptRoleHeaderSpan,
@@ -111,7 +110,7 @@ function visibleTokensProjection(
 }
 
 function cloneToken(
-  TokenType: typeof Token,
+  TokenType: StateCore["Token"],
   source: Token,
   content: string,
   type: string = source.type,
@@ -129,7 +128,7 @@ function cloneToken(
 }
 
 function annotatedToken(
-  TokenType: typeof Token,
+  TokenType: StateCore["Token"],
   source: Token,
   content: string,
   span: AssistantTranscriptRoleHeaderSpan,
@@ -146,7 +145,7 @@ function annotatedToken(
 }
 
 function splitVisibleToken(params: {
-  TokenType: typeof Token;
+  TokenType: StateCore["Token"];
   token: Token;
   visibleStart: number;
   spanStartIndex: number;
@@ -195,7 +194,7 @@ function splitVisibleToken(params: {
 }
 
 function annotateInlineChildren(
-  TokenType: typeof Token,
+  TokenType: StateCore["Token"],
   children: Token[],
   preserveLinks: boolean,
   options: AssistantTranscriptRoleMarkdownOptions,
@@ -310,7 +309,7 @@ function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[]
   return result;
 }
 
-function annotateHtmlBlock(TokenType: typeof Token, token: Token): Token[] {
+function annotateHtmlBlock(TokenType: StateCore["Token"], token: Token): Token[] {
   const spans = findAssistantTranscriptRoleHeaderSpans(
     token.content,
     findRawCodeContainerRanges(token.content),

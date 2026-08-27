@@ -35,7 +35,7 @@ import {
 import { IrcChannelConfigSchema } from "./config-schema.js";
 import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
 import { startIrcGatewayAccount } from "./gateway.js";
-import { ircMessageAdapter } from "./message-adapter.js";
+import { ircMessageAdapter, sendFormattedIrcText } from "./message-adapter.js";
 import {
   isChannelTarget,
   looksLikeIrcTargetId,
@@ -343,7 +343,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     collectWarnings: collectIrcSecurityWarnings,
   },
   outbound: {
-    base: ircOutboundBaseAdapter,
+    base: {
+      ...ircOutboundBaseAdapter,
+      sendFormattedText: sendFormattedIrcText,
+    },
     attachedResults: {
       channel: "irc",
       sendText: ({ onDeliveryResult: _onDeliveryResult, ...ctx }) =>

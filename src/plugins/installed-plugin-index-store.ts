@@ -13,6 +13,7 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -20,7 +21,7 @@ import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
+import { hashStableJson } from "./installed-plugin-index-hash.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
   recordInstalledPluginIndexInstallOwner,
@@ -485,15 +486,24 @@ export function writePersistedInstalledPluginIndexWithLeaseSync(
   return filePath;
 }
 
-function hasPolicyRefreshTargets(
+function hasCompletePolicyRefreshProjection(
   persisted: InstalledPluginIndex,
   policyPluginIds: readonly string[] | undefined,
+  env: NodeJS.ProcessEnv,
 ): boolean {
-  if (!policyPluginIds || policyPluginIds.length === 0) {
-    return true;
-  }
   const pluginIds = new Set(persisted.plugins.map((plugin) => plugin.pluginId));
-  return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
+  if (policyPluginIds?.some((pluginId) => !pluginIds.has(pluginId))) {
+    return false;
+  }
+  const installOwners = new Set(persisted.plugins.map(resolveInstalledPluginIndexInstallOwner));
+  return Object.entries(persisted.installRecords).every(([installOwner, record]) => {
+    if (installOwners.has(installOwner)) {
+      return true;
+    }
+    const installedPath = record.installPath?.trim() || record.sourcePath?.trim();
+    // Missing package bytes are orphaned owner records, not rediscoverable plugins.
+    return !installedPath || !existsSync(resolveUserPath(installedPath, env));
+  });
 }
 
 function canRefreshPersistedPolicyState(
@@ -523,11 +533,11 @@ function canRefreshPersistedPolicyState(
   }
   if (
     params.installRecords &&
-    hashJson(params.installRecords) !== hashJson(persisted.installRecords ?? {})
+    hashStableJson(params.installRecords) !== hashStableJson(persisted.installRecords ?? {})
   ) {
     return false;
   }
-  return hasPolicyRefreshTargets(persisted, params.policyPluginIds);
+  return hasCompletePolicyRefreshProjection(persisted, params.policyPluginIds, env);
 }
 
 function refreshPersistedPolicyState(

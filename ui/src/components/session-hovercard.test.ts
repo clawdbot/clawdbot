@@ -308,6 +308,23 @@ describe("renderSessionHovercard", () => {
     expect(container.textContent).not.toContain("This must not appear.");
   });
 
+  it("uses the session terminal status and endedAt for progress activity", () => {
+    const container = document.createElement("div");
+    const endedAt = Date.now() - 30_000;
+    render(
+      renderSessionHovercard({
+        row: row({ status: "failed", endedAt }),
+        progressCard: progressCard(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector("time")?.textContent).toBe("Failed just now");
+    expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
+      new Date(endedAt).toISOString(),
+    );
+  });
+
   it("deduplicates creator and self from the compact participant identity", () => {
     const container = document.createElement("div");
     render(
@@ -352,9 +369,7 @@ describe("renderSessionHovercard", () => {
     const name = container.querySelector<HTMLAnchorElement>(".session-hovercard__identity-name");
     expect(name?.getAttribute("href")).toBe("/ui/activity?person=alice");
     expect(
-      container
-        .querySelector(".session-hovercard__identity-avatar-link")
-        ?.getAttribute("aria-hidden"),
+      container.querySelector(".person-activity-avatar-link")?.getAttribute("aria-hidden"),
     ).toBe("true");
 
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -407,7 +422,7 @@ describe("renderSessionHovercard", () => {
     render(renderSessionHovercard({ row: row() }), container);
 
     expect(container.querySelector(".session-hovercard__identity-name")?.tagName).toBe("SPAN");
-    expect(container.querySelector(".session-hovercard__identity-avatar-link")).toBeNull();
+    expect(container.querySelector(".person-activity-avatar-link")).toBeNull();
   });
 
   it("keeps authoritative overflow when the participant projection is truncated", () => {

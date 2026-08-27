@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../agents/live-test-helpers.js";
+import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js";
+import { SessionManager } from "../../agents/sessions/index.js";
+import type { Message } from "../../llm/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { formatSkillExperienceReviewTranscript } from "./experience-review-prompt.js";
 import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
 import { listSkillProposals } from "./service.js";
 
@@ -17,21 +19,31 @@ const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let workspaceDir = "";
 
-function candidate(
+async function candidate(
   runId: string,
   messages: unknown[],
   options: { turnAborted?: boolean } = {},
-): ExperienceReviewCandidate {
+): Promise<ExperienceReviewCandidate> {
   const modelId = process.env.OPENCLAW_LIVE_SKILL_EXPERIENCE_MODEL ?? "gpt-5.6-luna";
-  return {
+  const sessionId = `live-skill-review-${runId}`;
+  const sessionKey = `agent:main:${sessionId}`;
+  const result: ExperienceReviewCandidate = {
     ctx: {
       agentId: "main",
       runId,
-      sessionKey: "agent:main:live-skill-review",
+      sessionId,
+      sessionKey,
       workspaceDir,
       modelProviderId: "openai",
       modelId,
-      trigger: "user",
+      foregroundPromptContext: {
+        agentId: "main",
+        agentDir: workspaceDir,
+        workspaceDir,
+        cwd: workspaceDir,
+        sandboxSessionKey: sessionKey,
+        trigger: "user",
+      },
     },
     config: {
       models: {
@@ -75,10 +87,19 @@ function candidate(
       // review lane, which can exceed the lane's no-progress watchdog.
       plugins: { allow: ["openai"] },
     },
-    transcript: formatSkillExperienceReviewTranscript(messages),
-    modelIterations: 10,
     ...(options.turnAborted === undefined ? {} : { turnAborted: options.turnAborted }),
   };
+  const target = await resolveAgentRunSessionTarget({
+    agentId: "main",
+    config: result.config,
+    missingSessionKey: "create",
+    sessionId,
+    sessionKey,
+  });
+  for (const message of messages) {
+    SessionManager.appendMessageToTranscript(target, message as Message, { config: result.config });
+  }
+  return result;
 }
 
 describeLive("skill experience review live OpenAI eval", () => {
@@ -96,8 +117,9 @@ describeLive("skill experience review live OpenAI eval", () => {
     // on a loaded machine.
     const { loadAgentRuntimePluginRegistryHandle } =
       await import("../../agents/runtime-plugins.js");
+    const warmupCandidate = await candidate("warmup", []);
     loadAgentRuntimePluginRegistryHandle({
-      config: candidate("warmup", []).config ?? {},
+      config: warmupCandidate.config ?? {},
       workspaceDir,
     });
   }, 600_000);
@@ -164,7 +186,7 @@ describeLive("skill experience review live OpenAI eval", () => {
       { role: "assistant", content: "Done." },
     ];
 
-    const positiveCandidate = candidate("live-positive", positiveMessages);
+    const positiveCandidate = await candidate("live-positive", positiveMessages);
     await runSkillExperienceReview(positiveCandidate, {
       getCurrentConfig: () => positiveCandidate.config ?? {},
     });
@@ -190,7 +212,7 @@ describeLive("skill experience review live OpenAI eval", () => {
       { role: "assistant", content: "All ten one-time receipts are valid." },
     ];
 
-    const negativeCandidate = candidate("live-negative", negativeMessages);
+    const negativeCandidate = await candidate("live-negative", negativeMessages);
     await runSkillExperienceReview(negativeCandidate, {
       getCurrentConfig: () => negativeCandidate.config ?? {},
     });
@@ -239,7 +261,7 @@ describeLive("skill experience review live OpenAI eval", () => {
       },
     ];
 
-    const interruptedCandidate = candidate("live-interrupted", interruptedMessages, {
+    const interruptedCandidate = await candidate("live-interrupted", interruptedMessages, {
       turnAborted: true,
     });
     await runSkillExperienceReview(interruptedCandidate, {

@@ -21,6 +21,7 @@ import {
   buildOutboundMediaLoadOptions,
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -81,6 +82,7 @@ type TelegramReplyChannelData = {
   pin?: boolean;
   reaction?: {
     emoji?: unknown;
+    replyToId?: unknown;
   };
 };
 
@@ -294,12 +296,15 @@ async function deliverMediaReply(params: {
   recordMessageId: (messageId: number) => void;
   textMode?: "html";
   onPlatformSendDispatch?: () => Promise<void>;
-}): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
+}): Promise<{
+  firstDeliveredMessageId?: number;
+  visibleFallbackText?: string;
+  mediaUrls: string[];
+}> {
   let firstDeliveredMessageId: number | undefined;
   let visibleFallbackText: string | undefined;
   let firstDeliveredCaption: string | undefined;
-  let first = true;
-  let pendingFollowUpText: string | undefined;
+  const mediaUrls: string[] = [];
   const recordPromptContextMessage = async (message: Message, text?: string) => {
     const promptContextMessage = {
       messageId: message.message_id,
@@ -310,6 +315,7 @@ async function deliverMediaReply(params: {
   };
   const deliverAcceptedMedia = async (options: {
     sender: TelegramOutboundMediaSender<Message>;
+    mediaUrl: string;
     requestParams: Record<string, unknown>;
     plainCaption?: string;
     shouldLog?: (err: unknown) => boolean;
@@ -330,6 +336,7 @@ async function deliverMediaReply(params: {
         }),
     });
     const message = delivery.result;
+    mediaUrls.push(options.mediaUrl);
     // Acceptance precedes topic checks and bookkeeping; losing this id lets
     // later failures trigger a duplicate reply for an already visible message.
     params.acceptedMessageIds.push(String(message.message_id));
@@ -356,8 +363,8 @@ async function deliverMediaReply(params: {
     deliveredCount: 0,
     ...(params.progress.promptContext ? { promptContext: params.progress.promptContext } : {}),
   });
-  for (const mediaUrl of params.mediaList) {
-    const isFirstMedia = first;
+  for (const [index, mediaUrl] of params.mediaList.entries()) {
+    const isFirstMedia = index === 0;
     const media = await params.mediaLoader(
       mediaUrl,
       buildOutboundMediaLoadOptions({
@@ -380,10 +387,6 @@ async function deliverMediaReply(params: {
       asVoice: params.reply.audioAsVoice,
     });
     const { htmlCaption, plainCaption, followUpText } = mediaPlan;
-    if (followUpText) {
-      pendingFollowUpText = followUpText;
-    }
-    first = false;
     const replyToMessageId = resolveReplyToForSend({
       replyToId: params.replyToId,
       replyToMode: params.replyToMode,
@@ -415,6 +418,7 @@ async function deliverMediaReply(params: {
         const hasCaption = typeof requestParams.caption === "string";
         await deliverAcceptedMedia({
           sender: mediaSender,
+          mediaUrl,
           requestParams,
           plainCaption: hasCaption ? plainCaption : undefined,
           shouldLog,
@@ -519,6 +523,7 @@ async function deliverMediaReply(params: {
         send: (sender) =>
           deliverAcceptedMedia({
             sender,
+            mediaUrl,
             requestParams: mediaParams,
             plainCaption,
             ...(sender.label === "photo"
@@ -528,7 +533,7 @@ async function deliverMediaReply(params: {
       });
     }
     markReplyApplied(params.progress, replyToMessageId);
-    if (pendingFollowUpText && isFirstMedia) {
+    if (followUpText) {
       try {
         const followUpMessageId = await deliverTextReply({
           bot: params.bot,
@@ -536,7 +541,7 @@ async function deliverMediaReply(params: {
           runtime: params.runtime,
           thread: params.thread,
           chunkText: params.chunkText,
-          text: pendingFollowUpText,
+          text: followUpText,
           replyMarkup: params.replyMarkup,
           richMessages: params.richMessages,
           tableMode: params.tableMode,
@@ -565,10 +570,9 @@ async function deliverMediaReply(params: {
           });
         }
       }
-      pendingFollowUpText = undefined;
     }
   }
-  return { firstDeliveredMessageId, visibleFallbackText };
+  return { firstDeliveredMessageId, visibleFallbackText, mediaUrls };
 }
 
 async function maybePinFirstDeliveredMessage(params: {
@@ -588,6 +592,9 @@ async function maybePinFirstDeliveredMessage(params: {
       disable_notification: !notify,
     });
   } catch (err) {
+    if (typeof params.pin === "object" && params.pin.required === true) {
+      throw err;
+    }
     logVerbose(
       `telegram pinChatMessage failed chat=${params.chatId} message=${params.firstDeliveredMessageId}: ${formatErrorMessage(err)}`,
     );
@@ -802,7 +809,8 @@ export async function deliverReplies(params: {
       typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
-    if (reactionEmoji && typeof replyToId !== "number") {
+    const targetId = parseStrictPositiveInteger(telegramData?.reaction?.replyToId ?? replyToId);
+    if (reactionEmoji && typeof targetId !== "number") {
       params.runtime.error?.(danger("Telegram reaction requires a reply target"));
       continue;
     }
@@ -875,9 +883,10 @@ export async function deliverReplies(params: {
         }),
       );
       let firstDeliveredMessageId: number | undefined;
-      if (reactionEmoji && typeof replyToId === "number") {
+      let deliveredMediaUrls: string[] = [];
+      if (reactionEmoji && typeof targetId === "number") {
         await params.onPlatformSendDispatch?.();
-        const reactionResult = await reactMessageTelegram(params.chatId, replyToId, reactionEmoji, {
+        const reactionResult = await reactMessageTelegram(params.chatId, targetId, reactionEmoji, {
           cfg: params.cfg ?? { channels: { telegram: { botToken: params.token } } },
           token: params.token,
           accountId: params.accountId,
@@ -912,6 +921,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          acceptedMessageIds,
           recordMessageId,
           onPlatformSendDispatch: params.onPlatformSendDispatch,
         });
@@ -946,6 +956,7 @@ export async function deliverReplies(params: {
           ...(params.textMode ? { textMode: params.textMode } : {}),
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
+        deliveredMediaUrls = mediaDelivery.mediaUrls;
         if (mediaDelivery.visibleFallbackText !== undefined) {
           contentForSentHook = mediaDelivery.visibleFallbackText;
         }
@@ -959,7 +970,7 @@ export async function deliverReplies(params: {
       });
 
       if (progress.deliveredCount > deliveredCountBeforeReply && transcriptMirror) {
-        deliveredContents.push({ text: contentForSentHook, mediaUrls: mediaList });
+        deliveredContents.push({ text: contentForSentHook, mediaUrls: deliveredMediaUrls });
       }
 
       emitMessageSentHooks({

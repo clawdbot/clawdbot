@@ -9,6 +9,7 @@ import { resolveMatrixMonitorCommandAccess } from "./access-state.js";
 import {
   isMatrixAudioMediaEnabled,
   resolveMatrixInboundBodyText,
+  resolveMatrixInboundMediaContent,
   resolveMatrixMentionPrecheckText,
   resolveMatrixPendingHistoryText,
 } from "./handler-helpers.js";
@@ -116,22 +117,8 @@ export async function resolveMatrixIngressContent(config: {
     content,
     locationText: locationPayload?.text,
   });
-  const contentUrl = "url" in content && typeof content.url === "string" ? content.url : undefined;
-  const contentFile =
-    "file" in content && content.file && typeof content.file === "object"
-      ? content.file
-      : undefined;
-  const mediaUrl = contentUrl ?? contentFile?.url;
-  const earlyContentInfo =
-    "info" in content && content.info && typeof content.info === "object"
-      ? (content.info as { mimetype?: string; size?: number })
-      : undefined;
-  const earlyContentType = earlyContentInfo?.mimetype;
-  const earlyContentSize =
-    typeof earlyContentInfo?.size === "number" ? earlyContentInfo.size : undefined;
-  const earlyContentBody = typeof content.body === "string" ? content.body.trim() : "";
-  const earlyContentFilename = typeof content.filename === "string" ? content.filename.trim() : "";
-  const earlyOriginalFilename = earlyContentFilename || earlyContentBody || undefined;
+  let mediaContent = resolveMatrixInboundMediaContent(content);
+  const mediaUrl = mediaContent.url;
   const pendingHistoryText = resolveMatrixPendingHistoryText({
     mentionPrecheckText,
     content,
@@ -173,7 +160,7 @@ export async function resolveMatrixIngressContent(config: {
   const shouldRunMatrixAudioPreflight =
     isMatrixAudioContent({
       msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
-      mimetype: earlyContentType,
+      mimetype: mediaContent.contentType,
     }) &&
     isMatrixAudioMediaEnabled(cfg) &&
     preflightAudioMediaUrl !== undefined;
@@ -208,11 +195,11 @@ export async function resolveMatrixIngressContent(config: {
       preflightMedia = await downloadMatrixMedia({
         client,
         mxcUrl: preflightAudioMediaUrl,
-        contentType: earlyContentType,
-        sizeBytes: earlyContentSize,
+        contentType: mediaContent.contentType,
+        sizeBytes: mediaContent.sizeBytes,
         maxBytes: mediaMaxBytes,
-        file: contentFile,
-        originalFilename: earlyOriginalFilename,
+        file: mediaContent.file,
+        originalFilename: mediaContent.originalFilename,
       });
     } catch (err) {
       preflightMediaDownloadFailed = true;
@@ -227,7 +214,7 @@ export async function resolveMatrixIngressContent(config: {
         roomId,
         eventId: event.event_id,
         msgtype: content.msgtype,
-        encrypted: Boolean(contentFile),
+        encrypted: Boolean(mediaContent.file),
         error: errorText,
       });
     }
@@ -373,6 +360,7 @@ export async function resolveMatrixIngressContent(config: {
       msgtype: "m.text",
       body: pollSnapshot.text,
     };
+    mediaContent = resolveMatrixInboundMediaContent(content);
   }
 
   let media: {
@@ -382,32 +370,17 @@ export async function resolveMatrixIngressContent(config: {
   } | null = preflightMedia;
   let mediaDownloadFailed = preflightMediaDownloadFailed;
   let mediaSizeLimitExceeded = preflightMediaSizeLimitExceeded;
-  const finalContentUrl =
-    "url" in content && typeof content.url === "string" ? content.url : undefined;
-  const finalContentFile =
-    "file" in content && content.file && typeof content.file === "object"
-      ? content.file
-      : undefined;
-  const finalMediaUrl = finalContentUrl ?? finalContentFile?.url;
-  const contentBody = typeof content.body === "string" ? content.body.trim() : "";
-  const contentFilename = typeof content.filename === "string" ? content.filename.trim() : "";
-  const originalFilename = contentFilename || contentBody || undefined;
-  const contentInfo =
-    "info" in content && content.info && typeof content.info === "object"
-      ? (content.info as { mimetype?: string; size?: number })
-      : undefined;
-  const contentType = contentInfo?.mimetype;
-  const contentSize = typeof contentInfo?.size === "number" ? contentInfo.size : undefined;
+  const finalMediaUrl = mediaContent.url;
   if (!media && !mediaDownloadFailed && finalMediaUrl?.startsWith("mxc://")) {
     try {
       media = await downloadMatrixMedia({
         client,
         mxcUrl: finalMediaUrl,
-        contentType,
-        sizeBytes: contentSize,
+        contentType: mediaContent.contentType,
+        sizeBytes: mediaContent.sizeBytes,
         maxBytes: mediaMaxBytes,
-        file: finalContentFile,
-        originalFilename,
+        file: mediaContent.file,
+        originalFilename: mediaContent.originalFilename,
       });
     } catch (err) {
       mediaDownloadFailed = true;
@@ -422,13 +395,13 @@ export async function resolveMatrixIngressContent(config: {
         roomId,
         eventId: event.event_id,
         msgtype: content.msgtype,
-        encrypted: Boolean(finalContentFile),
+        encrypted: Boolean(mediaContent.file),
         error: errorText,
       });
     }
   }
 
-  const rawBody = locationPayload?.text ?? contentBody;
+  const rawBody = locationPayload?.text ?? mediaContent.body;
   let bodyText = resolveMatrixInboundBodyText({
     rawBody,
     filename: typeof content.filename === "string" ? content.filename : undefined,

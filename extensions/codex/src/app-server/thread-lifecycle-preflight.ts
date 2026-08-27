@@ -5,10 +5,12 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { getCodexAppServerClientInstanceId } from "./client.js";
+import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
 } from "./dynamic-tool-profile.js";
+import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -32,6 +34,15 @@ import {
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrResumeThreadParams) {
+  await assertCodexModelBackedReviewerEffectiveConfig({
+    client: params.client,
+    approvalsReviewer: params.appServer.approvalsReviewer,
+    cwd: params.cwd,
+    signal: params.signal,
+  });
+  if (params.nativeHookRelayRequired) {
+    await assertCodexNativeHookRelayAllowed(params.client, params.signal);
+  }
   // Thread lifecycle spans are useful when profiling startup churn, but normal
   // turns should not pay Date.now/span-array overhead while resuming threads.
   const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
