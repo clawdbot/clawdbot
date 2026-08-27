@@ -56,7 +56,7 @@ export function validateGatewayWebSocketUrl(value: string): string | undefined {
 export async function promptRemoteGatewayConfig(
   cfg: OpenClawConfig,
   prompter: WizardPrompter,
-  options?: { secretInputMode?: SecretInputMode; edgeAuthOriginUrl?: string },
+  options?: { secretInputMode?: SecretInputMode; remoteOriginUrl?: string },
 ): Promise<OpenClawConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
@@ -285,9 +285,11 @@ export async function promptRemoteGatewayConfig(
     token = undefined;
     password = undefined;
   }
-  const edgeAuthOriginUrl = options?.edgeAuthOriginUrl ?? cfg.gateway?.remote?.url;
+  // An explicitly absent origin means onboarding had no saved endpoint before URL seeding.
+  const remoteOriginUrl =
+    options && "remoteOriginUrl" in options ? options.remoteOriginUrl : cfg.gateway?.remote?.url;
   const edgeAuth =
-    edgeAuthOriginUrl && gatewayOriginScope(url) === gatewayOriginScope(edgeAuthOriginUrl)
+    remoteOriginUrl && gatewayOriginScope(url) === gatewayOriginScope(remoteOriginUrl)
       ? cfg.gateway?.remote?.edgeAuth
       : undefined;
 
@@ -297,10 +299,12 @@ export async function promptRemoteGatewayConfig(
       ...cfg.gateway,
       mode: "remote",
       remote: {
+        // Pins and SSH settings stay with the same trimmed URL; explicit choices below take precedence.
+        ...(url === remoteOriginUrl?.trim() ? cfg.gateway?.remote : {}),
         url,
-        ...(edgeAuth !== undefined ? { edgeAuth } : {}),
-        ...(token !== undefined ? { token } : {}),
-        ...(password !== undefined ? { password } : {}),
+        edgeAuth,
+        token,
+        password,
         ...(pinnedDiscoveryFingerprint ? { tlsFingerprint: pinnedDiscoveryFingerprint } : {}),
       },
     },
