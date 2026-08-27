@@ -1050,4 +1050,12 @@ describe("installer option bounds", () => {
     expect(() => normalizeExtensionInstallWaitMs(999)).toThrow("--wait-ms");
     expect(() => normalizeExtensionInstallWaitMs(120_001)).toThrow("--wait-ms");
   });
+
+  it("rejects non-decimal --wait-ms string coercions instead of silently accepting them", () => {
+    // Number("0x1000")===4096 and Number("1e4")===10000 would pass the old
+    // range check silently; the strict parser requires plain decimal integers.
+    expect(() => normalizeExtensionInstallWaitMs("0x1000")).toThrow("--wait-ms");
+    expect(() => normalizeExtensionInstallWaitMs("1e4")).toThrow("--wait-ms");
+    expect(normalizeExtensionInstallWaitMs("10000")).toBe(10_000);
+  });
 });

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   assertOwnedPath,
@@ -381,8 +382,9 @@ export function normalizeExtensionInstallWaitMs(value: unknown): number {
   if (value === undefined) {
     return BROWSER_EXTENSION_INSTALL_WAIT_DEFAULT_MS;
   }
-  const parsed = typeof value === "number" ? value : Number(value);
+  const parsed = typeof value === "number" ? value : parseStrictPositiveInteger(value);
   if (
+    parsed === undefined ||
     !Number.isInteger(parsed) ||
     parsed < BROWSER_EXTENSION_INSTALL_WAIT_MIN_MS ||
     parsed > BROWSER_EXTENSION_INSTALL_WAIT_MAX_MS
