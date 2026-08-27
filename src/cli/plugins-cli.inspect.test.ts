@@ -63,8 +63,8 @@ describe("plugins cli inspect", () => {
       tools: [],
       commands: [],
       cliCommands: [],
-      services: [],
-      gatewayDiscoveryServices: [],
+      services: ["mem0-background"],
+      gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
       mcpServers: [
         { name: "local", hasStdioTransport: true },
         { name: "remote", hasStdioTransport: false },
@@ -89,6 +89,10 @@ describe("plugins cli inspect", () => {
     expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Policy");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("allowConversationAccess: true");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Services:\nmem0-background");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
+      "Gateway discovery:\nmem0-discovery\nmem0-discovery-secondary",
+    );
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");
@@ -100,6 +104,12 @@ describe("plugins cli inspect", () => {
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("remote");
     expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("remote (unsupported transport)");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("broken (unsupported transport)");
+
+    await runPluginsCommand(["plugins", "inspect", "openclaw-mem0", "--json"]);
+    expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toMatchObject({
+      services: ["mem0-background"],
+      gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
+    });
 
     for (const { id, status, detail, label } of [
       {
@@ -159,7 +169,7 @@ describe("plugins cli inspect", () => {
       commands: [],
       cliCommands: [],
       services: [],
-      gatewayDiscoveryServices: [],
+      gatewayDiscoveryServices: ["mem0-runtime-discovery"],
       mcpServers: [],
       lspServers: [],
       httpRouteCount: 0,
@@ -179,6 +189,7 @@ describe("plugins cli inspect", () => {
         config: {},
         onlyPluginIds: ["openclaw-mem0"],
       });
+      expect(pluginsCliRuntimeLogs.at(-1)).toContain("Gateway discovery:\nmem0-runtime-discovery");
     }
   });
 

@@ -1034,6 +1034,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
+    queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -1099,6 +1100,7 @@ async function runSyntheticOverflowSummary(params: {
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
+    queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {

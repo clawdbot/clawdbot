@@ -749,8 +749,6 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/matrix`]: bundledPluginWorkspace([
-      // Native import wrapper shipped alongside the Matrix runtime bundle.
-      "src/plugin-entry.runtime.js!",
       // The monitor lazy-loads outbound behavior on inbound-only processes.
       "src/matrix/send.ts!",
     ]),

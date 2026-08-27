@@ -380,10 +380,7 @@ export function createProcessTool(
       }
 
       if (!params.sessionId) {
-        return {
-          content: [{ type: "text", text: "sessionId is required for this action." }],
-          details: { status: "failed" },
-        };
+        return failText("sessionId is required for this action.");
       }
 
       const session = getSession(params.sessionId);
@@ -391,35 +388,30 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
-      const failedResult = (text: string): AgentToolResult<unknown> => ({
-        content: [{ type: "text", text }],
-        details: { status: "failed" },
-      });
-
       const resolveBackgroundedWritableStdin = () => {
         if (!scopedSession) {
           return {
             ok: false as const,
-            result: failedResult(`No active session found for ${params.sessionId}`),
+            result: failText(`No active session found for ${params.sessionId}`),
           };
         }
         if (!scopedSession.backgrounded) {
           return {
             ok: false as const,
-            result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
+            result: failText(`Session ${params.sessionId} is not backgrounded.`),
           };
         }
         if (scopedSession.finalizing) {
           return {
             ok: false as const,
-            result: failedResult(`Session ${params.sessionId} is finalizing.`),
+            result: failText(`Session ${params.sessionId} is finalizing.`),
           };
         }
         const stdin = resolveSessionStdin(scopedSession);
         if (!isWritableStdin(stdin)) {
           return {
             ok: false as const,
-            result: failedResult(`Session ${params.sessionId} stdin is not writable.`),
+            result: failText(`Session ${params.sessionId} stdin is not writable.`),
           };
         }
         return { ok: true as const, session: scopedSession, stdin };
@@ -451,8 +443,17 @@ export function createProcessTool(
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
+            if (signal?.aborted) {
+              throw createAbortError(signal.reason);
+            }
             const deadline = Date.now() + pollWaitMs;
-            while (!scopedSession.exited && Date.now() < deadline) {
+            // Interactive children cannot progress until their pending prompt reaches the model.
+            while (
+              !scopedSession.exited &&
+              scopedSession.pendingOutput.length === 0 &&
+              !scopedSession.pendingOutputDropped &&
+              Date.now() < deadline
+            ) {
               await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
             }
           }
@@ -501,15 +502,7 @@ export function createProcessTool(
         case "log": {
           if (scopedSession) {
             if (!scopedSession.backgrounded) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Session ${params.sessionId} is not backgrounded.`,
-                  },
-                ],
-                details: { status: "failed" },
-              };
+              return failText(`Session ${params.sessionId} is not backgrounded.`);
             }
             const window = resolveLogSliceWindow(params.offset, params.limit);
             const { slice, totalLines, totalChars } = sliceLogLines(
@@ -570,15 +563,7 @@ export function createProcessTool(
               },
             };
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          return failText(`No session found for ${params.sessionId}`);
         }
 
         case "write": {
@@ -632,15 +617,7 @@ export function createProcessTool(
           }
           const payload = encodePaste(params.text ?? "", params.bracketed !== false);
           if (!payload) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No paste text provided.",
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText("No paste text provided.");
           }
           await writeProcessStdin(resolved.stdin, payload);
           return runningSessionResult(
@@ -690,15 +667,7 @@ export function createProcessTool(
               details: { status: "completed" },
             };
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No finished session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          return failText(`No finished session found for ${params.sessionId}`);
         }
 
         case "remove": {
@@ -741,26 +710,14 @@ export function createProcessTool(
               details: { status: "completed" },
             };
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          return failText(`No session found for ${params.sessionId}`);
         }
       }
 
-      return {
-        content: [{ type: "text", text: `Unknown action ${params.action as string}` }],
-        details: { status: "failed" },
-      };
+      return failText(`Unknown action ${params.action as string}`);
     },
   };
 }
 
 /** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

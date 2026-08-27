@@ -200,6 +200,7 @@
   "channel-mention-gating",
   "channel-lifecycle",
   "channel-ingress-runtime",
+  "channel-ingress-test-runtime",
   "channel-message",
   "channel-outbound",
   "channel-pairing",

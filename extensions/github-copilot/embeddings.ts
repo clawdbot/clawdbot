@@ -16,6 +16,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
+import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
@@ -107,6 +108,7 @@ async function discoverEmbeddingModels(params: {
       },
     },
     policy: params.ssrfPolicy,
+    timeoutMs: COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS,
     auditContext: "memory-remote",
   });
   try {
@@ -240,7 +242,7 @@ async function createGitHubCopilotEmbeddingProvider(
 ): Promise<{ provider: MemoryEmbeddingProvider; client: GitHubCopilotEmbeddingClient }> {
   const initialSession = await resolveGitHubCopilotEmbeddingSession(client);
 
-  const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -276,11 +278,22 @@ async function createGitHubCopilotEmbeddingProvider(
     provider: {
       id: COPILOT_EMBEDDING_PROVIDER_ID,
       model: client.model,
-      embedQuery: async (text, options) => {
-        const [vector] = await embed([text], options?.signal);
+      embed: async (input, options) => {
+        const [vector] = await embedMany(
+          [typeof input === "string" ? input : input.text],
+          options?.signal,
+        );
         return vector ?? [];
       },
-      embedBatch: async (texts, options) => await embed(texts, options?.signal),
+      embedBatch: async (inputs, options) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+        if (options?.inputType === "query") {
+          return await Promise.all(
+            texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
+          );
+        }
+        return await embedMany(texts, options?.signal);
+      },
     },
     client: {
       ...client,
@@ -312,21 +325,21 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
           return { apiKey: explicitValue, baseUrl: customBaseUrl };
         })()
       : undefined;
-    const value = explicitValue
-      ? explicitValue
-      : (
-          await resolveFirstGithubToken({
-            agentDir: options.agentDir,
-            config: options.config,
-            env: process.env,
-          })
-        ).githubToken;
+    const profileAuth = explicitValue
+      ? undefined
+      : await resolveFirstGithubToken({
+          agentDir: options.agentDir,
+          config: options.config,
+          env: process.env,
+        });
+    const value = explicitValue ?? profileAuth?.githubToken;
     if (!value) {
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
 
     const githubDomain = resolveGithubCopilotDomain({
       env: process.env,
+      explicit: profileAuth?.githubDomain,
       config: options.config,
     });
     // A custom endpoint owns its own explicit credential. Never resolve a

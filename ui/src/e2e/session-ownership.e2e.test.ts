@@ -1,7 +1,5 @@
-// Control UI E2E tests cover session ownership dormancy and owner filtering.
 import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -9,23 +7,33 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   avatarLabelCenterDelta,
+  captureSessionOwnerPageProof,
+  captureSessionOwnerProof,
+  captureUiProof,
+  captureUiProofEnabled,
+  openSidebarSortMenu,
   routeAvatarFixtures,
+  sessionOwnerProofArtifactDir,
+  uiProofArtifactDir,
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session ownership",
 });
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
-const sessionOwnerProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-owner-stack",
-);
-
 let page: Page | undefined;
+
+async function selectMenuValue(menu: Locator, value: string) {
+  await menu.evaluate((element, selectedValue) => {
+    element.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: selectedValue } },
+      }),
+    );
+  }, value);
+}
+
 function sessionsList(owners: [string, string], withAvatars = false) {
   const ownerFacet = [
     {
@@ -143,38 +151,6 @@ function collaborativeSessionsList() {
     ],
     ts: 1,
   };
-}
-
-async function captureUiProof(targetPage: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await targetPage.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
-  });
-}
-
-async function captureSessionOwnerProof(targetPage: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
-  await targetPage.locator(".sidebar-sessions").screenshot({
-    animations: "disabled",
-    path: path.join(sessionOwnerProofArtifactDir, fileName),
-  });
-}
-
-async function openSidebarSortMenu(targetPage: Page) {
-  const filterAndSort = targetPage.getByRole("button", { name: "Filter & sort" });
-  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
-  await filterAndSort.click();
-  const menu = targetPage.locator(".sidebar-session-sort-menu");
-  await menu.waitFor();
-  return menu;
 }
 
 suite.define(() => {
@@ -297,8 +273,21 @@ suite.define(() => {
     }
   });
 
-  it("shows permanent owner chips and filters existing custom groups", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+  it("derives People controls and owner filtering from current session owners", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: sessionOwnerProofArtifactDir,
+              size: { height: 800, width: 1200 },
+            },
+          }
+        : {}),
+    });
     const currentPage = await context.newPage();
     page = currentPage;
     await routeAvatarFixtures(context, currentPage, [
@@ -307,7 +296,7 @@ suite.define(() => {
       { id: "profile-bob", background: "#985b42", label: "B" },
     ]);
     const gateway = await installMockGateway(currentPage, {
-      hasMultipleSessionSharingIdentities: true,
+      hasMultipleSessionSharingIdentities: false,
       sessionKey: "agent:main:ada",
       presenceUsers: [
         {
@@ -329,7 +318,9 @@ suite.define(() => {
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
-    await ownerMenu.locator('[value="sort:people"]').waitFor();
+    await captureUiProof(currentPage, "00-people-controls-from-session-owners.png");
+    await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
+    await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
     const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
@@ -338,14 +329,23 @@ suite.define(() => {
     const firstOwnerCenterDelta = await avatarLabelCenterDelta(ownerRows.first());
     await captureUiProof(currentPage, "00-people-sort-available.png");
     expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
-    await ownerMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "sort:people" } },
-        }),
-      ),
+    await selectMenuValue(ownerMenu, "grouping:person");
+    await expectBrowser(
+      currentPage.locator('[data-session-section="person:profile-ada"]'),
+    ).toContainText("Ada research");
+    await expectBrowser(
+      currentPage.locator('[data-session-section="person:profile-bob"]'),
+    ).toContainText("Bob operations");
+
+    const groupedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(groupedMenu.locator('[value="grouping:person"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
     );
+    await selectMenuValue(groupedMenu, "grouping:category");
+
+    const sortableMenu = await openSidebarSortMenu(currentPage);
+    await selectMenuValue(sortableMenu, "sort:people");
     const peopleMenu = await openSidebarSortMenu(currentPage);
     await expectBrowser(peopleMenu.locator('[value="sort:people"]')).toHaveAttribute(
       "aria-checked",
@@ -353,18 +353,12 @@ suite.define(() => {
     );
     await captureUiProof(currentPage, "01-people-sort-selected.png");
     await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
-    await peopleMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "owner:profile-ada" } },
-        }),
-      ),
-    );
+    await selectMenuValue(peopleMenu, "owner:profile-ada");
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
+    await captureSessionOwnerProof(currentPage, "04-owner-filter-selected.png");
     expect(await currentPage.locator('[data-session-section="category:Research"]').count()).toBe(1);
     expect(await currentPage.locator('[data-session-section="category:Operations"]').count()).toBe(
       0,
@@ -394,6 +388,25 @@ suite.define(() => {
       "aria-checked",
       "true",
     );
+
+    await currentPage.reload();
+    // installMockGateway creates a new in-page request log for the reloaded
+    // document, so this wait and last-request assertion cannot reuse traffic
+    // from the pre-reload owner selection.
+    await gateway.waitForRequest("sessions.list");
+    await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).at(-1)?.params)
+      .toMatchObject({ ownerId: "profile-ada" });
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    const reloadedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(reloadedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await captureSessionOwnerPageProof(currentPage, "05-owner-filter-restored-after-reload.png");
   });
 
   it("keeps unrelated active sessions out of the involving-me filter", async () => {
@@ -430,14 +443,7 @@ suite.define(() => {
       sessions: allSessions.sessions.filter((session) => session.key === "agent:main:ada"),
     });
     const menu = await openSidebarSortMenu(currentPage);
-    await menu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "involving-me" } },
-        }),
-      ),
-    );
+    await selectMenuValue(menu, "involving-me");
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
@@ -641,7 +647,7 @@ suite.define(() => {
         "chat.metadata",
         "chat.startup",
         "session.visibility.set",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
       ],
@@ -649,7 +655,7 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [],
@@ -709,7 +715,7 @@ suite.define(() => {
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
     await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
-    expect(await gateway.getRequests("session.members.list")).toHaveLength(0);
+    expect(await gateway.getRequests("session.members.listEvidence")).toHaveLength(0);
 
     const message = "visibility change rejected";
     await gateway.rejectDeferred("session.visibility.set", {
@@ -739,7 +745,7 @@ suite.define(() => {
         "chat.metadata",
         "chat.startup",
         "session.visibility.set",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
       ],
@@ -747,7 +753,7 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [{ type: "human", id: "profile-bob", label: "Bob" }],
@@ -760,7 +766,7 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
-    await gateway.waitForRequest("session.members.list");
+    await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     const publish = dropdown.locator('wa-dropdown-item[value="visibility:shared"]');
     await publish.waitFor();
@@ -818,7 +824,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
         "session.visibility.set",
@@ -856,7 +862,7 @@ suite.define(() => {
       ],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
           identities: [...humanIdentities, ...nonHumanIdentities],
@@ -869,7 +875,7 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.locator(".chat-pane__sharing-trigger").click();
-    await gateway.waitForRequest("session.members.list");
+    await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     await dropdown.locator('wa-dropdown-item[value="member:profile-member-0"]').waitFor();
     await dropdown.evaluate(async (element) => {

@@ -6,7 +6,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
 import { applyAutonomousSkillProposal } from "../../skills/workshop/autonomous-apply.js";
 import {
   AUTONOMOUS_SKILL_MAX_CHARS,
@@ -66,6 +65,12 @@ import {
   skillWorkshopAgentEventActor,
 } from "./skill-workshop-tool-helpers.js";
 import {
+  assertSkillPatchRunUsage,
+  executePrepareSkillPatch,
+  readSkillPatchText,
+  resolveSkillPatchAuthorization,
+} from "./skill-workshop-tool-patch.js";
+import {
   formatProposalEvaluation,
   formatProposalInspect,
   formatProposalList,
@@ -85,18 +90,6 @@ function requireProposalContent(content: string | undefined): string {
     throw new ToolInputError("proposal_content required");
   }
   return content;
-}
-
-function readSkillPatchText(params: Record<string, unknown>) {
-  return {
-    oldString:
-      readToolStringParam(params, "old_string", { label: "old_string", trim: false }) ?? "",
-    newString: readToolStringParam(params, "new_string", {
-      required: true,
-      label: "new_string",
-      trim: false,
-    }),
-  };
 }
 
 function bindProposalRevisionConstraint(
@@ -170,12 +163,14 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     options.collectionReconcile?.readSkillHashes ??
     options.proposalMutationBudget?.readSkillHashes ??
     new Map<string, string>();
+  const preparedSkillPatches = options.proposalMutationBudget?.preparedSkillPatches ?? new Map();
   if (options.collectionReconcile) {
     options.collectionReconcile.readSkillHashes = readSkillHashes;
     options.collectionReconcile.readSkillTreeHashes ??= new Map();
   }
   if (options.proposalMutationBudget) {
     options.proposalMutationBudget.readSkillHashes = readSkillHashes;
+    options.proposalMutationBudget.preparedSkillPatches = preparedSkillPatches;
   }
   return {
     label: "Skill Workshop",
@@ -269,6 +264,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           readSkillHashes.delete(skill.skillKey);
         } else {
           readSkillHashes.set(skill.skillKey, sha256Hex(skill.content));
+          preparedSkillPatches.delete(skill.skillKey);
         }
         const sizeBytes = Buffer.byteLength(skill.content);
         const text = truncated
@@ -278,7 +274,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
                 "Content omitted: the complete skill exceeds the selected-model read budget.",
                 options.collectionReconcile
                   ? "Next: leave this skill unlisted in the reconcile call; only the operator can change it."
-                  : "Next: use operator/CLI access for the complete skill; autonomous patch/update requires a complete model read.",
+                  : "Next: call action=prepare_patch with a non-empty exact old_string for a targeted patch, or use operator/CLI access for the complete skill. Full updates require a complete model read.",
               ].join("\n"),
               readMaxChars,
             )
@@ -287,6 +283,25 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           content: [{ type: "text", text }],
           details: { skillKey: skill.skillKey, sizeBytes, contentIncluded: !truncated },
         };
+      }
+
+      if (action === "prepare_patch") {
+        if (
+          options.proposalOnly === true &&
+          !options.collectionReconcile &&
+          options.updateProposals !== true
+        ) {
+          throw new ToolInputError("this Skill Workshop session cannot prepare live skill patches");
+        }
+        return await executePrepareSkillPatch({
+          workspaceDir: options.workspaceDir,
+          config: options.config,
+          agentId: options.agentId,
+          toolParams: params,
+          preparedSkillPatches,
+          proposalMutationBudgetRemaining: options.proposalMutationBudget?.remaining,
+          maxChars: projectionBudgets.artifactChars,
+        });
       }
 
       if (action === "reconcile") {
@@ -464,19 +479,31 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
       let expectedCurrentContentHash: string | undefined;
       let currentSkillContent: string | undefined;
+      const patchOldString = action === "patch" ? readSkillPatchText(params).oldString : undefined;
       const requiresRead = action === "patch" || (action === "update" && options.updateProposals);
       if (requiresRead) {
-        // The model must see the entire current skill before a targeted patch or
-        // autonomous rewrite. The service binds the proposal to that read.
+        // Full rewrites require a complete model read. A targeted patch may instead
+        // redeem one exact span prepared from the authoritative full skill.
         const target = await readWritableWorkspaceSkill(
           options.workspaceDir,
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
         const readHash = readSkillHashes.get(target.skillKey);
+        const contentHash = sha256Hex(target.content);
         currentSkillContent = target.content;
+        const preparedHash =
+          action === "patch"
+            ? resolveSkillPatchAuthorization({
+                skill: target,
+                oldString: patchOldString ?? "",
+                readHash,
+                preparedSkillPatches,
+              })
+            : undefined;
         if (
           !readHash &&
+          !preparedHash &&
           !(
             action === "update" &&
             options.autonomousCapture === true &&
@@ -484,29 +511,26 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           )
         ) {
           throw new ToolInputError(
-            `read the live skill first: call action=read with skill_name "${target.skillKey}", then ${action === "patch" ? "quote its current text in the patch" : "rewrite it from the returned content"}`,
+            target.content.length > projectionBudgets.artifactChars
+              ? action === "patch"
+                ? `skill "${target.skillKey}" exceeds the reviewer read budget: call action=prepare_patch with the non-empty exact old_string before patching`
+                : `skill "${target.skillKey}" exceeds the reviewer read budget and cannot be updated autonomously`
+              : `read the live skill first: call action=read with skill_name "${target.skillKey}", then ${action === "patch" ? "quote its current text in the patch" : "rewrite it from the returned content"}`,
           );
         }
-        if (readHash && readHash !== sha256Hex(target.content)) {
+        if (readHash && readHash !== contentHash) {
           readSkillHashes.delete(target.skillKey);
           throw new ToolInputError(
             `skill "${target.skillKey}" changed since it was read: call action=read again and redraft the ${action} from the current content`,
           );
         }
-        expectedCurrentContentHash = readHash ?? sha256Hex(target.content);
+        expectedCurrentContentHash = readHash ?? preparedHash ?? contentHash;
         if (action === "patch") {
-          if (
-            foregroundRepair &&
-            !hasRunWorkspaceSkillUsage({
-              runId: options.origin?.runId,
-              name: target.skillKey,
-              skillFile: target.skillFile,
-            })
-          ) {
-            throw new ToolInputError(
-              `skill "${target.skillKey}" was not used in this run and cannot be repaired autonomously`,
-            );
-          }
+          assertSkillPatchRunUsage({
+            skill: target,
+            foregroundRepair,
+            runId: options.origin?.runId,
+          });
           try {
             composeSkillBodyPatch(
               stripProposalFrontmatterForSkill(target.content),

@@ -20,7 +20,11 @@ import {
   classifyToolAgainstSandboxToolPolicy,
   resolveSandboxToolPolicyForAgent,
 } from "./tool-policy.js";
-import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
+import type { SandboxConfig, SandboxToolPolicyResolved, SandboxWorkspaceAccess } from "./types.js";
+
+type SandboxRuntimeIsolation =
+  | { sandboxRequired: false; sandboxPrincipalId?: never; workspaceAccess?: never }
+  | { sandboxRequired: true; sandboxPrincipalId?: string; workspaceAccess: SandboxWorkspaceAccess };
 
 function shouldSandboxSession(
   cfg: SandboxConfig,
@@ -80,10 +84,9 @@ export function resolveSandboxRuntimeStatus(params: {
   classificationSessionKey: string;
   mainSessionKey: string;
   mode: SandboxConfig["mode"];
-  sandboxRequired: boolean;
   sandboxed: boolean;
   toolPolicy: SandboxToolPolicyResolved;
-} {
+} & SandboxRuntimeIsolation {
   const sessionKey = params.sessionKey?.trim() ?? "";
   const agentId = resolveSessionAgentId({
     sessionKey,
@@ -105,7 +108,7 @@ export function resolveSandboxRuntimeStatus(params: {
     sessionKey: classificationSessionKey,
   });
   // Creation owns this immutable requirement; current callers and agent mode cannot relax it.
-  const sandboxRequired = classificationSessionKey
+  const sessionEntry = classificationSessionKey
     ? loadSessionEntryReadOnly({
         agentId: classificationAgentId,
         clone: false,
@@ -113,8 +116,20 @@ export function resolveSandboxRuntimeStatus(params: {
         storePath: resolveSessionStorePathCore(cfg?.session?.store, {
           agentId: classificationAgentId,
         }),
-      })?.sandbox === "required"
-    : false;
+      })
+    : undefined;
+  const sandboxRequired = sessionEntry?.sandbox === "required";
+  const sandboxPrincipalId =
+    sandboxRequired && sessionEntry.createdActor?.type === "human"
+      ? sessionEntry.createdActor.id?.trim() || undefined
+      : undefined;
+  const isolation: SandboxRuntimeIsolation = sandboxRequired
+    ? {
+        sandboxRequired: true,
+        ...(sandboxPrincipalId ? { sandboxPrincipalId } : {}),
+        workspaceAccess: sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess,
+      }
+    : { sandboxRequired: false };
   const sandboxed = classificationSessionKey
     ? shouldSandboxSession(sandboxCfg, comparableSessionKey, mainSessionKey, sandboxRequired)
     : false;
@@ -125,7 +140,7 @@ export function resolveSandboxRuntimeStatus(params: {
     classificationSessionKey,
     mainSessionKey,
     mode: sandboxCfg.mode,
-    sandboxRequired,
+    ...isolation,
     sandboxed,
     toolPolicy: resolveSandboxToolPolicyForAgent(cfg, classificationAgentId),
   };

@@ -2333,41 +2333,5 @@ describe("runCliAgent spawn path", () => {
     expect(authLog).not.toContain("/tmp/child-gemini-home");
     expect(authLog).not.toContain("sk-openai-child");
   });
-
-  it("prepends bootstrap warnings to the CLI prompt body", async () => {
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-    const context = buildPreparedCliRunContext({
-      provider: "codex-cli",
-      model: "gpt-5.4",
-    });
-    context.reusableCliSession = { mode: "reuse", sessionId: "thread-123" };
-    context.bootstrapPromptWarningLines = [
-      "[Bootstrap truncation warning]",
-      "- AGENTS.md: 200 raw -> 20 injected",
-    ];
-
-    await executePreparedCliRun(context, "thread-123");
-
-    const input = mockCallArg(supervisorSpawnMock) as {
-      argv?: string[];
-      input?: string;
-    };
-    const promptCarrier = [input.input ?? "", ...(input.argv ?? [])].join("\n");
-
-    expect(promptCarrier).toContain("[Bootstrap truncation warning]");
-    expect(promptCarrier).toContain("- AGENTS.md: 200 raw -> 20 injected");
-    expect(promptCarrier).toContain("hi");
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

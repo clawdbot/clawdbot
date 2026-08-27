@@ -24,7 +24,7 @@ function createState(result: ChatHistoryResult): TestState {
     sessionKey: "main",
   });
   const sessions: TestSessions = {
-    setModelOverride: vi.fn(),
+    refreshReplacement: vi.fn(async () => undefined),
     reconcileRunTerminal: vi.fn(),
   };
   return {
@@ -77,6 +77,37 @@ function activeHistory(runId: string): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
+  it.each([
+    {
+      name: "restores workspace preparation before visible activity",
+      text: "",
+      startup: { state: "status", runId: "run-live", phase: "preparing_workspace" },
+    },
+    {
+      name: "keeps actual assistant activity ahead of an older startup status",
+      text: "The assistant already started responding.",
+      startup: { state: "activity", runId: "run-live" },
+    },
+  ])("$name", async ({ text, startup }) => {
+    const history = activeHistory("run-live");
+    history.inFlightRun!.text = text;
+    history.inFlightRun!.events = [
+      {
+        runId: "run-live",
+        seq: 1,
+        stream: "run_status",
+        ts: 900,
+        sessionKey: "main",
+        data: { phase: "preparing_workspace" },
+      },
+    ];
+    const state = createState(history);
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunStartup).toEqual(startup);
+  });
+
   it("restores active tool state and authoritative preamble time from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
     (history.inFlightRun as { events?: unknown[] }).events = [

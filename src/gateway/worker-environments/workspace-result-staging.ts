@@ -45,7 +45,16 @@ const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 const DISABLED_GIT_HOOKS_PATH = os.devNull;
 
 function gitCommand(cwd: string, args: string[]): string[] {
-  return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
+  return [
+    "git",
+    "-c",
+    `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`,
+    "-c",
+    "core.fsmonitor=false",
+    "-C",
+    cwd,
+    ...args,
+  ];
 }
 
 export function workerWorkspaceTransferPaths(
@@ -663,7 +672,7 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
 
 export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   root: string;
-  retainedRefs?: ReadonlySet<string>;
+  retainedRefs?: () => ReadonlySet<string>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const output = await requireGit(root, [
@@ -671,9 +680,13 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
     "--format=%(refname)",
     `${WORKER_RESULT_CLEANUP_REF_PREFIX}/`,
   ]);
-  for (const cleanupRef of output.split("\n").filter(Boolean)) {
+  const cleanupRefs = output.split("\n").filter(Boolean);
+  // A post-start turn can stage a result during the Git scan. Read its fence
+  // after inventory; later claims cannot appear in these immutable claim refs.
+  const retainedRefs = cleanupRefs.length > 0 ? params.retainedRefs?.() : undefined;
+  for (const cleanupRef of cleanupRefs) {
     requireWorkerResultStorageRef(cleanupRef);
-    if (!params.retainedRefs?.has(cleanupRef)) {
+    if (!retainedRefs?.has(cleanupRef)) {
       await requireGit(root, ["update-ref", "-d", cleanupRef]);
     }
   }

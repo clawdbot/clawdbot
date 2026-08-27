@@ -99,6 +99,9 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
   const ownerId = options.ownerId?.trim();
+  if (options.ownerFirst === true) {
+    params.ownerFirst = true;
+  }
   if (options.involvingMe === true) {
     params.involvingMe = true;
   }
@@ -142,12 +145,19 @@ export function requestSessionPatch(
   client: SessionRequestClient,
   key: string,
   patch: SessionPatch,
-  options: { agentId?: string | null; expectedSessionId?: string | null } = {},
+  options: {
+    agentId?: string | null;
+    expectedSessionId?: string | null;
+    expectedMarkedUnreadAt?: number | null;
+  } = {},
 ): Promise<SessionsPatchResult> {
   const expectedSessionId = options.expectedSessionId?.trim();
   const params = {
     ...buildSessionRequestParams(key, options.agentId),
     ...(expectedSessionId ? { expectedSessionId } : {}),
+    ...(options.expectedMarkedUnreadAt !== undefined
+      ? { expectedMarkedUnreadAt: options.expectedMarkedUnreadAt }
+      : {}),
     ...patch,
   };
   return patch.archived === true

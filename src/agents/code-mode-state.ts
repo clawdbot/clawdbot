@@ -248,7 +248,7 @@ export function snapshotState(params: {
   catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
-  deadlineMs: number;
+  remainingMs: number;
   deliveredOutputCount?: number;
   reservedActiveRunSlot?: boolean;
   replaySafe: boolean;
@@ -348,7 +348,7 @@ export function createPendingBridgeStates(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
-  deadlineMs: number;
+  remainingMs: number;
   activeRunId?: string;
   ctx: ToolSearchToolContext;
   signal?: AbortSignal;
@@ -381,7 +381,7 @@ export function createPendingBridgeStates(params: {
       parentToolCallId: params.parentToolCallId,
       codeModeRunId: params.codeModeRunId,
       maxOutputBytes: params.config.maxOutputBytes,
-      remainingMs: Math.max(1, params.deadlineMs - Date.now()),
+      remainingMs: Math.max(1, params.remainingMs),
       ctx: params.ctx,
       request,
       signal,

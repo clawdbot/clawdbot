@@ -112,6 +112,81 @@ test("process poll waits for completion when timeout is provided", async () => {
   });
 });
 
+test.each([
+  { name: "buffered stdout", stream: "stdout", arrivesDuringWait: false, dropped: false },
+  { name: "buffered stderr", stream: "stderr", arrivesDuringWait: false, dropped: false },
+  { name: "new stdout", stream: "stdout", arrivesDuringWait: true, dropped: false },
+  { name: "new stderr", stream: "stderr", arrivesDuringWait: true, dropped: false },
+  { name: "buffered capped output", stream: "stdout", arrivesDuringWait: false, dropped: true },
+] as const)(
+  "process poll returns $name before the requested wait expires",
+  async ({ name, stream, arrivesDuringWait, dropped }) => {
+    vi.useFakeTimers();
+    const sessionId = `sess-prompt-${name.replaceAll(" ", "-")}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const controller = new AbortController();
+    const appendPendingOutput = () => {
+      if (dropped) {
+        appendOversizedPendingOutput(session);
+      } else {
+        appendOutput(session, stream, "interactive prompt\n");
+      }
+    };
+    if (arrivesDuringWait) {
+      setTimeout(appendPendingOutput, 10);
+    } else {
+      appendPendingOutput();
+    }
+
+    let settled = false;
+    const observedPoll = pollSession(
+      processTool,
+      "toolcall-prompt",
+      sessionId,
+      30_000,
+      controller.signal,
+    ).then(
+      (result) => {
+        settled = true;
+        return result;
+      },
+      () => undefined,
+    );
+
+    try {
+      await vi.advanceTimersByTimeAsync(arrivesDuringWait ? 250 : 0);
+      expect(settled).toBe(true);
+
+      const poll = await observedPoll;
+      expect(poll?.details).toMatchObject({ status: "running", sessionId });
+      expect(poll?.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(
+          dropped ? "earlier output is omitted from this poll" : "interactive prompt",
+        ),
+      });
+      expect(session.pendingOutput).toHaveLength(0);
+    } finally {
+      controller.abort();
+      await observedPoll;
+      vi.useRealTimers();
+    }
+  },
+);
+
+test("process poll rejects an already-aborted signal without consuming buffered output", async () => {
+  const sessionId = "sess-prompt-already-aborted";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+  appendOutput(session, "stdout", "interactive prompt\n");
+  const controller = new AbortController();
+  controller.abort();
+
+  await expect(
+    pollSession(processTool, "toolcall-prompt-aborted", sessionId, 30_000, controller.signal),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(session.pendingOutput).toEqual([{ stream: "stdout", text: "interactive prompt\n" }]);
+});
+
 test("waiting poll returns only output appended since the previous poll", async () => {
   vi.useFakeTimers();
   try {

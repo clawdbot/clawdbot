@@ -106,6 +106,8 @@ export type ChatItem =
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
+      /** Collapse the body behind a disclosure; the label line stays visible. */
+      collapsedBody?: true;
     }
   | {
       kind: "divider";

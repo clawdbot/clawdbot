@@ -22,6 +22,7 @@ import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type {
@@ -232,6 +233,11 @@ type GatewaySystemAgentSession = {
 /** Kernel-owned services and state that can be constructed without binding sockets. */
 type GatewayKernelContext = {
   deps: CliDeps;
+  /** Host-bound plugin ingress; the transport owns its shared hook dispatch queue. */
+  dispatchHookAgentTurn?: (
+    pluginId: string,
+    params: Parameters<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>[0],
+  ) => ReturnType<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>;
   configRevisionProjector: GatewayConfigRevisionProjector;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
@@ -326,6 +332,7 @@ type GatewayTransportContext = {
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  getClientConnIds?: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
   nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;

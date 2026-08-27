@@ -12,10 +12,15 @@ import type { FastModeSource } from "../../shared/fast-mode.js";
  *
  * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
  */
-import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
-export {
+import {
   createAgentToAgentPolicy,
+  resolveEffectiveSessionToolsVisibility,
+  resolveSandboxedSessionToolContext,
+} from "./sessions-access.js";
+export {
   createSessionVisibilityRowChecker,
+  formatSessionToolAccessDenial,
+  recordSessionToolActionFact,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
   resolveSessionToolAccess,
@@ -146,6 +151,11 @@ export function resolveSessionToolContext(opts?: {
   const cfg = opts?.config ?? getRuntimeConfig();
   return {
     cfg,
+    a2aPolicy: createAgentToAgentPolicy(cfg),
+    sessionVisibility: resolveEffectiveSessionToolsVisibility({
+      cfg,
+      sandboxed: opts?.sandboxed === true,
+    }),
     ...resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: opts?.agentSessionKey,

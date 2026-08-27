@@ -248,6 +248,11 @@ describe("llama-server setup", () => {
       expected: "llama-cpp/meta-llama/Llama-3.3-8B",
     },
     {
+      name: "does not recommend a server when every model has failed",
+      models: [{ id: "google/gemma-4-27b", status: "unloaded", failed: true }],
+      expected: null,
+    },
+    {
       name: "returns no candidate for an empty model catalog",
       models: [],
       expected: null,
@@ -850,5 +855,22 @@ describe("llama-server setup", () => {
       "llama-server model missing was not found. Available models: qwen/model:Q4_K_M",
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects failed-only implicit setup while preserving an explicitly selected model", async () => {
+    const discovery = successfulDiscovery();
+    discovery.models = discovery.models.map((model) => ({ ...model, failed: true }));
+    discoverMock.mockResolvedValue(discovery);
+
+    const implicit = nonInteractiveContext();
+    await expect(validateLlamaServerNonInteractive(implicit)).resolves.toBe(false);
+    expect(implicit.runtime.error).toHaveBeenCalledWith(
+      "No llama-server text models were found at http://localhost:8080.",
+    );
+    expect(removeProviderAuthProfilesWithLockMock).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLockMock).not.toHaveBeenCalled();
+
+    const explicit = nonInteractiveContext({ customModelId: "qwen/model:Q4_K_M" });
+    await expect(validateLlamaServerNonInteractive(explicit)).resolves.toBe(true);
   });
 });

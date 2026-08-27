@@ -14,6 +14,26 @@ public struct OpenClawChatGatewayRequest: Sendable, Equatable {
     }
 }
 
+public enum OpenClawChatSessionUnreadPatch: Sendable, Equatable {
+    case markUnread
+    case read
+    case automaticRead(expectedMarkedUnreadAt: Double?)
+
+    public static func routed(
+        unread: Bool?,
+        expectedMarkedUnreadAt: Double??,
+        supportsReadContract: Bool) -> Self?
+    {
+        guard let unread else { return nil }
+        guard !unread else { return .markUnread }
+        guard supportsReadContract else { return .read }
+        if let expectedMarkedUnreadAt {
+            return .automaticRead(expectedMarkedUnreadAt: expectedMarkedUnreadAt)
+        }
+        return .read
+    }
+}
+
 public enum OpenClawChatSessionTargetPolicy: Sendable {
     case preserveBareKeys
     case scopeBareKeysToSelectedAgent
@@ -342,7 +362,7 @@ public enum OpenClawChatGatewayRequests {
         category: String??,
         pinned: Bool?,
         archived: Bool?,
-        unread: Bool?) -> OpenClawChatGatewayRequest
+        unreadPatch: OpenClawChatSessionUnreadPatch?) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
         if let expectedSessionID = expectedSessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -362,8 +382,16 @@ public enum OpenClawChatGatewayRequests {
         if let archived {
             params["archived"] = AnyCodable(archived)
         }
-        if let unread {
-            params["unread"] = AnyCodable(unread)
+        switch unreadPatch {
+        case .markUnread:
+            params["unread"] = AnyCodable(true)
+        case .read:
+            params["unread"] = AnyCodable(false)
+        case let .automaticRead(expectedMarkedUnreadAt):
+            params["unread"] = AnyCodable(false)
+            params["expectedMarkedUnreadAt"] = expectedMarkedUnreadAt.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        case nil:
+            break
         }
         return OpenClawChatGatewayRequest(
             method: "sessions.patch",

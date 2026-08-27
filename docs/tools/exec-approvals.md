@@ -511,6 +511,23 @@ context when forwarding approved `system.run` requests:
 - Once approved, the final forwarded `system.run` call reuses the stored plan instead of trusting later caller edits.
 - If the caller changes `command`, `rawCommand`, `cwd`, `agentId`, or `sessionKey` after the approval request was created, the gateway rejects the forwarded run as an approval mismatch.
 
+## Approval scope summaries
+
+An approval owner can attach a typed, display-only scope describing the action's
+blast radius. OpenClaw renders the sanitized summary on channel approval cards
+and includes the bounded scope in the safe approval presentation available to
+Control UI clients. Scope never grants authorization or changes approval policy.
+
+- `message-send`: destination, recipient count, optional recipient preview, and
+  whether the audience is internal or external.
+- `payment`: exact decimal amount, currency, and payee or payment system.
+- `external-post`: destination and whether the post is public or restricted.
+
+For example, an email approval might show `Send to 3 recipients via email
+(external): alice@example.com, bob@example.com, +1 more`. Owners supply these
+facts; channels never infer them from commands or message text. Without a
+declared scope, approval cards render exactly as before.
+
 ## System events and denials
 
 Exec lifecycle posts an `Exec finished` system message to the agent's

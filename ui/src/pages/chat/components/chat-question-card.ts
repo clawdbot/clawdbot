@@ -4,20 +4,17 @@ import { property, state } from "lit/decorators.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatRelativeTimestamp } from "../../../lib/format.ts";
 
-type QuestionPanelQuestion = {
-  questionId: string;
-  header: string;
-  question: string;
-  options: Array<{ label: string; description?: string }>;
-  multiSelect?: boolean;
-  isOther?: boolean;
-};
+type QuestionPanelQuestion = QuestionPrompt["questions"][number];
 
 type QuestionPanelViewModel = {
   requestKey: string;
   title: string;
   questions: QuestionPanelQuestion[];
+  agentId?: string;
+  sessionKey?: string;
+  secretStoreAllowedHostsDraft?: string;
   collapsed: boolean;
   disabled: boolean;
   submitting?: boolean;
@@ -31,6 +28,7 @@ type QuestionPanelProps = {
   onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
   onAnswersChange?: (answersById: Record<string, string[]>) => void;
+  onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
   onDismissError?: () => void;
   onCollapsedChange?: (collapsed: boolean) => void;
   onPreviousRequest?: () => void;
@@ -80,6 +78,9 @@ export function createGatewayQuestionPanelProps(
       requestKey: prompt.id,
       title: t("chat.questions.eyebrow"),
       questions: prompt.questions,
+      agentId: prompt.agentId,
+      sessionKey: prompt.sessionKey,
+      secretStoreAllowedHostsDraft: prompt.secretStoreAllowedHostsDraft,
       collapsed: options.collapsed ?? false,
       disabled: prompt.status !== "pending" || prompt.submitting,
       submitting: prompt.submitting,
@@ -89,6 +90,10 @@ export function createGatewayQuestionPanelProps(
     },
     onAnswersChange: (answersById) => {
       updatePromptDrafts(prompt, answersById);
+      options.onChange?.();
+    },
+    onSecretStoreAllowedHostsChange: (allowedHosts) => {
+      prompt.secretStoreAllowedHostsDraft = allowedHosts;
       options.onChange?.();
     },
     onSubmit: options.onSubmit
@@ -129,6 +134,9 @@ function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion)
   }
   if (prompt.status === "unavailable") {
     return t("chat.questions.unavailable");
+  }
+  if (question.isSecret) {
+    return t("chat.questions.answered");
   }
   const answer = prompt.answers?.answers[question.questionId]?.join(", ");
   if (answer) {
@@ -577,6 +585,71 @@ class ChatQuestionPanel extends LitElement {
           })}
         </div>
 
+        ${question.secretStore
+          ? html`
+              <div class="chat-question-panel__store">
+                <div class="chat-question-panel__store-requester">
+                  ${t("chat.questions.storeRequestedBy", {
+                    agent: model.agentId ?? t("common.unknown"),
+                    session: model.sessionKey ?? t("common.unknown"),
+                  })}
+                </div>
+                <div class="chat-question-panel__store-entry">
+                  ${t("chat.questions.storeEntry", {
+                    name: question.secretStore.name,
+                    kind:
+                      question.secretStore.kind === "secret"
+                        ? t("secretsStore.protectedSecret")
+                        : t("secretsStore.agentReadable"),
+                  })}
+                </div>
+                ${question.secretStore.reason
+                  ? html`<div class="chat-question-panel__store-reason">
+                      ${question.secretStore.reason}
+                    </div>`
+                  : nothing}
+                ${question.secretStoreExisting
+                  ? html`<div class="chat-question-panel__store-replacement">
+                      ${question.secretStoreExisting.updatedBy
+                        ? t("chat.questions.storeReplacementBy", {
+                            name: question.secretStore.name,
+                            updated: formatRelativeTimestamp(
+                              question.secretStoreExisting.updatedAtMs,
+                            ),
+                            updatedBy: question.secretStoreExisting.updatedBy,
+                          })
+                        : t("chat.questions.storeReplacement", {
+                            name: question.secretStore.name,
+                            updated: formatRelativeTimestamp(
+                              question.secretStoreExisting.updatedAtMs,
+                            ),
+                          })}
+                    </div>`
+                  : nothing}
+                ${question.secretStore.kind === "secret"
+                  ? html`<label class="chat-question-panel__store-hosts">
+                      <span>${t("secretsStore.allowedHosts")}</span>
+                      <input
+                        class="chat-question-panel__other chat-question-panel__hosts"
+                        type="text"
+                        autocomplete="off"
+                        placeholder=${t("secretsStore.allowedHostsPlaceholder")}
+                        .value=${model.secretStoreAllowedHostsDraft ??
+                        question.secretStore.allowedHosts?.join(", ") ??
+                        ""}
+                        ?disabled=${disabled}
+                        @input=${(event: Event) => {
+                          const target = event.target;
+                          if (target instanceof HTMLInputElement) {
+                            props.onSecretStoreAllowedHostsChange?.(target.value);
+                          }
+                        }}
+                      />
+                    </label>`
+                  : nothing}
+              </div>
+            `
+          : nothing}
         ${question.isOther || question.options.length === 0
           ? html`
               <label
@@ -589,7 +662,7 @@ class ChatQuestionPanel extends LitElement {
                 <span class="chat-question-panel__option-marker" aria-hidden="true"></span>
                 <input
                   class="chat-question-panel__other"
-                  type="text"
+                  type=${question.isSecret ? "password" : "text"}
                   autocomplete="off"
                   placeholder=${t("chat.questions.other")}
                   aria-label=${t("chat.questions.ownAnswerFor", { header: question.header })}

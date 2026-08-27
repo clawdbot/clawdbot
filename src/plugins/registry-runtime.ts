@@ -671,6 +671,25 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
     };
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
+    const assertTrustedPluginRuntime = (
+      methodName:
+        | "dispatchHookAgentTurn"
+        | "openBlobStore"
+        | "openKeyedStore"
+        | "openSyncKeyedStore"
+        | "openChannelIngressQueue"
+        | "openChannelIngressDrain",
+    ) => {
+      const record =
+        pluginRuntimeRecordById.get(pluginId) ??
+        registry.plugins.find((entry) => entry.id === pluginId);
+      if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
+        // Name the denied plugin and its origin so operators can replace the untrusted install.
+        throw new Error(
+          `${methodName} is only available for trusted plugins in this release. Plugin "${pluginId}" loaded with origin "${record?.origin ?? "unknown"}"; reinstall it from its official npm package or ClawHub listing to enable trusted plugin state.`,
+        );
+      }
+    };
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
         const runWithPluginScope = <T>(run: () => T): T => {
@@ -698,47 +717,28 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         };
         if (prop === "state") {
           const baseState = getRuntimeProperty();
-          const assertPluginStateAllowed = (
-            methodName:
-              | "openBlobStore"
-              | "openKeyedStore"
-              | "openSyncKeyedStore"
-              | "openChannelIngressQueue"
-              | "openChannelIngressDrain",
-          ) => {
-            const record =
-              pluginRuntimeRecordById.get(pluginId) ??
-              registry.plugins.find((entry) => entry.id === pluginId);
-            if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
-              // Name the denied plugin and its origin: several plugins share this gate, and a
-              // bare capability name cannot tell an operator which install needs replacing.
-              throw new Error(
-                `${methodName} is only available for trusted plugins in this release. Plugin "${pluginId}" loaded with origin "${record?.origin ?? "unknown"}"; reinstall it from its official npm package or ClawHub listing to enable trusted plugin state.`,
-              );
-            }
-          };
           return {
             ...baseState,
             openBlobStore: <TMetadata>(
               options: OpenBlobStoreOptions,
             ): PluginBlobStore<TMetadata> => {
-              assertPluginStateAllowed("openBlobStore");
+              assertTrustedPluginRuntime("openBlobStore");
               return createPluginBlobStore<TMetadata>(pluginId, options);
             },
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
-              assertPluginStateAllowed("openKeyedStore");
+              assertTrustedPluginRuntime("openKeyedStore");
               return createPluginStateKeyedStore<T>(pluginId, options);
             },
             openSyncKeyedStore: <T>(
               options: OpenKeyedStoreOptions,
             ): PluginStateSyncKeyedStore<T> => {
-              assertPluginStateAllowed("openSyncKeyedStore");
+              assertTrustedPluginRuntime("openSyncKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertPluginStateAllowed("openChannelIngressQueue");
+              assertTrustedPluginRuntime("openChannelIngressQueue");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
                 ...options,
@@ -760,7 +760,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 stateDir?: string;
               },
             ) => {
-              assertPluginStateAllowed("openChannelIngressDrain");
+              assertTrustedPluginRuntime("openChannelIngressDrain");
               const stateDir = options.stateDir ?? baseState.resolveStateDir();
               const queue =
                 options.queue ??
@@ -818,6 +818,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 return await gateway.request(method, params, options);
               }),
           } satisfies PluginRuntime["gateway"];
+        }
+        if (prop === "hooks") {
+          const hooks: PluginRuntime["hooks"] = getRuntimeProperty();
+          return {
+            dispatchHookAgentTurn: async (params) => {
+              assertTrustedPluginRuntime("dispatchHookAgentTurn");
+              return await runWithPluginScope(() => hooks.dispatchHookAgentTurn(params));
+            },
+          } satisfies PluginRuntime["hooks"];
         }
         if (prop === "nodes") {
           const nodes = getRuntimeProperty();

@@ -538,7 +538,16 @@ function applyInFlightRunSnapshot(params: {
       timestamp: state.chatStreamStartedAt,
     });
   }
-  state.chatRunStartup = { state: "activity", runId: inFlightRunId };
+  const startupPhase = run.events?.findLast((event) => event.stream === "run_status")?.data.phase;
+  const hasStartupStatus =
+    startupPhase === "preparing_workspace" ||
+    startupPhase === "provisioning_environment" ||
+    startupPhase === "preparing_context" ||
+    startupPhase === "starting_model";
+  state.chatRunStartup =
+    hasStartupStatus && !tail && !(sameRunContinued && state.chatRunStartup?.state === "activity")
+      ? { state: "status", runId: inFlightRunId, phase: startupPhase }
+      : { state: "activity", runId: inFlightRunId };
   // Disconnect cleanup intentionally removes transient activity rows while
   // retaining the owned run. Replay fills that gap; per-identity sequence
   // fences keep a delayed snapshot from replacing newer live progress.
@@ -964,6 +973,7 @@ export async function syncSelectedSessionMessageSubscription(
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
+  supersedeInFlight?: boolean;
   startup?: boolean;
 };
 
@@ -1581,6 +1591,7 @@ export async function loadChatHistory(
   // Live events replace the rendered array while their snapshot is pending;
   // only stable session and connection ownership may start another request.
   if (
+    opts.supersedeInFlight !== true &&
     inFlight.phase === "in-flight" &&
     inFlight.key === requestKey &&
     inFlight.client === client &&

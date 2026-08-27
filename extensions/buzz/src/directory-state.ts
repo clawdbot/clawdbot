@@ -237,6 +237,16 @@ export class BuzzDirectoryState {
     return this.#rooms.get(parseBuzzTarget(roomId))?.archived === true;
   }
 
+  isBotMember(roomId: string, publicKey: string): boolean {
+    const normalizedRoomId = parseBuzzTarget(roomId);
+    const membership = this.#memberships.get(normalizedRoomId);
+    return (
+      !this.#rooms.get(normalizedRoomId)?.archived &&
+      membership?.members.has(publicKey) === true &&
+      membership.roles.get(publicKey) === "bot"
+    );
+  }
+
   applyProfileEvent(event: Event): boolean {
     const profile = parseBuzzDirectoryProfileEvent(event);
     if (

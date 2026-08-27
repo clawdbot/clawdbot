@@ -25,7 +25,6 @@ import {
 } from "../../../lib/chat/session-diff-split.ts";
 import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/session-diff.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -262,9 +261,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         return;
       case "scope":
         this.scope = action.value;
-        return;
-      case "copy-path":
-        void copyToClipboard(action.path);
         return;
       case "open-file":
         this.openFile?.(action.path);

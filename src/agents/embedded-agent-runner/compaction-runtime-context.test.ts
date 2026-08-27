@@ -172,6 +172,18 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.model).toBe("gpt-5.4");
   });
 
+  it("preserves the finite tool allowlist for delegated compaction", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      toolsAllow: ["read"],
+    });
+
+    expect(result.toolsAllow).toEqual(["read"]);
+  });
+
   it("normalizes nullable compaction routing fields to undefined", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: null,

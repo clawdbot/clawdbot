@@ -479,6 +479,27 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(finalText.length).toBeLessThanOrEqual(80);
   });
 
+  it("delivers buttonless ask_user prompts outside transient progress", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Pick one or more",
+          channelData: {
+            askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" },
+          },
+        },
+        { kind: "tool" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "progress" });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Pick one or more");
+    expect(registerChannelDelivery).toHaveBeenCalledOnce();
+  });
+
   it("streams interactive buttons into the same message", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {

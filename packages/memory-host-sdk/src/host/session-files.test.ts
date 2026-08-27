@@ -26,33 +26,13 @@ import {
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
-  sessionPathForFile,
   statSessionEntrySync,
   type SessionFileEntry,
 } from "./session-files.js";
 
-function captureStateDirEnv() {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  return {
-    restore() {
-      if (stateDir === undefined) {
-        Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-      } else {
-        Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-      }
-      if (configPath === undefined) {
-        Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
-      } else {
-        Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
-      }
-    },
-  };
-}
-
 let fixtureRoot: string;
 let tmpDir: string;
-let envSnapshot: ReturnType<typeof captureStateDirEnv> | undefined;
+let envSnapshot: Record<string, string | undefined> | undefined;
 let fixtureId = 0;
 
 beforeAll(() => {
@@ -66,7 +46,10 @@ afterAll(() => {
 beforeEach(() => {
   tmpDir = path.join(fixtureRoot, `case-${fixtureId++}`);
   fsSync.mkdirSync(tmpDir, { recursive: true });
-  envSnapshot = captureStateDirEnv();
+  envSnapshot = {
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+  };
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", tmpDir);
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -77,7 +60,13 @@ afterEach(() => {
   // env is active, then close shared state before removing the Windows-owned directory.
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  envSnapshot?.restore();
+  for (const [key, value] of Object.entries(envSnapshot ?? {})) {
+    if (value === undefined) {
+      Reflect.deleteProperty(process.env, key);
+    } else {
+      Reflect.set(process.env, key, value);
+    }
+  }
   envSnapshot = undefined;
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -296,18 +285,17 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         updateMode: "none",
       },
     );
-    const archiveMessage = (content: string) =>
-      JSON.stringify({ type: "message", message: { role: "user", content } });
     const archivePath = path.join(
       sessionsDir,
       `${sessionId}.jsonl.deleted.2026-06-25T12-01-00.000Z`,
     );
-    fsSync.writeFileSync(archivePath, archiveMessage("Archived JSONL transcript text"));
-    const resetArchivePath = path.join(
-      sessionsDir,
-      `${sessionId}.jsonl.reset.2026-06-25T12-02-00.000Z`,
+    fsSync.writeFileSync(
+      archivePath,
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Archived JSONL transcript text" },
+      }),
     );
-    fsSync.writeFileSync(resetArchivePath, archiveMessage("Retained pre-reset conversation fact"));
 
     expect(fsSync.existsSync(path.join(sessionsDir, `${sessionId}.jsonl`))).toBe(false);
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
@@ -331,10 +319,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           sessionFile: archivePath,
           sessionId,
         }),
-        expect.objectContaining({
-          artifactKind: "archive-artifact",
-          sessionFile: resetArchivePath,
-        }),
       ]),
     );
 
@@ -355,7 +339,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       updatedAtMs: updatedAt,
     });
     const archiveEntry = requireSessionEntry(await buildSessionEntry(archivePath));
-    const resetArchiveEntry = requireSessionEntry(await buildSessionEntry(resetArchivePath));
 
     expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
     expect(liveEntry.content).toBe("User: Live SQLite transcript text");
@@ -369,10 +352,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
-    expect(resetArchiveEntry.path).toBe(
-      "sessions/main/sqlite-live.jsonl.reset.2026-06-25T12-02-00.000Z",
-    );
-    expect(resetArchiveEntry.content).toBe("User: Retained pre-reset conversation fact");
   });
 
   it("exposes content revisions that change with SQLite appends and file replacement", async () => {
@@ -771,28 +750,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     clearConfigCache();
 
     await expect(listSessionFilesForAgent("ops")).resolves.toEqual([]);
-  });
-});
-
-describe("sessionPathForFile", () => {
-  it("includes the owning agent id when the transcript lives under an agent sessions dir", () => {
-    const absPath = path.join(
-      tmpDir,
-      "agents",
-      "main",
-      "sessions",
-      "deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    );
-
-    expect(sessionPathForFile(absPath)).toBe(
-      "sessions/main/deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    );
-  });
-
-  it("keeps the legacy basename-only path when the agent owner cannot be derived", () => {
-    expect(sessionPathForFile(path.join(tmpDir, "loose-session.jsonl"))).toBe(
-      "sessions/loose-session.jsonl",
-    );
   });
 });
 

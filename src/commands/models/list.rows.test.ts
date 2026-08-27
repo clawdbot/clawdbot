@@ -1026,7 +1026,6 @@ describe("appendAuthenticatedCatalogRows", () => {
     expect(mocks.loadScopedModelCatalogSnapshot).toHaveBeenCalledWith({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
-      inheritedAuthDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/openclaw-workspace",
       providerIds: ["local-openai"],
       runtimeProviderIds: ["local-openai"],

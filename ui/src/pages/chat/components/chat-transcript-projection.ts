@@ -60,7 +60,7 @@ import {
 } from "./chat-transcript-render-guard.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { renderTurnRecapRow, renderTurnTerminalStatusRow } from "./chat-working-indicator.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type ChatTranscriptProjection = {
   isDirectThread: boolean;
@@ -304,11 +304,12 @@ export function projectChatTranscript(
     onRequestUpdate: requestUpdate,
     resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+    connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
-    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
+    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
@@ -591,13 +592,6 @@ export function projectChatTranscript(
         transcriptRows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
       }
     }
-  }
-  if (props.runStatus?.phase === "interrupted") {
-    transcriptRows.push({
-      kind: "content",
-      key: `interrupted:${props.runStatus.occurredAt}`,
-      content: renderTurnTerminalStatusRow("interrupted"),
-    });
   }
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {

@@ -56,7 +56,7 @@ suite.define(() => {
       await microphoneSelect.selectOption("usb");
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.setViewportSize({ width: 320, height: 720 });
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
       expect(createRequest.params).toMatchObject({ sessionKey: "main" });
@@ -168,7 +168,7 @@ suite.define(() => {
 
       await page.getByRole("button", { name: "Stop voice input" }).click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Tap to talk" }).isVisible())
         .toBe(true);
       await expect.poll(() => page.locator(".agent-chat__voice-activity").count()).toBe(0);
       await expect
@@ -191,7 +191,7 @@ suite.define(() => {
 
       await gateway.deliverLatest({ setupComplete: {} });
       await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Tap to talk" }).isVisible())
         .toBe(true);
       console.info("[video-talk-e2e] ordinary_voice=start-stop-passed");
     });
@@ -523,6 +523,7 @@ suite.define(() => {
       );
       expect(talkRequests.map((entry) => entry.method)).toEqual([
         "talk.catalog",
+        "talk.catalog",
         "talk.client.create",
       ]);
       console.info(
@@ -664,6 +665,7 @@ suite.define(() => {
         entry.method.startsWith("talk."),
       );
       expect(talkRequests.map((entry) => entry.method)).toEqual([
+        "talk.catalog",
         "talk.catalog",
         "talk.client.create",
       ]);
@@ -1037,7 +1039,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 320, height: 720 });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       await gateway.waitForRequest("talk.client.create");
 
       await expect
@@ -1047,7 +1049,7 @@ suite.define(() => {
         .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
         .toBe(1);
       await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Tap to talk" }).isVisible())
         .toBe(true);
     });
   });

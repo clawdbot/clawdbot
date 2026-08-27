@@ -101,6 +101,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -2345,6 +2346,8 @@ private fun ChatComposer(
       SlashCommandPanel(
         commands = slashCommands,
         onSelect = { command -> onValueChange(slashCommandCompletion(command)) },
+        // Reserve the editor and run controls before measuring suggestions.
+        modifier = Modifier.weight(1f, fill = false),
       )
     }
 
@@ -2615,9 +2618,10 @@ private fun ChatModelPickerRow(
 private fun SlashCommandPanel(
   commands: List<ChatCommandEntry>,
   onSelect: (ChatCommandEntry) -> Unit,
+  modifier: Modifier,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    Column {
+  ClawPanel(modifier = modifier, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
       if (commands.isEmpty()) {
         Text(
           text = nativeString("No commands found"),

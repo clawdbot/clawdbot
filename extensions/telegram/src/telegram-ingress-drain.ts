@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
+  fitsTelegramCallbackData,
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
@@ -98,7 +99,7 @@ function isNonemptyTelegramCallbackValue(value: unknown): value is string {
 }
 
 function isBoundedTelegramCallbackData(value: unknown): value is string {
-  return isNonemptyTelegramCallbackValue(value) && Buffer.byteLength(value, "utf8") <= 64;
+  return isNonemptyTelegramCallbackValue(value) && fitsTelegramCallbackData(value);
 }
 
 function canReconcileTelegramLegacyLane(params: {
@@ -248,9 +249,10 @@ function canReconcileTelegramLegacyLane(params: {
 
 export type TelegramIngressDrainLifecycle = Omit<
   ChannelIngressMonitorLifecycle,
-  "admission" | "onFailed"
+  "admission" | "onFailed" | "onCancelled"
 > & {
   onFailed: (error: unknown) => void | Promise<void>;
+  onCancelled: () => void | Promise<void>;
 };
 
 type TelegramIngressDrainDispatch = (
@@ -339,8 +341,8 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         ),
     },
     deliver: async (update, lifecycle) => {
-      // The monitor always supplies onFailed; the optional public field preserves
-      // structural compatibility for channel lifecycles that never use deferred failure.
+      // The monitor supplies both callbacks; optional public fields preserve
+      // structural compatibility for channel lifecycles that do not need them.
       const telegramLifecycle = lifecycle as TelegramIngressDrainLifecycle;
       try {
         const result = await runWithTelegramSpooledReplayUpdate(
@@ -390,7 +392,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
               await telegramLifecycle.onFailed(error);
               return;
             }
-            await telegramLifecycle.onAbandoned();
+            await telegramLifecycle.onCancelled();
           };
           // Two-arg then: the rejection arm must observe only a participant.task
           // rejection. Chaining it as .catch would also swallow onFailed/onAdopted

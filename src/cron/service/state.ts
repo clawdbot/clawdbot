@@ -177,6 +177,13 @@ export type CronServiceDeps = {
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
+  runSkillCollectionReview?: (params: {
+    agentId: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    | { status: "ok" | "skipped"; summary: string }
+    | { status: "error"; summary: string; error: string }
+  >;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
    * { status:"skipped", reason:"requests-in-flight" } before falling back to

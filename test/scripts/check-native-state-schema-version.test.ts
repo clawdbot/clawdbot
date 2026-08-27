@@ -7,6 +7,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db
 
 describe("native state schema version guard", () => {
   it("keeps the checked-in Swift and TypeScript contracts aligned", () => {
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(12);
     expect(checkNativeStateSchemaVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   });
 

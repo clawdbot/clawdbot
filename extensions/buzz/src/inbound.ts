@@ -1,3 +1,4 @@
+import { normalizeURL } from "nostr-tools/utils";
 import {
   buildChannelInboundEventContext,
   resolveChannelInboundRouteEnvelope,
@@ -23,6 +24,7 @@ export async function handleBuzzInbound(params: {
   bus: BuzzBus;
   message: BuzzInboundMessage;
   signal: AbortSignal;
+  assertCurrent: () => void;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getBuzzRuntime();
@@ -82,6 +84,8 @@ export async function handleBuzzInbound(params: {
         }
       : undefined,
   });
+  // Admission awaits policy; only the transport owner can confirm membership is still current.
+  params.assertCurrent();
   if (access.ingress.admission !== "dispatch") {
     return;
   }
@@ -154,6 +158,24 @@ export async function handleBuzzInbound(params: {
       sessionKey: route.sessionKey,
     },
     ctxPayload,
+    botLoopProtection: bus.directory.isBotMember(channelId, message.senderPubkey)
+      ? {
+          // Reciprocal accounts share the relay/room pair budget. Threads and
+          // sender timestamps must not let a bot reset or evade that budget.
+          scopeId: `buzz:${normalizeURL(account.relayUrl)}`,
+          conversationId: channelId,
+          senderId: message.senderPubkey,
+          receiverId: bus.publicKey,
+          eventId: message.id,
+          defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+          defaultEnabled: true,
+        }
+      : undefined,
+    log: (event) => {
+      if (event.reason === "bot-loop-protection") {
+        log.warn(`[${account.accountId}] Buzz bot-pair loop suppressed in ${channelId}`);
+      }
+    },
     delivery: {
       deliver: async (payload) => {
         const text =

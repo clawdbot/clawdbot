@@ -1026,6 +1026,7 @@ export function buildAgentSystemPrompt(params: {
   const hasGateway = availableTools.has("gateway");
   const hasOpenClaw = availableTools.has("openclaw");
   const messageToolAvailable = availableTools.has("message");
+  const hasAutomations = availableTools.has(AUTOMATIONS_TOOL_NAME);
   const readToolName = resolveToolName("read");
   const waitToolHints = [
     hasExec ? `${resolveToolName("exec")} yieldMs` : "",
@@ -1251,6 +1252,18 @@ export function buildAgentSystemPrompt(params: {
               : []),
             ...(availableTools.has("screen")
               ? ["`screen` present: web/app turn may drive UI; messaging turn: don't."]
+              : []),
+            // The repeat is noticed during ordinary work, not while reading the
+            // automations schema, so this trigger cannot live in that tool's
+            // description; it is gated on the tool so it vanishes when absent.
+            // Create enabled: a failing enabled job is alerted and auto-disabled
+            // by the scheduler, while a job left disabled pending confirmation
+            // is watched by nothing and dies silently.
+            ...(hasAutomations
+              ? [
+                  `Same job asked a 3rd time: do it, then offer a routine. Check \`${resolveToolName(AUTOMATIONS_TOOL_NAME)}\` list first; never duplicate one.`,
+                  "Promote = restate schedule+task plainly, get a yes, create it (delivery defaults here), then force `run` once as a visible test; failed test => say so and remove it.",
+                ]
               : []),
           ]
         : []),

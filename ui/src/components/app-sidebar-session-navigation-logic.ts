@@ -602,11 +602,14 @@ export function applySidebarSessionOwnerFilter(input: {
     ownerOptions.length < 2 &&
     someSidebarSessionInTree(input.projected, (row) => (row.participantCount ?? 0) > 0);
   const ownershipVisible = ownerOptions.length >= 2 || hasParticipants;
-  const activeOwnerId = ownershipVisible
-    ? ownerOptions.some((owner) => owner.id === input.selectedOwnerId)
-      ? input.selectedOwnerId
-      : null
-    : null;
+  // An absent facet is unresolved during hydration. A present facet is the
+  // Gateway's complete owner inventory, even when rows are owner-filtered.
+  const selectedOwnerId = input.selectedOwnerId?.trim() || null;
+  const activeOwnerId =
+    selectedOwnerId &&
+    (input.ownerFacet === undefined || ownerOptions.some((owner) => owner.id === selectedOwnerId))
+      ? selectedOwnerId
+      : null;
   if (!activeOwnerId) {
     // Involving-me is evaluated by the Gateway against the complete participant table.
     // The bounded display projection cannot safely repeat that predicate client-side.

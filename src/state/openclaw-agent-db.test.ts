@@ -51,6 +51,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -1026,6 +1027,28 @@ describe("openclaw agent database", () => {
       reason: "database-missing",
     });
     expect(fs.existsSync(databasePath)).toBe(false);
+  });
+
+  it("opens extension-capable reads separately from the owner without enabling writes", () => {
+    const stateDir = createTempStateDir();
+    const options = {
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    };
+    const owner = openOpenClawAgentDatabase(options);
+
+    const result = withOpenClawAgentDatabaseReadOnly(
+      ({ db }) => {
+        expect(db).not.toBe(owner.db);
+        expect(() => db.enableLoadExtension(true)).not.toThrow();
+        expect(() => db.prepare("DELETE FROM auth_profile_store").run()).toThrow(/readonly/iu);
+        return db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get();
+      },
+      options,
+      { allowExtension: true },
+    );
+
+    expect(result).toEqual({ found: true, value: { agent_id: "worker-1" } });
   });
 
   it("refuses a newer schema from the read-only database helper", () => {
@@ -3585,6 +3608,48 @@ describe("openclaw agent database", () => {
     } finally {
       repaired.close();
     }
+  });
+
+  it("keeps memory provenance tables independently lazy and accepts their same-version installation", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const olderShape = new DatabaseSync(databasePath);
+    olderShape.exec("DROP TABLE memory_entry_origins; DROP TABLE memory_session_tombstones;");
+    olderShape.close();
+
+    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const findMemoryTable = (name: string) =>
+      opened.db.prepare("SELECT strict FROM pragma_table_list WHERE name = ?").get(name);
+    expect(findMemoryTable("memory_entry_origins")).toBeUndefined();
+    expect(findMemoryTable("memory_session_tombstones")).toBeUndefined();
+    expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+
+    for (const name of ["memory_entry_origins", "memory_session_tombstones"]) {
+      const canonicalSchema = OPENCLAW_AGENT_SCHEMA_SQL.match(
+        new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\([\\s\\S]*?\\) STRICT;`, "u"),
+      )?.[0];
+      if (!canonicalSchema) {
+        throw new Error(`Canonical ${name} schema is missing.`);
+      }
+      opened.db.exec(canonicalSchema);
+      opened.db.exec(canonicalSchema);
+      expect(findMemoryTable(name)).toEqual({ strict: 1 });
+      if (name === "memory_entry_origins") {
+        expect(findMemoryTable("memory_session_tombstones")).toBeUndefined();
+      }
+    }
+    expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+
+    closeOpenClawAgentDatabaseByPath(databasePath);
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    for (const name of ["memory_entry_origins", "memory_session_tombstones"]) {
+      expect(
+        reopened.db.prepare("SELECT strict FROM pragma_table_list WHERE name = ?").get(name),
+      ).toEqual({ strict: 1 });
+    }
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
   it("rejects a missing current-schema table instead of recreating it empty", () => {

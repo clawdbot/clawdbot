@@ -2,7 +2,6 @@ import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websock
 import { createChildAdapter } from "../process/supervisor/adapters/child.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
-import { formatWorkerConnectionFailure } from "../worker/worker-connection-contract.js";
 import {
   buildNodeWorkerContainerStartArgv,
   createNodeWorkerContainer,
@@ -68,13 +67,10 @@ export async function prepareNodeWorkerLaunchTransport(
             return;
           }
           options.connectionFailure.errorText = diagnostic.cause
-            ? formatWorkerConnectionFailure(
-                options.descriptor.connectionEndpoint,
-                sanitizeNodeWorkerDiagnostic(
-                  diagnostic.cause,
-                  "node worker gateway connection failed",
-                  options.scrubber.scrub,
-                ),
+            ? sanitizeNodeWorkerDiagnostic(
+                diagnostic.cause,
+                "node worker gateway connection failed",
+                options.scrubber.scrub,
               )
             : undefined;
         },

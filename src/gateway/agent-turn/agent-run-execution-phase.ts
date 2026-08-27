@@ -64,6 +64,7 @@ import {
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export function startAgentRunExecution(params: {
+  assertContextCurrent?: () => void;
   prepared: PreparedAgentRunDispatch;
   mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   request: AgentRunRequest;
@@ -164,6 +165,7 @@ export function startAgentRunExecution(params: {
           sessionKey: params.resolvedSessionKey,
           runId: params.runId,
           task: message,
+          gatewayContextResolver: params.context.resolveGatewayContext,
         });
       }
       if (
@@ -273,6 +275,9 @@ export function startAgentRunExecution(params: {
       } else if (localUserIngress) {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
+      // Routing and runtime publication await after admission. Retired owners
+      // must fail before the prepared user turn becomes an agent run.
+      params.assertContextCurrent?.();
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
       dispatchAgentRunFromGateway(
         withAgentRunDispatchExecutionIdentity(

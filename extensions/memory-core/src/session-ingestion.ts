@@ -4,6 +4,7 @@ import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
+  loadMemorySessionMetadata,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
   statSessionEntrySync,
@@ -12,6 +13,10 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asNullableRecord,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeSessionIngestionState,
   SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION,
@@ -25,6 +30,7 @@ import {
   SESSION_SEEN_HASHES_PER_CHUNK,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 
 export type { SessionIngestionState } from "./dreaming-ingestion-state.js";
 
@@ -38,11 +44,24 @@ const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
 type BuildSessionEntryOptions = NonNullable<Parameters<typeof buildSessionEntry>[1]>;
 
+export type SessionEntryOrigin = {
+  agentId: string;
+  sessionId: string;
+  sessionKey?: string;
+};
+
+export type SessionAdmissionPolicy = {
+  hookExternalContentSources: string[];
+  channels: string[];
+  chatTypes: string[];
+};
+
 export type SessionIngestionMessage = {
   day: string;
   snippet: string;
   rendered: string;
   provenance: NonNullable<MemorySearchResult["provenance"]>;
+  sessionOrigin?: SessionEntryOrigin;
 };
 
 export type SessionIngestionSource = {
@@ -54,6 +73,7 @@ export type SessionIngestionSource = {
   scope: string;
   legacyScope?: string;
   buildOptions: BuildSessionEntryOptions;
+  sessionOrigin?: SessionEntryOrigin;
 };
 
 export type SessionIngestionCandidate = SessionIngestionMessage & {
@@ -106,6 +126,11 @@ export function sessionIngestionSourceFromCorpus(
     sessionPath,
     stateKey: `${entry.agentId}:${sessionPath}`,
     scope,
+    sessionOrigin: {
+      agentId: entry.agentId,
+      sessionId: entry.sessionId,
+      ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
+    },
     ...(entry.transcriptSource === "sqlite"
       ? {
           legacyScope: buildSessionScope(entry.agentId, entry.sessionId),
@@ -123,6 +148,65 @@ export function sessionIngestionSourceFromCorpus(
       ...(entry.generatedByCronRun ? { generatedByCronRun: true } : {}),
     },
   };
+}
+
+export function resolveAdmissionPolicy(
+  pluginConfig?: Record<string, unknown>,
+): SessionAdmissionPolicy | undefined {
+  const exclusions = asNullableRecord(
+    asNullableRecord(pluginConfig?.memoryPolicy)?.excludeSessions,
+  );
+  if (!exclusions) {
+    return undefined;
+  }
+  const values = (key: keyof SessionAdmissionPolicy): string[] =>
+    Array.isArray(exclusions[key])
+      ? normalizeStringEntries(
+          exclusions[key].filter((value): value is string => typeof value === "string"),
+        )
+      : [];
+  const policy = {
+    hookExternalContentSources: values("hookExternalContentSources"),
+    channels: values("channels"),
+    chatTypes: values("chatTypes"),
+  };
+  return Object.values(policy).some((entries) => entries.length > 0) ? policy : undefined;
+}
+
+export function sessionExclusionReason(
+  source: SessionIngestionSource,
+  policy?: SessionAdmissionPolicy,
+  forgottenSessionIds?: ReadonlySet<string>,
+): string | undefined {
+  if (!source.sessionOrigin) {
+    return undefined;
+  }
+  const { agentId, sessionId } = source.sessionOrigin;
+  const forgotten = forgottenSessionIds
+    ? forgottenSessionIds.has(sessionId)
+    : listMemorySessionTombstones({ agentId, sessionIds: [sessionId] }).length > 0;
+  if (forgotten) {
+    return "forgotten";
+  }
+  if (!policy) {
+    return undefined;
+  }
+  const metadata = loadMemorySessionMetadata(source.sessionOrigin);
+  if (!metadata) {
+    return undefined;
+  }
+  if (
+    metadata.hookExternalContentSource &&
+    policy.hookExternalContentSources.includes(metadata.hookExternalContentSource)
+  ) {
+    return `hookExternalContentSource:${metadata.hookExternalContentSource}`;
+  }
+  if (metadata.channel && policy.channels.includes(metadata.channel)) {
+    return `channel:${metadata.channel}`;
+  }
+  return metadata.chatType && policy.chatTypes.includes(metadata.chatType)
+    ? `chatType:${metadata.chatType}`
+    : undefined;
 }
 
 export function sessionIngestionStateKeyFromCorpus(entry: SessionTranscriptCorpusEntry): string {
@@ -305,6 +389,7 @@ export async function scanSessionIngestionSource(params: {
       scope: params.source.scope,
       stateKey: params.source.stateKey,
       snippet,
+      ...(params.source.sessionOrigin ? { sessionOrigin: params.source.sessionOrigin } : {}),
     });
     seen.add(hash);
   }
@@ -394,7 +479,7 @@ export async function appendSessionCorpusLines(params: {
   workspaceDir: string;
   day: string;
   lines: SessionIngestionMessage[];
-}): Promise<MemorySearchResult[]> {
+}): Promise<Array<MemorySearchResult & { sessionOrigin?: SessionEntryOrigin }>> {
   if (params.lines.length === 0) {
     return [];
   }
@@ -428,5 +513,6 @@ export async function appendSessionCorpusLines(params: {
     snippet: entry.snippet,
     source: "memory",
     provenance: entry.provenance,
+    ...(entry.sessionOrigin ? { sessionOrigin: entry.sessionOrigin } : {}),
   }));
 }

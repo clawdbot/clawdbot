@@ -44,7 +44,6 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { BoardChatDockSize } from "./board-session-surface.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
-import { ComposerGutterController } from "./chat-composer-gutter.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
@@ -196,7 +195,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.requestUpdate(),
   );
   protected readonly transcript = new ChatTranscriptController(this);
-  protected readonly composerGutter = new ComposerGutterController(this);
   protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
@@ -289,7 +287,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (renderedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
       this.setSessionObserverVisibility(open);
     }
-    state.updateSidebarLayout(setSidebarOpen(renderedLayout, open));
+    this.commitSidebarLayout(setSidebarOpen(renderedLayout, open));
   }
 
   protected requestSessionRail(intent: "open" | "toggle"): void {
@@ -299,11 +297,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
     const visible = this.selectedSessionRailMode(state.sessionKey) === "expanded";
     if (intent === "toggle" && visible) {
-      state.updateSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
+      this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
       this.setSessionObserverVisibility(false);
       return;
     }
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, "companion"));
+    this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
     this.setSessionObserverVisibility(true);
   }
 
@@ -489,6 +487,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract commitSidebarLayout(layout: SidebarLayout): void;
   protected abstract refreshSwarmRoster(): void;
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;
