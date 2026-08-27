@@ -97,6 +97,54 @@ describe("createInternalAgentTurnFacade", () => {
     expect(waitForTurn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      method: "agent",
+      invoke: () =>
+        createFacade().dispatchRaw(
+          { message: "test", idempotencyKey: "run-authorization-timeout" },
+          { timeoutMs: 1_000 },
+        ),
+      work: startTurn,
+    },
+    {
+      method: "agent.wait",
+      invoke: () => createFacade().wait({ runId: "run-wait-authorization-timeout" }, 1_000),
+      work: waitForTurn,
+    },
+  ])("rejects $method before work when authorization exhausts its deadline", async (testCase) => {
+    vi.useFakeTimers();
+    authorizeGatewayRequestPreDispatch.mockImplementationOnce(
+      async () => await new Promise<never>(() => {}),
+    );
+
+    try {
+      let settled = false;
+      const outcome = testCase
+        .invoke()
+        .then(
+          () => ({ status: "resolved" as const }),
+          (error: unknown) => ({ error, status: "rejected" as const }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      expect(authorizeGatewayRequestPreDispatch).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(settled).toBe(true);
+      await expect(outcome).resolves.toMatchObject({
+        status: "rejected",
+        error: { message: `gateway request timeout for ${testCase.method}` },
+      });
+      expect(testCase.work).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects agent.wait when its context retires while the wait is pending", async () => {
     let releaseWait!: (result: { runId: string; status: "ok" }) => void;
     waitForTurn.mockImplementationOnce(
