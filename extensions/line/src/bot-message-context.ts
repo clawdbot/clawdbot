@@ -36,10 +36,7 @@ type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
 type StickerEventMessage = webhook.StickerMessageContent;
 
-interface MediaRef {
-  path: string;
-  contentType?: string;
-}
+type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
 interface BuildLineMessageContextParams {
   event: MessageEvent;

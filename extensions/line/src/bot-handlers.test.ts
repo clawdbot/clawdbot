@@ -1265,7 +1265,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards LINE file names to media downloads", async () => {
+  it("forwards LINE file names to media downloads and to the message context", async () => {
     const processMessage = vi.fn();
     downloadLineMediaMock.mockResolvedValueOnce({
       path: "/tmp/line-media/voice-note.m4a",
@@ -1300,8 +1300,43 @@ describe("handleLineWebhookEvents", () => {
           {
             path: "/tmp/line-media/voice-note.m4a",
             contentType: "audio/x-m4a",
+            fileName: "voice-note.m4a",
           },
         ],
+      }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the media fact unnamed for LINE message types that carry no file name", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media/photo.jpg",
+      contentType: "image/jpeg",
+      size: 2048,
+    });
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-named-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-named",
+      },
+      source: { type: "user", userId: "user-image-named" },
+      webhookEventId: "evt-image-named",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+    );
+
+    expect(downloadLineMediaMock).toHaveBeenCalledWith("image-named-1", "token", 1, {
+      originalFilename: undefined,
+    });
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/tmp/line-media/photo.jpg", contentType: "image/jpeg" }],
       }),
     );
     expect(processMessage).toHaveBeenCalledTimes(1);
