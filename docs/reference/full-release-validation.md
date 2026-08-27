@@ -53,10 +53,11 @@ required coverage, gate results, reuse identity, the original parent attempt,
 and every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
 Decision, Drain, manifest generation, evidence verification, and the final
 verifier consume the artifact for their current attempt. Collector retries
-restore the immutable cached copy, validate it, and upload the artifact again
-for the retry; they never rebuild the plan or redispatch tests. A missing or
-evicted cache fails closed, so start a new validation instead of retrying that
-stale parent.
+use the exact run-ID cache as an acceleration. If that cache is unavailable,
+they restore the same immutable plan from the parent-run artifact, validate it,
+and upload the artifact again for the retry; they never rebuild the plan or
+redispatch tests. A missing or invalid artifact fails closed, so start a new
+validation instead of retrying that stale parent.
 Release Decision also repeats canonical reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child
