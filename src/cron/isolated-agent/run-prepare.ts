@@ -1,7 +1,6 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
-import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
@@ -46,8 +45,7 @@ import {
 import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
 import {
   appendCronUnattendedRunPreamble,
-  hasConfiguredAuthProfiles,
-  loadCronAuthProfileRuntime,
+  resolveCronAuthSelection,
   loadCronExternalContentRuntime,
   loadCronModelPreflightRuntime,
   loadSessionAccessorRuntime,
@@ -609,28 +607,16 @@ export async function prepareCronRunContext(params: {
       job: input.job,
       cronSession,
     });
-    const storedAuthProfileId = cronSession.sessionEntry.authProfileOverride?.trim();
-    const hasSessionAuthProfileOverride = Boolean(storedAuthProfileId);
-    const authSelection =
-      !hasSessionAuthProfileOverride &&
-      !hasConfiguredAuthProfiles(cfgWithAgentDefaults) &&
-      !hasAnyAuthProfileStoreSource(agentDir)
-        ? undefined
-        : await (
-            await loadCronAuthProfileRuntime()
-          ).resolveSessionAuthSelection({
-            // Auth resolution may mutate session state; use the store/key persistence will write.
-            cfg: cfgWithAgentDefaults,
-            provider,
-            modelId: model,
-            harnessRuntime: effectiveAgentRuntime,
-            agentDir,
-            sessionEntry: cronSession.sessionEntry,
-            sessionStore: cronSession.store,
-            sessionKey: agentSessionKey,
-            storePath: cronSession.storePath,
-            isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
-          });
+    const authSelection = await resolveCronAuthSelection({
+      cfg: cfgWithAgentDefaults,
+      provider,
+      modelId: model,
+      harnessRuntime: effectiveAgentRuntime,
+      agentDir,
+      cronSession,
+      sessionKey: agentSessionKey,
+      isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
+    });
     const authProfileId = authSelection?.profileId;
     const liveSelection: CronLiveSelection = {
       provider,

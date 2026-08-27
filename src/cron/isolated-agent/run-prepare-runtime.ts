@@ -1,6 +1,7 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -75,6 +76,49 @@ export function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
     Boolean(cfg.auth?.order && Object.keys(cfg.auth.order).length > 0)
   );
 }
+
+/**
+ * Resolves the run's auth profile, skipping the lazy runtime entirely when no
+ * override, configured profile, or store source exists for it to find. Auth
+ * resolution may mutate session state, so it uses the store and key that
+ * persistence will write.
+ */
+export async function resolveCronAuthSelection(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  harnessRuntime: Parameters<
+    CronAuthProfileRuntime["resolveSessionAuthSelection"]
+  >[0]["harnessRuntime"];
+  agentDir: string;
+  cronSession: MutableCronSession;
+  sessionKey: string;
+  isNewSession: boolean;
+}) {
+  const hasSessionOverride = Boolean(params.cronSession.sessionEntry.authProfileOverride?.trim());
+  if (
+    !hasSessionOverride &&
+    !hasConfiguredAuthProfiles(params.cfg) &&
+    !hasAnyAuthProfileStoreSource(params.agentDir)
+  ) {
+    return undefined;
+  }
+  const runtime = await loadCronAuthProfileRuntime();
+  return await runtime.resolveSessionAuthSelection({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+    harnessRuntime: params.harnessRuntime,
+    agentDir: params.agentDir,
+    sessionEntry: params.cronSession.sessionEntry,
+    sessionStore: params.cronSession.store,
+    sessionKey: params.sessionKey,
+    storePath: params.cronSession.storePath,
+    isNewSession: params.isNewSession,
+  });
+}
+
+type CronAuthProfileRuntime = Awaited<ReturnType<typeof loadCronAuthProfileRuntime>>;
 
 export async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;
