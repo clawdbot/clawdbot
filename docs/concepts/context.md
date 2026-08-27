@@ -160,11 +160,12 @@ What persists across messages depends on the mechanism:
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
 
-In the embedded runtime, current request metadata stays in a fixed position after
-the user message and before its tool calls. This lets supported Responses
-transports reuse the previous response across tool rounds without dropping live
-context. When a later user turn retires that transient context, OpenClaw resends
-the updated history instead of retaining stale context through continuation.
+For embedded Responses requests, current request metadata stays after the user
+message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
+previous response across tool rounds without dropping live context. A later user
+turn that retires transient context requires the updated history to be resent.
+Other transports keep that metadata at the request tail to preserve their cached
+history prefix when the next user turn removes it.
 
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).
 

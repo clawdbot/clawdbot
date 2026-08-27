@@ -27,7 +27,7 @@ import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-conte
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
-import type { Context, Model } from "../../../llm/types.js";
+import type { Model } from "../../../llm/types.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -37,7 +37,7 @@ import {
 import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-  relocateCurrentRuntimeContextCarrierAfterUser,
+  relocateCurrentRuntimeContextCarrierToTail,
 } from "../../internal-runtime-context.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
@@ -118,7 +118,11 @@ async function captureOpenAICompletionsPayload(
     OPENAI_COMPLETIONS_MODEL,
     {
       systemPrompt: "Stable system prompt",
-      messages: normalizeMessagesForLlmBoundary(messages, { timezone: TZ }) as Context["messages"],
+      messages: convertToLlm(
+        relocateCurrentRuntimeContextCarrierToTail(
+          normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
+        ),
+      ),
     },
     {
       apiKey: TEST_PROVIDER_OPTION_VALUE,
@@ -145,7 +149,7 @@ async function captureOpenAIResponsesPayload(
     {
       systemPrompt: "Stable system prompt",
       messages: convertToLlm(
-        relocateCurrentRuntimeContextCarrierAfterUser(
+        relocateCurrentRuntimeContextCarrierToTail(
           normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
         ),
       ),
@@ -526,11 +530,48 @@ function textOf(message: unknown): string | undefined {
 
 describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", () => {
   const wire = (messages: AgentMsg[]) =>
-    relocateCurrentRuntimeContextCarrierAfterUser(
+    relocateCurrentRuntimeContextCarrierToTail(
       normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
     ) as unknown as Array<Record<string, unknown>>;
 
   const META = "Conversation info:\nsender=Bob";
+
+  it("preserves the full-history cache prefix through a completed tool loop on the next user turn", async () => {
+    const user = currentUserMsg("Check the deployment.", TS_TURN1);
+    const toolCall = {
+      role: "assistant",
+      api: OPENAI_COMPLETIONS_MODEL.api,
+      provider: OPENAI_COMPLETIONS_MODEL.provider,
+      model: OPENAI_COMPLETIONS_MODEL.id,
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+      timestamp: TS_TURN1 + 1,
+    } as AgentMsg;
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call_read",
+      toolName: "read",
+      content: [{ type: "text", text: "deployment ready" }],
+      isError: false,
+      timestamp: TS_TURN1 + 2,
+    } as AgentMsg;
+    const active = [runtimeCarrier(META, TS_TURN1), user, toolCall, toolResult];
+    const previous = await captureOpenAICompletionsPayload(active);
+    const next = await captureOpenAICompletionsPayload([
+      ...active,
+      ASSISTANT_MSG,
+      runtimeCarrier("new metadata", TS_TURN2),
+      currentUserMsg("next request", TS_TURN2),
+    ]);
+    const previousMessages = previous.messages as unknown[];
+    const nextMessages = next.messages as unknown[];
+
+    expect(nextMessages.slice(0, previousMessages.length - 1)).toEqual(
+      previousMessages.slice(0, -1),
+    );
+    expect(JSON.stringify(previousMessages.at(-1))).toContain("sender=Bob");
+    expect(JSON.stringify(nextMessages)).not.toContain("sender=Bob");
+  });
 
   it.each([
     "Check the deployment.",
