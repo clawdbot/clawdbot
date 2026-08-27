@@ -310,4 +310,36 @@ describe("openai transport stream", () => {
 
     expect(params.instructions).toBe("system");
   });
+
+  it("embeds the system prompt in input by default for a bundled-but-unverified named route (GitHub Copilot)", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com/v1",
+      }),
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string; input?: Array<{ role?: string }> };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.[0]?.role).toBe("system");
+  });
+
+  it("embeds the system prompt in input by default for a bundled-but-unverified named route (OpenCode)", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "opencode",
+        baseUrl: "https://opencode.ai/zen/v1",
+      }),
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string; input?: Array<{ role?: string }> };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.[0]?.role).toBe("system");
+  });
 });

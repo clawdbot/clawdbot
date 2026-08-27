@@ -71,7 +71,7 @@ type OpenAIResponsesPayloadCapabilities = {
   shouldStripResponsesPromptCache: boolean;
   supportsResponsesStoreField: boolean;
   usesKnownNativeOpenAIRoute: boolean;
-  usesUnverifiedProxyEndpoint: boolean;
+  usesVerifiedInstructionsEndpoint: boolean;
 };
 
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
@@ -244,12 +244,19 @@ function resolveOpenAIResponsesPayloadCapabilities(
   const usesKnownNativeOpenAIRoute =
     endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint;
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
-  // "custom"/"local" are hosts OpenClaw has no bundled knowledge of -- unlike
-  // the named classes above (openai, azure-openai, xai-native, etc.), which
-  // are each specifically identified and, for at least xAI's main route,
-  // directly confirmed to honor `instructions`. Everything else (arbitrary
-  // proxies, local gateways like OmniRoute/llama.cpp) is unverified.
-  const usesUnverifiedProxyEndpoint = endpointClass === "custom" || endpointClass === "local";
+  // Recognizing a hostname (routing it to a named endpointClass) is not the
+  // same as having confirmed that host's Responses API honors `instructions`
+  // -- OpenClaw bundles many named classes (Cerebras, Groq, Mistral,
+  // OpenCode, GitHub Copilot, ...) purely for SSRF/base-URL matching and
+  // other unrelated capability detection, with no contract proof either way
+  // for `instructions` specifically. Only two routes are actually verified:
+  // native OpenAI (definitionally, it's OpenAI's own API) and xAI's main
+  // route (confirmed via direct testing -- see the xAI compact-endpoint
+  // opt-out carve-out below, discovered by testing the real API). Every
+  // other named class defaults the same as an explicit custom/local proxy;
+  // `compat.supportsInstructions: true` opts a confirmed-working route in.
+  const usesVerifiedInstructionsEndpoint =
+    usesKnownNativeOpenAIRoute || endpointClass === "xai-native";
   const promptCacheKeySupport = readCompatPayloadBoolean(model.compat, "supportsPromptCacheKey");
   const shouldStripResponsesPromptCache =
     promptCacheKeySupport === true
@@ -281,7 +288,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
-    usesUnverifiedProxyEndpoint,
+    usesVerifiedInstructionsEndpoint,
   };
 }
 
@@ -397,19 +404,20 @@ export function resolveOpenAIResponsesPayloadPolicy(
     model,
     options.extraParams,
   );
-  // Defaults on only for endpoint classes OpenClaw has bundled, verified
-  // knowledge of (native OpenAI, xAI's main route, etc. -- see
-  // usesUnverifiedProxyEndpoint above). An unrecognized custom/local proxy
-  // defaults off instead: HTTP continuation is unreachable there anyway
-  // (openai-responses-websocket.ts requires the exact native OpenAI base
-  // URL), so there is nothing to gain from `instructions` and real risk of
-  // an unverified proxy silently dropping the field along with the system
-  // prompt. `compat.supportsInstructions` always overrides the default in
-  // either direction -- explicit `false` opts a normally-verified route out
-  // (confirmed necessary for at least one real route, xAI's compact
-  // endpoint); explicit `true` opts an unverified route in once confirmed.
+  // Defaults on only for the two routes actually confirmed to honor
+  // `instructions` (see usesVerifiedInstructionsEndpoint above: native
+  // OpenAI, and xAI's main route by direct test). Every other route --
+  // including bundled-but-unverified named classes and arbitrary
+  // custom/local proxies -- defaults off: HTTP continuation is unreachable
+  // there anyway (openai-responses-websocket.ts requires the exact native
+  // OpenAI base URL), so there is nothing to gain from `instructions` and
+  // real risk of an unconfirmed route silently dropping the field along
+  // with the system prompt. `compat.supportsInstructions` always overrides
+  // the default in either direction -- explicit `false` opts a verified
+  // route out (confirmed necessary for xAI's compact endpoint specifically);
+  // explicit `true` opts any other route in once confirmed.
   const instructionsCompat = readCompatPayloadBoolean(model.compat, "supportsInstructions");
-  const usesInstructionsField = instructionsCompat ?? !capabilities.usesUnverifiedProxyEndpoint;
+  const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
