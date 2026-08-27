@@ -412,6 +412,80 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(emitRestart).toHaveBeenCalledOnce();
   });
 
+  // ClawSweeper #118053: the takeover above used to be gated on the once-only onTimeout
+  // notification, so it superseded the stuck idle attempt exactly once. If the FORCED
+  // attempt it started then hung too, no later tick could replace it and the deferral
+  // wedged permanently — the same defect, moved one attempt along.
+  it("supersedes a forced preparation that also hangs after the deadline", async () => {
+    const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
+    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+    let beforeEmitCalls = 0;
+    // Both the idle-triggered attempt AND the first forced attempt hang; only the third
+    // preparation settles. A once-only takeover never reaches it.
+    const beforeEmit = vi.fn(() => {
+      beforeEmitCalls += 1;
+      return beforeEmitCalls <= 2 ? new Promise<void>(() => {}) : Promise.resolve();
+    });
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => 0,
+      maxWaitMs: 100,
+      pollMs: 10,
+      hooks,
+      timeoutIntent: { force: true },
+      emitHooks: { beforeEmit, emitRestart },
+    });
+
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(hooks.onTimeout).toHaveBeenCalledOnce();
+    // Three real preparations: idle (hung), first forced (hung), second forced (settles).
+    // Each runs its own beforeEmit, so no caller preflight is skipped by the takeover.
+    expect(beforeEmitCalls).toBeGreaterThanOrEqual(3);
+    expect(emitRestart).toHaveBeenCalledOnce();
+  });
+
+  // The takeover is bounded: an attempt that has not yet outlived a full poll interval is
+  // still preparing legitimately and must be left alone, or every post-deadline tick would
+  // thrash a merely-slow preflight into a fresh one.
+  it("does not supersede a forced preparation still within its first poll interval", async () => {
+    const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
+    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+    let beforeEmitCalls = 0;
+    let releaseForced: (() => void) | undefined;
+    const beforeEmit = vi.fn(() => {
+      beforeEmitCalls += 1;
+      // Idle attempt hangs forever; the forced attempt settles only when released below.
+      return beforeEmitCalls === 1
+        ? new Promise<void>(() => {})
+        : new Promise<void>((resolve) => {
+            releaseForced = resolve;
+          });
+    });
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => 0,
+      maxWaitMs: 100,
+      pollMs: 10,
+      hooks,
+      timeoutIntent: { force: true },
+      emitHooks: { beforeEmit, emitRestart },
+    });
+
+    // Deadline tick supersedes the hung idle attempt and starts the forced one.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(beforeEmitCalls).toBe(2);
+
+    // Only half a poll interval later: the forced attempt has not outlived its bound, so
+    // it must not be replaced yet.
+    await vi.advanceTimersByTimeAsync(5);
+    expect(beforeEmitCalls).toBe(2);
+
+    releaseForced?.();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(emitRestart).toHaveBeenCalledOnce();
+  });
+
   // If the forced attempt's own emission rejects, the deferral must not go silent forever:
   // the old path stopped the poll before the forced attempt ran, so nothing retried it.
   it("keeps retrying the forced restart when its emission rejects after the deadline", async () => {

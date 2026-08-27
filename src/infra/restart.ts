@@ -702,6 +702,9 @@ export function deferGatewayRestartUntilIdle(opts: {
 
   let cancelled = false;
   let attemptingEmission = false;
+  // When the in-flight attempt began. The post-deadline takeover uses it to supersede
+  // only a preparation that already failed to settle across a full poll interval.
+  let emissionStartedAt = 0;
   let cancelEmissionFence: (() => void) | null = null;
   let timedOutNotified = false;
   let poll: ReturnType<typeof setInterval> | null = null;
@@ -749,6 +752,7 @@ export function deferGatewayRestartUntilIdle(opts: {
       return;
     }
     attemptingEmission = true;
+    emissionStartedAt = Date.now();
     const attemptSeq = ++emissionAttemptSeq;
     const isStillCurrentAttempt = () => attemptSeq === emissionAttemptSeq;
     void emitPreparedGatewayRestart(
@@ -830,21 +834,26 @@ export function deferGatewayRestartUntilIdle(opts: {
       if (!timedOutNotified) {
         timedOutNotified = true;
         opts.hooks?.onTimeout?.(lastKnownPending, elapsedMs);
-        if (attemptingEmission) {
-          // The idle-triggered attempt above never settled (its beforeEmit hook is hung), so
-          // leaving its guard set would defeat this bound indefinitely. Roll back its fence
-          // (safe no-op if a signal already fired) and drop the guard so the forced attempt
-          // below claims a fresh attempt id and runs a real beforeEmit of its own — never
-          // skipped, so a caller's safety preflight can't look like it already ran. If the
-          // stuck slot is instead a coalesced session's parked hook (see the while(nextParked)
-          // drain above), it's unreachable here and its continuation is lost when it never
-          // settles — but on unfixed main the same stuck slot already defeats BOTH that
-          // session's restart and this bound forever, so nothing reachable from here is lost
-          // that wasn't lost already.
-          cancelEmissionFence?.();
-          cancelEmissionFence = null;
-          attemptingEmission = false;
-        }
+      }
+      // Deliberately NOT gated on the once-only notification above. An attempt whose
+      // beforeEmit hook is hung leaves its guard set, which would defeat this bound
+      // indefinitely — and that is true of a FORCED attempt started by an earlier
+      // timeout tick just as much as of the idle-triggered one, so a once-only takeover
+      // simply moves the permanent wedge one attempt along. Superseding is bounded to an
+      // attempt that already failed to settle across a full poll interval, so a merely
+      // slow preparation is retried rather than thrashed. Roll back its fence (safe
+      // no-op if a signal already fired) and drop the guard so the attempt below claims
+      // a fresh attempt id and runs a real beforeEmit of its own — never skipped, so a
+      // caller's safety preflight can't look like it already ran. If the stuck slot is
+      // instead a coalesced session's parked hook (see the while(nextParked) drain
+      // above), it's unreachable here and its continuation is lost when it never settles
+      // — but on unfixed main the same stuck slot already defeats BOTH that session's
+      // restart and this bound forever, so nothing reachable from here is lost that
+      // wasn't lost already.
+      if (attemptingEmission && Date.now() - emissionStartedAt >= pollMs) {
+        cancelEmissionFence?.();
+        cancelEmissionFence = null;
+        attemptingEmission = false;
       }
       // Not gated on !timedOutNotified: the poll deliberately stays alive past the deadline
       // (stopPoll only ever runs on cancel or a genuinely delivered restart) so a forced
