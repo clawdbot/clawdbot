@@ -9,7 +9,10 @@ import {
   resolveCoreToolFactoryFamily,
 } from "../../core-tool-factory-descriptors.js";
 import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
-import { isRuntimeToolAllowed } from "../../tool-policy-match.js";
+import {
+  isRuntimeToolAllowed,
+  isRuntimeToolAllowedForConstruction,
+} from "../../tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   buildPluginToolGroups,
@@ -134,12 +137,22 @@ function resolveCodingToolConstructionPlanForAllowlist(
   const constructionEntries = restrictions?.flat() ?? toolsAllow;
   const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
   const normalized = normalizeToolList(expanded);
+  const constructionRestrictions = restrictions ?? [toolsAllow];
   // Construct every family containing a tool that the final runtime policy can retain.
   // Otherwise a valid glob can survive filtering after its factory was never run.
   const coreFamilies = new Set<CoreToolFactoryFamily>(
-    applyEmbeddedAttemptToolsAllow([...listCoreToolFactoryDescriptors()], toolsAllow).map(
-      ({ family }) => family,
-    ),
+    listCoreToolFactoryDescriptors()
+      .filter(({ name }) =>
+        constructionRestrictions.every(
+          (restriction) =>
+            restriction.length > 0 &&
+            isRuntimeToolAllowedForConstruction(
+              name,
+              expandShippedCoreToolPolicyNames(restriction),
+            ),
+        ),
+      )
+      .map(({ family }) => family),
   );
   let includePluginTools = false;
   for (const name of normalized) {

@@ -7,10 +7,7 @@ import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 
-function makeToolPolicyMatcher(
-  policy: SandboxToolPolicy,
-  options: { writeAllowsApplyPatch: boolean },
-) {
+function makeToolPolicyMatcher(policy: SandboxToolPolicy, writeAllowsApplyPatch = true) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
     normalize: normalizeToolPolicyName,
@@ -30,10 +27,10 @@ function makeToolPolicyMatcher(
     if (matchesAnyGlobPattern(normalized, allow)) {
       return true;
     }
-    // Sandbox config historically treats `write` as covering `apply_patch`.
-    // Per-run caps disable that compatibility so explicit tool grants stay exact.
+    // Runtime policy historically treats `write` as covering `apply_patch`.
+    // Construction planning can disable that compatibility to avoid selecting a shell factory.
     if (
-      options.writeAllowsApplyPatch &&
+      writeAllowsApplyPatch &&
       normalized === "apply_patch" &&
       matchesAnyGlobPattern("write", allow)
     ) {
@@ -48,7 +45,7 @@ export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPoli
   if (!policy) {
     return true;
   }
-  return makeToolPolicyMatcher(policy, { writeAllowsApplyPatch: true })(name);
+  return makeToolPolicyMatcher(policy)(name);
 }
 
 /** Runtime caps deny empty lists and preserve every independently merged restriction. */
@@ -56,9 +53,17 @@ export function isRuntimeToolAllowed(name: string, toolsAllow?: string[]): boole
   return (
     toolsAllow === undefined ||
     (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
-      (allow) =>
-        allow.length > 0 &&
-        makeToolPolicyMatcher({ allow }, { writeAllowsApplyPatch: false })(name),
+      (allow) => allow.length > 0 && isToolAllowedByPolicyName(name, { allow }),
+    )
+  );
+}
+
+/** Avoid selecting the shell factory solely through the `write` compatibility alias. */
+export function isRuntimeToolAllowedForConstruction(name: string, toolsAllow?: string[]): boolean {
+  return (
+    toolsAllow === undefined ||
+    (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
+      (allow) => allow.length > 0 && makeToolPolicyMatcher({ allow }, false)(name),
     )
   );
 }

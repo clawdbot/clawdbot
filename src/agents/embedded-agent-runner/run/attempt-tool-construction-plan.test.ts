@@ -130,12 +130,13 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ]);
   });
 
-  it("keeps write and apply_patch distinct in per-run caps", () => {
+  it("preserves runtime write compatibility in the final filter", () => {
     const tools = [{ name: "write" }, { name: "apply_patch" }, { name: "exec" }];
 
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["write", "exec"]).map((tool) => tool.name),
-    ).toEqual(["write", "exec"]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, ["write"]).map((tool) => tool.name)).toEqual([
+      "write",
+      "apply_patch",
+    ]);
   });
 
   it("keeps plugin-only allowlists on the shared tool policy path", () => {
