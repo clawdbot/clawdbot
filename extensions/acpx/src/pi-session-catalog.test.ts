@@ -684,7 +684,7 @@ const finalSize = (await fs.stat(file)).size;
       expect(finalSize).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
       const message = transcript.items.find((item) => item.type === "agentMessage");
       console.log(
-`[acpx-runtime-proof] growth ${JSON.stringify({
+        `[acpx-runtime-proof] growth ${JSON.stringify({
           type: message?.type ?? "none",
           text: message?.text ?? "",
           snapshotBytes: content.length,
