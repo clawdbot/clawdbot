@@ -20,6 +20,9 @@ export type DraftBranches = {
 
 export type DraftRepositoryState =
   | { kind: "idle" }
+  // Selected GitHub project is git by construction; projects.add materializes
+  // its checkout before sessions.create runs.
+  | { kind: "pending-clone"; cloneUrl: string }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
