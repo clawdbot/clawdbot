@@ -150,7 +150,7 @@ function mergeSessionEntryWithPolicy(
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
 
-  // Node creation and exact fork ancestry are write-once; patches may only fill absent values.
+  // Node creation and exact fork ancestry are write-once; sandbox policy cannot be added later.
   if (existing.createdVia !== undefined) {
     next.createdVia = existing.createdVia;
   }
