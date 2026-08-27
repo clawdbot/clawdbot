@@ -906,6 +906,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "sessions.create",
         "sessions.groups.list",
         "sessions.groups.put",
       ],
@@ -918,6 +919,16 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const firstGroup = page.locator('[data-session-section="category:First group"]');
       await firstGroup.waitFor({ state: "visible" });
+      const firstGroupToggle = firstGroup.getByRole("button", { name: "First group", exact: true });
+      expect(await firstGroupToggle.isDisabled()).toBe(true);
+      expect(await firstGroupToggle.getAttribute("aria-expanded")).toBeNull();
+      expect(await firstGroupToggle.locator(".sidebar-session-group-count").textContent()).toBe(
+        "0",
+      );
+      expect(await firstGroup.locator(".sidebar-new-session").isDisabled()).toBe(false);
+      expect(await firstGroup.locator(".sidebar-session-group-actions").last().isDisabled()).toBe(
+        false,
+      );
 
       // A header-menu-created group starts empty and still gets a section.
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
@@ -993,7 +1004,10 @@ suite.define(() => {
           .toBe(1);
         const toggle = group.getByRole("button", { name, exact: true });
         await toggle.waitFor({ state: "visible" });
-        await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+        expect(await toggle.isDisabled()).toBe(true);
+        expect(await toggle.getAttribute("aria-expanded")).toBeNull();
+        expect(await toggle.locator(".sidebar-session-group-toggle__icon").count()).toBe(0);
+        expect(await toggle.locator(".sidebar-session-group-count").textContent()).toBe("0");
       }
 
       await expect.poll(() => emptyGroups.locator(".sidebar-session-empty-hint").count()).toBe(0);
@@ -1009,8 +1023,15 @@ suite.define(() => {
       await captureUiProof(page, "sidebar-empty-cross-agent-groups.png");
 
       const toggle = firstEmptyGroup.locator(".sidebar-session-group-toggle");
-      await toggle.click();
-      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
+      const collapsedSectionsBefore = await page.evaluate(
+        (key) => localStorage.getItem(key),
+        collapsedSessionSectionsStorageKey,
+      );
+      await toggle.evaluate((element) => (element as HTMLButtonElement).click());
+      expect(await toggle.getAttribute("aria-expanded")).toBeNull();
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), collapsedSessionSectionsStorageKey),
+      ).toBe(collapsedSectionsBefore);
       await expect.poll(groupHeight).toBe(expandedHeight);
       await expect
         .poll(() => firstEmptyGroup.locator(".sidebar-session-empty-hint").count())
