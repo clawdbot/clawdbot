@@ -652,8 +652,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
   let deliveryRows: SqliteBindRow[];
   let settledLostTaskIds = new Set<string>();
   try {
-    const { rows, settledLostTaskIds: settled } =
-      readLegacyTaskRowsWithSettlements(sourcePath);
+    const { rows, settledLostTaskIds: settled } = readLegacyTaskRowsWithSettlements(sourcePath);
     taskRows = rows;
     settledLostTaskIds = settled;
     deliveryRows = readLegacyTaskDeliveryRows(sourcePath);
