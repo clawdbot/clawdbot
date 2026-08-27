@@ -13,7 +13,7 @@ import {
 } from "./capability-provider-runtime.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import * as discovery from "./discovery.js";
-import * as installRecords from "./installed-plugin-index-records.js";
+import * as installRecords from "./installed-plugin-index-record-reader.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,

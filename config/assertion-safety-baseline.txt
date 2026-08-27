@@ -1960,7 +1960,6 @@ src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
 src/agents/prepared-model-runtime.configured.ts	2
 src/agents/prepared-model-runtime.facts.ts	1
-src/agents/prepared-model-runtime.plugin-context.ts	2
 src/agents/prepared-model-runtime.ts	1
 src/agents/provider-attribution.ts	14
 src/agents/provider-auth-aliases.ts	2
