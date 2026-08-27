@@ -42,7 +42,10 @@ export type UsageCostTranscriptFile = {
   filePath: string;
   kind: "jsonl" | "sqlite";
   size: number;
+  /** Session activity time; compressed archives keep source mtime for ranges and ordering. */
   mtimeMs: number;
+  /** Scanned file identity time; compressed archives use the materialized file mtime. */
+  contentMtimeMs: number;
   sessionId?: string;
   device?: number;
   inode?: number;
@@ -102,6 +105,7 @@ async function listUsageCountedTranscriptFileStats(
             kind: "jsonl",
             size: materializedStats.size,
             mtimeMs: stats.mtimeMs,
+            contentMtimeMs: materializedStats.mtimeMs,
             device: materializedStats.dev,
             inode: materializedStats.ino,
           };
@@ -117,6 +121,7 @@ async function listUsageCountedTranscriptFileStats(
         kind: "jsonl",
         size: stats.size,
         mtimeMs: stats.mtimeMs,
+        contentMtimeMs: stats.mtimeMs,
         device: stats.dev,
         inode: stats.ino,
       };
@@ -159,6 +164,7 @@ function listUsageCountedSqliteTranscriptStats(
       filePath: formatCanonicalUsageCostSqliteMarker(marker),
       kind: "sqlite",
       mtimeMs,
+      contentMtimeMs: mtimeMs,
       sessionId: marker.sessionId,
       size: stats.sizeBytes,
       eventCount: stats.eventCount,
@@ -203,6 +209,7 @@ export async function resolveUsageCostTranscriptFile(
       filePath: formatCanonicalUsageCostSqliteMarker(marker),
       kind: "sqlite",
       mtimeMs: stats.lastMutationAtMs ?? 0,
+      contentMtimeMs: stats.lastMutationAtMs ?? 0,
       sessionId: marker.sessionId,
       size: stats.sizeBytes,
       eventCount: stats.eventCount,
@@ -219,6 +226,7 @@ export async function resolveUsageCostTranscriptFile(
         kind: "jsonl",
         size: materializedStats.size,
         mtimeMs: archiveStats.mtimeMs,
+        contentMtimeMs: materializedStats.mtimeMs,
         device: materializedStats.dev,
         inode: materializedStats.ino,
       };
@@ -233,6 +241,7 @@ export async function resolveUsageCostTranscriptFile(
         kind: "jsonl",
         size: stats.size,
         mtimeMs: stats.mtimeMs,
+        contentMtimeMs: stats.mtimeMs,
         device: stats.dev,
         inode: stats.ino,
       }

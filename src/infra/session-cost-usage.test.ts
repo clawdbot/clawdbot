@@ -2451,12 +2451,12 @@ describe("session cost usage", () => {
     });
   });
 
-  it("keeps compressed archive rollup identity stable for direct session queries", async () => {
-    const root = await makeSessionCostRoot("session-compressed-archive");
+  it("keeps a compressed archive fresh across usage paths", async () => {
+    const root = await makeSessionCostRoot("archive-cross-path-freshness");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const encoded = encodeSessionArchiveContent(
-      transcriptText("sess-compressed", {
+      transcriptText("sess-cross-path", {
         type: "message",
         timestamp: "2026-02-12T10:00:00.000Z",
         message: {
@@ -2470,22 +2470,39 @@ describe("session cost usage", () => {
     }
     const archivePath = path.join(
       sessionsDir,
-      `sess-compressed.jsonl.reset.2026-02-12T11-00-00.000Z${encoded.suffix}`,
+      `sess-cross-path.jsonl.deleted.2026-02-12T11-00-00.000Z${encoded.suffix}`,
     );
     await fs.writeFile(archivePath, encoded.bytes);
+    // Keep activity time distinct from the materialized file identity.
+    const archivedAt = new Date("2026-02-12T11:00:00.000Z");
+    await fs.utimes(archivePath, archivedAt, archivedAt);
 
     await withStateDir(root, async () => {
-      const first = await loadSessionCostSummary({
-        sessionId: "sess-compressed",
-        sessionFile: archivePath,
-      });
-      const repeat = await loadSessionCostSummary({
-        sessionId: "sess-compressed",
-        sessionFile: archivePath,
-      });
+      const discovered = await discoverAllSessions({ includeFirstUserMessage: false });
+      expect(discovered).toHaveLength(1);
+      const session = requireValue(
+        discovered[0],
+        "expected the compressed archive to be discovered",
+      );
+      expect(session.mtime).toBe(archivedAt.getTime());
 
-      expect(first?.totalTokens).toBe(10);
-      expect(repeat?.totalTokens).toBe(10);
+      for (let round = 0; round < 3; round += 1) {
+        await loadCostUsageSummary({});
+        const { cacheStatus } = await loadSessionCostSummariesFromCache({
+          sessions: [{ sessionId: session.sessionId, sessionFile: session.sessionFile }],
+        });
+        const direct = await loadSessionCostSummary({
+          sessionId: session.sessionId,
+          sessionFile: archivePath,
+        });
+        expect(cacheStatus).toMatchObject({
+          cachedFiles: 1,
+          pendingFiles: 0,
+          staleFiles: 0,
+          status: "fresh",
+        });
+        expect(direct?.totalTokens).toBe(10);
+      }
     });
   });
 

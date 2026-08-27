@@ -53,6 +53,8 @@ type UsageCostJsonlCheckpoint = {
   kind: "jsonl";
   parsedOffset: number;
   observedSize: number;
+  // Checkpoints follow scanned-file identity, not archive activity time.
+  // Otherwise discovery and per-session refreshes invalidate each other.
   observedMtimeMs: number;
   device: number;
   inode: number;
@@ -162,7 +164,7 @@ export function isUsageCostRollupFresh(params: {
   if (checkpoint.kind === "jsonl") {
     return (
       checkpoint.observedSize === params.file.size &&
-      checkpoint.observedMtimeMs === params.file.mtimeMs &&
+      checkpoint.observedMtimeMs === params.file.contentMtimeMs &&
       checkpoint.device === params.file.device &&
       checkpoint.inode === params.file.inode
     );
@@ -435,7 +437,7 @@ async function scanJsonlUsageRollup(params: {
     kind: "jsonl",
     parsedOffset: processedOffset,
     observedSize: params.file.size,
-    observedMtimeMs: params.file.mtimeMs,
+    observedMtimeMs: params.file.contentMtimeMs,
     device: params.file.device ?? 0,
     inode: params.file.inode ?? 0,
     anchorHash,
