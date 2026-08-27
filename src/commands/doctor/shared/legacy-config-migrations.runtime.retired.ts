@@ -387,8 +387,9 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   // Compare only after traversal so every dropped intent names the final runtime value.
   const configuredFinalScope = messages?.ackReactionScope;
   const finalScope = configuredFinalScope ?? "group-mentions";
+  const comparableFinalScope = finalScope === "none" ? "off" : finalScope;
   for (const source of legacyWhatsAppAckSources) {
-    if (source.scope === finalScope) {
+    if (source.scope === comparableFinalScope) {
       continue;
     }
     if (source.scope) {
