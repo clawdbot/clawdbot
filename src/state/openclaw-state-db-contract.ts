@@ -19,6 +19,7 @@ export const FIRST_USE_STATE_TABLES = [
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
   "node_worker_launches",
+  "node_worker_turns",
   "operator_approval_execution_identities",
   "operator_approval_standing_grants",
   "execution_decision_facts",
@@ -28,6 +29,8 @@ export const FIRST_USE_STATE_TABLES = [
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
   "idx_node_worker_launches_terminal_completed",
+  "idx_node_worker_turns_terminal_completed",
+  "idx_node_worker_turns_active_owner",
   "idx_operator_approval_standing_grants_binding",
   "execution_identity_contexts_run_created_idx",
   "execution_decision_facts_context_occurred_idx",

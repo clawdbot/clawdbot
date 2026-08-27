@@ -20,6 +20,12 @@ The agent opens a portal for the application's port, then starts the development
 
 For a session on a node-backed cloud worker, including the bundled Crabbox provider, the development server runs on the worker. Each portal connection receives its own single-use ticket, which the enrolled node redeems over a TLS-pinned WebSocket to the Gateway before connecting to the selected loopback port. This uses the existing authenticated node channel without exposing the worker to inbound traffic or creating an SSH tunnel. Stopping or replacing the worker closes its portals.
 
+A background development server continues running after the agent finishes its
+reply. Later turns in the same worker environment can inspect or stop it with
+`process`. Closing the portal only closes the proxy; it does not stop the server.
+See [Worker background processes](/gateway/background-process#worker-environments)
+for process lifetime and capacity details.
+
 ## Declare development servers
 
 Optionally commit `.openclaw/portals.json` to the workspace repository so the agent can discover the available development servers:

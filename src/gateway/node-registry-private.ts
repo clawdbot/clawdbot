@@ -4,12 +4,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   isPrivateNodeInvokeCommand,
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
   type NodeWorkerCapacitySnapshot,
@@ -154,6 +156,7 @@ function isWorkerSupervisorProofCurrent(
   proof: NodeWorkerSupervisorNodeProof,
   requireLaunchEligibility: boolean,
   requiredCommands: readonly string[] = [],
+  requireEnvironmentSession = false,
 ): boolean {
   const node = state.context.getNode(proof.nodeId);
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -167,6 +170,8 @@ function isWorkerSupervisorProofCurrent(
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
     (!requireLaunchEligibility || current.workerHost.capacity.available > 0) &&
+    (!requireEnvironmentSession ||
+      current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
     requiredCommands.every((command) => current.commands.includes(command))
   );
 }
@@ -485,7 +490,10 @@ export function registerNodeRegistryPrivateRuntime(
         isWorkerSupervisorProofCurrent(
           state,
           params.node,
-          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+          false,
+          [],
+          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
+            params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
         );
       if (!isProofCurrent()) {
         return {

@@ -322,6 +322,7 @@ export async function createNodeWorkerContainer(
     CONTAINER_NODE_EXECUTABLE,
     params.image ?? DEFAULT_NODE_WORKER_CONTAINER_IMAGE,
     params.bundleEntry,
+    "--internal-worker-session",
   );
   const current = await resolveContainerEngineTarget(engine, { pinned: true });
   if (current.target !== engine.target) {

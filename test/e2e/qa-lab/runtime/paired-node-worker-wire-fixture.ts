@@ -21,6 +21,7 @@ import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../../src/infra/node-runner-inventory.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
@@ -331,6 +332,7 @@ export async function createPairedNodeWorkerHost(
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true as const,
+      environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       capacity,
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
@@ -444,9 +446,11 @@ export async function createPairedNodeWorkerHost(
         const receipts = await Promise.all(
           [...launchIds].map(async (launchId) => await supervisor.status(launchId)),
         );
-        return receipts.every(
-          (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
-        )
+        // Finished turns do not prove the physical worker or container has been removed.
+        return capacity.available === capacity.total &&
+          receipts.every(
+            (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
+          )
           ? true
           : undefined;
       });

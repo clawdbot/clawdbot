@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../../../src/infra/node-commands.js";
+import {
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+} from "../../../../src/infra/node-commands.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import { startPairedNodeWorkerLifecycleProvider } from "./paired-node-worker-lifecycle-provider.js";
@@ -241,6 +244,17 @@ describe("paired node worker lifecycle wire", () => {
         )) as { placement?: Placement };
         expect(movedLocal.placement).toMatchObject({ state: "local" });
         expect(await describePlacement(gateway, retainedKey)).toMatchObject({ state: "local" });
+        await workerNode.waitForInvokes();
+        expect(
+          workerNode.frames
+            .filter((frame) => frame.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND)
+            .map((frame) => JSON.parse(frame.paramsJSON!)),
+        ).toContainEqual(
+          expect.objectContaining({
+            environmentId: sourcePlacement.environmentId,
+            ownerEpoch: sourcePlacement.activeOwnerEpoch,
+          }),
+        );
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-LOCAL" });
         await dispatchNodeSession({ gateway, key: retainedKey, nodeId });
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-BACK" });

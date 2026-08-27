@@ -928,6 +928,65 @@ CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
   container_json TEXT
 ) STRICT;
 
+-- Turn receipts have a shorter lifetime than their physical worker owner.
+-- Keeping the launch running preserves capacity and predecessor cleanup semantics.
+CREATE TABLE IF NOT EXISTS node_worker_turns (
+  turn_id TEXT NOT NULL PRIMARY KEY
+    CHECK (length(turn_id) BETWEEN 1 AND 256 AND instr(turn_id, char(0)) = 0),
+  owner_launch_id TEXT NOT NULL
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  plan_hash TEXT NOT NULL
+    CHECK (length(plan_hash) = 64 AND plan_hash NOT GLOB '*[^0-9a-f]*'),
+  run_id TEXT NOT NULL
+    CHECK (length(run_id) BETWEEN 1 AND 256 AND instr(run_id, char(0)) = 0),
+  state TEXT NOT NULL
+    CHECK (state IN ('running', 'completed', 'failed', 'interrupted', 'cancelled')),
+  result_json TEXT CHECK (
+    result_json IS NULL
+    OR (
+      length(CAST(result_json AS BLOB)) BETWEEN 1 AND 65536
+      AND instr(result_json, char(0)) = 0
+      AND json_valid(result_json)
+    )
+  ),
+  error_text TEXT CHECK (
+    error_text IS NULL
+    OR (
+      length(CAST(error_text AS BLOB)) BETWEEN 1 AND 4096
+      AND instr(error_text, char(0)) = 0
+      AND instr(error_text, char(10)) = 0
+      AND instr(error_text, char(13)) = 0
+    )
+  ),
+  completed_at_ms INTEGER CHECK (
+    completed_at_ms IS NULL OR completed_at_ms BETWEEN 0 AND 9007199254740991
+  ),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  updated_at_ms INTEGER NOT NULL CHECK (
+    updated_at_ms BETWEEN created_at_ms AND 9007199254740991
+  ),
+  CHECK (
+    (state = 'running'
+      AND result_json IS NULL AND error_text IS NULL AND completed_at_ms IS NULL)
+    OR
+    (state = 'completed'
+      AND result_json IS NOT NULL AND error_text IS NULL
+      AND completed_at_ms BETWEEN created_at_ms AND updated_at_ms)
+    OR
+    (state IN ('failed', 'interrupted', 'cancelled')
+      AND result_json IS NULL AND error_text IS NOT NULL
+      AND completed_at_ms BETWEEN created_at_ms AND updated_at_ms)
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_node_worker_turns_terminal_completed
+  ON node_worker_turns(completed_at_ms, turn_id)
+  WHERE completed_at_ms IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_node_worker_turns_active_owner
+  ON node_worker_turns(owner_launch_id)
+  WHERE state = 'running';
+
 CREATE TABLE IF NOT EXISTS config_health_entries (
   config_path TEXT NOT NULL PRIMARY KEY,
   last_known_good_json TEXT,

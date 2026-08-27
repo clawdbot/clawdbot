@@ -761,6 +761,7 @@ describe("runNodeHost", () => {
       bundleRetention: 1,
       bundleStatus: 1,
       portalStream: 1,
+      environmentSession: 1,
     };
     options?.onHelloOk?.({
       protocol: 4,
@@ -771,6 +772,7 @@ describe("runNodeHost", () => {
           GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
           GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
           GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         ],
       },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
@@ -1007,52 +1009,22 @@ describe("runNodeHost", () => {
     }
   });
 
-  it("appends context path to the Gateway WebSocket URL", async () => {
+  it.each([
+    ["/gws", "ws://127.0.0.1:18789/gws"],
+    ["/gws/", "ws://127.0.0.1:18789/gws/"],
+    ["gws", "ws://127.0.0.1:18789/gws"],
+    ["", "ws://127.0.0.1:18789"],
+    [undefined, "ws://127.0.0.1:18789"],
+  ])("builds the Gateway URL for context path %s", async (gatewayContextPath, expectedUrl) => {
     await expect(
       runNodeHost({
         gatewayHost: "127.0.0.1",
         gatewayPort: 18789,
-        gatewayContextPath: "/gws",
+        gatewayContextPath,
       }),
     ).rejects.toThrow("event loop readiness timeout");
 
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws");
-  });
-
-  it("preserves trailing slash in context path as-is", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath: "/gws/",
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws/");
-  });
-
-  it("prepends leading slash when context path is missing one", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath: "gws",
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws");
-  });
-
-  it("omits context path when empty or undefined", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath: "",
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastCapturedOptions()?.url).toBe(expectedUrl);
   });
 
   it("configures the SQLite gateway snapshot with contextPath", async () => {

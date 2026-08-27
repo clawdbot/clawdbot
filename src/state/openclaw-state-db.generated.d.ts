@@ -956,6 +956,19 @@ export interface NodeWorkerLaunches {
   worker_start_time: number | null;
 }
 
+export interface NodeWorkerTurns {
+  completed_at_ms: number | null;
+  created_at_ms: number;
+  error_text: string | null;
+  owner_launch_id: string;
+  plan_hash: string;
+  result_json: string | null;
+  run_id: string;
+  state: string;
+  turn_id: string;
+  updated_at_ms: number;
+}
+
 export interface OfficialExternalPluginCatalogSnapshots {
   body: string;
   checksum: string;
@@ -1711,6 +1724,7 @@ export interface DB {
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_worker_launch_containers: NodeWorkerLaunchContainers;
   node_worker_launches: NodeWorkerLaunches;
+  node_worker_turns: NodeWorkerTurns;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approval_standing_grants: OperatorApprovalStandingGrants;

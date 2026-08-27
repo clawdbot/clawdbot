@@ -9,11 +9,16 @@ import type {
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import type {
+  NodeWorkerActiveTurn,
+  NodeWorkerEnvironmentBinding,
+} from "./node-worker-turn-lifecycle.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
 
 type NodeWorkerActiveBase = {
+  binding: NodeWorkerEnvironmentBinding;
   gatewayNamespace: string;
   launchId: string;
   planHash: string;
@@ -30,6 +35,8 @@ export type NodeWorkerRunningChild = NodeWorkerActiveBase & {
   releaseJournal: () => void;
   scrubber: NodeWorkerCredentialScrubber;
   connectionFailure: { errorText?: string };
+  turn?: NodeWorkerActiveTurn;
+  retiring: boolean;
   stopState?: NodeWorkerStopState;
   containerCleanup?: Promise<void>;
   deferredOutcome?: NodeWorkerTerminalOutcome;

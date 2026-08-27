@@ -9,6 +9,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
+import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
 import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.js";
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
@@ -27,7 +28,6 @@ import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-calle
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
@@ -209,6 +209,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         ...(params.browserRuntime ? { runtime: params.browserRuntime } : {}),
       })
     : undefined;
+  const turnLifetime = new AbortController();
+  const toolSignal = params.signal
+    ? AbortSignal.any([params.signal, turnLifetime.signal])
+    : turnLifetime.signal;
   const { session } = await (async () => {
     try {
       const unboundLocalTools = finalizeAgentTools({
@@ -230,6 +234,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           }),
         },
         agentId: params.agentId,
+        abortSignal: toolSignal,
       }).filter((tool) => localToolNameSet.has(tool.name));
       const localTools = unboundLocalTools.map((tool) =>
         wrapToolWithGatewayCallerIdentity(tool, {
@@ -270,7 +275,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         tools: [...activeToolNames],
         customTools: toToolDefinitions([
           ...localTools.filter((tool) => allowedToolNameSet.has(tool.name)),
-          ...sessionTools,
+          ...sessionTools.map((tool) => wrapToolWithAbortSignal(tool, toolSignal)),
         ]),
         noTools: "all",
         sessionManager,
@@ -279,6 +284,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
       });
     } catch (error) {
+      turnLifetime.abort();
       await browserRuntime?.dispose();
       throw error;
     }
@@ -350,9 +356,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       await liveRuntime.emitTerminal();
     }
   } finally {
+    // Tools and prepared calls belong to this turn; promoted processes belong
+    // to the enclosing environment and remain reachable through fresh tools.
+    turnLifetime.abort();
     params.signal?.removeEventListener("abort", abortTurn);
     unsubscribe();
-    getProcessSupervisor().cancelScope(params.sessionKey, "manual-cancel");
     session.dispose();
     await browserRuntime?.dispose();
   }

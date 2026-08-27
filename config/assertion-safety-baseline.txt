@@ -1709,7 +1709,7 @@ src/agents/bash-tools.exec-approval-request.ts	2
 src/agents/bash-tools.exec-host-node-phases.ts	3
 src/agents/bash-tools.exec-host-node.ts	2
 src/agents/bash-tools.exec-request-preparation.ts	7
-src/agents/bash-tools.exec-run.ts	2
+src/agents/bash-tools.exec-run.ts	1
 src/agents/bash-tools.exec-runtime.ts	2
 src/agents/bash-tools.exec-script-preflight.ts	2
 src/agents/bash-tools.process.ts	6
@@ -3084,7 +3084,6 @@ src/gateway/worker-environments/inference-control.ts	1
 src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/inference-store.ts	1
 src/gateway/worker-environments/live-event-projection.ts	1
-src/gateway/worker-environments/node-worker-tunnel.ts	6
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/node-workspace-transfer-service.ts	1
 src/gateway/worker-environments/placement-state.ts	3
@@ -3097,7 +3096,6 @@ src/gateway/worker-environments/store.ts	9
 src/gateway/worker-environments/transcript-commit.ts	6
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
-src/gateway/worker-environments/worker-turn-payload.ts	4
 src/gateway/worker-environments/workspace-accepted-publication.ts	1
 src/gateway/worker-environments/workspace-manifest.ts	14
 src/gateway/worker-environments/workspace-path-exclusions.ts	2
@@ -3418,7 +3416,6 @@ src/node-host/invoke-payload.ts	5
 src/node-host/invoke.ts	7
 src/node-host/mcp.ts	3
 src/node-host/node-worker-bundle-installer.ts	1
-src/node-host/node-worker-supervisor.ts	1
 src/node-host/node-worker-transfer-client.ts	3
 src/node-host/node-worker-transfer-http.ts	2
 src/node-host/node-worker-tree-control.ts	2
