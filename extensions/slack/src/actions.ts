@@ -744,12 +744,3 @@ export async function downloadSlackFile(
 
   return results?.[0] ?? null;
 }
-
-export {
-  addSlackChannelMember,
-  archiveSlackChannel,
-  createSlackChannel,
-  removeSlackChannelMember,
-  renameSlackChannel,
-  type SlackChannelManagementResult,
-} from "./channel-management-actions.js";

@@ -60,8 +60,12 @@ const channelManagementActions = new Set([
 const SLACK_REACTION_RESULT_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.js");
+type SlackChannelManagementRuntimeModule = typeof import("./channel-management-actions.js");
 
 const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
+const loadSlackChannelManagementRuntime = createLazyRuntimeModule(
+  () => import("./channel-management-actions.js"),
+);
 
 const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
@@ -76,10 +80,20 @@ function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
   }) as SlackActionsRuntimeModule[K];
 }
 
+function createLazyChannelManagementAction<K extends keyof SlackChannelManagementRuntimeModule>(
+  key: K,
+): SlackChannelManagementRuntimeModule[K] {
+  return (async (...args: unknown[]) => {
+    const runtime = await loadSlackChannelManagementRuntime();
+    const action = runtime[key] as (...actionArgs: unknown[]) => unknown;
+    return action(...args);
+  }) as SlackChannelManagementRuntimeModule[K];
+}
+
 export const slackActionRuntime = {
-  addSlackChannelMember: createLazySlackAction("addSlackChannelMember"),
-  archiveSlackChannel: createLazySlackAction("archiveSlackChannel"),
-  createSlackChannel: createLazySlackAction("createSlackChannel"),
+  addSlackChannelMember: createLazyChannelManagementAction("addSlackChannelMember"),
+  archiveSlackChannel: createLazyChannelManagementAction("archiveSlackChannel"),
+  createSlackChannel: createLazyChannelManagementAction("createSlackChannel"),
   deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
   downloadSlackFile: createLazySlackAction("downloadSlackFile"),
   editSlackMessage: createLazySlackAction("editSlackMessage"),
@@ -92,9 +106,9 @@ export const slackActionRuntime = {
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
   readSlackMessages: createLazySlackAction("readSlackMessages"),
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
-  removeSlackChannelMember: createLazySlackAction("removeSlackChannelMember"),
+  removeSlackChannelMember: createLazyChannelManagementAction("removeSlackChannelMember"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
-  renameSlackChannel: createLazySlackAction("renameSlackChannel"),
+  renameSlackChannel: createLazyChannelManagementAction("renameSlackChannel"),
   resolveSlackConversationName: createLazySlackAction("resolveSlackConversationName"),
   resolveSlackConversationInfo: async (params: {
     cfg: OpenClawConfig;
