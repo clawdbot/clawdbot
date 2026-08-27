@@ -623,7 +623,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
     to: resolveSessionRoute ? route.to : delivery.to,
     chatType: resolveSessionRoute ? route.chatType : delivery.chatType,
     threadId: resolveSessionRoute ? (route.threadId ?? delivery.threadId) : delivery.threadId,
-    targetSessionKey: route.sessionKey,
+    ...(route.recipientSessionExact === true ? { targetSessionKey: route.sessionKey } : {}),
   };
 }
 
