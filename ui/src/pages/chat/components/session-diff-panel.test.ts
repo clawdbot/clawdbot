@@ -121,6 +121,38 @@ describe("SessionDiffPanel", () => {
     },
   );
 
+  it.each([false, true])("highlights both languages of a rename in split=%s", async (split) => {
+    setNativeGatewayTestState(null);
+    localStorage.setItem("openclaw.control.sessionDiff.v1", JSON.stringify({ split }));
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    localStorage.removeItem("openclaw.control.sessionDiff.v1");
+    const before = '<section data-mode="before">Hello</section>';
+    const after = 'const value = "after";';
+    const data = fileResult(
+      ["--- a/example.html", "+++ b/example.ts", "@@ -1 +1 @@", `-${before}`, `+${after}`].join(
+        "\n",
+      ),
+    );
+    data.files[0] = {
+      ...data.files[0]!,
+      path: "example.ts",
+      oldPath: "example.html",
+      status: "renamed",
+    };
+    panel.loader = async () => data;
+    document.body.append(panel);
+
+    const oldSide = split ? ".session-diff-split__side--left" : ".chat-diff__row--del";
+    const newSide = split ? ".session-diff-split__side--right" : ".chat-diff__row--add";
+    const text = split ? ".session-diff-split__text" : ".chat-diff__text";
+    await vi.waitFor(() => {
+      expect(panel.querySelector(`${oldSide} .tok-propertyName`)?.textContent).toBe("data-mode");
+      expect(panel.querySelector(`${newSide} .tok-keyword`)?.textContent).toBe("const");
+    });
+    expect(panel.querySelector(`${oldSide} ${text}`)?.textContent).toBe(before);
+    expect(panel.querySelector(`${newSide} ${text}`)?.textContent).toBe(after);
+  });
+
   it.each([
     { surface: "file", failed: false, feedback: "Copied!" },
     { surface: "file", failed: true, feedback: "Copy failed" },

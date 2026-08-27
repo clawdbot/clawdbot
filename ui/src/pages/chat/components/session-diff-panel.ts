@@ -453,8 +453,8 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     const renderGap = (line: DiffLine) => this.renderGap(view, line);
     return html`
       ${this.split
-        ? renderSessionSplitDiff(parsed.lines, renderGap, file.path)
-        : renderDiffBlock(parsed.lines, "succeeded", renderGap, file.path)}
+        ? renderSessionSplitDiff(parsed.lines, renderGap, file)
+        : renderDiffBlock(parsed.lines, "succeeded", renderGap, file)}
       ${parsed.truncated
         ? html`<div class="session-diff__note">${t("chat.sessionDiff.truncatedFile")}</div>`
         : nothing}

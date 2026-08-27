@@ -1,7 +1,7 @@
 import { html } from "lit";
 import { t } from "../../../i18n/index.ts";
 import { pairSessionDiffLines } from "../../../lib/chat/session-diff-split.ts";
-import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
+import type { DiffFilePaths, DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { renderHighlightedDiff } from "./chat-diff-highlight.ts";
 
 function renderSplitSide(
@@ -25,12 +25,12 @@ function renderSplitSide(
 export function renderSessionSplitDiff(
   lines: readonly DiffLine[],
   renderSkip?: (line: DiffLine) => unknown,
-  path = "",
+  file: DiffFilePaths = { path: "" },
 ) {
   const rows = pairSessionDiffLines(lines);
   return renderHighlightedDiff(
     lines,
-    path,
+    file,
     (renderLine) => html`<div
       class="session-diff-split code-highlight"
       role="figure"

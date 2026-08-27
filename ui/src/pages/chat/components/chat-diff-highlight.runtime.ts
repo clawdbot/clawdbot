@@ -7,7 +7,7 @@ import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 // synchronously parsing an unbounded source string on the UI thread.
 const MAX_HIGHLIGHT_CHARS = 120_000;
 
-export async function highlightDiffLines(lines: readonly DiffLine[], path: string) {
+export async function highlightDiffLines(lines: readonly DiffLine[], path: string, oldPath = path) {
   const highlighted = new Map<DiffLine, unknown>();
   let size = 0;
   for (const line of lines) {
@@ -16,12 +16,15 @@ export async function highlightDiffLines(lines: readonly DiffLine[], path: strin
       return highlighted;
     }
   }
-  let section: { path: string; lines: DiffLine[] } = { path, lines: [] };
+  let section: { path: string; oldPath: string; lines: DiffLine[] } = { path, oldPath, lines: [] };
   const sections: (typeof section)[] = [];
   for (const line of lines) {
     if (line.kind === "file" || line.kind === "skip") {
       sections.push(section);
-      section = { path: line.kind === "file" ? (line.path ?? "") : section.path, lines: [] };
+      section =
+        line.kind === "file"
+          ? { path: line.path ?? "", oldPath: line.oldPath ?? line.path ?? "", lines: [] }
+          : { ...section, lines: [] };
     } else {
       section.lines.push(line);
     }
@@ -32,13 +35,14 @@ export async function highlightDiffLines(lines: readonly DiffLine[], path: strin
       if (!part.lines.length) {
         return;
       }
-      const support = await loadCodeLanguage(part.path);
-      if (!support) {
-        return;
-      }
       // Parse each side independently so deleted comments/strings cannot color
-      // added code. A gap starts a new parse: omitted source is unknown.
+      // added code. Renames retain each language; shared context uses the new side.
+      // A gap starts a new parse: omitted source is unknown.
       for (const excluded of ["add", "del"]) {
+        const support = await loadCodeLanguage(excluded === "add" ? part.oldPath : part.path);
+        if (!support) {
+          continue;
+        }
         const side = part.lines.filter((line) => line.kind !== excluded);
         const code = side.map((line) => line.text).join("\n");
         const tokens: unknown[][] = [[]];
@@ -53,7 +57,7 @@ export async function highlightDiffLines(lines: readonly DiffLine[], path: strin
           },
         );
         side.forEach((line, index) => {
-          if (line.text) {
+          if (line.text && (excluded === "del" || line.kind === "del")) {
             highlighted.set(line, tokens[index]);
           }
         });

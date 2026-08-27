@@ -175,7 +175,7 @@ describeControlUiE2e("session diff panel", () => {
 
   afterEach(closeContexts);
 
-  it("opens the session diff when Review is added from the panel menu", async () => {
+  it("opens a renamed session diff when Review is added from the panel menu", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -188,7 +188,21 @@ describeControlUiE2e("session diff panel", () => {
           files: [],
           browser: { path: "", entries: [] },
         },
-        "sessions.diff": SESSION_DIFF_RESPONSE,
+        "sessions.diff": {
+          ...SESSION_DIFF_RESPONSE,
+          files: [
+            {
+              path: "example.ts",
+              oldPath: "example.html",
+              status: "renamed",
+              additions: 1,
+              deletions: 1,
+              patch:
+                '@@ -1 +1 @@\n-<section data-mode="before">Hello</section>\n+const value = "after";',
+            },
+          ],
+          additions: 1,
+        },
       },
     });
     await page.goto(`${server.baseUrl}chat`);
@@ -196,7 +210,15 @@ describeControlUiE2e("session diff panel", () => {
     await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");
 
-    await waitForSessionDiff(page);
+    await expect
+      .poll(() => page.locator(".session-diff__old-path").textContent())
+      .toContain("example.html");
+    await expect
+      .poll(() => page.locator(".chat-diff__row--del .tok-propertyName").textContent())
+      .toBe("data-mode");
+    await expect
+      .poll(() => page.locator(".chat-diff__row--add .tok-keyword").textContent())
+      .toBe("const");
   });
 
   it("requests the default session diff once across subsequent pane renders", async () => {

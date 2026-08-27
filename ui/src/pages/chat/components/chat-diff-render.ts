@@ -4,7 +4,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
-import type { DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
+import type { DiffFilePaths, DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
 import { renderHighlightedDiff } from "./chat-diff-highlight.ts";
 
 export function renderDiffStatChips(stat: DiffStat & { modified?: number }) {
@@ -29,12 +29,12 @@ export function renderDiffBlock(
   lines: readonly DiffLine[],
   outcome: ToolCardOutcome = "succeeded",
   renderSkip?: (line: DiffLine) => unknown,
-  path = "",
+  file: DiffFilePaths = { path: "" },
 ) {
   const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
   return renderHighlightedDiff(
     lines,
-    path,
+    file,
     (renderLine) => html`
       <div
         class="chat-diff code-highlight"
