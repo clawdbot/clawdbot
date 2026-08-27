@@ -996,6 +996,60 @@ describe("plugin loader preferOver cede", () => {
     );
   });
 
+  // Codex P2 3874565069. The namesake case above ships a second claimant, so `claimants.length` is
+  // two and the sole-claimant path never runs. A replacement can be the only manifest claimant and
+  // still declare `preferOver` for the namesake that registers the channel without claiming it:
+  // scoping the claimant map to channels with two or more claimants left that channel out, the
+  // admission guard never ran, and the namesake registering first kept a channel schema ownership
+  // had already given to the replacement. One claimant plus a declaration is still a contest.
+  it("turns away a namesake when the declaring replacement is the only manifest claimant", () => {
+    const root = makePluginLoaderTempDir();
+    const selfDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zzalpha",
+      channelIds: [],
+      registeredChannelIds: ["zzalpha"],
+      toolName: "zz_self_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zzalpha"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" } },
+      plugins: {
+        entries: { zzalpha: { enabled: true } },
+        // The namesake loads first, so it reaches `registerChannel` before the replacement.
+        load: { paths: [selfDir, replacementDir] },
+      },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(
+      registry.diagnostics.find(
+        (diag) => diag.pluginId === "zzalpha" && diag.message.includes("is declared by"),
+      ),
+    ).toMatchObject({ level: "error" });
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).toBe(
+      "zz-replacement",
+    );
+  });
+
   // The contract admission inherits, pinned with no squatter in the picture: when the declared
   // winner fails during its own register, the channel is left unowned. The fallback ceded and
   // stood down before any register ran, so nothing else is entitled to it. This holds on the

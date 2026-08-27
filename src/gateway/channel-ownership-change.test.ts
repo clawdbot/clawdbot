@@ -100,6 +100,43 @@ describe("findChannelOwnershipChange", () => {
     expect(metadataMocks.resolveConfigWidePluginManifestRegistry).not.toHaveBeenCalled();
   });
 
+  // Codex P2 3874565075. Two claimants, no descriptor on either and no `preferOver` between them:
+  // the schema plane reports no owner on either side, and the cede map is empty because nothing is
+  // displaced. Reporting only cede-produced owners made this move invisible, so a channel edit
+  // took the restart-from-the-old-registry path and left the previous owner serving until a
+  // Gateway restart. The runtime plane names a winner for every contested channel, declaration or
+  // not, and that is the answer registration actually applies.
+  it("reports a runtime owner move on a contested channel with no declaration or descriptor", () => {
+    const bareChannelId = "zzbarechat";
+    const firstId = "zzbare-first";
+    const secondId = "zzbare-second";
+    const bareRegistry = makeRegistry([
+      { id: firstId, channels: [bareChannelId] },
+      { id: secondId, channels: [bareChannelId] },
+    ]);
+    // The activation flip a config edit produces: one claimant is switched off and the other on,
+    // so exactly one of them is active per side and the runtime winner moves between them.
+    const serving = (pluginId: string, disabledId: string) =>
+      ({
+        channels: { [bareChannelId]: { enabled: true } },
+        plugins: { entries: { [pluginId]: { enabled: true }, [disabledId]: { enabled: false } } },
+      }) as unknown as OpenClawConfig;
+    const previousSide = serving(secondId, firstId);
+    const nextSide = serving(firstId, secondId);
+
+    const change = findChannelOwnershipChange({
+      previous: { config: previousSide, sourceConfig: previousSide },
+      next: { config: nextSide, sourceConfig: nextSide },
+      pluginMetadataSnapshot: { manifestRegistry: bareRegistry },
+    });
+
+    expect(change).toEqual({
+      channelId: bareChannelId,
+      previousOwner: secondId,
+      nextOwner: firstId,
+    });
+  });
+
   it("refreshes each registry when workspace roots match in a different order", () => {
     const previousConfig = {
       ...runtimeConfig,

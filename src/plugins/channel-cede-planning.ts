@@ -136,18 +136,19 @@ export function collectCededChannelIdsByPlugin(params: {
       channels.push(channelId);
     }
   }
-  // Who may register a channel some manifest declares a replacement for. Scoped to declaration-
-  // contested channels because that is what this plan reasons about: a channel with one claimant,
-  // or two claimants and no declaration between them, keeps the first-registrant rule the runtime
-  // has always applied. Set-aside declarations are included deliberately -- they resolve to no
-  // winner, so `cededChannelOwners` has no entry, but the claimants are still the only plugins
-  // entitled to the channel, and an operator who hand-picks a claimant must not get less
-  // protection than one who lets auto-enable decide.
+  // Who may register a channel some manifest declares a replacement for. Scoped to channels a
+  // declaration reaches, because that is what this plan reasons about: a channel whose claimants
+  // declare nothing between them keeps the first-registrant rule the runtime has always applied.
+  // The claimant COUNT is deliberately not part of that test. A replacement can be the only
+  // manifest claimant and still declare `preferOver` for a namesake that registers the channel
+  // without claiming it, and requiring two claimants left exactly that channel unguarded: the
+  // namesake registered first and kept a channel schema ownership had given to the replacement.
+  // Set-aside declarations are included deliberately -- they resolve to no winner, so
+  // `cededChannelOwners` has no entry, but the claimants are still the only plugins entitled to
+  // the channel, and an operator who hand-picks a claimant must not get less protection than one
+  // who lets auto-enable decide.
   const declaredChannelClaimants = new Map<string, string[]>();
   for (const [claimedId, claimants] of claimantsByChannel) {
-    if (claimants.length < 2) {
-      continue;
-    }
     const declaresReplacement = claimants.some((claimantId) => {
       const claimant = params.registry.plugins.find((entry) => entry.id === claimantId);
       return claimant ? policy.resolveChannelPreferOverIds(claimant, claimedId).length > 0 : false;

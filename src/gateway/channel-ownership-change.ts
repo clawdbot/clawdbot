@@ -1,9 +1,11 @@
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import { collectChannelSchemaMetadataWithOwnership } from "../config/channel-config-metadata.js";
+import {
+  collectChannelSchemaMetadataWithOwnership,
+  collectRuntimeChannelOwnership,
+} from "../config/channel-config-metadata.js";
 import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { collectCededChannelIdsByPlugin } from "../plugins/channel-cede-planning.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 
 /**
@@ -23,8 +25,8 @@ export function isChannelOwnershipSourcePath(path: string): boolean {
 type ChannelOwnersSnapshot = {
   /** Selected schema owner per channel; undefined when no claimant ships a descriptor. */
   schemaOwners: Map<string, string | undefined>;
-  /** Runtime cede owner per contested channel: the claimant registration hands the channel to. */
-  runtimeOwners: Map<string, string>;
+  /** Runtime winner per contested channel: the claimant registration hands the channel to. */
+  runtimeOwners: ReadonlyMap<string, string>;
 };
 
 /**
@@ -66,20 +68,20 @@ function collectChannelOwners(side: {
   // A contest can exist with no schema descriptor on any side: a bare `record.channels` claim
   // serves a channel, and a `preferOver` declaration can travel on `channelCatalogMeta` alone,
   // which auto-enable honors like a `channelConfigs` one. The schema map reports no owner for
-  // such a channel however ownership settles, so the runtime plane's cede owner — the same
-  // shared rule plugin registration applies — travels alongside it, or a hot edit could still
-  // restart the stale owner while activation would select the replacement. The two planes stay
-  // in separate maps because manifest channel ids are arbitrary strings, so no composite key
-  // can be proven collision-free.
-  const { cededChannelOwners } = collectCededChannelIdsByPlugin({
-    registry,
-    config: side.config,
-    sourceConfig: side.sourceConfig,
-    env: process.env,
-    onlyPluginIdSet: null,
-    dreamingSidecar: null,
-  });
-  return { schemaOwners, runtimeOwners: cededChannelOwners };
+  // such a channel however ownership settles, so the runtime plane's winner — the same shared
+  // rule plugin registration applies — travels alongside it, or a hot edit could still restart
+  // the stale owner while activation would select the replacement. The two planes stay in
+  // separate maps because manifest channel ids are arbitrary strings, so no composite key can be
+  // proven collision-free.
+  //
+  // The winner map, not the cede map. Cedes only record channels a declaration displaced someone
+  // on, so two claimants with no declaration between them produced an empty map on both sides and
+  // an owner move between them read as no move at all -- the reload then restarted the channel
+  // from the old registry and left the previous owner serving. Ceded owners are a subset of these
+  // winners with the same values (a cede is recorded only for `winners.get(channelId)`), so this
+  // reports every move the cede map did and the undeclared ones it missed.
+  const { winners } = collectRuntimeChannelOwnership(registry, policy);
+  return { schemaOwners, runtimeOwners: winners };
 }
 
 function haveMatchingAgentWorkspaceRoots(

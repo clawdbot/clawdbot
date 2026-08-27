@@ -116,6 +116,73 @@ describe("createConfiguredChannelOwnershipPolicy", () => {
   // ("minimax-portal") as its exact manifest id. Gateway startup pre-seeds exact installed ids
   // before any alias fallback, so folding the written id first attributed that plugin's policy
   // and explicit selection to the bundled owner the legacy alias names.
+  // Codex P2 3874565082. `loader-runtime-candidate.ts` disables a single-kind memory plugin the
+  // memory slot does not select before it ever registers (`resolveMemorySlotDecision`). Reporting
+  // such a claimant active let cede planning crown it, suppress the fallback's registration, and
+  // leave the configured channel with no runtime owner at all. Slot eligibility is config-decided
+  // for the `null` and named-other arms, so the policy can read the same answer the loader will.
+  it("keeps a single-kind memory claimant the memory slot passed over inactive", () => {
+    const memoryRegistry = {
+      diagnostics: [],
+      plugins: [
+        { id: "zzmem-engine", origin: "config", kind: ["memory"], channels: ["zzmemchat"] },
+        { id: "zzmem-fallback", origin: "config", channels: ["zzmemchat"] },
+      ],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      channels: { zzmemchat: { token: "t" } },
+      plugins: {
+        entries: { "zzmem-engine": { enabled: true } },
+        slots: { memory: "zzsome-other-memory" },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: memoryRegistry,
+      env: {},
+    });
+
+    // Hand-selected by the operator, so explicit selection would otherwise report it active.
+    expect(policy.isPluginExplicitlySelected("zzmem-engine")).toBe(true);
+    expect(policy.isPluginActive("zzmem-engine", "zzmemchat")).toBe(false);
+    expect(policy.isPluginActive("zzmem-fallback", "zzmemchat")).toBe(true);
+  });
+
+  // The other side of the same rule: a dual-kind plugin keeps its non-memory role when the slot
+  // passes it over, so it stays a live claimant and must not be filtered out here.
+  it("keeps a dual-kind claimant active when the memory slot names another plugin", () => {
+    const dualRegistry = {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "zzdual-engine",
+          origin: "config",
+          kind: ["memory", "context-engine"],
+          channels: ["zzdualchat"],
+        },
+        { id: "zzdual-fallback", origin: "config", channels: ["zzdualchat"] },
+      ],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      channels: { zzdualchat: { token: "t" } },
+      plugins: {
+        entries: { "zzdual-engine": { enabled: true } },
+        slots: { memory: "zzsome-other-memory" },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: dualRegistry,
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzdual-engine", "zzdualchat")).toBe(true);
+  });
+
   it("attributes policy to an installed plugin whose exact id is a built-in legacy alias", () => {
     const aliasRegistry = {
       diagnostics: [],

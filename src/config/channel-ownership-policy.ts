@@ -6,6 +6,7 @@ import { normalizePluginsConfigWithResolver } from "../plugins/config-policy.js"
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { hasKind } from "../plugins/slots.js";
 import {
   collectAutoEnableConfiguredChannelIds,
   collectConfiguredChannelCandidateSet,
@@ -162,12 +163,45 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     return candidates;
   };
 
+  // The memory slot decides a single-kind memory plugin's fate before it ever registers:
+  // `loader-runtime-candidate.ts` calls `resolveMemorySlotDecision` and disables the record when
+  // the slot is off or names someone else. Only those two arms are config-decided -- the
+  // `selectedId` arm depends on which memory plugin the load reached first, which no static
+  // policy can know -- and a multi-kind plugin stays enabled for its other role, so neither is
+  // filtered here. Reporting a slot-rejected claimant active let cede planning crown a plugin
+  // that never registers and suppress the fallback, leaving the channel with no runtime owner.
+  //
+  // Collected once rather than scanned per call: `isPluginActive` runs for every claimant of every
+  // contested channel, and a linear manifest walk on each of those is a per-load cost this policy
+  // does not need to pay.
+  const singleKindMemoryAliases = new Set(
+    params.registry.plugins
+      .filter(
+        (entry) =>
+          hasKind(entry.kind, "memory") && !(Array.isArray(entry.kind) && entry.kind.length > 1),
+      )
+      .map((entry) => canonicalId(entry.id)),
+  );
+  const isRejectedByMemorySlot = (alias: string): boolean => {
+    if (!singleKindMemoryAliases.has(alias)) {
+      return false;
+    }
+    const slot = params.config.plugins?.slots?.memory;
+    if (slot === null) {
+      return true;
+    }
+    return typeof slot === "string" && canonicalId(slot) !== alias;
+  };
+
   return {
     isPluginActive: (pluginId, channelId) => {
       if (isPluginPolicyDisabled(params.config, pluginId, canonicalId, params.registry)) {
         return false;
       }
       const alias = canonicalId(pluginId);
+      if (isRejectedByMemorySlot(alias)) {
+        return false;
+      }
       // An operator can activate a plugin by hand, which bypasses candidate discovery entirely:
       // `plugins.entries.<id>.enabled: true` is explicit activation at startup. Narrowing to the
       // auto-enable candidates alone would report such a claimant inactive while the runtime runs
