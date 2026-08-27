@@ -270,7 +270,10 @@ export type MarkdownParseOptions = {
   horizontalRuleText?: string;
   /** Preserve source line spacing after headings and code blocks. */
   preserveSourceBlockSpacing?: boolean;
-  /** Preserve Python-style dunder identifiers in code-like contexts. */
+  /**
+   * Treat Python-style `__name__` member, call, argument, and index identifiers as literal text
+   * instead of emphasis delimiters. Disabled by default.
+   */
   preserveDunderIdentifiers?: boolean;
 };
 
