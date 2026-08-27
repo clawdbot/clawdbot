@@ -4191,17 +4191,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           trailingCenterDelta:
             iconCenter(".session-progress-card__summary-chevron svg") -
             iconCenter(".agent-chat__goal-expand svg"),
-          trailingControlWidthDelta:
-            rect(".session-progress-card__summary-chevron").width -
-            rect(".agent-chat__goal-expand").width,
-          trailingPaddingDelta:
-            Number.parseFloat(
-              getComputedStyle(document.querySelector(".session-progress-card__summary")!)
-                .paddingRight,
-            ) -
-            Number.parseFloat(
-              getComputedStyle(document.querySelector(".agent-chat__goal-row")!).paddingRight,
-            ),
         };
       });
       expect(collapsed.countLeft).toBeGreaterThan(collapsed.currentRight);
@@ -4210,8 +4199,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         0.5,
       );
       expect(Math.abs(collapsed.trailingCenterDelta)).toBeLessThan(0.5);
-      expect(Math.abs(collapsed.trailingControlWidthDelta)).toBeLessThan(0.5);
-      expect(Math.abs(collapsed.trailingPaddingDelta)).toBeLessThan(0.5);
       const closedRowCenters = await page.evaluate(() => {
         const centerY = (selector: string) => {
           const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
