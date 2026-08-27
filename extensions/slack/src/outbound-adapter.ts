@@ -393,10 +393,15 @@ export const slackOutbound: ChannelOutboundAdapter = {
     if (!resolution) {
       return;
     }
+    // Voice media carries its authored text as the upload caption, not in the
+    // rendered blocks. Reusing `payload.text` here would rebuild the card with
+    // that caption and write it back as the finalized message text/accessibility
+    // fallback, undoing the voice-media exclusion after the user answers.
+    const finalizationText = isVoiceMediaPayload(payload) ? "" : payload.text;
     const deliveryMessages = resolveSlackReplyDeliveryMessages({
       authoredTextPlacement: resolution.authoredTextPlacement,
       segments: resolution.segments,
-      text: payload.text,
+      text: finalizationText,
     });
     const deliveryMessage = deliveryMessages.find(
       (message) => resolveSlackQuestionActionIds(message.blocks).length > 0,

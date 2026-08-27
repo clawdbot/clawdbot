@@ -1,11 +1,33 @@
 // Slack tests cover outbound adapter plugin behavior.
 import { presentationToInteractiveControlsReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
+const updateMessageSlackMock = vi.hoisted(() => vi.fn());
+const registerChannelDeliveryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
+}));
+
+vi.mock("./send.runtime.js", () => ({
+  sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
+  updateMessageSlack: (...args: unknown[]) => updateMessageSlackMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
+  questionGatewayRuntime: {
+    readAskUserQuestionId: (payload: { channelData?: { askUser?: unknown } }) => {
+      const askUser = payload.channelData?.askUser;
+      if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+        return undefined;
+      }
+      const questionId = (askUser as { questionId?: unknown }).questionId;
+      return typeof questionId === "string" && questionId ? questionId : undefined;
+    },
+    registerChannelDelivery: (...args: unknown[]) => registerChannelDeliveryMock(...args),
+  },
 }));
 
 const { slackOutbound } = await import("./outbound-adapter.js");
@@ -27,6 +49,8 @@ describe("slackOutbound", () => {
 
   beforeEach(() => {
     sendMessageSlackMock.mockReset();
+    updateMessageSlackMock.mockReset();
+    registerChannelDeliveryMock.mockReset();
   });
 
   it("sends mirrored question controls once at the Slack message block limit", async () => {
@@ -737,5 +761,84 @@ describe("slackOutbound", () => {
         text: expect.objectContaining({ text: "Spoken summary of the deploy." }),
       }),
     );
+  });
+
+  it("keeps voice caption out of question-card finalization text", async () => {
+    // The question-card finalization path rebuilds the delivered card from the
+    // signed rendered resolution. For voice media the authored text is the
+    // upload caption, so finalization must not write it back as the card's
+    // message text/accessibility fallback after the user answers.
+    let capturedFinalize: ((statusLine: string) => Promise<void>) | undefined;
+    registerChannelDeliveryMock.mockImplementation(
+      (params: { finalize: (statusLine: string) => Promise<void> }) => {
+        capturedFinalize = params.finalize;
+      },
+    );
+    updateMessageSlackMock.mockResolvedValue({ ok: true });
+
+    const basePayload = {
+      text: "Spoken summary of the deploy.",
+      mediaUrl: "file:///tmp/tts/deploy.ogg",
+      audioAsVoice: true,
+      spokenText: "Spoken summary of the deploy.",
+      trustedLocalMedia: true,
+      channelData: {
+        askUser: { questionId: "q-1", optionValues: ["Yes"] },
+        slack: {
+          blocks: [
+            {
+              type: "actions" as const,
+              elements: [
+                {
+                  type: "button" as const,
+                  action_id: "openclaw:question_button",
+                  text: { type: "plain_text" as const, text: "Yes" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    const rendered = slackOutbound.renderPresentation!({
+      payload: basePayload,
+      presentation: basePayload.presentation,
+      ctx: { cfg, to: "C123", text: "", payload: basePayload },
+    });
+    // Sanity: renderPresentation must produce a signed resolution for the
+    // finalization path to read back.
+    expect(rendered).not.toBeNull();
+    const renderedSlackData = (rendered ?? basePayload).channelData?.slack as
+      | Record<string, unknown>
+      | undefined;
+    expect(renderedSlackData?.renderedPresentationSegments).toBeDefined();
+
+    await slackOutbound.afterDeliverPayload!({
+      cfg,
+      target: { to: "C123", accountId: "default" },
+      payload: rendered ?? basePayload,
+      results: [
+        {
+          channel: "slack",
+          messageId: "m-card",
+          target: { kind: "channel" as const, id: "C123" },
+          meta: {
+            slackQuestionActionIds: ["openclaw:question_button"],
+            [SLACK_QUESTION_FINALIZATION_BLOCKS]: [
+              { type: "section", text: { type: "mrkdwn", text: "Pick an option" } },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(registerChannelDeliveryMock).toHaveBeenCalledOnce();
+    expect(capturedFinalize).toBeDefined();
+    await capturedFinalize!("Answered: yes");
+
+    expect(updateMessageSlackMock).toHaveBeenCalledOnce();
+    const finalizedText = updateMessageSlackMock.mock.calls[0]?.[0]?.text ?? "";
+    expect(finalizedText).not.toContain("Spoken summary");
+    expect(finalizedText).toContain("Answered: yes");
   });
 });
