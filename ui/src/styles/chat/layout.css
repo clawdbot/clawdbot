@@ -7113,8 +7113,7 @@ button.chat-pr__diff {
         max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px))
     );
     margin: var(--chat-composer-top-margin, 0px)
-      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px))
-      calc(14px + var(--safe-area-bottom, 0px));
+      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px)) 0;
     margin-left: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px));
     gap: 6px;
   }
@@ -7139,12 +7138,6 @@ button.chat-pr__diff {
     width: calc(100% - 2 * var(--chat-mobile-edge-inset, 4px));
     margin-right: var(--chat-mobile-edge-inset, 4px);
     margin-left: var(--chat-mobile-edge-inset, 4px);
-  }
-}
-
-@media (display-mode: standalone) and (max-width: 768px) {
-  .agent-chat__composer-shell {
-    margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));
   }
 }
 
