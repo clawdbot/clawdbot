@@ -1095,6 +1095,41 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("selected=");
   });
 
+  it("falls back to a v-prefixed branch when no matching release tag exists", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2-hotfix
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s branch=%s kind=%s\\n' "$selected" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$branch_head" && "$GIT_REF_KIND" == "moving" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("kind=moving");
+    expect(result.stdout).toContain("selected=");
+  });
+
   it("updates a stale existing main checkout from the remote tracking ref", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
