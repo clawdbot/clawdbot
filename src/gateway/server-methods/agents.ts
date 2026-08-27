@@ -1034,12 +1034,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
         if (!isConfiguredAgent(lockedConfig, agentId)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
         }
-        const nextConfig = applyAgentConfig(lockedConfig, agentConfigUpdate);
+        const lockedNextConfig = applyAgentConfig(lockedConfig, agentConfigUpdate);
         const persistedIdentity = normalizeIdentityForFile(
-          resolveAgentIdentity(nextConfig, agentId),
+          resolveAgentIdentity(lockedNextConfig, agentId),
         );
         if (workspaceDir || hasIdentityFields) {
-          const identityWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, agentId);
+          const identityWorkspaceDir = resolveAgentWorkspaceDir(lockedNextConfig, agentId);
           const previousWorkspaceDir = resolveAgentWorkspaceDir(lockedConfig, agentId);
           const fallbackWorkspaceDir =
             workspaceDir && identityWorkspaceDir !== previousWorkspaceDir
