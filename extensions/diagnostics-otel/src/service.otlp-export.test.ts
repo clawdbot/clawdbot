@@ -274,11 +274,42 @@ const SHARED_ENDPOINT_ROUTING_CASES = [
       "/api/public/otel/v1/logs",
     ],
   },
+  {
+    label: "signal-qualified path with trailing slash",
+    suffix: "/api/public/otel/v1/traces/",
+    expected: [
+      "/api/public/otel/v1/traces",
+      "/api/public/otel/v1/metrics",
+      "/api/public/otel/v1/logs",
+    ],
+  },
+  {
+    label: "custom path with query slash",
+    suffix: "/api/public/otel/?tenant=team/",
+    expected: [
+      "/api/public/otel/v1/traces?tenant=team/",
+      "/api/public/otel/v1/metrics?tenant=team/",
+      "/api/public/otel/v1/logs?tenant=team/",
+    ],
+  },
+  {
+    label: "signal path with query slash",
+    suffix: "/api/public/otel/v1/traces/?tenant=team/",
+    expected: [
+      "/api/public/otel/v1/traces/?tenant=team/",
+      "/api/public/otel/v1/metrics?tenant=team/",
+      "/api/public/otel/v1/logs?tenant=team/",
+    ],
+  },
 ] as const;
 
-test.each(SHARED_ENDPOINT_ROUTING_CASES)(
-  "routes real exporters from a shared $label endpoint",
-  async ({ suffix, expected }) => {
+test.each(
+  SHARED_ENDPOINT_ROUTING_CASES.flatMap((entry) =>
+    (["config", "environment"] as const).map((source) => ({ ...entry, source })),
+  ),
+)(
+  "routes real exporters from a shared $label endpoint in $source",
+  async ({ suffix, expected, source }) => {
     const receiver = await startOtlpReceiver();
     releasePreloadedOtelGlobals();
     const { service, ctx } = await startOtelService({
@@ -286,6 +317,12 @@ test.each(SHARED_ENDPOINT_ROUTING_CASES)(
       traces: true,
       metrics: true,
       logs: true,
+      configure: (serviceContext) => {
+        if (source === "environment") {
+          delete serviceContext.config.diagnostics!.otel!.endpoint;
+          process.env.OTEL_EXPORTER_OTLP_ENDPOINT = `${receiver.endpoint}${suffix}`;
+        }
+      },
     });
 
     try {
