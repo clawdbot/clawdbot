@@ -1292,6 +1292,11 @@ is required.
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
+              filesystem: {
+                ":root": "read",
+                ":tmpdir": "write",
+                "~/.ssh": "deny",
+              },
               domains: {
                 "api.openai.com": "allow",
                 "blocked.example.com": "deny",
@@ -1316,7 +1321,11 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile: Codex managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 Domain entries use `allow` or `deny`; Unix socket entries use Codex's
-`allow` or `none` values.
+`allow` or `none` values. Additional filesystem entries use `read`, `write`,
+or `deny`. OpenClaw preserves the generated `:minimal` entry and the
+`baseProfile` project-root access; filesystem entries cannot replace those two
+base rules. Use explicit deny entries for credential directories whenever a
+broader read entry is configured.
 
 ### Image loader ownership
 

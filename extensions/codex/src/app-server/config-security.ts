@@ -62,8 +62,13 @@ export function resolveCodexAppServerNetworkProxy(
     dangerously_allow_non_loopback_proxy: config.dangerouslyAllowNonLoopbackProxy,
     dangerously_allow_all_unix_sockets: config.dangerouslyAllowAllUnixSockets,
   });
+  const additionalFilesystem = normalizeNetworkProxyPermissionMap(config.filesystem) ?? {};
+  delete additionalFilesystem[":minimal"];
+  delete additionalFilesystem[":project_roots"];
+  delete additionalFilesystem[":workspace_roots"];
   const profile = {
     filesystem: {
+      ...additionalFilesystem,
       ":minimal": "read",
       ":project_roots": {
         ".": fileSystemMode,

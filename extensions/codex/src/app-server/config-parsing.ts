@@ -62,12 +62,16 @@ const codexAppServerExperimentalSchema = z
   .strict();
 const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
+const codexAppServerNetworkProxyFilesystemPermissionSchema = z.enum(["read", "write", "deny"]);
 const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
 const codexAppServerNetworkProxySchema = z
   .object({
     enabled: z.boolean().optional(),
     profileName: z.string().trim().min(1).optional(),
     baseProfile: z.enum(["read-only", "workspace"]).optional(),
+    filesystem: z
+      .record(z.string(), codexAppServerNetworkProxyFilesystemPermissionSchema)
+      .optional(),
     mode: z.enum(["limited", "full"]).optional(),
     domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
     unixSockets: z

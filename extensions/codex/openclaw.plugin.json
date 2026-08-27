@@ -372,6 +372,13 @@
                 "type": "string",
                 "enum": ["read-only", "workspace"]
               },
+              "filesystem": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": ["read", "write", "deny"]
+                }
+              },
               "mode": {
                 "type": "string",
                 "enum": ["limited", "full"]
@@ -716,6 +723,11 @@
     "appServer.networkProxy.baseProfile": {
       "label": "Network Proxy Base",
       "help": "Filesystem access used by the generated profile. Defaults to read-only for read-only sandboxes and workspace otherwise.",
+      "advanced": true
+    },
+    "appServer.networkProxy.filesystem": {
+      "label": "Additional Filesystem Permissions",
+      "help": "Additional Codex filesystem permission-profile entries. The generated minimal and project-root entries remain authoritative.",
       "advanced": true
     },
     "appServer.networkProxy.domains": {

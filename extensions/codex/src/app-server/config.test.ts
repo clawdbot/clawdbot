@@ -259,6 +259,38 @@ describe("Codex app-server config", () => {
     expect(permissions[profileName ?? ""]?.filesystem[":project_roots"]["."]).toBe("read");
   });
 
+  it("adds declared filesystem rules to network proxy profiles", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          sandbox: "workspace-write",
+          networkProxy: {
+            enabled: true,
+            filesystem: {
+              " :root ": "read",
+              ":tmpdir": "write",
+              ":workspace_roots": "deny",
+              "~/.ssh": "deny",
+            },
+          },
+        },
+      },
+    });
+    const profileName = runtime.networkProxy?.profileName;
+    const permissions = runtime.networkProxy?.configPatch.permissions as Record<
+      string,
+      { filesystem: Record<string, unknown> }
+    >;
+
+    expect(permissions[profileName ?? ""]?.filesystem).toEqual({
+      ":minimal": "read",
+      ":project_roots": { ".": "write" },
+      ":root": "read",
+      ":tmpdir": "write",
+      "~/.ssh": "deny",
+    });
+  });
+
   it("clamps oversized app-server timer config", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {

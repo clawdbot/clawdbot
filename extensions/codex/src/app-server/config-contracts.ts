@@ -130,6 +130,7 @@ type CodexAppServerExperimentalConfig = {
 };
 
 type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
+type CodexAppServerNetworkProxyFilesystemPermission = "read" | "write" | "deny";
 type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
 type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
 type CodexAppServerNetworkProxyMode = "limited" | "full";
@@ -138,6 +139,7 @@ export type CodexAppServerNetworkProxyConfig = {
   enabled?: boolean;
   profileName?: string;
   baseProfile?: CodexAppServerNetworkProxyBaseProfile;
+  filesystem?: Record<string, CodexAppServerNetworkProxyFilesystemPermission>;
   mode?: CodexAppServerNetworkProxyMode;
   domains?: Record<string, CodexAppServerNetworkProxyDomainPermission>;
   unixSockets?: Record<string, CodexAppServerNetworkProxyUnixSocketPermission>;
