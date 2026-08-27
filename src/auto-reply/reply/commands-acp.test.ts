@@ -1929,6 +1929,14 @@ describe("/acp command", () => {
     const result = await runThreadAcpCommand("/acp close", baseCfg);
 
     expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
+    expectMockCallFields(hoisted.closeMock, {
+      cfg: baseCfg,
+      sessionKey: defaultAcpSessionKey,
+      reason: "manual-close",
+      allowBackendUnavailable: true,
+      discardPersistentState: true,
+      clearMeta: true,
+    });
     expectMockCallFields(hoisted.sessionBindingUnbindMock, {
       targetSessionKey: defaultAcpSessionKey,
       reason: "manual",
@@ -1964,6 +1972,7 @@ describe("/acp command", () => {
       sessionKey: defaultAcpSessionKey,
       reason: "manual-close",
       allowBackendUnavailable: true,
+      discardPersistentState: true,
       clearMeta: true,
     });
     expectMockCallFields(hoisted.sessionBindingUnbindMock, {

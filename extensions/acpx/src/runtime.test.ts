@@ -1953,9 +1953,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
-    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
-    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
 
     await wrappedStore.save({
       acpxRecordId: "fresh-record",
@@ -1965,7 +1965,39 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toEqual({
       acpxRecordId: "stale",
     });
-    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(3);
+  });
+
+  it("persists fresh-session preparation across runtime instances", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      closed: false,
+      acpx: {},
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => structuredClone(persisted)),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+
+    const { runtime } = makeRuntime(baseStore);
+    await runtime.prepareFreshSession({ sessionKey });
+
+    expect(baseStore["save"]).toHaveBeenCalledOnce();
+    expect(persisted).toMatchObject({
+      acpxRecordId: sessionKey,
+      closed: true,
+      acpx: { reset_on_next_ensure: true },
+    });
+
+    const { wrappedStore: restartedStore } = makeRuntime(baseStore);
+    await expect(restartedStore.load(sessionKey)).resolves.toMatchObject({
+      acpxRecordId: sessionKey,
+      closed: true,
+      acpx: { reset_on_next_ensure: true },
+    });
   });
 
   it("marks the session fresh after discardPersistentState close", async () => {
