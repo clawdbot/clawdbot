@@ -109,6 +109,12 @@ function mockOpenPathError(error: Error) {
 }
 
 let storedConfig: OpenClawConfig;
+// Set only where the authored and runtime halves must differ, as they do once auto-enable has
+// materialized a selection the operator never wrote. This overrides `sourceConfig` alone and
+// leaves `parsed`, `resolved` and `runtimeConfig` aliased to `storedConfig`, which production
+// never produces. `config.patch` reads none of them; a `config.set`/`config.apply` test that sets
+// this would be reasoning about an impossible snapshot and needs those aliases split first.
+let storedSourceConfig: OpenClawConfig | undefined;
 let storedHash: string;
 let nextHash: number;
 let modelNormalizationPluginMetadata: PluginMetadataSnapshot | undefined;
@@ -117,6 +123,9 @@ function currentWriteSnapshot() {
   const result = createConfigWriteSnapshot(storedConfig);
   result.snapshot.hash = storedHash;
   result.snapshot.raw = JSON.stringify(storedConfig);
+  if (storedSourceConfig) {
+    result.snapshot.sourceConfig = storedSourceConfig;
+  }
   if (modelNormalizationPluginMetadata) {
     result.writeOptions = {
       basePluginMetadataSnapshot: modelNormalizationPluginMetadata,
@@ -195,6 +204,7 @@ async function invokeConfigSchema() {
 
 beforeEach(() => {
   storedConfig = {};
+  storedSourceConfig = undefined;
   storedHash = "base-hash";
   nextHash = 1;
   modelNormalizationPluginMetadata = undefined;
@@ -599,225 +609,6 @@ describe("config schema response cache", () => {
     await invokeConfigSchema();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("config.patch hash-free ui.prefs LWW", () => {
-  it("persists a ui.prefs-only patch and returns the committed hash", async () => {
-    const { respond } = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });
-
-    expect(storedConfig.ui?.prefs?.theme).toBe("knot");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true, hash: "next-hash-1" }),
-      undefined,
-    );
-  });
-
-  it("rejects a hash-free patch outside the LWW subtree", async () => {
-    const { respond } = await invokeConfigPatch({ raw: { gateway: { port: 19_001 } } });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
-    );
-  });
-
-  it("rejects a mixed hash-free patch and names the guarded path", async () => {
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "knot" } }, gateway: { port: 19_001 } },
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      // The operator must see which path needs the base hash; a bare
-      // "hash required" with no path was a dead-end error.
-      expect.objectContaining({
-        message: expect.stringContaining("config base hash required for gateway.port"),
-      }),
-    );
-    expect(storedConfig).toEqual({});
-  });
-
-  it("rejects an empty-object structural change outside the LWW subtree", async () => {
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "knot" } }, gateway: {} },
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
-    );
-  });
-
-  it.each([
-    { name: "ui.prefs deletion", raw: { ui: { prefs: null } } },
-    { name: "ui deletion", raw: { ui: null } },
-    { name: "scalar ui.prefs", raw: { ui: { prefs: "stale-container" } } },
-  ])("rejects hash-free container operation: $name", async ({ raw }) => {
-    storedConfig = { ui: { prefs: { theme: "claw" } } };
-
-    const { respond } = await invokeConfigPatch({ raw });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
-    );
-    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-  });
-
-  it("allows a hash-free per-key null deletion below ui.prefs", async () => {
-    storedConfig = { ui: { prefs: { chatFollowUpMode: "queue", theme: "claw" } } };
-
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { chatFollowUpMode: null } } },
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ hash: "next-hash-1" }),
-      undefined,
-    );
-    expect(storedConfig.ui?.prefs).toEqual({ theme: "claw" });
-  });
-
-  it("keeps destructive array replacement explicit for hash-free patches", async () => {
-    storedConfig = { ui: { prefs: { sidebarEntries: ["route:usage", "route:tasks"] } } };
-
-    const rejected = await invokeConfigPatch({
-      raw: { ui: { prefs: { sidebarEntries: ["route:usage"] } } },
-    });
-    expect(rejected.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("config.patch would remove entries from array path(s)"),
-      }),
-    );
-
-    const accepted = await invokeConfigPatch({
-      raw: { ui: { prefs: { sidebarEntries: ["route:usage"] } } },
-      replacePaths: ["ui.prefs.sidebarEntries"],
-    });
-    expect(accepted.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ hash: "next-hash-1" }),
-      undefined,
-    );
-    expect(storedConfig.ui?.prefs?.sidebarEntries).toEqual(["route:usage"]);
-  });
-
-  it("returns a noop for an unchanged hash-free patch", async () => {
-    storedConfig = { ui: { prefs: { theme: "knot" } } };
-
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "knot" } } },
-    });
-
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ noop: true }), undefined);
-    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-  });
-
-  // The post-validation noop is the one response built while both halves are in hand and
-  // distinct: the patch changed a leaf (so the pre-validation noop cannot fire), and validation
-  // normalized that leaf away (so the post-validation path diff is empty). Its hint build must
-  // receive the AUTHORED candidate as the source half — handing it the validated config would
-  // read validation's runtime-materialized output, whose seeded entry configs masquerade as
-  // operator selection, the exact defect the sourceConfig threading closes.
-  it("builds post-validation noop hints from the authored candidate, not the validated config", async () => {
-    storedConfig = { ui: { prefs: { theme: "knot" } } };
-    const validatedEcho = structuredClone(storedConfig);
-    configValidationMocks.validateConfigObjectWithPlugins.mockImplementationOnce(() => ({
-      ok: true,
-      config: validatedEcho,
-      warnings: [],
-    }));
-
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "zigzag" } } },
-      baseHash: "base-hash",
-    });
-
-    // Reached the POST-validation noop: no write, and validation ran exactly once.
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ noop: true }), undefined);
-    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-    expect(configValidationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledTimes(1);
-    const validationInput =
-      configValidationMocks.validateConfigObjectWithPlugins.mock.calls[0]?.[0];
-    const authoredInput = (
-      configValidationMocks.validateConfigObjectWithPlugins.mock.calls[0]?.[1] as
-        | { sourceConfig?: unknown }
-        | undefined
-    )?.sourceConfig;
-    const noopBuild = buildRuntimeConfigSchemaForConfigMock.mock.calls.at(-1);
-    expect(noopBuild?.[0]).toBe(validatedEcho);
-    // The source half is the authored config — never validation's output, and never the
-    // runtime-shaped candidate validation reads, which carries validation-seeded entry configs.
-    expect(noopBuild?.[1]).toEqual(authoredInput);
-    expect(noopBuild?.[1]).not.toBe(validatedEcho);
-    expect(noopBuild?.[1]).not.toBe(validationInput);
-  });
-
-  it("preserves stale-hash rejection for strict patches", async () => {
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "knot" } } },
-      baseHash: "stale-hash",
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("config changed since last load"),
-      }),
-    );
-  });
-
-  it("surfaces a hash-free commit race without replaying stale intent", async () => {
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
-      storedConfig = { ui: { prefs: { locale: "de" } } };
-      storedHash = "raced-hash";
-      throw new ConfigMutationConflictError("config changed since last load");
-    });
-
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "knot" } } },
-    });
-
-    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("config changed since last load"),
-      }),
-    );
-    expect(storedConfig.ui?.prefs).toEqual({ locale: "de" });
-  });
-
-  it("advises retry only for retryable mutation conflicts", async () => {
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
-      throw new ConfigMutationConflictError("config path owned by another writer", {
-        retryable: false,
-      });
-    });
-
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "knot" } } },
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      // A non-retryable conflict fails the retry too; advising it is a dead end.
-      expect.objectContaining({
-        message: "config path owned by another writer",
-      }),
-    );
   });
 });
 

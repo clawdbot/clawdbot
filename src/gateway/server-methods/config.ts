@@ -1352,18 +1352,6 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const restoredChangedPaths = diffConfigLeafPaths(snapshot.config, restoredMerge.result);
-    if (hashlessPatch && !restoredChangedPaths.every(isHashlessPatchLwwPath)) {
-      const guardedPaths = restoredChangedPaths.filter((path) => !isHashlessPatchLwwPath(path));
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `config base hash required for ${guardedPaths.join(", ")}; re-run config.get and retry with baseHash`,
-        ),
-      );
-      return;
-    }
     // Same patch, applied to the authored snapshot. Channel schema ownership inside validation
     // must read explicit selection from what the operator wrote, and `restoredMerge.result` is
     // built on `snapshot.config`, which carries validation-seeded entry configs. This is also the
@@ -1408,6 +1396,42 @@ export const configHandlers: GatewayRequestHandlers = {
       snapshot.sourceConfig,
       authoredCandidate,
     ).filter(isChannelOwnershipSourcePath);
+    // Both halves gate the hashless path, and the authored half has to be computed first to do
+    // it. `restoredChangedPaths` compares runtime shapes, so a patch that writes a leaf the
+    // runtime half already carries -- a `plugins.entries.<id>.enabled` auto-enable materialized,
+    // or a default `materializeRuntimeConfig` applied -- changes nothing there and leaves the
+    // array empty, which `every` accepts. The authored diff is the one that sees it, and a
+    // `ui.prefs` leaf in the same patch defeats the no-op return below, so without this the
+    // authored write lands from a request carrying no `baseHash`.
+    //
+    // The UNFILTERED authored diff gates this, not `authoredChangedPaths`. That set is narrowed to
+    // ownership paths for the no-op and restart reasoning below; reusing it here would leave the
+    // same escape open one key over. The worst of those is not an ownership edit at all: a patch
+    // may carry the public redaction sentinel for a secret, restoration resolves it against
+    // `snapshot.config`, and the authored file would gain the resolved plaintext of a value the
+    // operator had written as an env or secret reference -- from a caller that never knew it.
+    //
+    // Ordering note: the authored merge can fail on its own, so a malformed hashless patch now
+    // reports that failure instead of the missing base hash. Both are INVALID_REQUEST.
+    const authoredChangedPathsForHashlessGuard = diffConfigLeafPaths(
+      snapshot.sourceConfig,
+      authoredCandidate,
+    );
+    const hashlessGuardedPaths = [
+      ...restoredChangedPaths,
+      ...authoredChangedPathsForHashlessGuard,
+    ].filter((path) => !isHashlessPatchLwwPath(path));
+    if (hashlessPatch && hashlessGuardedPaths.length > 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `config base hash required for ${[...new Set(hashlessGuardedPaths)].join(", ")}; re-run config.get and retry with baseHash`,
+        ),
+      );
+      return;
+    }
     const actor = resolveControlPlaneActor(client);
     if (restoredChangedPaths.length === 0 && authoredChangedPaths.length === 0) {
       respondConfigPatchNoop({
