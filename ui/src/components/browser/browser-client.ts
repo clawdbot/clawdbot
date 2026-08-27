@@ -215,9 +215,13 @@ async function evaluateInBrowser<T>(
 
 /** True when the failure is the config-gated `browser.evaluateEnabled=false` rejection. */
 export function isBrowserEvaluateDisabledError(err: unknown): boolean {
-  return (
-    err instanceof GatewayRequestError && asRecord(err.details)?.code === "ACT_EVALUATE_DISABLED"
-  );
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const code = err instanceof GatewayRequestError ? asRecord(err.details)?.code : undefined;
+  return code === undefined
+    ? err.message.includes("evaluateEnabled=false")
+    : code === "ACT_EVALUATE_DISABLED";
 }
 
 export async function scrollBrowserBy(
