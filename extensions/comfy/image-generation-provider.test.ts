@@ -1,5 +1,8 @@
 // Comfy tests cover image generation provider plugin behavior.
 import type { LookupAddress } from "node:dns";
+import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
@@ -10,6 +13,7 @@ import {
   mockComfyProviderApiKey,
   parseComfyJsonBody,
 } from "./test-helpers.js";
+import { isComfyCapabilityConfigured } from "./workflow-runtime.js";
 
 type FetchWithSsrFGuard = (typeof import("openclaw/plugin-sdk/ssrf-runtime"))["fetchWithSsrFGuard"];
 
@@ -538,6 +542,63 @@ describe("comfy image-generation provider", () => {
       }),
     ).rejects.toThrow(/unavailable secret/);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves a non-env (file-backed) SecretRef header value, not just env", async () => {
+    mockLocalImageResponses("auth-file-secretref-1");
+    // A dedicated mkdtemp dir gets restrictive (0700) permissions by
+    // default; writing straight into the shared, world-writable tmpdir()
+    // root fails readSecureFile's containing-directory security check.
+    const tmpDir = await fs.mkdtemp(join(tmpdir(), "comfy-header-secret-"));
+    const tmpFile = join(tmpDir, "token.txt");
+    await fs.writeFile(tmpFile, "Basic ZmlsZS1zZWNyZXQ=");
+    await fs.chmod(tmpFile, 0o600);
+    try {
+      const provider = buildComfyImageGenerationProvider();
+      await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: {
+          ...buildComfyConfig({
+            ...testWorkflowConfig(),
+            headers: {
+              Authorization: { source: "file", provider: "comfyheaderfile", id: "value" },
+            },
+          }),
+          secrets: {
+            providers: {
+              comfyheaderfile: { source: "file", path: tmpFile, mode: "singleValue" },
+            },
+          },
+        } as never,
+      });
+
+      const submitHeaders = new Headers(fetchRequest(1).init?.headers);
+      expect(submitHeaders.get("authorization")).toBe("Basic ZmlsZS1zZWNyZXQ=");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hides a local capability whose header SecretRef cannot be confirmed available", () => {
+    const cfg = buildComfyConfig({
+      ...testWorkflowConfig(),
+      headers: {
+        Authorization: { source: "env", provider: "default", id: "COMFY_TEST_VETO_MISSING_ENV" },
+      },
+    });
+
+    expect(isComfyCapabilityConfigured({ cfg, capability: "image" })).toBe(false);
+  });
+
+  it("keeps a local capability configured when a header is a literal string", () => {
+    const cfg = buildComfyConfig({
+      ...testWorkflowConfig(),
+      headers: { Authorization: "Basic literal" },
+    });
+
+    expect(isComfyCapabilityConfigured({ cfg, capability: "image" })).toBe(true);
   });
 
   it("injects a fresh random seed per submission when seedNodeId is configured", async () => {

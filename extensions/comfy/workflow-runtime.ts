@@ -19,6 +19,7 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeSecretInputString,
+  resolveConfiguredSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
@@ -270,52 +271,54 @@ function generateComfySeed(): number {
 // sit behind HTTP auth (Basic auth, a bearer token, etc.) that the plugin has
 // no built-in scheme for. A generic header passthrough -- same shape as the
 // established `remote.headers` config pattern (see the ollama plugin) --
-// covers that without inventing a Comfy-specific auth scheme. Each value
-// resolves through the same SecretInput path as `apiKey` (literal string or
-// a SecretRef), matching the ollama plugin's header-secret precedent -- a
-// credential-bearing header must never be forced into plaintext config.
-function resolveComfyHeadersConfig(
+// covers that without inventing a Comfy-specific auth scheme. A literal
+// string resolves synchronously via the cheap inspect path; a SecretRef of
+// any provider (env, file, keychain, plugin-backed) resolves through the
+// same full async resolver the ollama plugin uses for its own headers --
+// unlike `resolveComfyApiKey`'s sync-only env fallback (constrained by its
+// additional use in the sync `isComfyCapabilityConfigured` veto), this
+// function is only ever called from the already-async request path, so it
+// can resolve any configured provider rather than just env.
+async function resolveComfyHeadersConfig(
   value: unknown,
-  cfg?: OpenClawConfig,
-): Record<string, string> | undefined {
+  cfg: OpenClawConfig,
+): Promise<Record<string, string> | undefined> {
   if (!isRecord(value)) {
     return undefined;
   }
   const headers: Record<string, string> = {};
   for (const [name, headerValue] of Object.entries(value)) {
-    const resolved = resolveSecretInputString({
+    const path = `plugins.entries.comfy.config.headers.${name}`;
+    const inspected = resolveSecretInputString({
       value: headerValue,
-      path: `plugins.entries.comfy.config.headers.${name}`,
-      defaults: cfg?.secrets?.defaults,
+      path,
+      defaults: cfg.secrets?.defaults,
       mode: "inspect",
     });
-    if (resolved.status === "available") {
-      const normalized = normalizeSecretInputString(resolved.value);
+    if (inspected.status === "available") {
+      const normalized = normalizeSecretInputString(inspected.value);
       if (normalized) {
         headers[name] = normalized;
       }
       continue;
     }
-    if (resolved.status === "missing") {
+    if (inspected.status === "missing") {
       continue;
     }
-    if (resolved.ref.source === "env") {
-      const envVarName = resolved.ref.id.trim();
-      const normalized = canResolveEnvSecretRefInReadOnlyPath({
-        cfg,
-        provider: resolved.ref.provider,
-        id: envVarName,
-      })
-        ? normalizeSecretInputString(process.env[envVarName])
-        : undefined;
-      if (normalized) {
-        headers[name] = normalized;
-        continue;
-      }
+    const resolved = await resolveConfiguredSecretInputString({
+      config: cfg,
+      env: process.env,
+      value: headerValue,
+      path,
+      unresolvedReasonStyle: "detailed",
+    });
+    if (resolved.unresolvedRefReason) {
+      throw new Error(`${path} references an unavailable secret: ${resolved.unresolvedRefReason}`);
     }
-    throw new Error(
-      `plugins.entries.comfy.config.headers.${name} references an unavailable secret`,
-    );
+    const normalized = normalizeSecretInputString(resolved.value);
+    if (normalized) {
+      headers[name] = normalized;
+    }
   }
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
@@ -668,6 +671,41 @@ async function downloadOutputFile(params: {
   }
 }
 
+// Sync check mirroring resolveComfyApiKey's existing veto exactly: an env
+// ref can be confirmed synchronously (env access needs no I/O), so only a
+// genuinely empty/unset env var, or any non-env ref (file/keychain/exec --
+// inspect mode never attempts those, no sync way to confirm them), counts
+// as unavailable. Hide the capability in that case rather than advertise a
+// tool call that always throws on invocation; runComfyWorkflow's async path
+// still attempts full resolution for a non-env ref at request time.
+function hasUnavailableComfyHeaderSecret(value: unknown, cfg?: OpenClawConfig): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.entries(value).some(([name, headerValue]) => {
+    const inspected = resolveSecretInputString({
+      value: headerValue,
+      path: `plugins.entries.comfy.config.headers.${name}`,
+      defaults: cfg?.secrets?.defaults,
+      mode: "inspect",
+    });
+    if (inspected.status === "available" || inspected.status === "missing") {
+      return false;
+    }
+    if (inspected.ref.source !== "env") {
+      return true;
+    }
+    const envVarName = inspected.ref.id.trim();
+    const resolvable =
+      canResolveEnvSecretRefInReadOnlyPath({
+        cfg,
+        provider: inspected.ref.provider,
+        id: envVarName,
+      }) && Boolean(normalizeSecretInputString(process.env[envVarName]));
+    return !resolvable;
+  });
+}
+
 export function isComfyCapabilityConfigured(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -681,6 +719,9 @@ export function isComfyCapabilityConfigured(params: {
   );
   const hasPromptNode = Boolean(normalizeOptionalString(capabilityConfig.promptNodeId));
   if (!hasWorkflow || !hasPromptNode) {
+    return false;
+  }
+  if (hasUnavailableComfyHeaderSecret(capabilityConfig.headers, params.cfg)) {
     return false;
   }
   if (resolveComfyMode(capabilityConfig) === "local") {
@@ -780,7 +821,7 @@ export async function runComfyWorkflow(params: {
       defaultBaseUrl:
         mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
       allowPrivateNetwork: mode === "local" || explicitAllowPrivateNetwork,
-      headers: resolveComfyHeadersConfig(capabilityConfig.headers, params.cfg),
+      headers: await resolveComfyHeadersConfig(capabilityConfig.headers, params.cfg),
       defaultHeaders:
         mode === "cloud"
           ? {
