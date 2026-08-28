@@ -6116,7 +6116,7 @@ server.listen(0, "127.0.0.1", () => {
 
       expect(checkoutStep.uses, jobName).toBe(CHECKOUT_V6);
       expect(checkoutStep.with, jobName).toEqual({
-        "fetch-depth": 1,
+        "fetch-depth": 0,
         "persist-credentials": false,
       });
     }
@@ -10476,7 +10476,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(job.steps[0]).toMatchObject({
       uses: CHECKOUT_V6,
       with: {
-        "fetch-depth": 1,
+        "fetch-depth": 0,
         "persist-credentials": false,
         ref: "${{ github.workflow_sha }}",
       },
@@ -10505,7 +10505,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         with: { "app-id": "2971289", "permission-members": "read" },
       },
     ]);
-    expect(publisher).toContain('const CHECK_NAME = "openclaw/crabbox-gate"');
+    expect(publisher).toContain("const CHECK_NAME = CRABBOX_GATE_CHECK_NAME");
+    expect(readFileSync("scripts/pr-lib/crabbox-gate-contract.mjs", "utf8")).toContain(
+      'CRABBOX_GATE_CHECK_NAME = "openclaw/crabbox-gate"',
+    );
     expect(publisher).not.toContain('const CHECK_NAME = "openclaw/ci-gate"');
+    expect(workflow.on.workflow_dispatch.inputs).toHaveProperty("base_sha");
   });
 });

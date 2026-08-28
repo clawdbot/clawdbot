@@ -2255,6 +2255,15 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/pr$/u, ["pr-merge", "pr-operation-lock", "pr-wrappers"]],
+  [
+    /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
+    ["pr-crabbox-gate-publisher", "pr-crabbox-merge-bypass"],
+  ],
+  [
+    /^scripts\/pr-lib\/crabbox-gate-plan\.mts$/u,
+    ["pr-crabbox-gate-plan", "pr-crabbox-gate-publisher", "pr-prepare-gates"],
+  ],
+  [/^scripts\/pr-lib\/crabbox-merge-bypass\.sh$/u, ["pr-crabbox-merge-bypass", "pr-merge"]],
   [/^scripts\/lib\/windows-taskkill\.mjs$/u, ["managed-child-process", "run-with-env"]],
   [
     /^scripts\/lib\/config-boundary-guard\.mts$/u,

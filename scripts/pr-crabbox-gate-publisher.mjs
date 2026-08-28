@@ -1,30 +1,31 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "./lib/record-shared.mjs";
+import {
+  buildCrabboxGateCommand,
+  crabboxGatePlanDigest,
+  CRABBOX_GATE_CHECK_NAME,
+  formatCrabboxGateCheckSummary,
+  validateCrabboxGatePlan,
+} from "./pr-lib/crabbox-gate-contract.mjs";
+import { resolveCrabboxGatePlan } from "./pr-lib/crabbox-gate-plan.mts";
 
 const REPOSITORY = "openclaw/openclaw";
 const ORGANIZATION = "openclaw";
 const WORKFLOW = ".github/workflows/pr-crabbox-gate-publisher.yml";
 const BOOTSTRAP_PATH = "scripts/crabbox-untrusted-bootstrap.sh";
-const CHECK_NAME = "openclaw/crabbox-gate";
+const CHECK_NAME = CRABBOX_GATE_CHECK_NAME;
 const CHECK_APP_ID = 15368;
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const RUN_ID_PATTERN = /^run_[a-z0-9]+$/u;
 const LEASE_ID_PATTERN = /^cbx_[a-z0-9]+$/u;
 const MAX_PROOF_AGE_MS = 2 * 60 * 60 * 1000;
-const TEST_ENV = "CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_VITEST_MAX_WORKERS=1";
-const TOOLING_TEST_FILES = [
-  "test/scripts/pr-ci-dispatch.test.ts",
-  "test/scripts/pr-crabbox-gate-publisher.test.ts",
-  "test/scripts/pr-merge.test.ts",
-  "test/scripts/pr-prepare-gates.test.ts",
-  "test/scripts/pr-wrappers.test.ts",
-].join(" ");
-const WORKFLOW_GUARD_NAME =
-  "keeps the Crabbox gate publisher on protected main with minimal permissions";
 const EXPECTED_MARKERS = [
   "OPENCLAW_CRABBOX_GATE_VERSION=1",
   "OPENCLAW_CRABBOX_GATE_MODE=remote_crabbox_aws",
@@ -70,22 +71,7 @@ function requiredEnv(env, name) {
   return requiredString(env[name], name);
 }
 
-export function buildCrabboxGateCommand(headSha, bootstrapSha256) {
-  return [
-    "set -euo pipefail",
-    "umask 022",
-    `printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_VERSION=1' 'OPENCLAW_CRABBOX_GATE_MODE=remote_crabbox_aws' 'OPENCLAW_CRABBOX_GATE_HEAD=${headSha}' 'OPENCLAW_CRABBOX_BOOTSTRAP_SHA256=${bootstrapSha256}'`,
-    "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=build:start'",
-    "pnpm build",
-    "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=build:ok' 'OPENCLAW_CRABBOX_GATE_STAGE=check:start'",
-    "pnpm check",
-    "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=check:ok' 'OPENCLAW_CRABBOX_GATE_STAGE=test:start'",
-    `${TEST_ENV} node scripts/run-vitest.mjs run --config test/vitest/vitest.tooling.config.ts ${TOOLING_TEST_FILES} --reporter=verbose`,
-    `${TEST_ENV} node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts test/scripts/pr-crabbox-merge-bypass.test.ts --reporter=verbose`,
-    `${TEST_ENV} node scripts/run-vitest.mjs run --config test/vitest/vitest.tooling.config.ts test/scripts/ci-workflow-guards.test.ts --testNamePattern '${WORKFLOW_GUARD_NAME}' --reporter=verbose`,
-    "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=test:ok' 'OPENCLAW_CRABBOX_GATE_RESULT=success'",
-  ].join("; ");
-}
+export { buildCrabboxGateCommand };
 
 export function validatePublisherRequest(event, env) {
   if (requiredEnv(env, "GITHUB_REPOSITORY") !== REPOSITORY) {
@@ -111,11 +97,12 @@ export function validatePublisherRequest(event, env) {
   }
   const inputs = assertExactKeys(
     record(event, "workflow event").inputs,
-    ["bootstrap_sha256", "crabbox_lease_id", "crabbox_run_id", "head_sha", "pr_number"],
+    ["base_sha", "bootstrap_sha256", "crabbox_lease_id", "crabbox_run_id", "head_sha", "pr_number"],
     "workflow inputs",
   );
   const context = {
     actor,
+    baseSha: requiredString(inputs.base_sha, "base_sha"),
     bootstrapSha256: requiredString(inputs.bootstrap_sha256, "bootstrap_sha256"),
     headSha: requiredString(inputs.head_sha, "head_sha"),
     leaseId: requiredString(inputs.crabbox_lease_id, "crabbox_lease_id"),
@@ -124,8 +111,11 @@ export function validatePublisherRequest(event, env) {
     runId: requiredString(inputs.crabbox_run_id, "crabbox_run_id"),
     workflowSha,
   };
-  if (!SHA_PATTERN.test(context.headSha)) {
-    throw new Error("head_sha must be exactly 40 lowercase hex characters");
+  if (!SHA_PATTERN.test(context.baseSha) || !SHA_PATTERN.test(context.headSha)) {
+    throw new Error("base_sha and head_sha must be exactly 40 lowercase hex characters");
+  }
+  if (context.baseSha !== workflowSha) {
+    throw new Error("base_sha must match the exact protected-main workflow SHA");
   }
   if (!SHA256_PATTERN.test(context.bootstrapSha256)) {
     throw new Error("bootstrap_sha256 must be exactly 64 lowercase hex characters");
@@ -144,10 +134,11 @@ function validatePullRequest(value, context) {
     throw new Error("gate target must be the requested open pull request");
   }
   if (
+    base.sha !== context.baseSha ||
     head.sha !== context.headSha ||
     record(head.repo, "pull request.head.repo").full_name !== REPOSITORY
   ) {
-    throw new Error("pull request exact head or head repository does not match");
+    throw new Error("pull request exact base, head, or head repository does not match");
   }
   if (base.ref !== "main" || record(base.repo, "pull request.base.repo").full_name !== REPOSITORY) {
     throw new Error("pull request base must be openclaw/openclaw main");
@@ -182,13 +173,17 @@ function parseTime(value, label) {
 
 export function validateBrokerProof({ bootstrapSha256, context, events, log, now, run, userId }) {
   const proof = record(run, "Crabbox run");
+  const plan = validateCrabboxGatePlan(context.plan);
+  if (plan.baseSha !== context.baseSha || plan.headSha !== context.headSha) {
+    throw new Error("Crabbox run plan does not bind the requested base and head");
+  }
   const expectedCommand = [
     "--script",
     ".local/crabbox-untrusted-bootstrap.sh",
     context.headSha,
     "/bin/bash",
     "-lc",
-    buildCrabboxGateCommand(context.headSha, bootstrapSha256),
+    buildCrabboxGateCommand(plan, bootstrapSha256),
   ];
   const leaseIds = new Set([
     proof.leaseID,
@@ -210,8 +205,10 @@ export function validateBrokerProof({ bootstrapSha256, context, events, log, now
       "Crabbox run identity, ownership, provider, lifecycle, or result does not match",
     );
   }
-  if (proof.label !== `openclaw-pr-gate:${context.prNumber}:${context.headSha}`) {
-    throw new Error("Crabbox run label does not bind the requested PR and exact head");
+  if (
+    proof.label !== `openclaw-pr-gate:${context.prNumber}:${context.baseSha}:${context.headSha}`
+  ) {
+    throw new Error("Crabbox run label does not bind the requested PR, base, and exact head");
   }
   if (
     !Array.isArray(proof.command) ||
@@ -280,7 +277,10 @@ export function validateBrokerProof({ bootstrapSha256, context, events, log, now
   if (log.length > 0) {
     for (const marker of [
       ...EXPECTED_MARKERS,
+      `OPENCLAW_CRABBOX_GATE_BASE=${context.baseSha}`,
       `OPENCLAW_CRABBOX_GATE_HEAD=${context.headSha}`,
+      `OPENCLAW_CRABBOX_GATE_PLAN_SHA256=${crabboxGatePlanDigest(plan)}`,
+      `OPENCLAW_CRABBOX_GATE_TARGET_COUNT=${plan.targets.length}`,
       `OPENCLAW_CRABBOX_BOOTSTRAP_SHA256=${bootstrapSha256}`,
     ]) {
       if (log.split(marker).length !== 2) {
@@ -294,7 +294,43 @@ function bootstrapHash(path = BOOTSTRAP_PATH) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-export async function runPublisher({ broker, event, github, organization, env, now = Date.now() }) {
+function resolvePlanInDetachedWorktree(context) {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-gate-plan-"));
+  const worktree = path.join(tempRoot, "head");
+  try {
+    execFileSync("git", ["fetch", "--no-tags", "origin", context.headSha], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    execFileSync("git", ["worktree", "add", "--detach", worktree, context.headSha], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    return resolveCrabboxGatePlan({
+      baseSha: context.baseSha,
+      cwd: worktree,
+      headSha: context.headSha,
+    });
+  } finally {
+    try {
+      if (existsSync(worktree)) {
+        execFileSync("git", ["worktree", "remove", "--force", worktree], {
+          stdio: ["ignore", "ignore", "ignore"],
+        });
+      }
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  }
+}
+
+export async function runPublisher({
+  broker,
+  event,
+  github,
+  organization,
+  env,
+  now = Date.now(),
+  resolvePlan = resolvePlanInDetachedWorktree,
+}) {
   const context = validatePublisherRequest(event, env);
   const localBootstrapHash = bootstrapHash();
   if (localBootstrapHash !== context.bootstrapSha256) {
@@ -315,6 +351,10 @@ export async function runPublisher({ broker, event, github, organization, env, n
     await github.request("GET", `/repos/${REPOSITORY}/git/ref/heads/main`),
     context.workflowSha,
   );
+  context.plan = await resolvePlan(context);
+  if (context.plan.baseSha !== context.baseSha || context.plan.headSha !== context.headSha) {
+    throw new Error("Crabbox gate plan does not bind the requested base and head");
+  }
   const user = record(
     await github.request("GET", `/users/${encodeURIComponent(context.actor)}`),
     "GitHub actor",
@@ -359,7 +399,14 @@ export async function runPublisher({ broker, event, github, organization, env, n
       head_sha: context.headSha,
       name: CHECK_NAME,
       output: {
-        summary: `Trusted Crabbox AWS proof ${context.runId} / ${context.leaseId}; build, check, and focused PR-tooling changed-surface tests passed on exact head ${context.headSha}.`,
+        summary: formatCrabboxGateCheckSummary({
+          baseSha: context.baseSha,
+          headSha: context.headSha,
+          leaseId: context.leaseId,
+          planDigest: crabboxGatePlanDigest(context.plan),
+          runId: context.runId,
+          targetCount: context.plan.targets.length,
+        }),
         title: "Crabbox AWS exact-head gate passed",
       },
       status: "completed",
@@ -455,12 +502,11 @@ async function main() {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
     if (process.argv[2] === "--print-command") {
-      const headSha = requiredString(process.argv[3], "head SHA");
+      const plan = validateCrabboxGatePlan(
+        JSON.parse(readFileSync(requiredString(process.argv[3], "plan path"), "utf8")),
+      );
       const bootstrapSha256 = requiredString(process.argv[4], "bootstrap SHA-256");
-      if (!SHA_PATTERN.test(headSha) || !SHA256_PATTERN.test(bootstrapSha256)) {
-        throw new Error("print-command requires an exact head SHA and bootstrap SHA-256");
-      }
-      console.log(buildCrabboxGateCommand(headSha, bootstrapSha256));
+      console.log(buildCrabboxGateCommand(plan, bootstrapSha256));
     } else {
       await main();
     }

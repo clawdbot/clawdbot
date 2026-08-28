@@ -74,8 +74,9 @@ EOF_RECOVERY
 ci_dispatch() {
   local pr="$1"
   shift
-  local record head_ref head_sha is_cross_repository
-  record=$(gh pr view "$pr" --json headRefName,headRefOid,isCrossRepository)
+  local record base_sha head_ref head_sha is_cross_repository
+  record=$(gh pr view "$pr" --json baseRefOid,headRefName,headRefOid,isCrossRepository)
+  base_sha=$(printf '%s\n' "$record" | jq -r .baseRefOid)
   head_ref=$(printf '%s\n' "$record" | jq -r .headRefName)
   head_sha=$(printf '%s\n' "$record" | jq -r .headRefOid)
   is_cross_repository=$(printf '%s\n' "$record" | jq -r .isCrossRepository)
@@ -89,7 +90,8 @@ ci_dispatch() {
   fi
 
   mark_pr_operation_side_effects_if_available
-  node "$script_parent_dir/pr-lib/ci-dispatch.mjs" "$pr" "$head_ref" "$head_sha" false "$@"
+  node "$script_parent_dir/pr-lib/ci-dispatch.mjs" \
+    "$pr" "$head_ref" "$head_sha" "$base_sha" false "$@"
 }
 
 mark_pr_operation_side_effects_if_available() {
@@ -288,16 +290,46 @@ read_remote_crabbox_aws_gate_stamp() {
   ' "$log_file" | tail -n 1
 }
 
+read_crabbox_gate_pr_binding() {
+  local pr="$1"
+  local expected_head="$2"
+  local expected_base="${3:-}"
+  local record
+  record=$(gh pr view "$pr" --json baseRefName,baseRefOid,headRefOid,isCrossRepository,state)
+  if [ "$(printf '%s\n' "$record" | jq -r .state)" != "OPEN" ] ||
+    [ "$(printf '%s\n' "$record" | jq -r .isCrossRepository)" != "false" ] ||
+    [ "$(printf '%s\n' "$record" | jq -r .baseRefName)" != "main" ] ||
+    [ "$(printf '%s\n' "$record" | jq -r .headRefOid)" != "$expected_head" ]; then
+    echo "Crabbox AWS gate requires the requested open same-repository PR at exact head $expected_head." >&2
+    return 1
+  fi
+  local base_sha
+  base_sha=$(printf '%s\n' "$record" | jq -r .baseRefOid)
+  if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]] ||
+    { [ -n "$expected_base" ] && [ "$base_sha" != "$expected_base" ]; }; then
+    echo "Crabbox AWS gate PR base changed or is malformed." >&2
+    return 1
+  fi
+  printf '%s\n' "$base_sha"
+}
+
 run_remote_crabbox_aws_gate() {
   local pr="$1"
-  local head_sha="$2"
-  local actor crabbox_bin bootstrap_path bootstrap_sha command log_file config_json coordinator
+  local base_sha="$2"
+  local head_sha="$3"
+  local actor crabbox_bin bootstrap_path bootstrap_sha command log_file config_json coordinator plan_file
   actor=$(require_active_org_admin_for_crabbox_gate)
   crabbox_bin=$(install_crabbox_release_v046)
   bootstrap_path=".local/crabbox-untrusted-bootstrap.sh"
   git show refs/remotes/origin/main:scripts/crabbox-untrusted-bootstrap.sh >"$bootstrap_path"
   chmod 700 "$bootstrap_path"
   bootstrap_sha=$(shasum -a 256 "$bootstrap_path" | awk '{print $1}')
+  plan_file=".local/crabbox-gate-plan.json"
+  node --import "$script_parent_dir/tsx.mjs" \
+    "$script_parent_dir/pr-lib/crabbox-gate-plan.mts" \
+    --base "$base_sha" \
+    --head "$head_sha" \
+    >"$plan_file"
   config_json=$(
     env -u CRABBOX_AWS_INSTANCE_PROFILE \
       "$crabbox_bin" config show --provider aws --json
@@ -315,10 +347,11 @@ run_remote_crabbox_aws_gate() {
       ;;
   esac
   command=$(
-    node "$script_parent_dir/pr-crabbox-gate-publisher.mjs" --print-command "$head_sha" "$bootstrap_sha"
+    node "$script_parent_dir/pr-crabbox-gate-publisher.mjs" \
+      --print-command "$plan_file" "$bootstrap_sha"
   )
   log_file=".local/gates-crabbox-aws.log"
-  echo "Running exact-head Crabbox AWS build, check, and focused PR-tooling proof as active org admin $actor." >&2
+  echo "Running exact-base/head Crabbox AWS build, check, and PR-derived test proof as active org admin $actor." >&2
   run_quiet_logged "Crabbox AWS exact-head gates" "$log_file" \
     env \
     -u AWS_ACCESS_KEY_ID \
@@ -343,7 +376,7 @@ run_remote_crabbox_aws_gate() {
     --ttl 240m \
     --stop-after always \
     --timing-json \
-    --label "openclaw-pr-gate:$pr:$head_sha" \
+    --label "openclaw-pr-gate:$pr:$base_sha:$head_sha" \
     --script "$bootstrap_path" \
     -- "$head_sha" /bin/bash -lc "$command" >&2
   local stamp
@@ -363,8 +396,10 @@ run_remote_crabbox_aws_gate() {
 finalize_remote_crabbox_aws_gate() {
   local pr="$1"
   local head_sha="$2"
-  local stamp run_id lease_id coordinator run_url bootstrap_sha
-  stamp=$(run_remote_crabbox_aws_gate "$pr" "$head_sha")
+  local base_sha stamp run_id lease_id coordinator run_url bootstrap_sha
+  base_sha=$(read_crabbox_gate_pr_binding "$pr" "$head_sha") || return 1
+  stamp=$(run_remote_crabbox_aws_gate "$pr" "$base_sha" "$head_sha")
+  read_crabbox_gate_pr_binding "$pr" "$head_sha" "$base_sha" >/dev/null || return 1
   run_id=$(printf '%s\n' "$stamp" | jq -r .runId)
   lease_id=$(printf '%s\n' "$stamp" | jq -r .leaseId)
   bootstrap_sha=$(printf '%s\n' "$stamp" | jq -r .bootstrapSha256)

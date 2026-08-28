@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dispatchScript = join(process.cwd(), "scripts/pr-lib/ci-dispatch.mjs");
 const sha = "0123456789abcdef0123456789abcdef01234567";
+const baseSha = "1111111111111111111111111111111111111111";
 const changedSha = "fedcba9876543210fedcba9876543210fedcba98";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
@@ -100,6 +101,7 @@ function runDispatch(
       "12345",
       "contributor/fix-hosted-gates",
       sha,
+      baseSha,
       "false",
       ...(options.backend === "crabbox"
         ? [
@@ -178,7 +180,7 @@ describePosix("scripts/pr ci-dispatch", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const calls = readFileSync(fakeGh.calls, "utf8");
     expect(calls).toContain(
-      `real-gh\tworkflow run pr-crabbox-gate-publisher.yml --ref main -f pr_number=12345 -f head_sha=${sha} -f crabbox_run_id=run_abc123 -f crabbox_lease_id=cbx_def456 -f bootstrap_sha256=${"a".repeat(64)}`,
+      `real-gh\tworkflow run pr-crabbox-gate-publisher.yml --ref main -f pr_number=12345 -f head_sha=${sha} -f base_sha=${baseSha} -f crabbox_run_id=run_abc123 -f crabbox_lease_id=cbx_def456 -f bootstrap_sha256=${"a".repeat(64)}`,
     );
     expect(calls).toContain(
       "gh\tapi --method GET repos/openclaw/openclaw/actions/workflows/pr-crabbox-gate-publisher.yml/runs -f event=workflow_dispatch -f branch=main -f per_page=20",
@@ -194,6 +196,7 @@ describePosix("scripts/pr ci-dispatch", () => {
         "12345",
         "contributor/fix-hosted-gates",
         sha,
+        baseSha,
         "false",
         "--backend",
         "crabbox",
@@ -217,7 +220,7 @@ describePosix("scripts/pr ci-dispatch", () => {
     const fakeGh = createFakeGh();
     const result = spawnSync(
       process.execPath,
-      [dispatchScript, "12345", "fix-hosted-gates", sha, "true"],
+      [dispatchScript, "12345", "fix-hosted-gates", sha, baseSha, "true"],
       {
         encoding: "utf8",
         env: {

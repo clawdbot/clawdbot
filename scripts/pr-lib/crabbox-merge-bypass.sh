@@ -40,6 +40,7 @@ verify_crabbox_admin_merge_bypass() {
   mkdir -p "$proof_dir"
   read_required_checks_for_crabbox_bypass "$pr" "$proof_dir/required-checks.json" || return 1
   gh_plain api user >"$proof_dir/actor.json" || return 1
+  gh_plain api "repos/{owner}/{repo}/pulls/$pr" >"$proof_dir/pull-request.json" || return 1
   local actor
   actor=$(jq -r '.login // empty' "$proof_dir/actor.json")
   if [ -z "$actor" ]; then
@@ -107,6 +108,7 @@ verify_crabbox_admin_merge_bypass() {
   if ! node "$script_parent_dir/pr-lib/crabbox-merge-bypass.mjs" \
     --actor "$proof_dir/actor.json" \
     --membership "$proof_dir/membership.json" \
+    --pull-request "$proof_dir/pull-request.json" \
     --publisher-run "$proof_dir/publisher-run.json" \
     --required-checks "$proof_dir/required-checks.json" \
     --check-runs "$proof_dir/check-runs.json" \

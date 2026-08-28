@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { validateCrabboxMergeBypass } from "../../scripts/pr-lib/crabbox-merge-bypass.mjs";
 
+const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
+const planDigest = "c".repeat(64);
 const runId = "run_abc123";
 const leaseId = "cbx_def456";
 const ciRunId = 7001;
@@ -36,7 +39,14 @@ function input() {
           id: 21,
           name: "openclaw/crabbox-gate",
           output: {
-            summary: `Trusted Crabbox AWS proof ${runId} / ${leaseId}; build, check, and full test passed on exact head ${headSha}.`,
+            summary: formatCrabboxGateCheckSummary({
+              baseSha,
+              headSha,
+              leaseId,
+              planDigest,
+              runId,
+              targetCount: 8,
+            }),
           },
           status: "completed",
         },
@@ -69,10 +79,18 @@ function input() {
       state: "active",
       user: { login: "maintainer" },
     },
+    pullRequest: {
+      base: { ref: "main", repo: { full_name: "openclaw/openclaw" }, sha: baseSha },
+      draft: false,
+      head: { repo: { full_name: "openclaw/openclaw" }, sha: headSha },
+      number: 131091,
+      state: "open",
+    },
     publisherRun: {
       conclusion: "success",
       event: "workflow_dispatch",
       head_branch: "main",
+      head_sha: baseSha,
       id: 8001,
       path: ".github/workflows/pr-crabbox-gate-publisher.yml",
       status: "completed",
@@ -104,6 +122,8 @@ describe("Crabbox admin merge bypass verifier", () => {
           name: "check",
         },
       ],
+      planDigest,
+      targetCount: 8,
     });
   });
 
@@ -137,9 +157,17 @@ describe("Crabbox admin merge bypass verifier", () => {
       /not an active openclaw organization admin/u,
     ],
     [
-      "untrusted publisher workflow",
+      "pull-ref publisher workflow",
       (value: ReturnType<typeof input>) => {
-        value.publisherRun.path = ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main";
+        value.publisherRun.path =
+          ".github/workflows/pr-crabbox-gate-publisher.yml@refs/pull/123/merge";
+      },
+      /not bound to the protected-main publisher workflow/u,
+    ],
+    [
+      "stale publisher SHA",
+      (value: ReturnType<typeof input>) => {
+        value.publisherRun.head_sha = "d".repeat(40);
       },
       /not bound to the protected-main publisher workflow/u,
     ],
@@ -167,6 +195,35 @@ describe("Crabbox admin merge bypass verifier", () => {
     const value = input();
     mutate(value);
     expect(() => validateCrabboxMergeBypass(value)).toThrow(error);
+  });
+
+  it.each([
+    [".github/workflows/pr-crabbox-gate-publisher.yml", ".github/workflows/ci.yml"],
+    [
+      ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main",
+      ".github/workflows/ci.yml@refs/heads/main",
+    ],
+  ])("accepts protected-main workflow paths %s", (publisherPath, ciPath) => {
+    const value = input();
+    value.publisherRun.path = publisherPath;
+    value.workflowRun.path = ciPath;
+    expect(validateCrabboxMergeBypass(value).planDigest).toBe(planDigest);
+  });
+
+  it.each([
+    ".github/workflows/ci.yml@refs/pull/123/merge",
+    ".github/workflows/ci.yml@refs/tags/v1.0.0",
+    ".github/workflows/ci.yml@refs/heads/release",
+  ])("rejects non-main CI workflow path %s", (workflowPath) => {
+    const value = input();
+    value.workflowRun.path = workflowPath;
+    expect(() => validateCrabboxMergeBypass(value)).toThrow(/normal CI workflow identity/u);
+  });
+
+  it("rejects stale base or altered summary binding", () => {
+    const value = input();
+    value.pullRequest.base.sha = "d".repeat(40);
+    expect(() => validateCrabboxMergeBypass(value)).toThrow(/expected broker proof/u);
   });
 
   it("rejects another unsatisfied required check", () => {

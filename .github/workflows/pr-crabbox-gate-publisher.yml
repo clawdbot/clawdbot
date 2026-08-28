@@ -12,6 +12,10 @@ on:
         description: Exact lowercase 40-character pull request head SHA
         required: true
         type: string
+      base_sha:
+        description: Exact lowercase 40-character pull request base SHA
+        required: true
+        type: string
       crabbox_run_id:
         description: Immutable broker run id
         required: true
@@ -45,7 +49,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node

@@ -277,13 +277,24 @@ describe("remote Crabbox AWS gate contract", () => {
   });
 
   it("builds the canonical deterministic proof command", () => {
+    const planPath = join(tempDirs.make("openclaw-crabbox-command-"), "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        baseSha: "a".repeat(40),
+        changedPaths: [{ path: "scripts/pr-lib/gates.sh", status: "M" }],
+        headSha: "b".repeat(40),
+        targets: ["test/scripts/pr-prepare-gates.test.ts"],
+        version: 1,
+      }),
+    );
     const result = spawnSync(
       process.execPath,
       [
         join(repoRoot, "scripts/pr-crabbox-gate-publisher.mjs"),
         "--print-command",
-        "a".repeat(40),
-        "b".repeat(64),
+        planPath,
+        "c".repeat(64),
       ],
       { encoding: "utf8" },
     );
@@ -291,28 +302,16 @@ describe("remote Crabbox AWS gate contract", () => {
     expect(result.stdout).toContain("umask 022");
     expect(result.stdout).toContain("pnpm build");
     expect(result.stdout).toContain("pnpm check");
-    for (const testFile of [
-      "test/scripts/pr-ci-dispatch.test.ts",
-      "test/scripts/pr-crabbox-gate-publisher.test.ts",
-      "test/scripts/pr-crabbox-merge-bypass.test.ts",
-      "test/scripts/pr-merge.test.ts",
-      "test/scripts/pr-prepare-gates.test.ts",
-      "test/scripts/pr-wrappers.test.ts",
-    ]) {
-      expect(result.stdout).toContain(testFile);
-    }
-    expect(result.stdout).toContain(
-      "--config test/vitest/vitest.unit-fast.config.ts test/scripts/pr-crabbox-merge-bypass.test.ts",
-    );
-    expect(result.stdout).toContain(
-      "test/scripts/ci-workflow-guards.test.ts --testNamePattern 'keeps the Crabbox gate publisher on protected main with minimal permissions'",
-    );
+    expect(result.stdout).toContain("test/scripts/pr-prepare-gates.test.ts");
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_BASE=${"a".repeat(40)}`);
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${"b".repeat(40)}`);
+    expect(result.stdout).not.toContain("test/scripts/pr-wrappers.test.ts");
     expect(result.stdout).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
     expect(result.stdout).not.toContain("pnpm test");
     expect(result.stdout).not.toContain("pnpm check:changed");
   });
 
-  it("bounds the direct AWS lease for the focused PR-tooling proof", () => {
+  it("bounds the direct AWS lease for the PR-derived proof", () => {
     const dir = tempDirs.make("openclaw-pr-gates-aws-run-");
     const workDir = join(dir, "work");
     const crabbox = join(dir, "crabbox");
@@ -337,7 +336,14 @@ describe("remote Crabbox AWS gate contract", () => {
         "require_active_org_admin_for_crabbox_gate() { printf 'maintainer\\n'; }",
         `install_crabbox_release_v046() { printf '%s\\n' '${crabbox}'; }`,
         "git() { printf '#!/bin/sh\\n'; }",
-        `run_remote_crabbox_aws_gate 424242 '${"a".repeat(40)}' >/dev/null`,
+        "node() {",
+        '  case "$*" in',
+        `    *crabbox-gate-plan.mts*) printf '%s\\n' '{"baseSha":"${"a".repeat(40)}","changedPaths":[],"headSha":"${"b".repeat(40)}","targets":[],"version":1,"digest":"${"c".repeat(64)}"}' ;;`,
+        "    *pr-crabbox-gate-publisher.mjs*) printf 'true\\n' ;;",
+        `    *) command '${process.execPath}' "$@" ;;`,
+        "  esac",
+        "}",
+        `run_remote_crabbox_aws_gate 424242 '${"a".repeat(40)}' '${"b".repeat(40)}' >/dev/null`,
       ].join("\n"),
       { cwd: workDir },
     );

@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import {
+  isProtectedMainWorkflowPath,
+  parseCrabboxGateCheckSummary,
+} from "./crabbox-gate-contract.mjs";
 
 const CHECK_APP_ID = 15368;
 const CRABBOX_CHECK_NAME = "openclaw/crabbox-gate";
@@ -132,6 +136,7 @@ export function validateCrabboxMergeBypass({
   headSha,
   jobs,
   membership,
+  pullRequest,
   publisherRun,
   requiredChecks,
   workflowRun,
@@ -158,8 +163,25 @@ export function validateCrabboxMergeBypass({
     headSha,
     name: CRABBOX_CHECK_NAME,
   });
-  const expectedSummary = `Trusted Crabbox AWS proof ${expectedRunId} / ${expectedLeaseId}; build, check, and full test passed on exact head ${headSha}.`;
-  if (record(crabboxCheck.output, "openclaw/crabbox-gate output").summary !== expectedSummary) {
+  const binding = parseCrabboxGateCheckSummary(
+    record(crabboxCheck.output, "openclaw/crabbox-gate output").summary,
+  );
+  const pull = record(pullRequest, "pull request");
+  if (
+    binding.runId !== expectedRunId ||
+    binding.leaseId !== expectedLeaseId ||
+    binding.headSha !== headSha ||
+    pull.number < 1 ||
+    pull.state !== "open" ||
+    pull.draft !== false ||
+    record(pull.head, "pull request head").sha !== headSha ||
+    record(record(pull.head, "pull request head").repo, "pull request head repo").full_name !==
+      "openclaw/openclaw" ||
+    record(pull.base, "pull request base").sha !== binding.baseSha ||
+    record(record(pull.base, "pull request base").repo, "pull request base repo").full_name !==
+      "openclaw/openclaw" ||
+    record(pull.base, "pull request base").ref !== "main"
+  ) {
     throw new Error("openclaw/crabbox-gate does not bind the expected broker proof");
   }
   const publisherRunId = parsePublisherDetailsUrl(crabboxCheck.details_url);
@@ -170,7 +192,8 @@ export function validateCrabboxMergeBypass({
     publisher.conclusion !== "success" ||
     publisher.event !== "workflow_dispatch" ||
     publisher.head_branch !== "main" ||
-    publisher.path !== ".github/workflows/pr-crabbox-gate-publisher.yml"
+    publisher.head_sha !== binding.baseSha ||
+    !isProtectedMainWorkflowPath(publisher.path, ".github/workflows/pr-crabbox-gate-publisher.yml")
   ) {
     throw new Error("Crabbox check is not bound to the protected-main publisher workflow");
   }
@@ -189,7 +212,7 @@ export function validateCrabboxMergeBypass({
     run.status !== "completed" ||
     !["failure", "startup_failure", "timed_out"].includes(run.conclusion) ||
     !["pull_request", "workflow_dispatch"].includes(run.event) ||
-    run.path !== ".github/workflows/ci.yml"
+    !isProtectedMainWorkflowPath(run.path, ".github/workflows/ci.yml")
   ) {
     throw new Error("normal CI workflow identity, exact head, or terminal result does not match");
   }
@@ -270,6 +293,8 @@ export function validateCrabboxMergeBypass({
     ciGateUrl: requiredString(ciCheck.details_url, "openclaw/ci-gate URL"),
     ciRunId,
     infrastructureJobs,
+    planDigest: binding.planDigest,
+    targetCount: binding.targetCount,
   };
 }
 
@@ -305,6 +330,7 @@ function main() {
     headSha: requiredString(args.head, "head SHA"),
     jobs,
     membership: readJson(args.membership, "organization membership"),
+    pullRequest: readJson(args["pull-request"], "pull request"),
     publisherRun: readJson(args["publisher-run"], "Crabbox publisher workflow run"),
     requiredChecks: readJson(args["required-checks"], "required checks"),
     workflowRun: readJson(args["workflow-run"], "workflow run"),

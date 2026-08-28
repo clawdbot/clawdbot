@@ -34,7 +34,7 @@ auto_merge_unavailable_error() {
 }
 
 # shellcheck source=scripts/pr-lib/crabbox-merge-bypass.sh
-source "$script_parent_dir/pr-lib/crabbox-merge-bypass.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/crabbox-merge-bypass.sh"
 
 mainline_drift_requires_sync() {
   local mainline_base="$1"

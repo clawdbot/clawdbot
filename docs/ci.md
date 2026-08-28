@@ -814,11 +814,14 @@ For an explicitly authorized admin-only PR landing fallback, set
 The mode does not replace the default hosted aggregate gate. After the exact
 prep head is pushed, the trusted wrapper downloads
 checksum-verified Crabbox v0.46, runs sanitized brokered AWS with `umask 022`,
-the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and focused
-PR-tooling changed-surface tests. The test proof runs the complete dispatch,
-publisher, merge-bypass, merge, prepare-gates, and wrapper test files plus the
-single protected-main publisher workflow guard; it does not claim the
-environment-sensitive monolithic test suite. The AWS lease uses a 90-minute
+the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and a
+fail-closed PR-derived test plan. The existing changed-test owner evaluates
+every executable changed path independently and must resolve each one to
+concrete matched test files; broad fallback, skipped paths, config targets,
+deleted executable paths, and partial plans are refused. Explicit docs and
+`AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
+The exact base SHA, head SHA, and deterministic plan digest are bound into the
+broker command and published check summary. The AWS lease uses a 90-minute
 idle timeout and 240-minute TTL before dispatching the protected-main
 `pr-crabbox-gate-publisher.yml` workflow. That workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
@@ -826,7 +829,8 @@ PR and the exact active organization-admin membership object using the repo-nati
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates the authenticated immutable broker
 run, ordered complete events, canonical command and bootstrap upload hash, and
-publishes the distinct `openclaw/crabbox-gate` only on the exact proven SHA.
+publishes the distinct `openclaw/crabbox-gate` only for the exact proven
+base/head/plan binding.
 Retained broker logs are validated when non-empty but are optional because
 released Crabbox v0.46 can report zero retained log bytes after a successful
 run. The local `.local/gates.env` provider/run/lease/URL fields are recovery

@@ -4,12 +4,12 @@ import { spawnSync } from "node:child_process";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { execGhJson, execGhRead, execPlainGh, workflowRunsApiArgs } from "../lib/plain-gh.mjs";
 
-const SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const RUN_ID_PATTERN = /^run_[a-z0-9]+$/u;
 const LEASE_ID_PATTERN = /^cbx_[a-z0-9]+$/u;
 
-function requirePrRecord({ pr, headRefName, headRefOid, isCrossRepository }) {
+function requirePrRecord({ baseRefOid, pr, headRefName, headRefOid, isCrossRepository }) {
   if (!Number.isSafeInteger(pr) || pr <= 0) {
     throw new Error("Expected a positive PR number.");
   }
@@ -18,6 +18,9 @@ function requirePrRecord({ pr, headRefName, headRefOid, isCrossRepository }) {
   }
   if (!SHA_PATTERN.test(headRefOid)) {
     throw new Error("Expected a full PR headRefOid.");
+  }
+  if (!SHA_PATTERN.test(baseRefOid)) {
+    throw new Error("Expected a full PR baseRefOid.");
   }
   if (isCrossRepository === true) {
     throw new Error(
@@ -39,6 +42,8 @@ function buildCiDispatchArgs(record, backend = { name: "ci" }) {
       `pr_number=${record.pr}`,
       "-f",
       `head_sha=${record.headRefOid}`,
+      "-f",
+      `base_sha=${record.baseRefOid}`,
       "-f",
       `crabbox_run_id=${backend.runId}`,
       "-f",
@@ -215,20 +220,21 @@ function warnOnLocalHeadDrift(record) {
 }
 
 async function main(argv = process.argv.slice(2)) {
-  if (argv.length < 4 || !["true", "false"].includes(argv[3])) {
+  if (argv.length < 5 || !["true", "false"].includes(argv[4])) {
     console.error(
-      "Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <isCrossRepository> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]",
+      "Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <baseRefOid> <isCrossRepository> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]",
     );
     process.exitCode = 2;
     return;
   }
   const record = {
+    baseRefOid: argv[3],
     pr: Number(argv[0]),
     headRefName: argv[1],
     headRefOid: argv[2],
-    isCrossRepository: argv[3] === "true",
+    isCrossRepository: argv[4] === "true",
   };
-  const backend = parseBackendArgs(argv.slice(4));
+  const backend = parseBackendArgs(argv.slice(5));
   requirePrRecord(record);
   warnOnLocalHeadDrift(record);
   const run = await dispatchCiForPr(record, backend);

@@ -9,9 +9,14 @@ import {
   validateBrokerProof,
   validatePublisherRequest,
 } from "../../scripts/pr-crabbox-gate-publisher.mjs";
+import {
+  crabboxGatePlanDigest,
+  formatCrabboxGateCheckSummary,
+} from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 
 const repository = "openclaw/openclaw";
 const workflowSha = "a".repeat(40);
+const baseSha = workflowSha;
 const headSha = "b".repeat(40);
 const bootstrapSha256 = createHash("sha256")
   .update(readFileSync("scripts/crabbox-untrusted-bootstrap.sh"))
@@ -39,6 +44,7 @@ function env(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 function event(overrides: Record<string, unknown> = {}) {
   return {
     inputs: {
+      base_sha: baseSha,
       bootstrap_sha256: bootstrapSha256,
       crabbox_lease_id: leaseId,
       crabbox_run_id: runId,
@@ -50,7 +56,17 @@ function event(overrides: Record<string, unknown> = {}) {
 }
 
 function context() {
-  return validatePublisherRequest(event(), env());
+  return { ...validatePublisherRequest(event(), env()), plan: gatePlan() };
+}
+
+function gatePlan() {
+  return {
+    baseSha,
+    changedPaths: [{ path: "scripts/pr", status: "M" }],
+    headSha,
+    targets: ["test/scripts/pr-merge.test.ts"],
+    version: 1,
+  };
 }
 
 function command() {
@@ -60,7 +76,7 @@ function command() {
     headSha,
     "/bin/bash",
     "-lc",
-    buildCrabboxGateCommand(headSha, bootstrapSha256),
+    buildCrabboxGateCommand(gatePlan(), bootstrapSha256),
   ];
 }
 
@@ -68,7 +84,10 @@ function retainedLog() {
   return [
     "OPENCLAW_CRABBOX_GATE_VERSION=1",
     "OPENCLAW_CRABBOX_GATE_MODE=remote_crabbox_aws",
+    `OPENCLAW_CRABBOX_GATE_BASE=${baseSha}`,
     `OPENCLAW_CRABBOX_GATE_HEAD=${headSha}`,
+    `OPENCLAW_CRABBOX_GATE_PLAN_SHA256=${crabboxGatePlanDigest(gatePlan())}`,
+    "OPENCLAW_CRABBOX_GATE_TARGET_COUNT=1",
     `OPENCLAW_CRABBOX_BOOTSTRAP_SHA256=${bootstrapSha256}`,
     "OPENCLAW_CRABBOX_GATE_STAGE=build:ok",
     "OPENCLAW_CRABBOX_GATE_STAGE=check:ok",
@@ -84,7 +103,7 @@ function brokerRun(overrides: Record<string, unknown> = {}) {
     eventCount: 6,
     exitCode: 0,
     id: runId,
-    label: `openclaw-pr-gate:130481:${headSha}`,
+    label: `openclaw-pr-gate:130481:${baseSha}:${headSha}`,
     leaseID: leaseId,
     logTruncated: false,
     org: "openclaw",
@@ -120,7 +139,7 @@ function brokerEvents(overrides: Record<number, Record<string, unknown>> = {}) {
 
 function pullRequest(overrides: Record<string, unknown> = {}) {
   return {
-    base: { ref: "main", repo: { full_name: repository } },
+    base: { ref: "main", repo: { full_name: repository }, sha: baseSha },
     draft: false,
     head: { repo: { full_name: repository }, sha: headSha },
     number: 130481,
@@ -133,6 +152,7 @@ describe("Crabbox gate request validation", () => {
   it("accepts only the exact protected-main inputs", () => {
     expect(context()).toMatchObject({
       bootstrapSha256,
+      baseSha,
       headSha,
       leaseId,
       prNumber: 130481,
@@ -144,12 +164,33 @@ describe("Crabbox gate request validation", () => {
   });
 
   it.each([
-    ["fork repository", env({ GITHUB_REPOSITORY: "attacker/fork" })],
-    ["pull request ref", env({ GITHUB_REF: "refs/pull/130481/merge" })],
-    ["moved workflow", env({ GITHUB_SHA: "c".repeat(40) })],
-    ["different actor", env({ GITHUB_TRIGGERING_ACTOR: "other" })],
-  ])("rejects %s", (_label, inputEnv) => {
-    expect(() => validatePublisherRequest(event(), inputEnv)).toThrow();
+    {
+      inputEnv: env({ GITHUB_REPOSITORY: "attacker/fork" }),
+      inputEvent: event(),
+      label: "fork repository",
+    },
+    {
+      inputEnv: env({ GITHUB_REF: "refs/pull/130481/merge" }),
+      inputEvent: event(),
+      label: "pull request ref",
+    },
+    {
+      inputEnv: env({ GITHUB_SHA: "c".repeat(40) }),
+      inputEvent: event(),
+      label: "moved workflow",
+    },
+    {
+      inputEnv: env(),
+      inputEvent: event({ base_sha: "c".repeat(40) }),
+      label: "mismatched base",
+    },
+    {
+      inputEnv: env({ GITHUB_TRIGGERING_ACTOR: "other" }),
+      inputEvent: event(),
+      label: "different actor",
+    },
+  ])("rejects $label", ({ inputEnv, inputEvent }) => {
+    expect(() => validatePublisherRequest(inputEvent, inputEnv)).toThrow();
   });
 });
 
@@ -285,6 +326,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
         github,
         now: Date.parse("2026-08-27T02:00:00Z"),
         organization,
+        resolvePlan: async () => gatePlan(),
       }),
     ).rejects.toThrow(/not an active openclaw organization admin/u);
     expect(broker.request).not.toHaveBeenCalled();
@@ -355,6 +397,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
         github,
         now: Date.parse("2026-08-27T02:00:00Z"),
         organization,
+        resolvePlan: async () => gatePlan(),
       }),
     ).resolves.toMatchObject({ checkId: 88 });
     expect(organization.request).toHaveBeenCalledTimes(2);
@@ -373,7 +416,14 @@ describe("Crabbox gate publisher mutation boundary", () => {
         head_sha: headSha,
         name: "openclaw/crabbox-gate",
         output: {
-          summary: expect.stringContaining("focused PR-tooling changed-surface tests passed"),
+          summary: formatCrabboxGateCheckSummary({
+            baseSha,
+            headSha,
+            leaseId,
+            planDigest: crabboxGatePlanDigest(gatePlan()),
+            runId,
+            targetCount: 1,
+          }),
         },
         status: "completed",
       },
@@ -408,73 +458,85 @@ describe("Crabbox gate publisher mutation boundary", () => {
         github,
         now: Date.parse("2026-08-27T02:00:00Z"),
         organization,
+        resolvePlan: async () => gatePlan(),
       }),
     ).rejects.toThrow(/requested open pull request/u);
     expect(broker.request).not.toHaveBeenCalled();
   });
 
-  it("rejects protected main moving after broker validation", async () => {
-    let mainReads = 0;
-    const github = {
-      request: vi.fn(async (method: string, path: string) => {
-        if (path === "/repos/openclaw/openclaw/pulls/130481") {
-          return pullRequest();
-        }
-        if (path === "/repos/openclaw/openclaw/git/ref/heads/main") {
-          mainReads += 1;
-          return {
-            object: { sha: mainReads === 1 ? workflowSha : "c".repeat(40) },
-            ref: "refs/heads/main",
-          };
-        }
-        if (path === "/users/maintainer") {
-          return { id: 42, login: "maintainer" };
-        }
-        if (method === "POST" && path === "/repos/openclaw/openclaw/check-runs") {
-          throw new Error("check publication must not run after protected main moves");
-        }
-        throw new Error(`unexpected GitHub call: ${method} ${path}`);
-      }),
-    };
-    const organization = {
-      request: vi.fn(async () => ({
-        role: "admin",
-        state: "active",
-        user: { login: "maintainer" },
-      })),
-    };
-    const broker = {
-      request: vi.fn(async (path: string, options?: { text?: boolean }) => {
-        if (path.endsWith("/logs") && options?.text) {
-          return retainedLog();
-        }
-        if (path.endsWith("/events?limit=500")) {
-          return { events: brokerEvents() };
-        }
-        if (path === `/v1/runs/${runId}`) {
-          return { run: brokerRun() };
-        }
-        throw new Error(`unexpected broker call: ${path}`);
-      }),
-    };
+  it.each(["protected main", "pull request base"] as const)(
+    "rejects %s moving after broker validation",
+    async (drift) => {
+      let mainReads = 0;
+      let pullReads = 0;
+      const github = {
+        request: vi.fn(async (method: string, path: string) => {
+          if (path === "/repos/openclaw/openclaw/pulls/130481") {
+            pullReads += 1;
+            return pullRequest(
+              drift === "pull request base" && pullReads === 2
+                ? { base: { ref: "main", repo: { full_name: repository }, sha: "c".repeat(40) } }
+                : {},
+            );
+          }
+          if (path === "/repos/openclaw/openclaw/git/ref/heads/main") {
+            mainReads += 1;
+            return {
+              object: {
+                sha: drift === "protected main" && mainReads === 2 ? "c".repeat(40) : workflowSha,
+              },
+              ref: "refs/heads/main",
+            };
+          }
+          if (path === "/users/maintainer") {
+            return { id: 42, login: "maintainer" };
+          }
+          if (method === "POST" && path === "/repos/openclaw/openclaw/check-runs") {
+            throw new Error("check publication must not run after protected main moves");
+          }
+          throw new Error(`unexpected GitHub call: ${method} ${path}`);
+        }),
+      };
+      const organization = {
+        request: vi.fn(async () => ({
+          role: "admin",
+          state: "active",
+          user: { login: "maintainer" },
+        })),
+      };
+      const broker = {
+        request: vi.fn(async (path: string, options?: { text?: boolean }) => {
+          if (path.endsWith("/logs") && options?.text) {
+            return retainedLog();
+          }
+          if (path.endsWith("/events?limit=500")) {
+            return { events: brokerEvents() };
+          }
+          if (path === `/v1/runs/${runId}`) {
+            return { run: brokerRun() };
+          }
+          throw new Error(`unexpected broker call: ${path}`);
+        }),
+      };
 
-    await expect(
-      runPublisher({
-        broker,
-        env: env(),
-        event: event(),
-        github,
-        now: Date.parse("2026-08-27T02:00:00Z"),
-        organization,
-      }),
-    ).rejects.toThrow(/trusted main moved/u);
-    expect(mainReads).toBe(2);
-    expect(github.request).not.toHaveBeenCalledWith(
-      "POST",
-      "/repos/openclaw/openclaw/check-runs",
-      expect.anything(),
-    );
-  });
+      await expect(
+        runPublisher({
+          broker,
+          env: env(),
+          event: event(),
+          github,
+          now: Date.parse("2026-08-27T02:00:00Z"),
+          organization,
+          resolvePlan: async () => gatePlan(),
+        }),
+      ).rejects.toThrow(/trusted main moved|exact base, head, or head repository does not match/u);
+      expect(github.request).not.toHaveBeenCalledWith(
+        "POST",
+        "/repos/openclaw/openclaw/check-runs",
+        expect.anything(),
+      );
+    },
+  );
 
   it("rejects a malformed published check ID", async () => {
     const github = {
@@ -530,6 +592,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
         github,
         now: Date.parse("2026-08-27T02:00:00Z"),
         organization,
+        resolvePlan: async () => gatePlan(),
       }),
     ).rejects.toThrow(/published check ID must be a positive integer/u);
   });
@@ -582,6 +645,7 @@ describe("Crabbox gate workflow", () => {
       permissions: Record<string, string>;
     };
     expect(Object.keys(workflow.on.workflow_dispatch.inputs).toSorted()).toEqual([
+      "base_sha",
       "bootstrap_sha256",
       "crabbox_lease_id",
       "crabbox_run_id",
@@ -595,7 +659,11 @@ describe("Crabbox gate workflow", () => {
       "pull-requests": "read",
     });
     expect(workflow.jobs.publish.steps[0]).toMatchObject({
-      with: { "persist-credentials": false, ref: "${{ github.workflow_sha }}" },
+      with: {
+        "fetch-depth": 0,
+        "persist-credentials": false,
+        ref: "${{ github.workflow_sha }}",
+      },
     });
     expect(workflow.jobs.publish.steps.at(-1)).toMatchObject({
       env: {

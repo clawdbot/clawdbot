@@ -2,12 +2,14 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const commonScript = join(process.cwd(), "scripts/pr-lib/common.sh");
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const headSha = "0123456789abcdef0123456789abcdef01234567";
+const baseSha = "1111111111111111111111111111111111111111";
 const landedSha = "fedcba9876543210fedcba9876543210fedcba98";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
@@ -126,7 +128,14 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
               id: 21,
               name: "openclaw/crabbox-gate",
               output: {
-                summary: `Trusted Crabbox AWS proof run_abc123 / cbx_def456; build, check, and full test passed on exact head ${headSha}.`,
+                summary: formatCrabboxGateCheckSummary({
+                  baseSha,
+                  headSha,
+                  leaseId: "cbx_def456",
+                  planDigest: "c".repeat(64),
+                  runId: "run_abc123",
+                  targetCount: 8,
+                }),
               },
               status: "completed",
             },
@@ -145,6 +154,7 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
     conclusion: "success",
     event: "workflow_dispatch",
     head_branch: "main",
+    head_sha: baseSha,
     id: 8001,
     path: ".github/workflows/pr-crabbox-gate-publisher.yml",
     status: "completed",
@@ -317,6 +327,9 @@ gh_route() {
           else
             printf '%s\\n' '{"state":"active","role":"admin","user":{"login":"maintainer"}}'
           fi
+          ;;
+        *"repos/"*"/pulls/123"*)
+          printf '%s\\n' '{"number":123,"state":"open","draft":false,"head":{"sha":"${headSha}","repo":{"full_name":"openclaw/openclaw"}},"base":{"sha":"${baseSha}","ref":"main","repo":{"full_name":"openclaw/openclaw"}}}'
           ;;
         *"/commits/${headSha}/check-runs"*)
           printf '[%s]\\n' "$OPENCLAW_TEST_CHECK_RUNS_JSON"
