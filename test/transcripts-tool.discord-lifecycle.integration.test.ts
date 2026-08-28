@@ -1,16 +1,18 @@
 import path from "node:path";
-import { activeSessions } from "../../../../src/agents/tools/transcripts-tool-runtime.js";
-import { createTranscriptsTool } from "../../../../src/agents/tools/transcripts-tool.js";
-import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../../../src/plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { TranscriptsStore } from "../../../../src/transcripts/store.js";
-import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   discordVoiceTranscriptsSourceProvider,
+  loadDiscordVoiceTestHarness,
   setDiscordTranscriptsVoiceManager,
-} from "./transcripts-source.js";
-import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
+} from "../extensions/discord/test-api.js";
+import { activeSessions } from "../src/agents/tools/transcripts-tool-runtime.js";
+import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
+import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { TranscriptsStore } from "../src/transcripts/store.js";
+import { createTempDirTracker } from "./helpers/temp-dir.js";
+
+const { defineDiscordVoiceTests } = await loadDiscordVoiceTestHarness();
 
 defineDiscordVoiceTests(
   ({
