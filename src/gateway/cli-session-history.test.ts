@@ -736,6 +736,36 @@ describe("cli session history", () => {
     expect(merged).toEqual([localMessage, importedMessage]);
   });
 
+  it("retains legacy captioned imports near matching local image turns", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const importedMessage = {
+      role: "user",
+      content: "look at this\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe06.png",
+      timestamp: timestamp + 60_000,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "legacy-captioned-image-user",
+      },
+    };
+    const localMessage = {
+      role: "user",
+      content: "look at this",
+      timestamp,
+      __openclaw: {
+        id: "local-captioned-image",
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe06.png" }],
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+
+    expect(merged).toEqual([localMessage, importedMessage]);
+  });
+
   it("matches same-caption image imports to their exact local turns", () => {
     const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
     const localEntryId = "local-image-b";
