@@ -319,12 +319,13 @@ describe("installToolResultContextGuard", () => {
       const original = structuredClone(content);
       const requests: Message[][] = [];
       const execute = vi.fn(async () => ({ content, details: { privateReference: "fixture" } }));
+      const contextWindowTokens = 8_192;
       const model = makeProviderModelFixture({
         id: "test-model",
         api: "openai-responses",
         provider: "openai",
         baseUrl: "https://example.test",
-        contextWindow: 8_192,
+        contextWindow: contextWindowTokens,
       });
       const agent = new Agent({
         initialState: {
@@ -363,7 +364,7 @@ describe("installToolResultContextGuard", () => {
       });
       const dispose = installToolResultContextGuard({
         agent,
-        contextWindowTokens: model.contextWindow,
+        contextWindowTokens,
       });
       try {
         await agent.prompt("Read the diagnostic and report its next step.");
@@ -389,7 +390,7 @@ describe("installToolResultContextGuard", () => {
       expect(projected).not.toHaveProperty("details");
       expect(
         estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
-      ).toBeLessThanOrEqual(model.contextWindow);
+      ).toBeLessThanOrEqual(contextWindowTokens);
       expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
       expect(getAllToolResultText(projected)).toContain(hint);
       expect(agent.state.messages.at(-1)).toMatchObject({
