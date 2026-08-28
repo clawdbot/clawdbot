@@ -299,7 +299,11 @@ export function resolveGatewaySessionThinkingProjectionInternal(
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
-  options?: { agentId?: string; allowPluginNormalization?: boolean },
+  options?: {
+    agentId?: string;
+    allowPluginNormalization?: boolean;
+    providerPolicySource?: ThinkingProviderPolicySource;
+  },
 ): GatewaySessionsDefaults {
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
@@ -351,9 +355,9 @@ export function getSessionDefaults(
     provider: resolved.provider,
     model: resolved.model,
     agentId,
-    modelCatalog: modelCatalog ?? (options?.allowPluginNormalization === false ? [] : undefined),
+    modelCatalog: modelCatalog ?? (options?.providerPolicySource === "active" ? [] : undefined),
     sessionKey,
-    providerPolicySource: options?.allowPluginNormalization === false ? "active" : undefined,
+    providerPolicySource: options?.providerPolicySource,
   });
   return {
     modelProvider: resolved.provider ?? null,

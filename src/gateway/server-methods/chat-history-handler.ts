@@ -435,6 +435,7 @@ async function handleChatHistoryRequest({
   const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
     agentId: sessionAgentId,
     allowPluginNormalization: false,
+    providerPolicySource: "active",
   });
   // Unprepared catalog facts are unknown, not an Off default or a smaller profile.
   // Omission lets clients retain richer same-identity metadata; authored defaults still apply.
