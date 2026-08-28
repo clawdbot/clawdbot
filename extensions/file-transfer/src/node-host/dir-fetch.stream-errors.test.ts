@@ -84,25 +84,6 @@ describe("dir.fetch process wrapper", () => {
     );
   });
 
-  it("rejects oversized preflight-only requests using the encoded tar limit", async () => {
-    runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({
-        code: null,
-        termination: "output-limit",
-        outputLimitStream: "stdout",
-      }),
-    );
-
-    await expect(
-      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
-    ).resolves.toMatchObject({
-      ok: false,
-      code: "TREE_TOO_LARGE",
-      message: "tarball exceeded 1024 byte limit during preflight",
-    });
-    expect(runCommandBufferedMock).toHaveBeenCalledOnce();
-  });
-
   it("rejects preflight-only requests once filesystem listing crosses the entry cap", async () => {
     await Promise.all(
       Array.from({ length: 5001 }, (_, index) =>
@@ -120,19 +101,30 @@ describe("dir.fetch process wrapper", () => {
     expect(runCommandBufferedMock).not.toHaveBeenCalled();
   });
 
-  it("preserves filesystem classification when a preflight tar race removes the directory", async () => {
-    runCommandBufferedMock.mockImplementationOnce(async () => {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-      return commandResult({ code: 1 });
-    });
+  it.each([true, false])(
+    "reclassifies a removed directory only for preflight=%s",
+    async (preflightOnly) => {
+      if (!preflightOnly) {
+        runCommandBufferedMock.mockResolvedValueOnce(
+          commandResult({ stdout: Buffer.from("1\tproject\n") }),
+        );
+      }
+      runCommandBufferedMock.mockImplementationOnce(async () => {
+        await fs.rm(tmpRoot, { recursive: true, force: true });
+        return commandResult({ code: 1 });
+      });
 
-    await expect(
-      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
-    ).resolves.toMatchObject({
-      ok: false,
-      code: "NOT_FOUND",
-    });
-  });
+      await expect(
+        handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly }),
+      ).resolves.toMatchObject({
+        ok: false,
+        code: preflightOnly ? "NOT_FOUND" : "READ_ERROR",
+        message: preflightOnly ? expect.stringContaining("stat failed:") : "tar command failed",
+        canonicalPath: tmpRoot,
+      });
+      expect(runCommandBufferedMock).toHaveBeenCalledTimes(preflightOnly ? 1 : 2);
+    },
+  );
 
   it("fails tar entry listing closed on wrapper errors", async () => {
     runCommandBufferedMock
@@ -149,40 +141,57 @@ describe("dir.fetch process wrapper", () => {
     });
   });
 
-  it.each([
-    {
-      label: "output cap",
-      result: commandResult({
-        code: null,
-        termination: "output-limit",
-        outputLimitStream: "stdout",
-      }),
-      message: "tarball exceeded 1024 byte limit mid-stream",
-    },
-    {
-      label: "timeout",
-      result: commandResult({ code: null, termination: "timeout" }),
-      message: "tar command exceeded 60s wall-clock timeout",
-    },
-    {
-      label: "launch error",
-      result: new Error("spawn failed"),
-      message: "tar command failed",
-    },
-  ])("classifies $label failures through handleDirFetch", async ({ result, message }) => {
-    runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({ stdout: Buffer.from("1\tproject\n") }),
-    );
-    if (result instanceof Error) {
-      runCommandBufferedMock.mockRejectedValueOnce(result);
-    } else {
-      runCommandBufferedMock.mockResolvedValueOnce(result);
-    }
+  describe.each([true, false])("archive failures with preflight=%s", (preflightOnly) => {
+    it.each([
+      {
+        label: "output cap",
+        result: commandResult({
+          code: null,
+          termination: "output-limit",
+          outputLimitStream: "stdout",
+        }),
+        code: "TREE_TOO_LARGE",
+        message: `tarball exceeded 1024 byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
+      },
+      {
+        label: "timeout",
+        result: commandResult({ code: null, termination: "timeout" }),
+        code: "READ_ERROR",
+        message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+      },
+      {
+        label: "changed canonical path",
+        result: commandResult({ code: 78 }),
+        code: "CANONICAL_PATH_CHANGED",
+        message: "canonical path differs from the authorized target",
+      },
+      {
+        label: "launch error",
+        result: new Error("spawn failed"),
+        code: "READ_ERROR",
+        message: "tar command failed",
+      },
+    ])("classifies $label failures through handleDirFetch", async ({ result, code, message }) => {
+      if (!preflightOnly) {
+        runCommandBufferedMock.mockResolvedValueOnce(
+          commandResult({ stdout: Buffer.from("1\tproject\n") }),
+        );
+      }
+      if (result instanceof Error) {
+        runCommandBufferedMock.mockRejectedValueOnce(result);
+      } else {
+        runCommandBufferedMock.mockResolvedValueOnce(result);
+      }
 
-    const response = await handleDirFetch({ path: tmpRoot, maxBytes: 1024 });
-    expect(response).toMatchObject({ ok: false, code: expect.any(String) });
-    if (!response.ok) {
-      expect(response.message).toContain(message);
-    }
+      await expect(
+        handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly }),
+      ).resolves.toEqual({
+        ok: false,
+        code,
+        message,
+        canonicalPath: tmpRoot,
+      });
+      expect(runCommandBufferedMock).toHaveBeenCalledTimes(preflightOnly ? 1 : 2);
+    });
   });
 });
