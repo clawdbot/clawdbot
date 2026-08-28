@@ -16,6 +16,7 @@ import {
   createPlugin,
   createPluginsRouteData,
   createResult,
+  createRuntimeConfigHarness,
   deferred,
   mountPage,
   resetPluginsPageTestState,
@@ -30,6 +31,29 @@ describe("PluginsPage lifecycle confirmation", () => {
   });
 
   afterEach(resetPluginsPageTestState);
+
+  function createQueuedRuntimeConfig(client: ReturnType<typeof createClient>["client"]) {
+    const queued = deferred<void>();
+    const release = deferred<void>();
+    const harness = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      { configFormDirty: false, lastError: null },
+      () => client,
+    );
+    harness.runtimeConfig.runExternalMutation = async (task, options) => {
+      queued.resolve();
+      await release.promise;
+      if (options?.canDispatch && !options.canDispatch()) {
+        return {
+          ok: false,
+          reason: "unavailable",
+          error: options.dispatchError ?? "Mutation scope changed before dispatch.",
+        };
+      }
+      return { ok: true, value: await task(client), refresh: { ok: true } };
+    };
+    return { harness, queued: queued.promise, release };
+  }
 
   it("does not install on a replacement Gateway after confirmation started", async () => {
     const available = createPlugin({
@@ -131,6 +155,108 @@ describe("PluginsPage lifecycle confirmation", () => {
       pluginId: "community-thing",
     });
     expect(replacementRequest).not.toHaveBeenCalledWith("plugins.uninstall", {
+      pluginId: "community-thing",
+    });
+  });
+
+  it("does not install after its confirmed Gateway source changes while config writes drain", async () => {
+    const available = createPlugin({
+      id: "community-thing",
+      name: "Community Thing",
+      origin: "global",
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      install: { source: "official", pluginId: "community-thing" },
+    });
+    const { client, request: gatewayRequest } = createClient(async (method) => {
+      if (method === "plugins.install") {
+        return {
+          ok: true,
+          plugin: { ...available, installed: true },
+          restartRequired: true,
+        } satisfies PluginMutationResult;
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const initialGateway = createGateway(client);
+    const replacementGateway = createGateway(client);
+    const config = createQueuedRuntimeConfig(client);
+    const initialContext = createContext(
+      initialGateway.gateway,
+      undefined,
+      undefined,
+      config.harness,
+    );
+    const { page, provider } = await mountPage(
+      initialContext,
+      createPluginsRouteData(initialGateway.gateway, createResult(available)),
+    );
+    const request = {
+      source: "official",
+      pluginId: "community-thing",
+    } satisfies PluginInstallRequest;
+
+    const install = page.install(request, "plugin:community-thing");
+    await config.queued;
+    provider.setContext(
+      createContext(replacementGateway.gateway, undefined, undefined, config.harness),
+    );
+    await page.updateComplete;
+    config.release.resolve();
+    await install;
+
+    expect(gatewayRequest).not.toHaveBeenCalledWith("plugins.install", request);
+  });
+
+  it("does not uninstall after its confirmed Gateway source changes while config writes drain", async () => {
+    const removable = createPlugin({
+      id: "community-thing",
+      name: "Community Thing",
+      origin: "global",
+      removable: true,
+      featured: false,
+    });
+    const result = {
+      plugins: [createPlugin(), removable],
+      diagnostics: [],
+      mutationAllowed: true,
+    } satisfies PluginListResult;
+    const { client, request: gatewayRequest } = createClient(async (method) => {
+      if (method === "plugins.uninstall") {
+        return {
+          ok: true,
+          pluginId: "community-thing",
+          restartRequired: true,
+          removed: ["install record"],
+        };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const initialGateway = createGateway(client);
+    const replacementGateway = createGateway(client);
+    const config = createQueuedRuntimeConfig(client);
+    const initialContext = createContext(
+      initialGateway.gateway,
+      undefined,
+      undefined,
+      config.harness,
+    );
+    const { page, provider } = await mountPage(
+      initialContext,
+      createPluginsRouteData(initialGateway.gateway, result),
+    );
+
+    const uninstall = page.uninstall("community-thing", "plugin:community-thing");
+    await config.queued;
+    provider.setContext(
+      createContext(replacementGateway.gateway, undefined, undefined, config.harness),
+    );
+    await page.updateComplete;
+    config.release.resolve();
+    await uninstall;
+
+    expect(gatewayRequest).not.toHaveBeenCalledWith("plugins.uninstall", {
       pluginId: "community-thing",
     });
   });

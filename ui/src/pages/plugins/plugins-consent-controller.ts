@@ -108,7 +108,7 @@ export class PluginsConsentController {
     ) {
       return;
     }
-    // Confirmation and request share the captured Gateway epoch and client.
+    // Confirmation, config queue, and request share the captured Gateway epoch and client.
     this.host.clearPageNotice();
     const mutationToken = ++this.mutationToken;
     this.mutationTokens.set(rowKey, mutationToken);
@@ -124,6 +124,7 @@ export class PluginsConsentController {
         this.host.getContext().runtimeConfig,
         scope.client,
         mutate,
+        { canDispatch: () => isCurrent() && this.host.canMutate() },
       );
       if (isCurrent()) {
         await onSuccess(mutation.value, mutation.refreshError, scope.client, isCurrent, isLatest);
