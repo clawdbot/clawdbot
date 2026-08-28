@@ -74,6 +74,39 @@ summary: "YAML document end page"
     expect(output).not.toContain("unterminated front matter");
   });
 
+  it("preserves suffixes and line endings on front matter terminators", () => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-terminator-suffixes-");
+    mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
+    const cases = [
+      [
+        "annotated.md",
+        '---\r\nsummary: "Annotated closing delimiter"\r\n--- # end\r\n',
+        "Annotated closing delimiter",
+      ],
+      [
+        "whitespace.md",
+        '---\nsummary: "Whitespace closing delimiter"\n---   \n',
+        "Whitespace closing delimiter",
+      ],
+      [
+        "document-end-comment.md",
+        '---\r\nsummary: "Document end comment"\r\n... # end\r\n',
+        "Document end comment",
+      ],
+    ] as const;
+
+    for (const [fileName, content] of cases) {
+      writeFileSync(path.join(tempRepoRoot, "docs", fileName), content, "utf8");
+    }
+
+    const output = runDocsList(tempRepoRoot);
+
+    for (const [fileName, , summary] of cases) {
+      expect(output).toContain(`${fileName} - ${summary}`);
+    }
+    expect(output).not.toContain("unterminated front matter");
+  });
+
   it("renders the publish docs map on demand without creating a mirror", () => {
     const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-");
     mkdirSync(path.join(tempRepoRoot, "docs", "nested"), { recursive: true });
