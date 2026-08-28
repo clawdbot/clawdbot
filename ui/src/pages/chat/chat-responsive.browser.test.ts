@@ -2290,6 +2290,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       for (const [index, expectedWidth] of [160, 84].entries()) {
         const frame = frames.nth(index);
         await frame.hover();
+        await expect
+          .poll(() => frame.evaluate((element) => getComputedStyle(element, "::after").opacity))
+          .toBe("1");
         const geometry = await frame.evaluate((element) => {
           const actions = element.querySelector<HTMLElement>(".chat-image-actions")!;
           const frameRect = element.getBoundingClientRect();
@@ -2301,7 +2304,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               actionsRect.top >= frameRect.top &&
               actionsRect.bottom <= frameRect.bottom,
             actionsNearBottom: frameRect.bottom - actionsRect.bottom <= 9,
-            fadeOpacity: getComputedStyle(element, "::after").opacity,
             fadeWidth: Number.parseFloat(getComputedStyle(element, "::after").width),
             frameWidth: frameRect.width,
             overflow: getComputedStyle(element).overflow,
@@ -2309,7 +2311,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
         expect(geometry.actionsInsideFrame).toBe(true);
         expect(geometry.actionsNearBottom).toBe(true);
-        expect(geometry.fadeOpacity).toBe("1");
         expect(geometry.fadeWidth).toBeCloseTo(geometry.frameWidth, 0);
         expect(geometry.frameWidth).toBeCloseTo(expectedWidth, 0);
         expect(geometry.overflow).toBe("hidden");
@@ -2372,6 +2373,53 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         textRightAligned: true,
       });
       expect(geometry.tileSize).toBeCloseTo(128, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps every sent-image text shape on the user bubble surface", async () => {
+    const page = await openBrowserPage(1280, 900);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-group user">
+            <div class="chat-bubble chat-bubble--with-images">
+              <div class="chat-text" data-shape="text">Short text</div>
+            </div>
+            <div class="chat-bubble chat-bubble--with-images">
+              <div class="chat-message-disclosure" data-shape="disclosure">
+                <div class="chat-message-disclosure__content">
+                  <div class="chat-text">Collapsed text</div>
+                </div>
+              </div>
+            </div>
+            <div class="chat-bubble chat-bubble--with-images">
+              <details class="chat-json-collapse" data-shape="json">
+                <summary class="chat-json-summary">JSON</summary>
+              </details>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      for (const theme of ["dark", "light"] as const) {
+        await page.evaluate(
+          (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
+          theme,
+        );
+        const surfaces = await page.locator("[data-shape]").evaluateAll((elements) =>
+          elements.map((element) => {
+            const style = getComputedStyle(element);
+            return {
+              backgroundColor: style.backgroundColor,
+              padding: style.padding,
+            };
+          }),
+        );
+        expect(surfaces[0]).toMatchObject({ padding: "10px 14px" });
+        expect(surfaces[1]).toEqual(surfaces[0]);
+        expect(surfaces[2]).toEqual(surfaces[0]);
+      }
     } finally {
       await closeBrowserPage(page);
     }

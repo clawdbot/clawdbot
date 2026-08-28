@@ -1051,7 +1051,7 @@ img.chat-avatar.chat-avatar--logo {
 
 .chat-group.user:not(.chat-group--peer)
   .chat-bubble--with-images
-  > .chat-text {
+  > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
   width: fit-content;
   max-width: 100%;
   padding: 10px 14px;
@@ -1062,7 +1062,7 @@ img.chat-avatar.chat-avatar--logo {
 :root[data-theme-mode="light"]
   .chat-group.user:not(.chat-group--peer)
   .chat-bubble--with-images
-  > .chat-text {
+  > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
   background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   color: var(--text-strong);
 }

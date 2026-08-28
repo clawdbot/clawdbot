@@ -1244,7 +1244,7 @@ openclaw-chat-page {
   padding: 0;
   border: 0;
   border-radius: 0;
-  color: #fff;
+  color: var(--media-foreground);
   background: transparent;
   cursor: var(--cursor-action);
 }

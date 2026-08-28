@@ -92,8 +92,8 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
 
     .actions .action,
-    .zoom-control {
-      color: #fff;
+    .action.zoom-control {
+      color: var(--media-foreground);
       background-color: var(--image-lightbox-control-background);
       -webkit-backdrop-filter: blur(16px) saturate(140%);
       backdrop-filter: blur(16px) saturate(140%);

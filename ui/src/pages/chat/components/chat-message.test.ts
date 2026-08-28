@@ -983,11 +983,23 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("collapses long user messages and toggles their disclosure state", () => {
+  it("collapses long image-bearing user messages and toggles their disclosure state", () => {
     const container = document.createElement("div");
     const collapsedLines = ["Inspect AGENTS.md:188 first.", "a".repeat(1_201)];
     const expandedTail = "Full prompt tail after the disclosure boundary.";
     const markdownContent = [...collapsedLines, expandedTail].join("\n");
+    const message = createUserMessage(
+      [
+        { type: "text", text: markdownContent },
+        createMediaBlock({
+          url: "data:image/png;base64,cG5n",
+          alt: "Sent image",
+          width: 640,
+          height: 640,
+        }),
+      ],
+      { timestamp: 1001 },
+    );
     const onToggleUserMessageExpanded = vi.fn();
     markdownRenderMock
       .mockImplementationOnce(renderMarkdownHtml)
@@ -995,7 +1007,7 @@ describe("grouped chat rendering", () => {
 
     renderGroupedMessage(
       container,
-      createUserMessage(markdownContent, { timestamp: 1001 }),
+      message,
       "user",
       {
         isUserMessageExpanded: () => false,
@@ -1004,6 +1016,12 @@ describe("grouped chat rendering", () => {
     );
 
     const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
+    expect(
+      expectElement(container, ".chat-bubble", HTMLDivElement).classList.contains(
+        "chat-bubble--with-images",
+      ),
+    ).toBe(true);
+    expect(container.querySelector(".chat-message-image")).not.toBeNull();
     const toggle = expectElement(disclosure, ".chat-message-disclosure__toggle", HTMLButtonElement);
     const collapsedText = expectElement(disclosure, ".chat-text", HTMLDivElement);
     const collapsedFileLink = expectElement(
@@ -1023,7 +1041,7 @@ describe("grouped chat rendering", () => {
 
     renderGroupedMessage(
       container,
-      createUserMessage(markdownContent, { timestamp: 1001 }),
+      message,
       "user",
       {
         isUserMessageExpanded: () => true,
