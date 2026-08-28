@@ -54,6 +54,8 @@ Two profile settings turn cloud workers from always-on machines into compute tha
 - `suspendAfter: "2h"` — after the session has been idle for the duration, the Gateway performs the same safe stop as **Stop cloud worker…**: it reconciles the workspace first, then releases the machine. While suspended, you pay for retained snapshot storage only. The next message provisions a replacement automatically — no button to press.
 - `settings.warmImage: true` — capture a scrubbed machine image when a worker stops, and start later workers for the same profile from that image instead of provisioning cold. Paired with `suspendAfter`, a suspended session wakes on a warm machine in a fraction of the cold provisioning time.
 
+With warm images enabled, repeat sessions for the same repository can also avoid a fresh clone. For clean workspaces eligible for the published-origin path, node-tunnel sync copies the machine's per-repository Git seed, fetches only the Git delta, and checks out the requested commit. Other workspaces keep the normal sync path.
+
 Suspension never interrupts work: sessions with an active turn, queued messages, or unreconciled results are skipped and re-checked on the next sweep. See the profile fields in [Cloud Workers](/gateway/cloud-workers#configuration) for costs, capture boundaries, and prerequisites.
 
 ## What stays with the Gateway

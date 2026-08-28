@@ -2209,6 +2209,7 @@ describe("package acceptance workflow", () => {
     }
 
     expect(publishOrchestration.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
+    expect(publishOrchestration.env?.PARENT_WORKFLOW_BRANCH).toBe("${{ github.ref_name }}");
     expect(publishOrchestration.env?.CHILD_WORKFLOW_REF).toBe(
       "${{ steps.clawhub_plan.outputs.child_workflow_ref }}",
     );
@@ -2225,6 +2226,7 @@ describe("package acceptance workflow", () => {
       'wait_for_run android-release.yml "${android_release_run_id}" "${TARGET_SHA}"',
       'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
+      '-f release_publish_branch="${PARENT_WORKFLOW_BRANCH}"',
       "plugin-clawhub-release.yml: detached; approval and publish not awaited",
       "plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited",
     ]);
@@ -7609,7 +7611,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         PLUGIN_NPM_RELEASE_WORKFLOW,
         "validate_release_publish_approval",
         "publish_plugins_npm",
-        "${{ github.ref_name }}",
+        "${{ inputs.release_publish_branch || github.ref_name }}",
       ],
       [
         PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
@@ -7621,7 +7623,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         OPENCLAW_NPM_RELEASE_WORKFLOW,
         "validate_publish_request",
         "publish_openclaw_npm",
-        "${{ github.ref_name }}",
+        "${{ inputs.release_publish_branch || github.ref_name }}",
       ],
       [
         ".github/workflows/plugin-clawhub-new.yml",
@@ -7643,6 +7645,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         '${GITHUB_ACTOR}" != "github-actions[bot]"',
         "validate-release-publish-approval.mjs",
       ]);
+    }
+
+    for (const workflowPath of [PLUGIN_NPM_RELEASE_WORKFLOW, OPENCLAW_NPM_RELEASE_WORKFLOW]) {
+      const authorization = workflowStep(
+        workflowJob(
+          workflowPath,
+          workflowPath === PLUGIN_NPM_RELEASE_WORKFLOW
+            ? "validate_release_publish_approval"
+            : "validate_publish_request",
+        ),
+        "Validate release publish approval run",
+      );
+      expectTextToIncludeAll(authorization.run, [
+        'export EXPECTED_WORKFLOW_FULL_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"',
+        'export EXPECTED_WORKFLOW_FULL_REF="refs/heads/${EXPECTED_WORKFLOW_BRANCH}"',
+      ]);
+      expect(
+        readWorkflow(workflowPath).on?.workflow_dispatch?.inputs?.release_publish_branch,
+      ).toBeDefined();
     }
 
     for (const [workflowPath, publishJobName, environment] of [

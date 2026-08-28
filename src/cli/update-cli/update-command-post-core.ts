@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -290,6 +291,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   pluginInstallRecords: Record<string, PluginInstallRecord>;
   preUpdateConfig?: PreUpdateConfigRestoreInput;
   updateStartedAtMs: number;
+  timeoutMs: number;
   nodeRunner?: string;
 }): Promise<{
   resumed: boolean;
@@ -299,6 +301,20 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
     return { resumed: false };
+  }
+  const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
+  const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
+  if (params.opts.acceptCapabilities) {
+    // Same-version artifacts can expose different CLI options. Keep consent in
+    // the current process when the installed target cannot receive it.
+    const { stdout } = await runExec(nodeRunner, [entryPath, "update", "--help"], {
+      baseEnv,
+      logOutput: false,
+      timeoutMs: params.timeoutMs,
+    });
+    if (!/^[\t ]*--accept-capabilities(?:[\t ]|$)/m.test(stripVTControlCharacters(stdout))) {
+      return { resumed: false };
+    }
   }
 
   const argv = [entryPath, "update"];
@@ -310,6 +326,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   }
   if (params.opts.yes) {
     argv.push("--yes");
+  }
+  if (params.opts.acceptCapabilities) {
+    argv.push("--accept-capabilities");
   }
   if (params.opts.timeout) {
     argv.push("--timeout", params.opts.timeout);
@@ -357,12 +376,12 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     const jsonMode = params.opts.json === true;
     const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
     const handoffEnv = buildPostCoreHandoffEnv({
-      baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+      baseEnv,
       compatHostVersion: postCoreHostVersion,
       requestedChannel: params.requestedChannel,
       sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
     });
-    const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
+    const child = spawn(nodeRunner, argv, {
       stdio: childStdio,
       env: {
         ...handoffEnv,
