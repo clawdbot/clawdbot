@@ -10,6 +10,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import { projectInferenceRoute } from "./inference-route.js";
 import { executeSystemAgentOperation } from "./operations.js";
@@ -25,6 +26,10 @@ const cleanups: Array<() => void> = [];
 
 afterEach(() => {
   resetConfigRuntimeState();
+  // Persistent-setup cases reach the audit writer, which caches an open handle
+  // on the shared SQLite state DB under the fixture root; close it before the
+  // cleanups delete that root so rmSync cannot fail with EBUSY on Windows.
+  closeOpenClawStateDatabaseForTest();
   for (const cleanup of cleanups.splice(0)) {
     cleanup();
   }
