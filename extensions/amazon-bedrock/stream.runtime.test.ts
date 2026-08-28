@@ -937,7 +937,7 @@ describe("Bedrock Fable contract", () => {
       unsubscribe();
     }
 
-    expect(activityCount).toBeGreaterThan(0);
+    expect(activityCount).toBe(3);
   });
 });
 
