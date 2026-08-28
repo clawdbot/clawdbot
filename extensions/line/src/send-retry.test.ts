@@ -3,7 +3,7 @@ import { HTTPFetchError } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { isLineDefinitiveRejection } from "./send-retry.js";
+import { isLineDefinitiveRejection, runLinePushWithRetries } from "./send-retry.js";
 
 const {
   requireRuntimeConfigMock,
@@ -230,5 +230,32 @@ describe("isLineDefinitiveRejection", () => {
     },
   ])("treats $label as definitive=$definitive", ({ error, definitive }) => {
     expect(isLineDefinitiveRejection(error)).toBe(definitive);
+  });
+
+  it("keeps a push ambiguous when an earlier attempt never reached LINE", async () => {
+    const rejected = httpError(400);
+    let attempt = 0;
+    const failure = await runLinePushWithRetries(async () => {
+      attempt += 1;
+      // A reset connection may already have delivered the push, so the retry
+      // that follows cannot prove it was never sent.
+      throw attempt === 1
+        ? Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })
+        : rejected;
+    }, "line:push").catch((error: unknown) => error);
+
+    expect(attempt).toBeGreaterThan(1);
+    expect(isLineDefinitiveRejection(failure)).toBe(false);
+  });
+
+  it("still proves a push was refused when LINE rejected the only attempt", async () => {
+    let attempt = 0;
+    const failure = await runLinePushWithRetries(async () => {
+      attempt += 1;
+      throw httpError(400);
+    }, "line:push").catch((error: unknown) => error);
+
+    expect(attempt).toBe(1);
+    expect(isLineDefinitiveRejection(failure)).toBe(true);
   });
 });

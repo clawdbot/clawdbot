@@ -14,15 +14,30 @@ export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
 }
 
 /**
- * LINE answered with a client error, so it rejected the request and sent nothing.
+ * LINE answered this attempt with a client error, so it rejected the request and
+ * sent nothing.
  *
  * Narrower than the in-request policy below: a rate limit or a request timeout
  * can still succeed on a later delivery attempt, so they stay ambiguous even
  * though neither is worth replaying inside the same send.
  */
-export function isLineDefinitiveRejection(error: unknown): boolean {
+function isDefinitiveAttemptRejection(error: unknown): boolean {
   const status = findLineHttpError(error)?.status;
   return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+// A push that was retried can only prove "nothing was sent" when LINE itself
+// refused every attempt. Any attempt LINE never answered is treated as unproven
+// here, including a pre-connect failure that core can still prove by other
+// means, because this module cannot tell the two apart from the error alone.
+const pushErrorsWithAmbiguousAttempt = new WeakSet<object>();
+
+/** True when LINE refused every attempt of this push, so none of them was sent. */
+export function isLineDefinitiveRejection(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && pushErrorsWithAmbiguousAttempt.has(error)) {
+    return false;
+  }
+  return isDefinitiveAttemptRejection(error);
 }
 
 function isRetryableLinePushError(error: unknown): boolean {
@@ -43,8 +58,25 @@ function isRetryableLinePushError(error: unknown): boolean {
  * Pushes are non-idempotent without a retry key, so the generic message-matching
  * fallback stays off and only the classification above may replay a request.
  */
-export const runLinePushWithRetries = createChannelApiRetryRunner({
+const runLinePushAttempts = createChannelApiRetryRunner({
   shouldRetry: isRetryableLinePushError,
   strictShouldRetry: true,
   verbose: true,
 });
+
+export const runLinePushWithRetries: typeof runLinePushAttempts = (fn, label) => {
+  let sawAmbiguousAttempt = false;
+  return runLinePushAttempts(async () => {
+    try {
+      return await fn();
+    } catch (error) {
+      sawAmbiguousAttempt ||= !isDefinitiveAttemptRejection(error);
+      throw error;
+    }
+  }, label).catch((error: unknown) => {
+    if (sawAmbiguousAttempt && typeof error === "object" && error !== null) {
+      pushErrorsWithAmbiguousAttempt.add(error);
+    }
+    throw error;
+  });
+};
