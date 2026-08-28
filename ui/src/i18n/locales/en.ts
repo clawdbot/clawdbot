@@ -275,7 +275,7 @@ export const en: TranslationMap = {
     refreshingStaleSnapshot:
       "Refreshing channel status in the background; showing the last successful snapshot.",
     hub: {
-      connectedTitle: "Your channels",
+      connectedTitle: "Connected channels",
       addTitle: "Add a channel",
       addSubtitle: "Pick a service and follow the guided setup.",
       updatedAgo: "Updated {ago}",
