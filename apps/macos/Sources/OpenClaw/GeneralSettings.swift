@@ -355,6 +355,18 @@ struct GeneralSettings: View {
             set: { self.state.isPaused = !$0 })
     }
 
+    private func manualRouteBinding<Value: Equatable>(
+        _ keyPath: ReferenceWritableKeyPath<AppState, Value>) -> Binding<Value>
+    {
+        Binding(
+            get: { self.state[keyPath: keyPath] },
+            set: { value in
+                guard value != self.state[keyPath: keyPath] else { return }
+                self.state.retireDiscoveryRouteOwnershipForManualEdit()
+                self.state[keyPath: keyPath] = value
+            })
+    }
+
     /// Reflects the effective bridge state: off (and disabled) whenever Computer Control is off,
     /// so the row matches the host that actually runs instead of a standalone toggle.
     private var peekabooBridgeBinding: Binding<Bool> {
@@ -472,7 +484,7 @@ struct GeneralSettings: View {
                 subtitle: "Pick whether this app owns a local Gateway or attaches to another host.",
                 showsDivider: self.state.connectionMode == .unconfigured)
             {
-                Picker("Gateway location", selection: self.$state.connectionMode) {
+                Picker("Gateway location", selection: self.manualRouteBinding(\.connectionMode)) {
                     Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
                     Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
                     Text("Remote (another host)").tag(AppState.ConnectionMode.remote)
@@ -671,7 +683,7 @@ struct GeneralSettings: View {
             title: "Transport",
             subtitle: "SSH keeps the Gateway private; direct is best for HTTPS or Tailscale Serve.")
         {
-            Picker("Transport", selection: self.$state.remoteTransport) {
+            Picker("Transport", selection: self.manualRouteBinding(\.remoteTransport)) {
                 Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
                 Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
             }
@@ -687,7 +699,7 @@ struct GeneralSettings: View {
 
         return VStack(alignment: .leading, spacing: 0) {
             SettingsCardRow(title: "SSH target", subtitle: "User and host for the remote Gateway machine.") {
-                TextField("user@host[:22]", text: self.$state.remoteTarget)
+                TextField("user@host[:22]", text: self.manualRouteBinding(\.remoteTarget))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: Self.remoteFieldWidth)
                 self.remoteTestButton(disabled: !canTest)
@@ -706,7 +718,7 @@ struct GeneralSettings: View {
         SettingsCardRow(title: "Gateway URL", subtitle: "The WebSocket URL exposed by the remote Gateway.") {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                    TextField("wss://gateway.example.ts.net", text: self.manualRouteBinding(\.remoteUrl))
                         .textFieldStyle(.roundedBorder)
                         .frame(width: Self.remoteFieldWidth)
                     self.remoteTestButton(

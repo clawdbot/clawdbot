@@ -5,7 +5,6 @@ import OpenClawKit
 @MainActor
 enum GatewayDiscoverySelectionSupport {
     private static let defaultSshTunnelGatewayUrl = "ws://127.0.0.1:18789"
-    private static let tailscaleServeStableIDPrefix = "tailscale-serve|"
 
     static func applyRemoteSelection(
         gateway: GatewayDiscoveryModel.DiscoveredGateway,
@@ -31,7 +30,7 @@ enum GatewayDiscoverySelectionSupport {
         else { return }
         // Selection establishes ownership before persistence. A failed atomic
         // save leaves routing unavailable; retry still removes both auth kinds.
-        state.clearRemoteCredentialsForDiscoverySelection()
+        state.clearRemoteCredentialsForDiscoverySelection(routeBinding: selectedRoute)
     }
 
     private static func routeBinding(state: AppState) -> String? {
@@ -68,9 +67,9 @@ enum GatewayDiscoverySelectionSupport {
     static func shouldPreferDirectTransport(
         for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool
     {
-        // Bonjour TXT never decides routing. Only Tailscale Serve's dedicated
-        // discovery source can establish the secure direct-route contract.
-        guard gateway.stableID.hasPrefix(self.tailscaleServeStableIDPrefix),
+        // Bonjour TXT never decides routing. This fact is minted only by the
+        // dedicated Tailscale Serve source and preserved through deduplication.
+        guard gateway.supportsSecureDirectTransport,
               let url = GatewayDiscoveryHelpers.directUrl(for: gateway)
         else { return false }
         return url.hasPrefix("wss://")

@@ -1,16 +1,16 @@
 import Foundation
-import OpenClawDiscovery
 import Testing
 @testable import OpenClaw
+@testable import OpenClawDiscovery
 
 @Suite(.serialized)
 @MainActor
 struct GatewayDiscoverySelectionSupportTests {
-    private func withIsolation(
+    private func withIsolation<T>(
         configPath: String,
-        _ body: () async -> Void) async
+        _ body: () async throws -> T) async rethrows -> T
     {
-        await TestIsolation.withIsolatedState(
+        try await TestIsolation.withIsolatedState(
             env: ["OPENCLAW_CONFIG_PATH": configPath],
             defaults: [
                 "gateway.preferredStableID": nil,
@@ -27,6 +27,7 @@ struct GatewayDiscoverySelectionSupportTests {
         sshPort: Int = 22,
         gatewayTls: Bool = false,
         gatewayDirectReachable: Bool = false,
+        supportsSecureDirectTransport: Bool = false,
         stableID: String) -> GatewayDiscoveryModel.DiscoveredGateway
     {
         GatewayDiscoveryModel.DiscoveredGateway(
@@ -39,6 +40,7 @@ struct GatewayDiscoverySelectionSupportTests {
             gatewayPort: servicePort,
             gatewayTls: gatewayTls,
             gatewayDirectReachable: gatewayDirectReachable,
+            supportsSecureDirectTransport: supportsSecureDirectTransport,
             cliPath: nil,
             stableID: stableID,
             debugID: UUID().uuidString,
@@ -59,12 +61,44 @@ struct GatewayDiscoverySelectionSupportTests {
                     servicePort: 443,
                     tailnetDns: tailnetHost,
                     gatewayTls: true,
+                    supportsSecureDirectTransport: true,
                     stableID: "tailscale-serve|\(tailnetHost)"),
                 state: state)
 
             #expect(state.remoteTransport == .direct)
             #expect(state.remoteUrl == "wss://\(tailnetHost)")
             #expect(CommandResolver.parseSSHTarget(state.remoteTarget)?.host == tailnetHost)
+        }
+    }
+
+    @Test func `combined wide area and tailscale serve discovery retains secure direct transport`() async throws {
+        let tailnetHost = "gateway-host.tailnet-example.ts.net"
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(configPath: configPath) {
+            let wideArea = self.makeGateway(
+                serviceHost: tailnetHost,
+                servicePort: 443,
+                tailnetDns: tailnetHost,
+                gatewayTls: true,
+                stableID: "wide-area|openclaw.internal.|gateway-host")
+            let tailscaleServe = self.makeGateway(
+                serviceHost: tailnetHost,
+                servicePort: 443,
+                tailnetDns: tailnetHost,
+                gatewayTls: true,
+                supportsSecureDirectTransport: true,
+                stableID: "tailscale-serve|\(tailnetHost)")
+            let deduped = GatewayDiscoveryModel.sortedDeduped(gateways: [wideArea, tailscaleServe])
+            #expect(deduped.count == 1)
+            let selected = try #require(deduped.first)
+            let state = AppState(preview: true)
+            state.remoteTransport = .ssh
+
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: selected, state: state)
+
+            #expect(selected.stableID == tailscaleServe.stableID)
+            #expect(state.remoteTransport == .direct)
+            #expect(state.remoteUrl == "wss://\(tailnetHost)")
         }
     }
 
