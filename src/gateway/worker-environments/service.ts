@@ -309,6 +309,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareNodeEnrollment: options.prepareNodeEnrollment,
     closeNodeEnrollment: options.closeNodeEnrollment,
     retireNodeEnrollment: options.retireNodeEnrollment,
+    placementStore: options.placementStore,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
     credentialBroker,
