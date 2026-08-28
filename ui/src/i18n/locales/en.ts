@@ -5916,6 +5916,9 @@ export const en: TranslationMap = {
       volume: "Volume",
       download: "Download {filename}",
       preparing: "Preparing playback…",
+      openVideo: "Expand {filename} in the media overlay",
+      videoPreview: "Video preview: {title}",
+      closeVideoPreview: "Close video preview",
     },
     modelControls: {
       default: "Default",

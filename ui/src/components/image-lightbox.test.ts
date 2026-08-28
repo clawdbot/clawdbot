@@ -92,6 +92,31 @@ describe("openclaw-image-lightbox", () => {
     expect(root?.querySelector<HTMLButtonElement>(".close")?.hasAttribute("autofocus")).toBe(true);
   });
 
+  it("renders video in the shared overlay without image zoom controls", async () => {
+    render(
+      html`<openclaw-image-lightbox
+        mediaKind="video"
+        src="https://example.com/demo.mp4"
+        .imageTitle=${"Demo clip"}
+      ></openclaw-image-lightbox>`,
+      container,
+    );
+    const modal = container.querySelector("openclaw-image-lightbox");
+    if (!modal) {
+      throw new Error("missing media lightbox");
+    }
+    await modal.updateComplete;
+
+    const video = modal.shadowRoot?.querySelector<HTMLVideoElement>("video");
+    expect(video?.src).toBe("https://example.com/demo.mp4");
+    expect(video?.controls).toBe(true);
+    expect(video?.autoplay).toBe(true);
+    expect(modal.shadowRoot?.querySelector("img, .zoom-controls")).toBeNull();
+    expect(
+      modal.shadowRoot?.querySelector<HTMLButtonElement>(".close")?.getAttribute("aria-label"),
+    ).toBe("Close video preview");
+  });
+
   it("accepts parameters on safe raster MIME types", async () => {
     fetchImage.mockResolvedValueOnce({
       blob: async () => new Blob(["png"], { type: "image/png;charset=utf-8" }),

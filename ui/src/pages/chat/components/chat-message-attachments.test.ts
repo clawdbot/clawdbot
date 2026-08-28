@@ -936,10 +936,9 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("renders normalized base64 video with inline playback and Files actions", () => {
+  it("renders normalized base64 video with inline playback", () => {
     const source = "data:video/mp4;base64,AAAA";
     const container = document.body.appendChild(document.createElement("div"));
-    const onOpenSidebar = vi.fn();
     render(
       renderAssistantAttachments(
         [
@@ -954,6 +953,39 @@ describe("attachment sidebar source ownership", () => {
           },
         ],
         {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-chat-video-player")).toMatchObject({
+      label: "inline.mp4",
+      mimeType: "video/mp4",
+      sourceIdentity: source,
+      src: source,
+    });
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    container.remove();
+  });
+
+  it("expands an inline video into the shared media overlay", () => {
+    const source = "https://example.com/inline.mp4";
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenImage = vi.fn();
+    const onOpenSidebar = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "video",
+              label: "inline.mp4",
+              mimeType: "video/mp4",
+              url: source,
+            },
+          },
+        ],
+        { onOpenImage },
         onOpenSidebar,
       ),
       container,
@@ -969,9 +1001,8 @@ describe("attachment sidebar source ownership", () => {
     });
     expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
     (player as HTMLElement & { onExpand: () => void }).onExpand();
-    expect(onOpenSidebar).toHaveBeenCalledWith(
-      expect.objectContaining({ attachmentKind: "video", src: source }),
-    );
+    expect(onOpenImage).toHaveBeenCalledWith({ kind: "video", src: source, title: "inline.mp4" });
+    expect(onOpenSidebar).not.toHaveBeenCalled();
     container.remove();
   });
 

@@ -153,6 +153,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref,
+          expandLabel: t("chat.mediaPlayer.openVideo", { filename: this.label }),
           onExpand: this.onExpand,
           visualMode: "preview-with-favicon",
         })}

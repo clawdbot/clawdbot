@@ -55,6 +55,7 @@ export function renderChatImageLightbox(
   }
   return html`
     <openclaw-image-lightbox
+      .mediaKind=${item.kind ?? "image"}
       src=${item.src}
       .imageTitle=${item.title}
       @image-lightbox-close=${onClose}
