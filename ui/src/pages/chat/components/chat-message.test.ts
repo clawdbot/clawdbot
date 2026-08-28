@@ -5103,11 +5103,15 @@ describe("grouped chat rendering", () => {
         { type: "input_image", omitted: true, bytes: 26 },
         {
           type: "input_image",
-          image_url: { detail: "high", omitted: true, bytes: 27 },
+          omitted: true,
+          bytes: 27,
+          image_url: { detail: "high" },
         },
         {
           type: "input_image",
-          source: { media_type: "image/png", omitted: true, bytes: 16 },
+          omitted: true,
+          bytes: 16,
+          source: { media_type: "image/png" },
         },
       ]),
     );

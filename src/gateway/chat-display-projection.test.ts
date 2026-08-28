@@ -149,18 +149,18 @@ describe("oversized multimodal chat history", () => {
           },
           {
             type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(nestedImageUrl, "utf8"),
             image_url: {
               detail: "high",
-              omitted: true,
-              bytes: Buffer.byteLength(nestedImageUrl, "utf8"),
             },
           },
           {
             type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(sourceData, "utf8"),
             source: {
               media_type: "image/png",
-              omitted: true,
-              bytes: Buffer.byteLength(sourceData, "utf8"),
             },
           },
           { type: "input_image", image_url: "https://example.test/image.png" },
