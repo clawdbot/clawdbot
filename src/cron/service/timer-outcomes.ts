@@ -90,6 +90,8 @@ export function applyJobResult(
     scheduleOwnershipAtMs?: number;
     // Startup replay restores alert cooldown bookkeeping without redelivery.
     replayFailureAlertAtMs?: number;
+    // Originating run-history row; forwarded into the alert callback for exact settlement.
+    taskRunId?: string;
     deferredNotifications?: DeferredCronNotifications;
   },
 ): boolean {
@@ -167,6 +169,7 @@ export function applyJobResult(
         ...(opts?.replayFailureAlertAtMs !== undefined
           ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
           : {}),
+        taskRunId: opts?.taskRunId,
         deferredNotifications: opts?.deferredNotifications,
       });
     } else {
@@ -206,6 +209,7 @@ export function applyJobResult(
       completionFailed: completionStatus === "failed",
       autoDisableNotificationOwnsFailure,
       replayFailureAlertAtMs: opts?.replayFailureAlertAtMs,
+      taskRunId: opts?.taskRunId,
       deferredNotifications: opts?.deferredNotifications,
     });
     return shouldDelete;
@@ -646,6 +650,7 @@ export function applyOutcomeToStoredJob(
     // snapshot so operator history survives without reviving the stored job.
     applyJobResult(state, result.job, result, {
       scheduleOwnership: "stale",
+      taskRunId: result.taskRunId,
       deferredNotifications: opts?.deferredNotifications,
     });
     emitCronOutcomeForJob(state, result.job, result);
@@ -709,6 +714,7 @@ export function applyOutcomeToAuthoritativeJob(
 
   const shouldDelete = applyJobResult(state, job, result, {
     scheduleOwnership,
+    taskRunId: result.taskRunId,
     deferredNotifications: opts?.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });

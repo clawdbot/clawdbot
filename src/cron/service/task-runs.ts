@@ -62,26 +62,47 @@ export function tryRecordCronFailureNotificationDeliveryOutcome(
   params: {
     jobId: string;
     outcome: CronFailureNotificationDelivery;
+    // When provided, updates exactly this run-history row; no scan required.
+    taskRunId?: string;
   },
 ): void {
   try {
     const storeKey = cronStoreKey(state.deps.storePath);
-    const pending = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-      runtime: "cron",
-      sourceId: params.jobId,
-    })
-      .filter(
-        (task) =>
-          cronTaskRecordStoreKey(task) === storeKey &&
-          task.runId !== undefined &&
-          isRecord(task.detail) &&
-          isRecord(task.detail.failureNotificationDelivery) &&
-          task.detail.failureNotificationDelivery.status === "unknown",
-      )
-      .toSorted((left, right) => right.createdAt - left.createdAt)[0];
-    const runId = pending?.runId;
-    const detail = pending?.detail;
-    if (!pending || runId === undefined || !isRecord(detail)) {
+    let runId: string | undefined;
+    let detail: unknown;
+    if (params.taskRunId !== undefined) {
+      // Use the exact originating run — replacing the job-level pending-row scan.
+      const exact = findTaskByRunId(params.taskRunId);
+      if (
+        exact?.runtime !== "cron" ||
+        cronTaskRecordStoreKey(exact) !== storeKey ||
+        !isRecord(exact.detail)
+      ) {
+        return;
+      }
+      runId = exact.runId;
+      detail = exact.detail;
+    } else {
+      const pending = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+        runtime: "cron",
+        sourceId: params.jobId,
+      })
+        .filter(
+          (task) =>
+            cronTaskRecordStoreKey(task) === storeKey &&
+            task.runId !== undefined &&
+            isRecord(task.detail) &&
+            isRecord(task.detail.failureNotificationDelivery) &&
+            task.detail.failureNotificationDelivery.status === "unknown",
+        )
+        .toSorted((left, right) => right.createdAt - left.createdAt)[0];
+      runId = pending?.runId;
+      detail = pending?.detail;
+      if (!pending || runId === undefined || !isRecord(detail)) {
+        return;
+      }
+    }
+    if (runId === undefined || !isRecord(detail)) {
       return;
     }
     updateTaskStateByRunId({

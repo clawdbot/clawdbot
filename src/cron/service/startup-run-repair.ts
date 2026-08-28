@@ -100,6 +100,7 @@ export function markInterruptedStartupRun(params: {
     },
     completionFailed: false,
     autoDisableNotificationOwnsFailure,
+    taskRunId: params.taskRunId,
     deferredNotifications: params.deferredNotifications,
   });
 
