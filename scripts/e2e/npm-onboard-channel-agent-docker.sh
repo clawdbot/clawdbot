@@ -175,6 +175,7 @@ dump_debug_logs() {
   echo "npm onboard/channel/agent scenario failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
+    /tmp/openclaw-codex-plugin-install.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-channels-status.json \
     /tmp/openclaw-channels-status.err \
@@ -206,6 +207,15 @@ if [ -d "$package_root/dist/extensions/$CHANNEL" ]; then
 else
   CHANNEL_PACKAGE_MODE="external"
   echo "$CHANNEL is not packaged with core OpenClaw; expecting channel selection to install it on demand."
+fi
+
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+  echo "Installing reviewed Codex runtime companion: @openclaw/codex@$candidate_version"
+  openclaw plugins install "npm:@openclaw/codex@$candidate_version" \
+    --pin \
+    --accept-capabilities \
+    >/tmp/openclaw-codex-plugin-install.log 2>&1
 fi
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"

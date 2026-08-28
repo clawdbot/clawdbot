@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SOURCE_SHA = "a".repeat(40);
 const VERSION = "2026.8.1-beta.1";
 const SCRIPT = "scripts/e2e/lib/prepublish-plugin-registry.sh";
+const NPM_ONBOARD_SCRIPT = "scripts/e2e/npm-onboard-channel-agent-docker.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function sha256(path: string): string {
@@ -30,6 +31,21 @@ function createTarball(
 }
 
 describe("prepublish plugin registry shell helper", () => {
+  it("installs the reviewed staged Codex companion before non-interactive onboarding", () => {
+    const runner = readFileSync(NPM_ONBOARD_SCRIPT, "utf8");
+    const registryStart = runner.indexOf("openclaw_prepublish_plugin_registry_start_mounted");
+    const consentedInstall = runner.indexOf(
+      'openclaw plugins install "npm:@openclaw/codex@$candidate_version"',
+    );
+    const onboard = runner.indexOf("openclaw onboard --non-interactive --accept-risk");
+
+    expect(registryStart).toBeGreaterThan(-1);
+    expect(consentedInstall).toBeGreaterThan(registryStart);
+    expect(runner.slice(consentedInstall, onboard)).toContain("--pin");
+    expect(runner.slice(consentedInstall, onboard)).toContain("--accept-capabilities");
+    expect(onboard).toBeGreaterThan(consentedInstall);
+  });
+
   it("derives the immutable Docker mount contract from the registry artifact", () => {
     const root = tempDirs.make("openclaw-prepublish-registry-mount-");
     const manifestPath = join(root, "prepublish-plugin-registry.json");
