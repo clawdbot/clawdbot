@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  assertTesterMatchesLease,
   cleanupOwnedRuntime,
   createGatewayEnvironment,
   drainSutUpdates,
@@ -29,6 +30,14 @@ function exited(child) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => child.once("exit", resolve));
 }
+
+test("runner rejects a live tester identity that differs from the lease", () => {
+  assert.throws(
+    () => assertTesterMatchesLease({ id: "42" }, { testerUserId: "43" }),
+    /identity does not match the lease/u,
+  );
+  assert.doesNotThrow(() => assertTesterMatchesLease({ id: "42" }, { testerUserId: "42" }));
+});
 
 test("successful probe cleanup removes private runner scratch without an output directory", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-runner-scratch-"));

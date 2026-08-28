@@ -342,6 +342,12 @@ async function readTester(driverEnv, leaseFailure, repoRoot) {
   };
 }
 
+export function assertTesterMatchesLease(tester, credential) {
+  if (String(tester.id) !== String(credential.testerUserId)) {
+    throw new Error("TDLib Test Server user identity does not match the lease.");
+  }
+}
+
 // Commentary and preamble behavior is transport-shaped: only the completions
 // transport tags assistant text before a tool call as commentary. Hardcoding the
 // api made those scenarios untestable without forking this runner.
@@ -896,6 +902,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     error,
   }));
   const tester = await readTester(driverEnv, leaseFailure, repoRoot);
+  assertTesterMatchesLease(tester, creds);
   const evidenceDir = args.output ? dirname(resolve(args.output)) : "";
   if (evidenceDir) fs.mkdirSync(evidenceDir, { recursive: true });
   const temp = writeConfig({
