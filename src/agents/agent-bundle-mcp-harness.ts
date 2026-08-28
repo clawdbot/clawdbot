@@ -289,7 +289,11 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       });
       liveCatalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
       if (liveCatalog.tools.length > 0) {
-        rememberAdvertisedScopedMcpCatalog(params.sessionId, liveCatalog);
+        rememberAdvertisedScopedMcpCatalog(
+          params.sessionId,
+          liveCatalog,
+          scopedRuntime.advertisedCatalogConfigFingerprint,
+        );
       }
     }
 

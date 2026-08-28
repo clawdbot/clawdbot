@@ -119,7 +119,11 @@ export type SessionMcpRuntimeManagerLifecycle = {
     sessionId: string,
     opts?: { preserveRequiredRetirement?: boolean },
   ) => Promise<void>;
-  rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
+  rememberAdvertisedScopedCatalog: (
+    sessionId: string,
+    catalog: McpToolCatalog,
+    configFingerprint: string,
+  ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
   reconcileAdvertisedScopedCatalogConfig: (sessionId: string, fingerprint: string) => void;
 };
@@ -329,7 +333,16 @@ export function createSessionMcpRuntimeManagerLifecycle(
     forgetSessionKeysForSessionId(sessionId);
   };
 
-  const rememberAdvertisedScopedCatalog = (sessionId: string, catalog: McpToolCatalog): void => {
+  const rememberAdvertisedScopedCatalog = (
+    sessionId: string,
+    catalog: McpToolCatalog,
+    configFingerprint: string,
+  ): void => {
+    // An older requester may finish after reconciliation; reject its catalog
+    // instead of allowing stale tools to repopulate the session cache.
+    if (store.advertisedScopedCatalogConfigFingerprints.get(sessionId) !== configFingerprint) {
+      return;
+    }
     let entry = store.advertisedScopedCatalogBySessionId.get(sessionId);
     if (!entry) {
       entry = {

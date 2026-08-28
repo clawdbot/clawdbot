@@ -142,6 +142,11 @@ export type SessionMcpRuntime = {
   dispose: () => Promise<void>;
 };
 
+/** Requester runtime carrying the config version that authorizes catalog publication. */
+export type RequesterScopedMcpRuntime = SessionMcpRuntime & {
+  advertisedCatalogConfigFingerprint: string;
+};
+
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */
 export type SessionMcpRuntimeManager = {
   getOrCreate: (params: {
@@ -172,12 +177,16 @@ export type SessionMcpRuntimeManager = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }) => Promise<SessionMcpRuntime | undefined>;
+  }) => Promise<RequesterScopedMcpRuntime | undefined>;
   /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread
    * harnesses so dynamic tool specs do not rotate per sender.
    */
-  rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
+  rememberAdvertisedScopedCatalog: (
+    sessionId: string,
+    catalog: McpToolCatalog,
+    configFingerprint: string,
+  ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
