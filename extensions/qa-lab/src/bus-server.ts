@@ -3,9 +3,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isRequestBodyLimitError,
-  readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import { z } from "zod";
 import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
@@ -181,11 +181,12 @@ export function isQaMalformedJsonBodyError(error: unknown): error is Error {
 
 export async function readQaJsonBody(
   req: IncomingMessage,
-  options?: { maxBytes?: number },
+  res: ServerResponse,
+  maxBytes = QA_HTTP_JSON_MAX_BODY_BYTES,
 ): Promise<unknown> {
   const text = (
-    await readRequestBodyWithLimit(req, {
-      maxBytes: options?.maxBytes ?? QA_HTTP_JSON_MAX_BODY_BYTES,
+    await readWebhookBodyForResponse(req, res, {
+      maxBytes,
       timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
     })
   ).trim();
@@ -349,12 +350,14 @@ export async function handleQaBusRequest(params: {
   }
 
   try {
-    const body = (await readQaJsonBody(
-      params.req,
+    const maxBytes =
       url.pathname === "/v1/inbound/message" || url.pathname === "/v1/outbound/message"
-        ? { maxBytes: QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES }
-        : undefined,
-    )) as Record<string, unknown>;
+        ? QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES
+        : QA_HTTP_JSON_MAX_BODY_BYTES;
+    const body = (await readQaJsonBody(params.req, params.res, maxBytes)) as Record<
+      string,
+      unknown
+    >;
     switch (url.pathname) {
       case "/v1/reset":
         params.state.reset();

@@ -669,7 +669,7 @@ export async function startQaLabServer(
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/capture/delete-sessions") {
-          const body = (await readQaJsonBody(req)) as { sessionIds?: unknown };
+          const body = (await readQaJsonBody(req, res)) as { sessionIds?: unknown };
           const sessionIds = Array.isArray(body.sessionIds)
             ? body.sessionIds.filter((value): value is string => typeof value === "string")
             : [];
@@ -704,7 +704,7 @@ export async function startQaLabServer(
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/inbound/message") {
-          const body = await readQaJsonBody(req);
+          const body = await readQaJsonBody(req, res);
           writeJson(res, 200, {
             message: state.addInboundMessage(
               body as Parameters<QaBusState["addInboundMessage"]>[0],
@@ -741,7 +741,7 @@ export async function startQaLabServer(
           let adapterFactories: readonly QaTransportAdapterFactory[] | undefined;
           try {
             selection = normalizeQaRunSelection(
-              await readQaJsonBody(req),
+              await readQaJsonBody(req, res),
               scenarioCatalog.scenarios,
               scorecardReport.profiles,
             );

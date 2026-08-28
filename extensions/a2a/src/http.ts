@@ -3,11 +3,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isRequestBodyLimitError,
-  readRequestBodyWithLimit,
-} from "openclaw/plugin-sdk/webhook-ingress";
+import { isRequestBodyLimitError } from "openclaw/plugin-sdk/webhook-ingress";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import {
   A2aProtocolError,
   A2aRpcRequestSchema,
@@ -268,14 +266,11 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
 
     let body: string;
     try {
-      body = await readRequestBodyWithLimit(request, {
+      body = await readWebhookBodyForResponse(request, response, {
         maxBytes: MAX_REQUEST_BODY_BYTES,
-        destroyOnLimit: false,
       });
     } catch (error) {
       if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
-        response.setHeader("connection", "close");
-        response.once("finish", () => request.destroy());
         writeJsonResponse(response, 413, { error: "Request body exceeds the 1 MiB limit" });
         return true;
       }

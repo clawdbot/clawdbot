@@ -7,7 +7,7 @@ export {
   isBlockedHostnameOrIp,
   isRequestBodyLimitError,
   type OpenClawPluginApi,
-  readRequestBodyWithLimit,
+  readWebhookBodyForResponse,
   requestBodyErrorToText,
   type SessionEntry,
   sleep,

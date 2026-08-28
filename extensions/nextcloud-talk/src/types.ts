@@ -187,7 +187,11 @@ export type NextcloudTalkWebhookServerOptions = {
     maxRequests?: number;
     windowMs?: number;
   };
-  readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
+  readBody?: (
+    req: import("node:http").IncomingMessage,
+    maxBodyBytes: number,
+    res: import("node:http").ServerResponse,
+  ) => Promise<string>;
   isBackendAllowed?: (backend: string) => boolean;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;

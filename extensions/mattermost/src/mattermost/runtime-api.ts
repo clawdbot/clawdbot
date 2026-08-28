@@ -32,8 +32,6 @@ export {
   createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
 export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
-export {
-  isRequestBodyLimitError,
-  readRequestBodyWithLimit,
-} from "openclaw/plugin-sdk/webhook-ingress";
+export { isRequestBodyLimitError } from "openclaw/plugin-sdk/webhook-ingress";
+export { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 export { isTrustedProxyAddress, resolveClientIp } from "openclaw/plugin-sdk/core";

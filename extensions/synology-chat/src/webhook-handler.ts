@@ -11,10 +11,10 @@ import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
   isRequestBodyLimitError,
-  readRequestBodyWithLimit,
   resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import * as synologyClient from "./client.js";
 import {
   validateToken,
@@ -152,7 +152,8 @@ function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): st
 /** Read the full request body as a string. */
 async function readBody(
   req: IncomingMessage,
-  timeoutMs = PREAUTH_BODY_TIMEOUT_MS,
+  res: ServerResponse,
+  timeoutMs: number = PREAUTH_BODY_TIMEOUT_MS,
 ): Promise<
   | { ok: true; body: string }
   | {
@@ -162,7 +163,7 @@ async function readBody(
     }
 > {
   try {
-    const body = await readRequestBodyWithLimit(req, {
+    const body = await readWebhookBodyForResponse(req, res, {
       maxBytes: PREAUTH_MAX_BODY_BYTES,
       timeoutMs,
     });
@@ -407,7 +408,7 @@ async function parseWebhookPayloadRequest(params: {
 }): Promise<
   { ok: false } | { ok: true; payload: SynologyWebhookPayload; rawEvent: SynologyWebhookRawEvent }
 > {
-  const bodyResult = await readBody(params.req, params.bodyTimeoutMs);
+  const bodyResult = await readBody(params.req, params.res, params.bodyTimeoutMs);
   if (!bodyResult.ok) {
     params.log?.error("Failed to read request body", bodyResult.error);
     respondJson(params.res, bodyResult.statusCode, { error: bodyResult.error });

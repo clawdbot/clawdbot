@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
 const mockState = vi.hoisted(() => ({
-  readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
+  readWebhookBodyForResponse: vi.fn(async () => "token=valid-token"),
   parseSlashCommandPayload: vi.fn(() => ({
     token: "valid-token",
     command: "/oc_models",
@@ -68,7 +68,7 @@ vi.mock("./runtime-api.js", () => {
     logTypingFailure: vi.fn(),
     formatInboundFromLabel: vi.fn(() => ""),
     rawDataToString: vi.fn((value: unknown) => (typeof value === "string" ? value : "")),
-    readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
+    readWebhookBodyForResponse: mockState.readWebhookBodyForResponse,
     resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
       sessionKey: params.baseSessionKey,
       parentSessionKey: undefined,
@@ -217,7 +217,7 @@ const accountFixture: ResolvedMattermostAccount = {
 describe("slash-http cfg threading", () => {
   beforeEach(async () => {
     vi.resetModules();
-    mockState.readRequestBodyWithLimit.mockClear();
+    mockState.readWebhookBodyForResponse.mockClear();
     mockState.parseSlashCommandPayload.mockClear();
     mockState.resolveCommandText.mockClear();
     mockState.buildModelsProviderData.mockClear();

@@ -16,7 +16,7 @@ import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   isRequestBodyLimitError,
-  readRequestBodyWithLimit,
+  readWebhookBodyForResponse,
   type OpenClawPluginApi,
 } from "./runtime-api.js";
 import {
@@ -331,7 +331,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     // routing handler indefinitely (Slowloris).
     let bodyStr: string;
     try {
-      bodyStr = await readRequestBodyWithLimit(req, {
+      bodyStr = await readWebhookBodyForResponse(req, res, {
         maxBytes: MULTI_ACCOUNT_BODY_MAX_BYTES,
         timeoutMs: MULTI_ACCOUNT_BODY_TIMEOUT_MS,
       });

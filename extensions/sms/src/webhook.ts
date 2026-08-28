@@ -124,7 +124,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
 
     let form: Record<string, string>;
     try {
-      form = await readTwilioWebhookForm(req);
+      form = await readTwilioWebhookForm(req, res);
     } catch (error) {
       if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
         respondTwiml(res, 413, "Payload too large");

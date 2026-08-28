@@ -251,6 +251,7 @@
     "!dist/plugin-sdk/video-generation.d.ts",
     "!dist/plugin-sdk/video-generation-runtime.d.ts",
     "!dist/plugin-sdk/web-content-extractor.d.ts",
+    "!dist/plugin-sdk/webhook-request-release.d.ts",
     "!dist/plugin-sdk/webhook-targets.d.ts",
     "!dist/plugin-sdk/windows-spawn.d.ts",
     "!dist/plugin-sdk/src/agents/test-helpers/**",
@@ -1479,6 +1480,9 @@
     "./plugin-sdk/webhook-request-guards": {
       "types": "./dist/plugin-sdk/webhook-request-guards.d.ts",
       "default": "./dist/plugin-sdk/webhook-request-guards.js"
+    },
+    "./plugin-sdk/webhook-request-release": {
+      "default": "./dist/plugin-sdk/webhook-request-release.js"
     },
     "./plugin-sdk/web-media": {
       "types": "./dist/plugin-sdk/web-media.d.ts",

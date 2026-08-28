@@ -13,10 +13,8 @@ import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
 } from "openclaw/plugin-sdk/realtime-voice";
-import {
-  readRequestBodyWithLimit,
-  resolveAcceptedBrowserOrigin,
-} from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveAcceptedBrowserOrigin } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import WebSocket, { type RawData } from "ws";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
@@ -447,7 +445,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
     };
     try {
       const offerStartedAt = Date.now();
-      const sdp = await readRequestBodyWithLimit(req, {
+      const sdp = await readWebhookBodyForResponse(req, res, {
         maxBytes: OPENAI_QUICKSILVER_MAX_SDP_BYTES,
         timeoutMs: 15_000,
       });

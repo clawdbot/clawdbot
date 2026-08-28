@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { createMockIncomingRequest, postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -544,6 +544,90 @@ describe("monitorLineProvider lifecycle", () => {
       expect(message).toContain("retryAfterMs");
       expect(message).not.toContain("[object Object]");
       expect(message).not.toContain(bearerToken);
+    } finally {
+      try {
+        if (server.listening) {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve();
+            });
+          });
+        }
+      } finally {
+        await monitor.stop();
+      }
+    }
+  });
+
+  it("answers an over-limit webhook with 413 and then closes the connection", async () => {
+    // Driven over a raw socket rather than fetch: the server answers while the sender is
+    // still uploading and then closes, so both halves of the contract - the status reaches
+    // LINE, and the rejected request does not stay open - have to be observed on the wire.
+    // A mocked response records status(413) either way and proves neither half.
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    const route = requireRegisteredRoute();
+    const server = createServer((req, res) => {
+      void route.handler(req, res);
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected LINE webhook test server to have a TCP address");
+      }
+      const webhookUrl = `http://127.0.0.1:${address.port}/line/webhook`;
+
+      const oversizedPayload = JSON.stringify({
+        events: [{ type: "message" }],
+        padding: "x".repeat(70 * 1024),
+      });
+      const oversized = await postRawWebhook({
+        url: webhookUrl,
+        body: oversizedPayload,
+        headers: {
+          "content-type": "application/json",
+          "x-line-signature": crypto
+            .createHmac("SHA256", "secret")
+            .update(oversizedPayload)
+            .digest("base64"),
+        },
+      });
+      expect(oversized.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(oversized.body)).toEqual({ error: "Payload too large" });
+      expect(oversized.closedByServer).toBe(true);
+
+      // Same route: an in-limit webhook is still admitted and answered normally.
+      const acceptedPayload = JSON.stringify({ events: [{ type: "message" }] });
+      const accepted = await fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-line-signature": crypto
+            .createHmac("SHA256", "secret")
+            .update(acceptedPayload)
+            .digest("base64"),
+        },
+        body: acceptedPayload,
+      });
+      expect(accepted.status).toBe(200);
+      expect(await accepted.json()).toEqual({ status: "ok" });
     } finally {
       try {
         if (server.listening) {

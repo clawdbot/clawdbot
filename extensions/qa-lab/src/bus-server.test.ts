@@ -534,10 +534,18 @@ describe("handleQaBusRequest", () => {
         destroy() {
           this.destroyed = true;
         },
+        // Body readers pause rather than destroy when the caller still owes a response.
+        pause() {
+          return this;
+        },
       };
       const res = {
         statusCode: 0,
         body: "",
+        headersSent: false,
+        setHeader() {
+          return this;
+        },
         writeHead(statusCode: number) {
           this.statusCode = statusCode;
         },
@@ -553,7 +561,9 @@ describe("handleQaBusRequest", () => {
       });
 
       expect(handled).toBe(true);
-      expect(req.destroyed).toBe(true);
+      // The request is left readable so this 413 can be flushed; the connection is
+      // released once the response closes rather than by destroying it first.
+      expect(req.destroyed).toBe(false);
       expect(res.statusCode).toBe(413);
       expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
     },
@@ -568,10 +578,18 @@ describe("handleQaBusRequest", () => {
       destroy() {
         this.destroyed = true;
       },
+      // Body readers pause rather than destroy when the caller still owes a response.
+      pause() {
+        return this;
+      },
     };
     const res = {
       statusCode: 0,
       body: "",
+      headersSent: false,
+      setHeader() {
+        return this;
+      },
       writeHead(statusCode: number) {
         this.statusCode = statusCode;
       },

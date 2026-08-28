@@ -156,20 +156,11 @@ function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean
   req.pause();
 }
 
-/** Close a limited request only after its response transport has closed. */
-export function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
+/** Ask Node to flush the rejection response before it closes the limited connection. */
+export function closeRequestAfterResponse(_req: IncomingMessage, res: ServerResponse): void {
   if (!res.headersSent) {
     res.setHeader("Connection", "close");
   }
-  const once = Reflect.get(res, "once");
-  if (typeof once !== "function") {
-    return;
-  }
-  once.call(res, "close", () => {
-    if (!req.destroyed) {
-      req.destroy();
-    }
-  });
 }
 
 type ReadResponsePrefixResult = {

@@ -5,10 +5,10 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
   isRequestBodyLimitError,
-  readRequestBodyWithLimit,
   resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkWebhookHeaders, NextcloudTalkWebhookServerOptions } from "./types.js";
 import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
@@ -92,8 +92,12 @@ function verifyWebhookSignature(params: {
   return true;
 }
 
-function readNextcloudTalkWebhookBody(req: IncomingMessage, maxBodyBytes: number): Promise<string> {
-  return readRequestBodyWithLimit(req, {
+function readNextcloudTalkWebhookBody(
+  req: IncomingMessage,
+  maxBodyBytes: number,
+  res: ServerResponse,
+): Promise<string> {
+  return readWebhookBodyForResponse(req, res, {
     // This read happens before signature verification, so keep the unauthenticated
     // body budget bounded even if the operator-configured post-parse limit is larger.
     maxBytes: Math.min(maxBodyBytes, PREAUTH_WEBHOOK_MAX_BODY_BYTES),
@@ -165,7 +169,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
           return;
         }
 
-        const body = await readBody(req, maxBodyBytes);
+        const body = await readBody(req, maxBodyBytes, res);
 
         const hasValidSignature = verifyWebhookSignature({
           headers,

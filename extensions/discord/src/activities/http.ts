@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
-import {
-  readJsonBodyWithLimit,
-  WEBHOOK_BODY_READ_DEFAULTS,
-} from "openclaw/plugin-sdk/webhook-request-guards";
+import { WEBHOOK_BODY_READ_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readJsonWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
 import {
   DISCORD_TOKEN_URL,
@@ -154,7 +152,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     if (!account) {
       return respondJson(res, 503, { error: "Discord Activities is not fully configured" });
     }
-    const bodyResult = await readJsonBodyWithLimit(req, {
+    const bodyResult = await readJsonWebhookBodyForResponse(req, res, {
       maxBytes: BODY_MAX_BYTES,
       timeoutMs: bodyTimeoutMs,
       emptyObjectOnEmpty: true,

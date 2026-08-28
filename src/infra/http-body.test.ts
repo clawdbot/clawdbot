@@ -397,7 +397,7 @@ describe("http body limits", () => {
     expect(pause).toHaveBeenCalledOnce();
   });
 
-  it("closes a limited request only after its response transport closes", () => {
+  it("marks a limited response for connection close without destroying the request", () => {
     const req = createMockRequest({ emitEnd: false });
     const res = new EventEmitter() as ServerResponse;
     const setHeader = vi.fn();
@@ -407,13 +407,9 @@ describe("http body limits", () => {
 
     expect(setHeader).toHaveBeenCalledWith("Connection", "close");
     expect(req.destroyed).toBe(false);
-    res.emit("finish");
-    expect(req.destroyed).toBe(false);
-    res.emit("close");
-    expect(req.destroyed).toBe(true);
   });
 
-  it("flushes an installed guard response before destroying the request", async () => {
+  it("leaves an installed guard request for Node to close after its response", async () => {
     const req = createMockRequest({ chunks: ["oversized"], emitEnd: false });
     const res = new EventEmitter() as ServerResponse;
     const setHeader = vi.fn();
@@ -428,10 +424,6 @@ describe("http body limits", () => {
     expect(setHeader).toHaveBeenCalledWith("Connection", "close");
     expect(end).toHaveBeenCalledWith(JSON.stringify({ error: "Payload too large" }));
     expect(req.destroyed).toBe(false);
-    res.emit("finish");
-    expect(req.destroyed).toBe(false);
-    res.emit("close");
-    expect(req.destroyed).toBe(true);
   });
 
   it("allows lightweight responses without finish listeners", () => {

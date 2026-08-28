@@ -11,7 +11,7 @@ import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
   isTrustedProxyAddress,
-  readRequestBodyWithLimit,
+  readWebhookBodyForResponse,
   resolveClientIp,
   type OpenClawConfig,
 } from "./runtime-api.js";
@@ -352,8 +352,8 @@ export function buildButtonProps(params: {
 
 // ── Request body reader ────────────────────────────────────────────────
 
-function readInteractionBody(req: IncomingMessage): Promise<string> {
-  return readRequestBodyWithLimit(req, {
+function readInteractionBody(req: IncomingMessage, res: ServerResponse): Promise<string> {
+  return readWebhookBodyForResponse(req, res, {
     maxBytes: INTERACTION_MAX_BODY_BYTES,
     timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
   });
@@ -437,7 +437,7 @@ export function createMattermostInteractionHandler(params: {
 
     let payload: MattermostInteractionPayload;
     try {
-      const raw = await readInteractionBody(req);
+      const raw = await readInteractionBody(req, res);
       payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);

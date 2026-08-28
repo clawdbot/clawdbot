@@ -193,6 +193,7 @@
   "video-generation",
   "video-generation-runtime",
   "web-content-extractor",
+  "webhook-request-release",
   "webhook-targets",
   "windows-spawn"
 ]

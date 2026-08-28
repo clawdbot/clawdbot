@@ -29,7 +29,7 @@ import {
   createFixedWindowRateLimiter,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readJsonWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import { mergeTelegramAccountConfig } from "./account-config.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -510,7 +510,7 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     void (async () => {
-      const body = await readJsonBodyWithLimit(req, {
+      const body = await readJsonWebhookBodyForResponse(req, res, {
         maxBytes: TELEGRAM_WEBHOOK_MAX_BODY_BYTES,
         timeoutMs: TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS,
         emptyObjectOnEmpty: false,

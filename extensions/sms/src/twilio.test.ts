@@ -2,6 +2,7 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
@@ -72,7 +73,9 @@ function computeTestTwilioSignature(params: {
 async function readTestTwilioForm(body: string): Promise<Record<string, string>> {
   const req = Readable.from([body]) as IncomingMessage;
   req.headers = { "content-length": String(Buffer.byteLength(body)) };
-  return await readTwilioWebhookForm(req);
+  // The reader hands this response the limit rejection; these cases stay under the cap.
+  const res = createMockServerResponse();
+  return await readTwilioWebhookForm(req, res);
 }
 
 function cancelTrackedTextResponse(

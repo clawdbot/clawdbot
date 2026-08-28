@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
@@ -296,8 +296,11 @@ export function resolveTwilioMessageSid(form: Record<string, string>): string {
   );
 }
 
-export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Record<string, string>> {
-  const body = await readRequestBodyWithLimit(req, {
+export async function readTwilioWebhookForm(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<Record<string, string>> {
+  const body = await readWebhookBodyForResponse(req, res, {
     maxBytes: WEBHOOK_BODY_LIMIT_BYTES,
     timeoutMs: WEBHOOK_BODY_TIMEOUT_MS,
   });

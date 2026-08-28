@@ -6,10 +6,8 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  readJsonBodyWithLimit,
-  WEBHOOK_BODY_READ_DEFAULTS,
-} from "openclaw/plugin-sdk/webhook-request-guards";
+import { WEBHOOK_BODY_READ_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readJsonWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
 const ErrorCodes = {
@@ -56,7 +54,6 @@ type ReadJsonBodyResult =
       ok: false;
       status: number;
       message: string;
-      closeAfterResponse?: boolean;
     };
 
 function createError(code: string, message: string): RpcError {
@@ -107,10 +104,11 @@ function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
   return 400;
 }
 
-async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResult> {
-  const body = await readJsonBodyWithLimit(req, {
-    // Admin responses are part of the client contract. The response-first profile
-    // defers destruction so closeRequestAfterResponse can flush the JSON error.
+async function readAdminJsonBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<ReadJsonBodyResult> {
+  const body = await readJsonWebhookBodyForResponse(req, res, {
     ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
     emptyObjectOnEmpty: false,
   });
@@ -131,23 +129,7 @@ async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResu
     ok: false,
     status: statusForBodyErrorCode(body.code),
     message: body.error,
-    closeAfterResponse: body.code !== "CONNECTION_CLOSED",
   };
-}
-
-function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
-  const once = (res as { once?: ServerResponse["once"] }).once;
-  if (typeof once !== "function") {
-    return;
-  }
-  res.setHeader("Connection", "close");
-  once.call(res, "finish", () => {
-    // Timeout/size failures must flush JSON first; destroying before finish drops
-    // the HTTP response on real partial-body sockets.
-    if (!req.destroyed) {
-      req.destroy();
-    }
-  });
 }
 
 function readRpcRequestBody(body: unknown):
@@ -243,11 +225,8 @@ export async function handleAdminHttpRpcRequest(
     return true;
   }
 
-  const body = await readAdminJsonBody(req);
+  const body = await readAdminJsonBody(req, res);
   if (!body.ok) {
-    if (body.closeAfterResponse) {
-      closeRequestAfterResponse(req, res);
-    }
     sendError(res, body.status, {
       type: "invalid_request",
       message: body.message,

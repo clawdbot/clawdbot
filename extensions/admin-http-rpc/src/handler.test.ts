@@ -2,6 +2,7 @@
 import { createServer, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
 import { Readable } from "node:stream";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminHttpRpcRequest } from "./handler.js";
 import { listAdminHttpRpcAllowedMethods } from "./methods.js";
@@ -373,6 +374,39 @@ describe("admin-http-rpc plugin handler", () => {
       expect(dispatchGatewayMethod).not.toHaveBeenCalled();
     } finally {
       socket?.destroy();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("flushes the 413 when the whole oversized body is already in flight", async () => {
+    // The declared-length case above answers before any body arrives. A sender that
+    // writes the whole over-cap body first leaves the rejection queued behind bytes the
+    // server has stopped reading, which is the case a hard teardown discards.
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    try {
+      const port = await listen(server);
+      const result = await postRawWebhook({
+        url: `http://127.0.0.1:${port}/api/v1/admin/rpc`,
+        body: "x".repeat(1024 * 1024 + 128 * 1024),
+        headers: { "content-type": "application/json" },
+        idleTimeoutMs: 500,
+      });
+
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(result.body) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(result.closedByServer).toBe(true);
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

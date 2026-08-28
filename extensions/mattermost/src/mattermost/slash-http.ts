@@ -39,7 +39,7 @@ import {
   buildModelsProviderData,
   isRequestBodyLimitError,
   logTypingFailure,
-  readRequestBodyWithLimit,
+  readWebhookBodyForResponse,
   type OpenClawConfig,
   type RuntimeEnv,
 } from "./runtime-api.js";
@@ -106,12 +106,10 @@ const SECRET_LOG_KEYS = new Set([
 function readBody(
   req: IncomingMessage,
   maxBytes: number,
-  timeoutMs = BODY_READ_TIMEOUT_MS,
+  res: ServerResponse,
+  timeoutMs: number = BODY_READ_TIMEOUT_MS,
 ): Promise<string> {
-  return readRequestBodyWithLimit(req, {
-    maxBytes,
-    timeoutMs,
-  });
+  return readWebhookBodyForResponse(req, res, { maxBytes, timeoutMs });
 }
 
 function sendJsonResponse(
@@ -586,7 +584,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
 
     let body: string;
     try {
-      body = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs);
+      body = await readBody(req, MAX_BODY_BYTES, res, bodyTimeoutMs);
     } catch (error) {
       if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
         res.statusCode = 408;

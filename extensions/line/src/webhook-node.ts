@@ -8,6 +8,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -19,10 +20,7 @@ export async function readLineWebhookRequestBody(
   maxBytes = LINE_WEBHOOK_MAX_BODY_BYTES,
   timeoutMs = LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
 ): Promise<string> {
-  return await readRequestBodyWithLimit(req, {
-    maxBytes,
-    timeoutMs,
-  });
+  return await readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
 }
 
 type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
@@ -36,8 +34,6 @@ export function createLineNodeWebhookHandler(params: {
   onRequestAuthenticated?: () => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
-  const readBody = params.readBody ?? readLineWebhookRequestBody;
-
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === "GET" || req.method === "HEAD") {
       if (req.method === "HEAD") {
@@ -76,11 +72,13 @@ export function createLineNodeWebhookHandler(params: {
         return;
       }
 
-      const rawBody = await readBody(
-        req,
-        Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES),
-        LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
-      );
+      const bodyLimit = Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES);
+      const rawBody = params.readBody
+        ? await params.readBody(req, bodyLimit, LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS)
+        : await readWebhookBodyForResponse(req, res, {
+            maxBytes: bodyLimit,
+            timeoutMs: LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+          });
 
       if (!validateLineSignature(rawBody, signature, params.channelSecret)) {
         logVerbose("line: webhook signature validation failed");

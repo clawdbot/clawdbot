@@ -20,7 +20,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   isRequestBodyLimitError,
-  readRequestBodyWithLimit,
+  readWebhookBodyForResponse,
   requestBodyErrorToText,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
@@ -643,13 +643,14 @@ export class VoiceCallWebhookServer {
     res: http.ServerResponse,
     webhookPath: string,
   ): Promise<void> {
-    const payload = await this.runWebhookPipeline(req, webhookPath);
+    const payload = await this.runWebhookPipeline(req, webhookPath, res);
     this.writeWebhookResponse(res, payload);
   }
 
   private async runWebhookPipeline(
     req: http.IncomingMessage,
     webhookPath: string,
+    res: http.ServerResponse,
   ): Promise<WebhookResponsePayload> {
     const url = buildRequestUrl(req.url);
 
@@ -697,7 +698,7 @@ export class VoiceCallWebhookServer {
     try {
       let body = "";
       try {
-        body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS);
+        body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS, res);
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
           return { statusCode: 413, body: "Payload Too Large" };
@@ -1018,9 +1019,10 @@ export class VoiceCallWebhookServer {
   private readBody(
     req: http.IncomingMessage,
     maxBytes: number,
-    timeoutMs = WEBHOOK_BODY_TIMEOUT_MS,
+    timeoutMs: number,
+    res: http.ServerResponse,
   ): Promise<string> {
-    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
+    return readWebhookBodyForResponse(req, res, { maxBytes, timeoutMs });
   }
 
   /**
