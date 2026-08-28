@@ -56,17 +56,19 @@ import { readRestartSentinel } from "./restart-sentinel.js";
 import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
 import {
   autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
-  autoMigrateLegacyPluginDoctorState,
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
-  resetAutoMigrateLegacyStateDirForTest,
-  resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
-} from "./state-migrations.js";
+} from "./state-migrations.doctor.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
+import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
 import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
+import {
+  resetAutoMigrateLegacyStateDirForTest,
+  resetAutoMigrateLegacyTaskStateSidecarsForTest,
+} from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -107,6 +109,40 @@ function autoMigrateLegacyState(
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
   });
+}
+
+// Static helpers can retain earlier cohorts after resetModules; close every cohort at teardown.
+const migrationDatabaseClosers = new Set([
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+]);
+
+function closeMigrationDatabases() {
+  for (const close of migrationDatabaseClosers) {
+    close();
+  }
+}
+
+async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStateParams) {
+  closeMigrationDatabases();
+  vi.resetModules();
+  const [agentDb, stateDb] = await Promise.all([
+    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-state-db.js"),
+  ]);
+  migrationDatabaseClosers.add(agentDb.closeOpenClawAgentDatabasesForTest);
+  migrationDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
+  try {
+    const migrationOwner = await import("./state-migrations.doctor.js");
+    return await migrationOwner.autoMigrateLegacyState({
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      ...params,
+    });
+  } finally {
+    closeMigrationDatabases();
+    expect(agentDb.listOpenClawAgentDatabasesForTest()).toEqual([]);
+    expect(stateDb.isOpenClawStateDatabaseOpen()).toBe(false);
+  }
 }
 
 const pluginDoctorStateMigrationEntries = vi.hoisted(
@@ -743,10 +779,9 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 afterEach(() => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
-  resetAutoMigrateLegacyStateForTest();
+  resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetAutoMigrateLegacyStateDirForTest();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  closeMigrationDatabases();
   resetPluginRuntimeStateForTest();
 });
 
@@ -1093,6 +1128,7 @@ describe("state migrations", () => {
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
+      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
       );
@@ -1102,13 +1138,13 @@ describe("state migrations", () => {
       expect(fsSync.existsSync(databasePath)).toBe(true);
       expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
 
-      resetAutoMigrateLegacyStateForTest();
       const doctor = await autoMigrateLegacyState({
         cfg,
         env,
         homedir: () => root,
         doctorOnlyStateMigrations: true,
       });
+      expect(doctor.skipped).toBe(false);
       expect(doctor.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
       );
@@ -1140,19 +1176,20 @@ describe("state migrations", () => {
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
+      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toEqual([]);
       expect(automatic.notices).toContain(
         "Deferred legacy agent/session migration: select an agent owner",
       );
       expect(fsSync.readFileSync(legacyAgentPath, "utf8")).toBe('{"legacy":true}\n');
 
-      resetAutoMigrateLegacyStateForTest();
       const doctor = await autoMigrateLegacyState({
         cfg,
         env,
         homedir: () => root,
         doctorOnlyStateMigrations: true,
       });
+      expect(doctor.skipped).toBe(false);
       expect(doctor.warnings).toContain(
         "Deferred legacy agent/session migration: select an agent owner",
       );
@@ -2987,14 +3024,14 @@ describe("state migrations", () => {
     ).toBe("existing-runtime");
 
     const firstBytes = await fs.readFile(storePath, "utf8");
-    closeOpenClawStateDatabaseForTest();
-    resetAutoMigrateLegacyStateForTest();
-    const rerun = await autoMigrateLegacyState({
+    const rerun = await rerunAutomaticMigrationAfterRestart({
       cfg,
       env,
       homedir: () => root,
       doctorOnlyStateMigrations: true,
     });
+    expect(rerun.skipped).toBe(false);
+    expect(rerun.warnings).toEqual([]);
     await expect(fs.readFile(storePath, "utf8")).resolves.toBe(firstBytes);
     expect(rerun.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
@@ -5688,15 +5725,15 @@ describe("state migrations", () => {
       expect(afterStore[ordinaryKey]?.sessionId).toBe("ordinary-session");
 
       const firstBytes = await fs.readFile(targetStorePath, "utf8");
-      closeOpenClawStateDatabaseForTest();
-      resetAutoMigrateLegacyStateForTest();
-      const rerun = await autoMigrateLegacyState({
+      const rerun = await rerunAutomaticMigrationAfterRestart({
         cfg,
         env,
         homedir: () => root,
         now: () => 1234,
         doctorOnlyStateMigrations: true,
       });
+      expect(rerun.skipped).toBe(false);
+      expect(rerun.warnings).toEqual([]);
       await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(firstBytes);
       expect(rerun.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(
         false,

@@ -956,6 +956,52 @@ export function createCodexAppServerBindingStore(
     }
   };
 
+  const transitionSessionGeneration = async (
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+    mode: "reset" | "retire",
+  ): Promise<CodexSessionGenerationRetirementResult> => {
+    return await runBindingMutation(async () => {
+      const key = bindingStoreKey(identity);
+      const ttlMs =
+        mode === "reset"
+          ? leaseContext.getStore()?.has(key)
+            ? undefined
+            : 1
+          : identity.sessionKey?.trim()
+            ? undefined
+            : PHYSICAL_SESSION_RETIRE_TTL_MS;
+      return await transactKey(
+        key,
+        (current, leaseToken) => {
+          if (!current) {
+            return { result: "absent" as const };
+          }
+          if (!ownsStoredSessionGeneration(identity, current)) {
+            return { result: "conflict" as const };
+          }
+          // Retirement is idempotent, but reset cannot clear a same-id deletion fence.
+          // Only the authoritative session-store reclaim path can prove an in-place reset.
+          if (current.state === "cleared" && current.retired === true) {
+            return { result: mode === "retire" ? ("applied" as const) : ("conflict" as const) };
+          }
+          return {
+            result: "applied" as const,
+            next: {
+              version: 1,
+              state: "cleared",
+              ...(mode === "retire" ? { retired: true as const } : {}),
+              ...storedSessionGeneration(identity, current),
+              ...(current.lease && current.lease.token === leaseToken
+                ? { lease: current.lease }
+                : {}),
+            },
+          };
+        },
+        ttlMs,
+      );
+    });
+  };
+
   return {
     async read(identity) {
       const key = bindingStoreKey(identity);
@@ -1206,72 +1252,8 @@ export function createCodexAppServerBindingStore(
       });
     },
 
-    async resetSessionGeneration(identity) {
-      return await runBindingMutation(async () => {
-        const key = bindingStoreKey(identity);
-        return await transactKey(
-          key,
-          (current, leaseToken) => {
-            if (!current) {
-              return { result: "absent" as const };
-            }
-            if (!ownsStoredSessionGeneration(identity, current)) {
-              return { result: "conflict" as const };
-            }
-            // A retired same-id row may be a deletion fence. Only the authoritative
-            // session-store reclaim path can prove it belongs to an in-place reset.
-            if (current.state === "cleared" && current.retired === true) {
-              return { result: "conflict" as const };
-            }
-            return {
-              result: "applied" as const,
-              next: {
-                version: 1,
-                state: "cleared",
-                ...storedSessionGeneration(identity, current),
-                ...(current.lease && current.lease.token === leaseToken
-                  ? { lease: current.lease }
-                  : {}),
-              },
-            };
-          },
-          leaseContext.getStore()?.has(key) ? undefined : 1,
-        );
-      });
-    },
-
-    async retireSessionGeneration(identity) {
-      return await runBindingMutation(async () => {
-        const key = bindingStoreKey(identity);
-        return await transactKey(
-          key,
-          (current, leaseToken) => {
-            if (!current) {
-              return { result: "absent" as const };
-            }
-            if (!ownsStoredSessionGeneration(identity, current)) {
-              return { result: "conflict" as const };
-            }
-            if (current.state === "cleared" && current.retired === true) {
-              return { result: "applied" as const };
-            }
-            return {
-              result: "applied" as const,
-              next: {
-                version: 1,
-                state: "cleared",
-                retired: true,
-                ...storedSessionGeneration(identity, current),
-                ...(current.lease && current.lease.token === leaseToken
-                  ? { lease: current.lease }
-                  : {}),
-              },
-            };
-          },
-          identity.sessionKey?.trim() ? undefined : PHYSICAL_SESSION_RETIRE_TTL_MS,
-        );
-      });
-    },
+    resetSessionGeneration: (identity) => transitionSessionGeneration(identity, "reset"),
+    retireSessionGeneration: (identity) => transitionSessionGeneration(identity, "retire"),
 
     async withThreadArchiveFence(run) {
       pendingArchives += 1;

@@ -2,6 +2,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearAllCliSessions } from "./cli-session-binding.js";
@@ -14,8 +15,7 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
-import { runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction } from "./session-accessor.sqlite-deletion.js";
-import { assertSessionEntrySelectionUnchanged } from "./session-accessor.sqlite-entry-equality.js";
+import { assertLifecycleTargetSnapshotUnchanged } from "./session-accessor.sqlite-entry-equality.js";
 import {
   collectSessionEntryLookupKeys,
   readSessionEntryRow,
@@ -178,7 +178,7 @@ export async function trimTranscriptForManualCompact(
     if (!retainedLines) {
       return { trimmed: false };
     }
-    if (sessionSnapshot.selected?.entry.sessionId !== resolved.sessionId) {
+    if (sessionSnapshot[0]?.entry.sessionId !== resolved.sessionId) {
       throw new Error(
         `Cannot compact SQLite transcript ${resolved.sessionId} without its current session entry`,
       );
@@ -193,12 +193,12 @@ export async function trimTranscriptForManualCompact(
         resolved.sessionKey,
         true,
       );
-      assertSessionEntrySelectionUnchanged(
+      assertLifecycleTargetSnapshotUnchanged(
         sessionSnapshot,
         freshSessionSnapshot,
         "session.transcript.manual-compact",
       );
-      const freshEntry = freshSessionSnapshot.selected?.entry;
+      const freshEntry = freshSessionSnapshot[0]?.entry;
       if (!freshEntry || freshEntry.sessionId !== resolved.sessionId) {
         throw new Error(`SQLite session changed before compacting ${resolved.sessionId}`);
       }

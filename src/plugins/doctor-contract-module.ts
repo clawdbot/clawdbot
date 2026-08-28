@@ -76,29 +76,29 @@ export type PluginDoctorChannelIngressQueueAccess = {
   }) => ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
 };
 
+type PluginDoctorStateMigrationInput = {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+  context: PluginDoctorStateMigrationContext;
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
   phase?: "after-session-repair";
-  detectLegacyState: (params: {
-    config: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    stateDir: string;
-    oauthDir: string;
-    context: PluginDoctorStateMigrationContext;
-  }) =>
+  detectLegacyState: (
+    params: PluginDoctorStateMigrationInput,
+  ) =>
     | Promise<PluginDoctorStateMigrationDetection | null>
     | PluginDoctorStateMigrationDetection
     | null;
-  migrateLegacyState: (params: {
-    config: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    stateDir: string;
-    oauthDir: string;
-    context: PluginDoctorStateMigrationContext;
-  }) =>
+  migrateLegacyState: (
+    params: PluginDoctorStateMigrationInput,
+  ) =>
     | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
     | { changes: string[]; warnings: string[]; notices?: string[] };
 };
