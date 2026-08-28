@@ -11,6 +11,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { resetLogger, setLoggerOverride } from "../logging.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -33,6 +34,7 @@ const ENV_KEYS = [
 ] as const;
 
 function resetGatewayState(): void {
+  resetLogger();
   resetConfigOverrides();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -170,6 +172,7 @@ describe("Gateway Active Memory", () => {
           deleteTestEnvValue(key);
         }
         resetGatewayState();
+        setLoggerOverride({ level: "silent", consoleLevel: "info" });
         phase = "starting mock provider";
         await new Promise<void>((resolve, reject) => {
           providerServer.once("error", reject);
@@ -274,7 +277,9 @@ describe("Gateway Active Memory", () => {
         } finally {
           try {
             providerServer.closeAllConnections();
-            await new Promise<void>((resolve) => providerServer.close(() => resolve()));
+            await new Promise<void>((resolve) => {
+              providerServer.close(() => resolve());
+            });
             await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
           } finally {
             env.restore();

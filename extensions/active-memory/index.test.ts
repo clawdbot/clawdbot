@@ -3068,13 +3068,15 @@ describe("active-memory plugin", () => {
   });
 
   it.each([
-    { failed: true, persistTranscripts: true },
-    { failed: false, persistTranscripts: true },
-    { failed: true, persistTranscripts: false },
-    { failed: false, persistTranscripts: false },
+    { failed: true, persistTranscripts: true, cleanupFails: false },
+    { failed: false, persistTranscripts: true, cleanupFails: false },
+    { failed: true, persistTranscripts: false, cleanupFails: false },
+    { failed: false, persistTranscripts: false, cleanupFails: false },
+    { failed: true, persistTranscripts: true, cleanupFails: true },
+    { failed: false, persistTranscripts: true, cleanupFails: true },
   ])(
-    "preserves terminal recall outcome when cleanup crosses its deadline (failed=$failed, persist=$persistTranscripts)",
-    async ({ failed, persistTranscripts }) => {
+    "preserves terminal recall outcome when cleanup crosses its deadline (failed=$failed, persist=$persistTranscripts, cleanupFails=$cleanupFails)",
+    async ({ failed, persistTranscripts, cleanupFails }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       testing.setMinimumTimeoutMsForTests(1);
       testing.setSetupGraceTimeoutMsForTests(0);
@@ -3082,6 +3084,7 @@ describe("active-memory plugin", () => {
       const sessionKey = "agent:main:completed-recall-cleanup-deadline";
       seedSession(sessionKey, "s-completed-recall-cleanup-deadline", 0);
       const summary = "User usually orders ramen.";
+      const firstCleanupAttempt = createDeferred<void>();
       const cleanupStarted = createDeferred<void>();
       const releaseCleanup = createDeferred<void>();
       const recallAborted = createDeferred<void>();
@@ -3089,9 +3092,18 @@ describe("active-memory plugin", () => {
         hoisted.cleanupSessionLifecycleArtifacts.getMockImplementation(),
         "recall cleanup fixture",
       );
-      hoisted.cleanupSessionLifecycleArtifacts.mockImplementationOnce(async (params) => {
+      let cleanupAttempts = 0;
+      hoisted.cleanupSessionLifecycleArtifacts.mockImplementation(async (params) => {
+        cleanupAttempts += 1;
+        firstCleanupAttempt.resolve();
+        if (cleanupFails && cleanupAttempts < 3) {
+          throw new Error("session store remains busy");
+        }
         cleanupStarted.resolve();
         await releaseCleanup.promise;
+        if (cleanupFails) {
+          throw new Error("session store remains busy");
+        }
         return await cleanup(params);
       });
       runEmbeddedAgent.mockImplementationOnce(
@@ -3120,15 +3132,26 @@ describe("active-memory plugin", () => {
       );
       void resultPromise.catch(() => undefined);
       try {
+        if (cleanupFails) {
+          await firstCleanupAttempt.promise;
+          // Exhaust the two retry delays before holding the last attempt across the deadline.
+          await vi.advanceTimersByTimeAsync(500);
+        }
         await cleanupStarted.promise;
         // Execution has settled; only cleanup is held across the original watchdog.
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(cleanupFails ? 500 : 1_000);
         await recallAborted.promise;
       } finally {
         releaseCleanup.resolve();
       }
       const result = await resultPromise;
-      if (!failed && persistTranscripts) {
+      if (cleanupFails) {
+        expect(cleanupAttempts).toBe(3);
+        expect(api.logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining("failed to clean up recall session"),
+        );
+      }
+      if (!failed && persistTranscripts && !cleanupFails) {
         expectPrependContextContains(result, summary);
         expectLinesToContain(getActiveMemoryLines(sessionKey), "status=timeout_partial");
       } else {
@@ -4554,7 +4577,7 @@ describe("active-memory plugin", () => {
     onTestFailed(() => {
       console.info({
         statusLines: getActiveMemoryLines(sessionKey),
-        warnings: vi.mocked(api.logger.warn).mock.calls.map(([message]) => message),
+        warnings: vi.mocked(api.logger.warn).mock.calls,
         embeddedRuns: runEmbeddedAgent.mock.calls.length,
       });
     });
