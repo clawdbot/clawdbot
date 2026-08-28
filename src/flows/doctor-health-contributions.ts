@@ -61,8 +61,11 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeMigrateAuthProfileJsonStoresToSqlite } =
-    await import("../commands/doctor-auth-flat-profiles.js");
+  const {
+    maybeMigrateAuthProfileJsonStoresToSqlite,
+    collectOpenAICodexAuthProfileStoreIdMap,
+    maybeRepairOpenAICodexAuthConfig,
+  } = await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { maybeRepairLegacyOAuthSidecarProfiles } =
@@ -77,11 +80,26 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });
-  await maybeMigrateAuthProfileJsonStoresToSqlite({
+  // The interactive (non---fix) path reaches the SQLite migration without the
+  // config repair sequence, so the collision map must be collected once here and
+  // shared with the config-side canonicalization: after the legacy JSON is
+  // archived the map cannot be recreated, and leaving auth.profiles on legacy
+  // ids the migrated store no longer contains makes runtime drop the profile.
+  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
     cfg: ctx.cfg,
-    prompter: ctx.prompter,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
+  const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+    openAICodexAuthProfileIdMap,
+    ...(ctx.env ? { env: ctx.env } : {}),
+  });
+  if (authProfileSqliteMigration.changes.length > 0) {
+    ctx.cfg = maybeRepairOpenAICodexAuthConfig(ctx.cfg, {
+      profileIdMap: openAICodexAuthProfileIdMap,
+    }).config;
+  }
   await maybeMigrateLegacyPluginModelCatalogs({
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
