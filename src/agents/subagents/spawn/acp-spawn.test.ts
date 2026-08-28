@@ -33,7 +33,8 @@ import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
+import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -88,6 +89,7 @@ const hoisted = vi.hoisted(() => {
   const cleanupFailedAcpSpawnMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
   const countActiveRunsForSessionMock = vi.fn();
+  const countActiveDescendantRunsMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
   const upsertSessionEntryMock = vi.fn();
@@ -183,6 +185,7 @@ const hoisted = vi.hoisted(() => {
     cleanupFailedAcpSpawnMock,
     registerSubagentRunMock,
     countActiveRunsForSessionMock,
+    countActiveDescendantRunsMock,
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
     upsertSessionEntryMock,
@@ -269,6 +272,7 @@ vi.mock("../registry/subagent-registry.js", () => ({
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => ({
+  countActiveDescendantRuns: hoisted.countActiveDescendantRunsMock,
   getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
 }));
 
@@ -733,6 +737,7 @@ describe("spawnAcpDirect", () => {
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
+    hoisted.countActiveDescendantRunsMock.mockReset().mockReturnValue(0);
     hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
     hoisted.listTasksForOwnerKeyMock.mockReset().mockReturnValue([]);
     hoisted.upsertSessionEntryMock
@@ -1046,8 +1051,10 @@ describe("spawnAcpDirect", () => {
     });
     const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const productionDeps = getSubagentSpawnDeps();
+    const defaultDeps = { ...productionDeps };
     let capturedIdentity: AgentRuntimeIdentity | undefined;
-    setSubagentSpawnDepsForTest({
+    subagentSpawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
         _method: string,
@@ -1087,7 +1094,9 @@ describe("spawnAcpDirect", () => {
       );
     } finally {
       releaseAgentRunDelegatedAuthority(authority);
-      setSubagentSpawnDepsForTest();
+      subagentSpawnTesting.setDepsForTest();
+      expect(getSubagentSpawnDeps()).toBe(productionDeps);
+      expect(productionDeps).toEqual(defaultDeps);
     }
   });
 

@@ -1,5 +1,5 @@
 export * from "./subagent-spawn.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 
 type SpawnRuntime = typeof import("./subagent-spawn.runtime.js");
 type SpawnDeps = Omit<
@@ -23,5 +23,10 @@ type SpawnDeps = Omit<
 export const testing: {
   setDepsForTest(overrides?: Partial<SpawnDeps>): void;
 } = {
-  setDepsForTest: setSubagentSpawnDepsForTest,
+  setDepsForTest(overrides) {
+    Object.assign(spawnDeps, defaultSpawnDeps, overrides);
+  },
 };
+
+const spawnDeps = getSubagentSpawnDeps();
+const defaultSpawnDeps = { ...spawnDeps };
