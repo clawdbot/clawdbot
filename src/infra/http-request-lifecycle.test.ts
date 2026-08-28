@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, type Socket } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { runWithGatewayHttpWorkAdmission } from "../gateway/server/http-work-admission.js";
 import {
@@ -674,8 +675,8 @@ describe("bounded HTTP rejection transport", () => {
               "GET /one HTTP/1.1\r\nHost: localhost\r\n\r\nGET /two HTTP/1.1\r\nHost: localhost\r\n\r\nHEAD /head HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n",
             );
             await selected.promise;
-            earlier[1].end("two");
-            earlier[0].end("one");
+            expectDefined(earlier[1], "second queued response").end("two");
+            expectDefined(earlier[0], "first queued response").end("one");
             await ended;
             // FIN must precede the bounded disposal deadline, not be caused by it.
             expect(retired).toBe(false);

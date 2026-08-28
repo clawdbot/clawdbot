@@ -1,4 +1,5 @@
 // Feishu helper module supports monitor.webhook helpers behavior.
+import crypto from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -8,10 +9,49 @@ import {
 import { vi } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import type { FeishuStatusSink, monitorFeishuProvider } from "./monitor.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 const WEBHOOK_READY_MAX_ATTEMPTS = 200;
 const WEBHOOK_READY_RETRY_DELAY_MS = 50;
 const WEBHOOK_MONITOR_START_MAX_ATTEMPTS = 4;
+
+export function createFeishuWebhookTestAccount(
+  accountId: string,
+  port: number,
+  webhookPath: string,
+): ResolvedFeishuAccount {
+  return {
+    accountId,
+    encryptKey: "encrypt_key",
+    config: {
+      enabled: true,
+      connectionMode: "webhook",
+      webhookHost: "127.0.0.1",
+      webhookPort: port,
+      webhookPath,
+    },
+  } as ResolvedFeishuAccount;
+}
+
+export function signFeishuPayload(params: {
+  encryptKey: string;
+  rawBody: string;
+  timestamp?: string;
+  nonce?: string;
+}): Record<string, string> {
+  const timestamp = params.timestamp ?? "1711111111";
+  const nonce = params.nonce ?? "nonce-test";
+  const signature = crypto
+    .createHash("sha256")
+    .update(timestamp + nonce + params.encryptKey + params.rawBody)
+    .digest("hex");
+  return {
+    "content-type": "application/json",
+    "x-lark-request-timestamp": timestamp,
+    "x-lark-request-nonce": nonce,
+    "x-lark-signature": signature,
+  };
+}
 
 export async function getFreePort(): Promise<number> {
   const server = createServer();

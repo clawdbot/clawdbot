@@ -263,7 +263,7 @@ export async function sendHttpRequestRejection(
         }
       };
       if (!res.socket) {
-        // HEAD ignores write callbacks. The public finish notification lets a
+        // HEAD write callbacks do not flush headers. The public notification lets a
         // standalone SDK response wait for earlier responses without private
         // socket-assignment events; Node completes that handoff on this stack.
         const finished = channel("http.server.response.finish");
