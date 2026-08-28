@@ -1011,9 +1011,11 @@ export function createAgentEventHandler({
   const resolveBufferedChatTextState = (
     clientRunId: string,
     sourceRunId: string,
-    options?: { suppressLeadFragments?: boolean },
+    options?: { final?: boolean; suppressLeadFragments?: boolean },
   ) => {
-    const bufferedText = chatRunState.resolveBuffer(clientRunId).text.trim();
+    const bufferedText = chatRunState
+      .resolveBuffer(clientRunId, { final: options?.final })
+      .text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
@@ -1094,6 +1096,7 @@ export function createAgentEventHandler({
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
+      final: true,
       suppressLeadFragments: false,
     });
     // Flush any paced delta so streaming clients receive the complete text

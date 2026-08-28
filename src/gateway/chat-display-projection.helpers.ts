@@ -1,5 +1,5 @@
-import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isRelativeAssistantMediaReference } from "../media/assistant-media-reference.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
@@ -21,14 +21,15 @@ export function stripAssistantMediaDirectivesForDisplay(text: string): string {
     extractAudioDirectives: false,
     extractMarkdownImages: false,
   });
-  // Legacy remote directives are already client-resolvable attachment input.
-  // Only withhold batches that contain host-local pipeline references.
-  if (parsed.mediaUrls?.length && parsed.mediaUrls.every(hasHttpUrlPrefix)) {
+  if (!parsed.mediaUrls?.some(isRelativeAssistantMediaReference)) {
     return text;
   }
-  // The parser trims output as part of delivery. Preserve display bytes when it
-  // found only a fenced example or other non-directive text.
-  return parsed.text === text.trimEnd() ? text : parsed.text;
+  return (parsed.segments ?? [])
+    .filter(
+      (segment) => segment.type !== "media" || !isRelativeAssistantMediaReference(segment.url),
+    )
+    .map((segment) => (segment.type === "media" ? `MEDIA:${segment.url}` : segment.text))
+    .join("\n");
 }
 
 /** Resolve the text cap used when projecting chat history for display. */

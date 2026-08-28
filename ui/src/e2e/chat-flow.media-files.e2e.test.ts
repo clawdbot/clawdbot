@@ -425,7 +425,7 @@ suite.define(() => {
     }
   });
 
-  it("moves a managed audio batch from skeletons directly to final cards", async () => {
+  it("moves a managed document batch from skeletons directly to final cards", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -433,42 +433,42 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const managedAudioSource = (artifactId: string) =>
-      `/api/chat/media/outgoing/agent%3Amain%3Amain/${artifactId.slice("artifact_managed_audio_".length)}/full`;
+    const managedAttachmentSource = (artifactId: string) =>
+      `/api/chat/media/outgoing/agent%3Amain%3Amain/${artifactId.slice("artifact_managed_media_".length)}/full`;
     const attachments = [
       {
-        artifactId: "artifact_managed_audio_11111111-1111-4111-8111-111111111111",
-        label: "demo.mp3",
-        mimeType: "audio/mpeg",
-        sizeBytes: 981,
+        artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+        label: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 8_231,
       },
       {
-        artifactId: "artifact_managed_audio_22222222-2222-4222-8222-222222222222",
-        label: "demo.ogg",
-        mimeType: "audio/ogg",
+        artifactId: "artifact_managed_media_22222222-2222-4222-8222-222222222222",
+        label: "table.csv",
+        mimeType: "text/csv",
         sizeBytes: 2_774,
       },
       {
-        artifactId: "artifact_managed_audio_33333333-3333-4333-8333-333333333333",
-        label: "demo.m4a",
-        mimeType: "audio/mp4",
-        sizeBytes: 2_253,
+        artifactId: "artifact_managed_media_33333333-3333-4333-8333-333333333333",
+        label: "notes.txt",
+        mimeType: "text/plain",
+        sizeBytes: 981,
       },
       {
-        artifactId: "artifact_managed_audio_44444444-4444-4444-8444-444444444444",
-        label: "demo.flac",
-        mimeType: "audio/flac",
-        sizeBytes: 8_231,
+        artifactId: "artifact_managed_media_44444444-4444-4444-8444-444444444444",
+        label: "bundle.zip",
+        mimeType: "application/zip",
+        sizeBytes: 42_831,
       },
     ] as const;
     const methodCases = attachments.map((attachment) => {
-      const id = attachment.artifactId.slice("artifact_managed_audio_".length);
+      const id = attachment.artifactId.slice("artifact_managed_media_".length);
       return {
         match: { artifactId: attachment.artifactId, sessionKey: "agent:main:main" },
         response: {
           artifact: {
             id: attachment.artifactId,
-            type: "audio",
+            type: "attachment",
             title: attachment.label,
             mimeType: attachment.mimeType,
             sizeBytes: attachment.sizeBytes,
@@ -485,13 +485,15 @@ suite.define(() => {
         {
           role: "assistant",
           content: attachments.map((attachment) => ({
-            type: "audio",
-            artifactId: attachment.artifactId,
-            url: managedAudioSource(attachment.artifactId),
-            fileName: attachment.label,
-            mimeType: attachment.mimeType,
-            playback: "native",
-            sizeBytes: attachment.sizeBytes,
+            type: "attachment",
+            attachment: {
+              artifactId: attachment.artifactId,
+              url: managedAttachmentSource(attachment.artifactId),
+              kind: "document",
+              label: attachment.label,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            },
           })),
           timestamp: Date.now(),
         },
@@ -516,6 +518,28 @@ suite.define(() => {
           .first()
           .evaluate((element) => getComputedStyle(element, "::after").animationName),
       ).toBe("shimmer");
+      const metadataSize = await skeletons.first().evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { height: rect.height, width: rect.width };
+      });
+      expect(metadataSize.height).toBe(14);
+      expect(metadataSize.width).toBeGreaterThanOrEqual(112);
+      expect(metadataSize.width).toBeLessThanOrEqual(144);
+      const actionSkeletons = checkingCards.locator(
+        ".chat-assistant-attachment-card__action-skeleton.skeleton",
+      );
+      expect(await actionSkeletons.count()).toBe(4);
+      expect(
+        await actionSkeletons.first().evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { height: rect.height, width: rect.width };
+        }),
+      ).toEqual({ height: 30, width: 64 });
+      expect(
+        await actionSkeletons
+          .first()
+          .evaluate((element) => getComputedStyle(element, "::after").animationName),
+      ).toBe("shimmer");
       expect(await page.getByText("Checking...", { exact: true }).count()).toBe(0);
       expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
       if (proofDir) {
@@ -534,7 +558,8 @@ suite.define(() => {
           .locator(".chat-assistant-attachment-card--compact")
           .filter({ hasText: attachment.label });
         expect(await card.count()).toBe(1);
-        expect(((await card.textContent()) ?? "").includes("Audio ·")).toBe(true);
+        expect(await card.locator(".chat-assistant-attachment-card__expand").count()).toBe(1);
+        expect(await card.locator(".chat-assistant-attachment-card__download").count()).toBe(1);
       }
       expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
       if (proofDir) {

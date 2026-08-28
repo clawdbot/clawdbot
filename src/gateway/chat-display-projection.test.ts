@@ -159,6 +159,40 @@ describe("assistant media directive display projection", () => {
       content: [{ type: "text", text }],
     });
   });
+
+  it("withholds only relative directives from a mixed legacy batch", () => {
+    const { payload } = projectSessionMessagePayload({
+      sessionKey: "agent:main:main",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: [
+              "Prepared the mixed batch.",
+              "MEDIA:https://cdn.example.test/legacy.jpg",
+              "MEDIA:/media/legacy-audio.mp3",
+              "MEDIA:./attachment-catalog-tiny/demo.jpg",
+            ].join("\n"),
+          },
+        ],
+      },
+    });
+
+    expect(payload?.message).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: [
+            "Prepared the mixed batch.",
+            "MEDIA:https://cdn.example.test/legacy.jpg",
+            "MEDIA:/media/legacy-audio.mp3",
+          ].join("\n"),
+        },
+      ],
+    });
+    expect(JSON.stringify(payload)).not.toContain("attachment-catalog-tiny");
+  });
 });
 
 describe("oversized multimodal chat history", () => {

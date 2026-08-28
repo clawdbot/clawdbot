@@ -84,3 +84,20 @@
 .chat-assistant-attachment-card--definitive .chat-attachment-file-icon {
   color: currentColor;
 }
+
+.chat-assistant-attachment-card--checking {
+  --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
+  --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.chat-assistant-attachment-card__metadata-skeleton {
+  inline-size: clamp(112px, 14vw, 144px);
+  max-inline-size: 100%;
+}
+
+.chat-assistant-attachment-card__action-skeleton {
+  inline-size: 64px;
+  block-size: 30px;
+  flex: none;
+  border-radius: 999px;
+}

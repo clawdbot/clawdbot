@@ -7,6 +7,9 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../auto-reply/tokens.js";
+import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
+import { isRelativeAssistantMediaReference } from "../media/assistant-media-reference.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
@@ -77,10 +80,28 @@ export function resolveMergedAssistantText(params: {
 }
 
 /** Removes runtime-only context/directive tags from the merged live assistant buffer. */
-export function normalizeLiveAssistantBufferedText(text: string): string {
-  return stripAssistantMediaDirectivesForDisplay(
-    stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
-  );
+export function normalizeLiveAssistantBufferedText(
+  text: string,
+  options?: { final?: boolean },
+): string {
+  const normalized = stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
+  const trailing = options?.final
+    ? { text: normalized, tail: "" }
+    : splitTrailingDirective(normalized);
+  const parsedTail = trailing.tail
+    ? splitMediaFromOutput(trailing.tail, {
+        extractAudioDirectives: false,
+        extractMarkdownImages: false,
+      })
+    : undefined;
+  // Hold an ambiguous final line until it is either a client-renderable legacy
+  // reference or a relative pipeline directive that the display projection removes.
+  const withoutPendingMediaTail =
+    parsedTail?.mediaUrls?.length &&
+    parsedTail.mediaUrls.every((url) => !isRelativeAssistantMediaReference(url))
+      ? normalized
+      : trailing.text;
+  return stripAssistantMediaDirectivesForDisplay(withoutPendingMediaTail);
 }
 
 /** Projects buffered assistant text into display text or a suppressed/pending state. */

@@ -1198,6 +1198,77 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("keeps a media-only assistant event pending without an empty or raw delta", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    registerNamedChatRun(chatRunState, "media-only");
+
+    emitAgentEvent(
+      handler,
+      "run-media-only",
+      "assistant",
+      { text: "MEDIA:./attachment-catalog-tiny/demo.jpg" },
+      { seq: 1 },
+    );
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+
+    emitLifecycleEnd(handler, "run-media-only", 2);
+    const payloads = chatBroadcastCalls(broadcast).map(([, payload]) => payload) as Array<{
+      state?: string;
+      message?: unknown;
+    }>;
+    expect(payloads).toEqual([expect.objectContaining({ state: "final", message: undefined })]);
+    expect(JSON.stringify(payloads)).not.toContain("MEDIA:");
+    nowSpy?.mockRestore();
+  });
+
+  it("withholds split MEDIA prefixes before a relative directive is complete", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    registerNamedChatRun(chatRunState, "split-media");
+
+    for (const [index, delta] of [
+      "Prepared the batch.\nM",
+      "EDIA:./attachment-catalog-tiny/",
+      "demo.jpg",
+    ].entries()) {
+      emitAgentEvent(handler, "run-split-media", "assistant", { delta }, { seq: index + 1 });
+    }
+    emitLifecycleEnd(handler, "run-split-media", 4);
+
+    const payloads = chatBroadcastCalls(broadcast).map(([, payload]) => payload) as Array<{
+      message?: { content?: Array<{ text?: string }> };
+    }>;
+    expect(payloads.length).toBeGreaterThan(0);
+    for (const payload of payloads) {
+      const text = payload.message?.content?.[0]?.text ?? "";
+      expect(text).not.toMatch(/(?:^|\n)(?:M|ME|MED|MEDI|MEDIA:)/u);
+      expect(text).not.toContain("attachment-catalog-tiny");
+    }
+    expect(payloads.at(-1)?.message?.content?.[0]?.text).toBe("Prepared the batch.");
+    nowSpy?.mockRestore();
+  });
+
+  it("restores an ordinary MEDIA-like prefix when the assistant run ends", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    registerNamedChatRun(chatRunState, "terminal-media-prefix");
+
+    emitAgentEvent(
+      handler,
+      "run-terminal-media-prefix",
+      "assistant",
+      { text: "The selected size is\nM" },
+      { seq: 1 },
+    );
+    emitLifecycleEnd(handler, "run-terminal-media-prefix", 2);
+
+    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("The selected size is\nM");
+    nowSpy?.mockRestore();
+  });
+
   it("strips internal runtime context from assistant chat events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),

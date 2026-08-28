@@ -67,7 +67,7 @@ export function renderAssistantAttachmentStatusCard(params: {
                     : nothing}
                 </span>`
               : html`<span
-                  class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta skeleton skeleton-line skeleton-line--medium"
+                  class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta chat-assistant-attachment-card__metadata-skeleton skeleton skeleton-line"
                   aria-hidden="true"
                 ></span>`}
           </span>
@@ -80,7 +80,12 @@ export function renderAssistantAttachmentStatusCard(params: {
             >
               ${icons.refresh} ${t("common.retry")}
             </button>`
-          : nothing}
+          : unavailable
+            ? nothing
+            : html`<span
+                class="chat-assistant-attachment-card__action-skeleton skeleton"
+                aria-hidden="true"
+              ></span>`}
       </div>
     </div>
   `;
