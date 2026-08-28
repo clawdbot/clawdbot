@@ -169,27 +169,49 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
-    func testSidebarMoreAgentsMenuShowsAvatarsAndKeepsFooterVisible() throws {
+    func testSidebarAgentSelectorShowsAllAgentsAndKeepsFooterVisible() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
             initialDestination: "chat",
-            name: "sidebar-more-agents"))
+            name: "sidebar-agent-selector"))
 
         let showSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Show"])
         XCTAssertTrue(showSidebar.waitForExistence(timeout: 8))
         showSidebar.tap()
 
-        let moreAgents = try XCTUnwrap(self.app?.buttons["More Agents"])
-        XCTAssertTrue(moreAgents.waitForExistence(timeout: 5))
+        let agentSelector = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.AgentSelector"])
+        XCTAssertTrue(agentSelector.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(agentSelector.frame.height, 44)
+        XCTAssertEqual(agentSelector.value as? String, "Molty")
+
+        let newChat = try XCTUnwrap(self.app?.buttons["New chat"])
+        XCTAssertTrue(newChat.exists)
+        XCTAssertGreaterThanOrEqual(newChat.frame.height, 44)
+        XCTAssertGreaterThan(newChat.frame.minY, agentSelector.frame.maxY)
+
         let gatewayFooter = try XCTUnwrap(self.app?.buttons.matching(
             NSPredicate(format: "label CONTAINS %@", "OpenClaw Gateway")).firstMatch)
         XCTAssertTrue(gatewayFooter.exists)
-        moreAgents.tap()
+        let settings = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Destination.settings"])
+        XCTAssertTrue(settings.exists)
+        XCTAssertGreaterThan(settings.frame.midX, gatewayFooter.frame.midX)
+        XCTAssertEqual(settings.frame.midY, gatewayFooter.frame.midY, accuracy: 2)
+        self.attachScreenshot(named: "sidebar-agent-selector")
 
+        agentSelector.tap()
+
+        XCTAssertTrue(self.app?.buttons["Molty"].waitForExistence(timeout: 5) == true)
         XCTAssertTrue(self.app?.buttons["Research"].waitForExistence(timeout: 5) == true)
         XCTAssertTrue(self.app?.buttons["Automation"].exists == true)
-        self.attachScreenshot(named: "sidebar-more-agents")
+        self.attachScreenshot(named: "sidebar-agent-selector-open")
+
+        self.app?.buttons["Research"].tap()
+        XCTAssertEqual(agentSelector.value as? String, "Research")
+        agentSelector.tap()
+        XCTAssertTrue(self.app?.buttons["Molty"].waitForExistence(timeout: 5) == true)
+        XCTAssertTrue(self.app?.buttons["Research"].exists == true)
+        XCTAssertTrue(self.app?.buttons["Automation"].exists == true)
     }
 
     func testSidebarSlowEdgeDragOpensFromEveryRootDestination() throws {
