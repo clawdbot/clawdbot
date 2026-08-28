@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listAppServerRuntimeModelBackendBindings } from "./app-server-runtime-bindings.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
+  resolveCompatibleAgentRuntimeForProvider,
   resolveManualCompactionCliTarget,
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
@@ -277,5 +279,36 @@ describe("resolveManualCompactionCliTarget", () => {
       },
       cliSessionId: "native-claude-session",
     });
+  });
+});
+
+describe("resolveCompatibleAgentRuntimeForProvider app-server bindings", () => {
+  // Regression for openclaw-vgx7. This resolver hardcoded Codex, so every other
+  // app-server harness was rejected: the /models picker offered
+  // `zai/glm-5.3 --runtime glm-bridge`, the directive answered 'Runtime
+  // "glm-bridge" is not supported for zai', and the model silently never changed.
+  it("accepts every provider/runtime pair the chooser is willing to offer", () => {
+    for (const binding of listAppServerRuntimeModelBackendBindings()) {
+      expect(
+        resolveCompatibleAgentRuntimeForProvider({
+          provider: binding.provider,
+          runtime: binding.runtime,
+        }),
+        `${binding.provider} must accept its bound runtime ${binding.runtime}`,
+      ).toBe(binding.runtime);
+    }
+  });
+
+  it("keeps the Codex harness usable for OpenClaw's virtual codex provider", () => {
+    // Not a model provider, so it has no binding row and needs its own path.
+    expect(resolveCompatibleAgentRuntimeForProvider({ provider: "codex", runtime: "codex" })).toBe(
+      "codex",
+    );
+  });
+
+  it("still rejects a runtime that no binding serves", () => {
+    expect(
+      resolveCompatibleAgentRuntimeForProvider({ provider: "anthropic", runtime: "codex" }),
+    ).toBeUndefined();
   });
 });
