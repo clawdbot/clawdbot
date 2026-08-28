@@ -754,6 +754,25 @@ function resolveInstalledHostedOfficialEntry(params: {
   };
 }
 
+export type ManagedPluginIconSource =
+  | { kind: "file"; path: string; rootPath: string }
+  | { kind: "url"; url: string };
+
+function resolveInstalledPluginIconSource(params: {
+  metadata: PluginMetadataSnapshot;
+  officialEntry?: OfficialExternalPluginCatalogEntry;
+  pluginId: string;
+}): ManagedPluginIconSource | undefined {
+  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
+  const manifest = params.metadata.byPluginId.get(normalizedPluginId);
+  const localIconPath = normalizeOptionalString(manifest?.iconPath);
+  if (localIconPath && manifest) {
+    return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
+  }
+  const url =
+    resolveCatalogEntryIcon(params.officialEntry) ?? normalizeOptionalString(manifest?.icon);
+  return url ? { kind: "url", url } : undefined;
+}
 function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const workspace = resolvePluginControlPlaneWorkspace({ config, env });
   return {
@@ -798,14 +817,14 @@ export function refreshManagedPluginMetadata(params: {
   return snapshot;
 }
 
-/** Resolve the current manifest/catalog icon URL without accepting a caller-provided URL. */
-export const resolveManagedPluginIconUrl = withManagedPluginCache(
+/** Resolve the current package/manifest/catalog icon without accepting caller-provided input. */
+export const resolveManagedPluginIconSource = withManagedPluginCache(
   async (params: {
     config: OpenClawConfig;
     pluginId: string;
     env?: NodeJS.ProcessEnv;
     officialCatalog?: OfficialCatalogResult;
-  }): Promise<string | undefined> => {
+  }): Promise<ManagedPluginIconSource | undefined> => {
     const env = params.env ?? process.env;
     const metadata = resolveManagedPluginMetadata(params.config, env);
     const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
@@ -814,11 +833,12 @@ export const resolveManagedPluginIconUrl = withManagedPluginCache(
       (candidate) => metadata.normalizePluginId(candidate.pluginId) === normalizedPluginId,
     );
     if (!record) {
-      return resolveCatalogEntryIcon(
+      const url = resolveCatalogEntryIcon(
         officialCatalog.entries.find(
           (candidate) => resolveOfficialExternalPluginId(candidate) === normalizedPluginId,
         ),
       );
+      return url ? { kind: "url", url } : undefined;
     }
     const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
     const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
@@ -829,10 +849,11 @@ export const resolveManagedPluginIconUrl = withManagedPluginCache(
       officialEntries: prepareCatalogEntries(officialCatalog.entries),
       bundledOfficialEntries: prepareCatalogEntries(listOfficialExternalPluginCatalogEntries()),
     });
-    return (
-      resolveCatalogEntryIcon(officialEntry) ??
-      normalizeOptionalString(metadata.byPluginId.get(normalizedPluginId)?.icon)
-    );
+    return resolveInstalledPluginIconSource({
+      metadata,
+      officialEntry,
+      pluginId: params.pluginId,
+    });
   },
 );
 
@@ -894,7 +915,7 @@ export const listManagedPlugins = withManagedPluginCache(
     const bundledOfficialEntries = prepareCatalogEntries(
       listOfficialExternalPluginCatalogEntries(),
     );
-    const installedIconsById = new Map<string, string | undefined>();
+    const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
     const installedClawHubPackages = new Set<string>();
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
@@ -1000,8 +1021,11 @@ export const listManagedPlugins = withManagedPluginCache(
       if (!installedIconsById.has(normalizedPluginId)) {
         installedIconsById.set(
           normalizedPluginId,
-          resolveCatalogEntryIcon(officialEntry) ??
-            normalizeOptionalString(metadata.byPluginId.get(normalizedPluginId)?.icon),
+          resolveInstalledPluginIconSource({
+            metadata,
+            officialEntry,
+            pluginId: record.pluginId,
+          }),
         );
       }
       if (installedIconsById.get(normalizedPluginId)) {

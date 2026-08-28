@@ -74,7 +74,7 @@ function createPluginCandidate(params: {
   sourceName?: string;
   origin: "bundled" | "global" | "workspace" | "config";
   format?: "openclaw" | "bundle";
-  bundleFormat?: "codex" | "claude" | "cursor";
+  bundleFormat?: "agent" | "codex" | "claude" | "cursor";
   packageName?: string;
   packageVersion?: string;
   packageManifest?: OpenClawPackageManifest;
@@ -610,6 +610,51 @@ describe("loadPluginManifestRegistry", () => {
     ]);
 
     expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
+  });
+
+  it("discovers the portable package icon without manifest indirection", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "icon-demo",
+      name: "Icon Demo",
+      configSchema: { type: "object" },
+    });
+    writeTextFile(dir, "assets/icon.png", "portable icon");
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "icon-demo",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
+  });
+
+  it("discovers the same portable icon convention for Agent Plugins bundles", () => {
+    const dir = makeTempDir();
+    setupBundleFixture({
+      bundleDir: dir,
+      manifestRelativePath: "plugin.json",
+      manifest: {
+        $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        name: "Portable Icon Bundle",
+      },
+      textFiles: { "assets/icon.png": "portable icon" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "portable-icon-bundle",
+        rootDir: dir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "agent",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
   });
 
   it("preserves manifest catalog metadata on registry records", () => {

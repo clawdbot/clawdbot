@@ -26,6 +26,7 @@ export function metadataSnapshot(params: {
   icon?: string;
   packageBuild?: { bundledDist?: boolean };
   packageDependencies?: Record<string, string>;
+  iconPath?: string;
 }) {
   const id = params.id ?? "workboard";
   const origin = params.origin ?? "bundled";
@@ -39,6 +40,7 @@ export function metadataSnapshot(params: {
     catalog: { featured: true, order: 10 },
     ...(params.icon ? { icon: params.icon } : {}),
     ...(params.packageDependencies ? { packageDependencies: params.packageDependencies } : {}),
+    ...(params.iconPath ? { iconPath: params.iconPath } : {}),
     channels: [],
     providers: [],
     cliBackends: [],

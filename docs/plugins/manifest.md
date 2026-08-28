@@ -184,9 +184,20 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                      |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                          |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
-| `icon`                               | No       | `string`                     | HTTPS image URL for marketplace/catalog cards. ClawHub accepts any valid `https://` URL and falls back to the default plugin icon when this is omitted or invalid.                                                                                                                                                                                                                               |
+| `icon`                               | No       | `string`                     | Legacy HTTPS image URL for marketplace/catalog cards. Prefer the package-local icon convention below. ClawHub falls back to the default plugin icon when this is omitted or invalid.                                                                                                                                                                                                             |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
+
+## Plugin icon
+
+Place the portable plugin icon at `assets/icon.png`, relative to the plugin root. No manifest
+field is required. Use a square PNG that remains recognizable at 16 px; 512×512 is recommended.
+Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
+
+The fixed package path follows the Agent Plugins asset convention. It keeps packages portable and
+inspectable, avoids manifest path indirection and precedence rules, and lets clients render the icon
+without a runtime network request. OpenClaw still accepts the shipped top-level HTTPS `icon` field
+for compatibility, but a valid package-local icon takes precedence.
 
 Prefer top-level `sessionRouteStateOwners` for static doctor ownership. The
 older `doctorContract.sessionRouteStateOwners: true` declaration plus a

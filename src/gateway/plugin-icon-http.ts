@@ -1,4 +1,6 @@
 // Authenticated same-origin proxy for Gateway-owned Control UI icons.
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { fileTypeFromBuffer } from "file-type";
@@ -14,7 +16,7 @@ import {
   readImageMetadataFromHeader,
 } from "../media/image-ops.js";
 import {
-  resolveManagedPluginIconUrl,
+  resolveManagedPluginIconSource,
   resolveManagedSetupCatalogIconUrl,
 } from "../plugins/management-service.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -91,6 +93,101 @@ function rememberIcon(
   return entry;
 }
 
+async function normalizeIconPayload(params: {
+  body: Buffer;
+  contentType: string | undefined;
+  maxBytes: number;
+}): Promise<HttpImageRepresentation | null> {
+  const contentType = resolveHttpImageMimeType(params.contentType);
+  if (!contentType || !(await validateImageMime(params.body, contentType))) {
+    return null;
+  }
+  if (contentType === SVG_MIME_TYPE || contentType === "image/x-icon") {
+    return createHttpImageRepresentation(params.body, contentType);
+  }
+  const metadata = readImageMetadataFromHeader(params.body);
+  if (
+    !metadata ||
+    !Number.isInteger(metadata.width) ||
+    !Number.isInteger(metadata.height) ||
+    metadata.width <= 0 ||
+    metadata.height <= 0 ||
+    metadata.width > MAX_IMAGE_INPUT_PIXELS / metadata.height
+  ) {
+    return null;
+  }
+  const normalized = await pluginIconImageProcessor.encode(params.body, {
+    format: "png",
+    compressionLevel: 9,
+    resize: {
+      fit: "inside",
+      maxSide: 256,
+      enlarge: false,
+    },
+  });
+  if (normalized.data.byteLength > params.maxBytes) {
+    return null;
+  }
+  return createHttpImageRepresentation(normalized.data, "image/png");
+}
+
+async function loadPackageIcon(params: {
+  cacheScope: string;
+  iconPath: string;
+}): Promise<HttpImageRepresentation | null> {
+  const cacheKey = `${params.cacheScope}\0file:${params.iconPath}`;
+  const now = Date.now();
+  const cached = pluginIconCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    pluginIconCache.delete(cacheKey);
+    pluginIconCache.set(cacheKey, cached);
+    return await cached.promise;
+  }
+  if (cached) {
+    pluginIconCache.delete(cacheKey);
+  }
+
+  const pending = (async () => {
+    let file;
+    try {
+      // Recheck the package path at use time: a post-snapshot symlink or hardlink
+      // must not turn the authenticated icon route into a local-file oracle.
+      file = await open(params.iconPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.nlink > 1 || stat.size < 1 || stat.size > PLUGIN_ICON_MAX_BYTES) {
+        return null;
+      }
+      const body = Buffer.alloc(stat.size);
+      let offset = 0;
+      while (offset < body.byteLength) {
+        const { bytesRead } = await file.read(body, offset, body.byteLength - offset, offset);
+        if (bytesRead === 0) {
+          return null;
+        }
+        offset += bytesRead;
+      }
+      return await normalizeIconPayload({
+        body,
+        contentType: "image/png",
+        maxBytes: PLUGIN_ICON_MAX_BYTES,
+      });
+    } catch {
+      return null;
+    } finally {
+      await file?.close().catch(() => {});
+    }
+  })();
+  const entry = rememberIcon(pluginIconCache, cacheKey, {
+    expiresAt: now + PLUGIN_ICON_CACHE_TTL_MS,
+    promise: pending,
+  });
+  const result = await pending;
+  if (!result && pluginIconCache.get(cacheKey) === entry) {
+    pluginIconCache.delete(cacheKey);
+  }
+  return result;
+}
+
 async function loadCatalogIcon(params: {
   cacheScope: string;
   iconUrl: string;
@@ -145,37 +242,11 @@ async function loadCatalogIcon(params: {
           },
         },
       });
-      const contentType = resolveHttpImageMimeType(loaded.contentType);
-      if (!contentType || !(await validateImageMime(loaded.buffer, contentType))) {
-        return null;
-      }
-      if (contentType === SVG_MIME_TYPE || contentType === "image/x-icon") {
-        return createHttpImageRepresentation(loaded.buffer, contentType);
-      }
-      const metadata = readImageMetadataFromHeader(loaded.buffer);
-      if (
-        !metadata ||
-        !Number.isInteger(metadata.width) ||
-        !Number.isInteger(metadata.height) ||
-        metadata.width <= 0 ||
-        metadata.height <= 0 ||
-        metadata.width > MAX_IMAGE_INPUT_PIXELS / metadata.height
-      ) {
-        return null;
-      }
-      const normalized = await pluginIconImageProcessor.encode(loaded.buffer, {
-        format: "png",
-        compressionLevel: 9,
-        resize: {
-          fit: "inside",
-          maxSide: 256,
-          enlarge: false,
-        },
+      return await normalizeIconPayload({
+        body: loaded.buffer,
+        contentType: loaded.contentType,
+        maxBytes: params.maxBytes ?? PLUGIN_ICON_MAX_BYTES,
       });
-      if (normalized.data.byteLength > (params.maxBytes ?? PLUGIN_ICON_MAX_BYTES)) {
-        return null;
-      }
-      return createHttpImageRepresentation(normalized.data, "image/png");
     } catch {
       return null;
     }
@@ -261,37 +332,44 @@ export async function handlePluginIconHttpRequest(
     return true;
   }
 
-  const iconUrl = pluginId
-    ? await resolveManagedPluginIconUrl({
+  const pluginIcon = pluginId
+    ? await resolveManagedPluginIconSource({
         config: opts.config,
         pluginId,
       })
-    : catalogIconUrl
-      ? resolveManagedSetupCatalogIconUrl({
-          config: opts.config,
-          iconUrl: catalogIconUrl,
-        })
-      : faviconHostname
-        ? // The route accepts a hostname, never a caller-controlled URL. Keep
-          // path and scheme fixed so only the strict fetch guard owns redirects.
-          `https://${faviconHostname}/favicon.ico`
+    : undefined;
+  const remoteIconUrl = catalogIconUrl
+    ? resolveManagedSetupCatalogIconUrl({
+        config: opts.config,
+        iconUrl: catalogIconUrl,
+      })
+    : faviconHostname
+      ? // The route accepts a hostname, never a caller-controlled URL. Keep
+        // path and scheme fixed so only the strict fetch guard owns redirects.
+        `https://${faviconHostname}/favicon.ico`
+      : pluginIcon?.kind === "url"
+        ? pluginIcon.url
         : undefined;
-  if (!iconUrl) {
+  if (!pluginIcon && !remoteIconUrl) {
     sendNotFound(res);
     return true;
   }
-  const icon = await loadCatalogIcon({
-    cacheScope: pluginId ? `plugin:${pluginId}` : faviconHostname ? "favicon" : "catalog",
-    iconUrl,
-    ...(faviconHostname
-      ? {
-          maxBytes: LINK_FAVICON_MAX_BYTES,
-          requireHttps: true,
-          retainFailureForMs: LINK_FAVICON_NEGATIVE_CACHE_TTL_MS,
-          limitConcurrency: true,
-        }
-      : {}),
-  });
+  const cacheScope = pluginId ? `plugin:${pluginId}` : faviconHostname ? "favicon" : "catalog";
+  const icon =
+    pluginIcon?.kind === "file"
+      ? await loadPackageIcon({ cacheScope, iconPath: pluginIcon.path })
+      : await loadCatalogIcon({
+          cacheScope,
+          iconUrl: remoteIconUrl!,
+          ...(faviconHostname
+            ? {
+                maxBytes: LINK_FAVICON_MAX_BYTES,
+                requireHttps: true,
+                retainFailureForMs: LINK_FAVICON_NEGATIVE_CACHE_TTL_MS,
+                limitConcurrency: true,
+              }
+            : {}),
+        });
   if (!icon) {
     sendNotFound(res);
     return true;

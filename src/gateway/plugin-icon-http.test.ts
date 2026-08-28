@@ -1,7 +1,10 @@
 // Gateway plugin icon HTTP tests cover authenticated identity lookup, bounded
 // remote loading, SVG normalization, caching, and failure fallback behavior.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
@@ -13,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   readImageMetadata: vi.fn(),
   readRemoteMediaBuffer: vi.fn(),
   resolveCatalogIconUrl: vi.fn(),
-  resolveIconUrl: vi.fn(),
+  resolveIconSource: vi.fn(),
 }));
 
 vi.mock("./http-utils.js", () => ({
@@ -33,7 +36,7 @@ vi.mock("../media/image-ops.js", () => ({
 }));
 
 vi.mock("../plugins/management-service.js", () => ({
-  resolveManagedPluginIconUrl: (...args: unknown[]) => mocks.resolveIconUrl(...args),
+  resolveManagedPluginIconSource: (...args: unknown[]) => mocks.resolveIconSource(...args),
   resolveManagedSetupCatalogIconUrl: (...args: unknown[]) => mocks.resolveCatalogIconUrl(...args),
 }));
 
@@ -52,6 +55,9 @@ const PNG_BYTES = Buffer.from(
   "base64",
 );
 const NORMALIZED_PNG_BYTES = Buffer.from("normalized-png");
+const iconFixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-icon-"));
+const localIconPath = path.join(iconFixtureDir, "icon.png");
+writeFileSync(localIconPath, PNG_BYTES);
 const ICO_BYTES = Buffer.from([
   0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 0, 0, 0, 0, 22, 0, 0, 0,
 ]);
@@ -107,6 +113,7 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
+  rmSync(iconFixtureDir, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -118,7 +125,10 @@ beforeEach(() => {
     authMethod: "token",
     operatorScopes: ["operator.admin", "operator.read"],
   });
-  mocks.resolveIconUrl.mockResolvedValue("https://cdn.example.test/plugin.svg");
+  mocks.resolveIconSource.mockResolvedValue({
+    kind: "url",
+    url: "https://cdn.example.test/plugin.svg",
+  });
   mocks.resolveCatalogIconUrl.mockImplementation(({ iconUrl }) => iconUrl);
   mocks.readImageMetadata.mockReturnValue({ width: 1, height: 1 });
   mocks.encodeImage.mockResolvedValue({ data: NORMALIZED_PNG_BYTES });
@@ -313,7 +323,7 @@ describe("Control UI plugin and catalog icon routes", () => {
       expect(response.status).toBe(404);
       await expect(response.text()).resolves.toBe("Not Found");
       expect(mocks.authorize).toHaveBeenCalledOnce();
-      expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
+      expect(mocks.resolveIconSource).not.toHaveBeenCalled();
       expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
       expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     },
@@ -339,7 +349,7 @@ describe("Control UI plugin and catalog icon routes", () => {
       });
 
       expect(response.status).toBe(401);
-      expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
+      expect(mocks.resolveIconSource).not.toHaveBeenCalled();
       expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
       expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     },
@@ -415,7 +425,7 @@ describe("Control UI plugin and catalog icon routes", () => {
     expect(response.headers.get("content-disposition")).toBe('attachment; filename="plugin-icon"');
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(Buffer.from(await response.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
-    expect(mocks.resolveIconUrl).toHaveBeenCalledWith({
+    expect(mocks.resolveIconSource).toHaveBeenCalledWith({
       config: testConfig,
       pluginId: "firecrawl",
     });
@@ -432,6 +442,26 @@ describe("Control UI plugin and catalog icon routes", () => {
         },
       },
     });
+    expect(mocks.encodeImage).toHaveBeenCalledWith(PNG_BYTES, {
+      format: "png",
+      compressionLevel: 9,
+      resize: {
+        fit: "inside",
+        maxSide: 256,
+        enlarge: false,
+      },
+    });
+  });
+
+  it("serves a portable package icon without making a remote request", async () => {
+    mocks.resolveIconSource.mockResolvedValueOnce({ kind: "file", path: localIconPath });
+
+    const response = await request("/__openclaw__/plugin-icon/local-plugin");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(mocks.encodeImage).toHaveBeenCalledWith(PNG_BYTES, {
       format: "png",
       compressionLevel: 9,
@@ -518,7 +548,7 @@ describe("Control UI plugin and catalog icon routes", () => {
     "returns a bodyless 404 for an unavailable $label icon HEAD",
     async ({ label, pathname }) => {
       if (label === "plugin") {
-        mocks.resolveIconUrl.mockResolvedValueOnce(undefined);
+        mocks.resolveIconSource.mockResolvedValueOnce(undefined);
       } else {
         mocks.resolveCatalogIconUrl.mockReturnValueOnce(undefined);
       }
@@ -538,7 +568,7 @@ describe("Control UI plugin and catalog icon routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mocks.resolveIconUrl).toHaveBeenCalledWith({
+    expect(mocks.resolveIconSource).toHaveBeenCalledWith({
       config: testConfig,
       pluginId: "@expediagroup/expedia-openclaw",
     });
@@ -569,7 +599,7 @@ describe("Control UI plugin and catalog icon routes", () => {
   });
 
   it("returns not found when metadata is absent or remote image validation fails", async () => {
-    mocks.resolveIconUrl.mockResolvedValueOnce(undefined);
+    mocks.resolveIconSource.mockResolvedValueOnce(undefined);
     const missing = await request("/__openclaw__/plugin-icon/missing");
     expect(missing.status).toBe(404);
 
@@ -607,7 +637,7 @@ describe("Control UI plugin and catalog icon routes", () => {
 
       expect(response.status).toBe(405);
       expect(response.headers.get("allow")).toBe("GET, HEAD");
-      expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
+      expect(mocks.resolveIconSource).not.toHaveBeenCalled();
       expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
     },
   );
