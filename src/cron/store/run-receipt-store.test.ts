@@ -292,11 +292,12 @@ describe("cron run receipt store", () => {
     expect(
       openOpenClawStateDatabase()
         .db.prepare(
-          `SELECT owner_id
-           FROM execution_owner_lifecycle_bindings
-           WHERE owner_kind = 'cron'`,
+          `SELECT binding.owner_id
+           FROM execution_owner_lifecycle_bindings AS binding
+           JOIN cron_run_receipts AS receipt ON receipt.receipt_id = binding.owner_id
+           WHERE binding.owner_kind = 'cron' AND receipt.store_key = ?`,
         )
-        .all(),
+        .all(cronStoreKey(storePath)),
     ).toEqual([{ owner_id: replacement.receiptId }]);
 
     finishCronRunReceipt({ handle: replacement, status: "ok", finishedAtMs: 250 });
