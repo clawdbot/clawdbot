@@ -7,10 +7,10 @@ import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribu
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { resolveProfileParticipantIdFromSessionCreation } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { defaultRuntime } from "../../runtime.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
 import { checkContextPressure } from "../continuation/context-pressure.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -446,9 +446,7 @@ export async function executePreparedReplyAgentRun(
       const gitCoauthorAttribution = prepareGitCoauthorAttribution({
         agentId: followupRun.run.agentId,
         config: cfg,
-        currentProfileId: resolveProfileParticipantIdFromSessionCreation(
-          sessionCtx.SessionCreation,
-        ),
+        currentProfileId: readSessionInputProfileId(sessionCtx),
         sessionKey,
         storePath,
       });

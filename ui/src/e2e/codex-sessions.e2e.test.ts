@@ -363,7 +363,12 @@ suite.define(() => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
-                      createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+                      createdActor: {
+                        type: "human",
+                        id: "profile-ada",
+                        identity: { type: "profile", id: "profile-ada" },
+                        label: "Ada",
+                      },
                     },
                     {
                       threadId: "thread-worktree",
@@ -373,7 +378,12 @@ suite.define(() => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
-                      createdActor: { type: "human", id: "profile-zoe", label: "Zoe" },
+                      createdActor: {
+                        type: "human",
+                        id: "profile-zoe",
+                        identity: { type: "profile", id: "profile-zoe" },
+                        label: "Zoe",
+                      },
                     },
                     {
                       threadId: "thread-other",
@@ -597,13 +607,13 @@ suite.define(() => {
       ).toEqual(["listitem", "listitem", "listitem"]);
       expect(
         await section
-          .locator('[data-session-catalog-project="person:profile-ada"]')
+          .locator('[data-session-catalog-project="person:profile:profile-ada"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("Ada");
       expect(
         await section
-          .locator('[data-session-catalog-project="person:profile-zoe"]')
+          .locator('[data-session-catalog-project="person:profile:profile-zoe"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("Zoe");

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import {
   executeSqliteQuerySync,
@@ -26,6 +27,26 @@ export const AGENT_DATABASE_MAINTENANCE_LEASE = {
   scope: "core:agent-database-maintenance",
   key: "global",
 } as const;
+
+const maintenanceAuthority = new AsyncLocalStorage<OpenClawStateLeaseContext>();
+
+export function runWithAgentDatabaseMaintenanceAuthority<T>(
+  authority: OpenClawStateLeaseContext,
+  run: () => Promise<T>,
+): Promise<T> {
+  return maintenanceAuthority.run(authority, run);
+}
+
+/** Revalidate the held lease, including immediately before committing a versioned rebuild. */
+export function assertAgentDatabaseMaintenanceAuthority(): void {
+  const authority = maintenanceAuthority.getStore();
+  if (!authority) {
+    throw new Error(
+      "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
+    );
+  }
+  authority.assertOwned();
+}
 
 export function claimOpenClawAgentDatabaseLease(params: {
   agentId: string;

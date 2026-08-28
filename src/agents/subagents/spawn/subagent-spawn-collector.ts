@@ -22,6 +22,7 @@ import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
 export function activateCollectorSubagentRun(params: {
   swarmSchedulerGroupKey: string;
   childRunId: string;
+  promptedAt: number;
   requesterAgentId: string;
   targetAgentId: string;
   childSessionKey: string;
@@ -73,10 +74,10 @@ export function activateCollectorSubagentRun(params: {
         const gatewayRunId = readGatewayRunId(launch.response) ?? params.childRunId;
         acceptedGatewayRunId = gatewayRunId;
         recordSessionParticipantBestEffort({
-          actor: { type: "agent", id: params.requesterAgentId },
+          promptedAt: params.promptedAt,
+          identity: { type: "agent", id: params.requesterAgentId },
           agentId: params.targetAgentId,
           sessionKey: params.childSessionKey,
-          source: "agent",
           storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
             agentId: params.targetAgentId,
           }),

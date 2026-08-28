@@ -298,11 +298,10 @@ export interface SessionNodes {
 
 export interface SessionParticipants {
   actor_id: string;
-  actor_source: string | null;
-  actor_type: string;
-  contribution_count: number | null;
-  first_prompted_at: number;
-  last_prompted_at: number;
+  contribution_count: number;
+  first_prompted_at: number | null;
+  identity_namespace: string;
+  last_prompted_at: number | null;
   session_key: string;
 }
 

@@ -13,6 +13,7 @@ import {
   migrateOpenClawAgentDatabaseForMaintenance,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
+  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -55,7 +56,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   const trustedTargets = resolveRecoverTargets(params.targets, params.env);
   const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, trustedTargets);
   if (!failedRun) {
-    const recoveredCorruptTargets = recoverCorruptSqliteTargets(params.targets, params.env);
+    const recoveredCorruptTargets = await withAgentDatabaseMaintenanceLease(
+      { env: params.env },
+      async () => recoverCorruptSqliteTargets(params.targets, params.env),
+    );
     if (recoveredCorruptTargets.length > 0) {
       return summarizeRecoverReport(recoveredCorruptTargets);
     }

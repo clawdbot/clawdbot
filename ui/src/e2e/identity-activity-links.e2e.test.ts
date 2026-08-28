@@ -46,38 +46,75 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const sessionList = {
+          ...chatSessionListResponse([
+            {
+              key: selectedSessionKey,
+              kind: "direct",
+              label: "Selected session",
+              updatedAt: now - 5 * 60_000,
+            },
+            {
+              createdActor: {
+                type: "human",
+                id: "profile-ada",
+                identity: { type: "profile", id: "profile-ada" },
+                label: "Ada King",
+              },
+              createdAt: now - 3 * 60 * 60_000,
+              key: sessionKey,
+              kind: "direct",
+              label: "Ada's session",
+              displayName: "Ada's session",
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-ada",
+                  identity: { type: "profile", id: "profile-ada" },
+                  label: "Ada King",
+                },
+              },
+              participants: [
+                { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
+                { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+              ],
+              participantCount: 2,
+              updatedAt: now - 10 * 60_000,
+            },
+          ]),
+          people: [
+            {
+              identity: { type: "profile", id: "profile-ada" },
+              label: "Ada King",
+              sessionCount: 1,
+            },
+            { identity: { type: "profile", id: "profile-mira" }, label: "Mira", sessionCount: 1 },
+          ],
+          peopleSessionCount: 2,
+          peopleIncomplete: false,
+        };
+        const associatedSessions = sessionList.sessions.slice(1);
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-          presenceUsers: [
-            { self: true, id: "profile-self", name: "You" },
-            { id: "profile-ada", name: "Ada King" },
-            { id: "profile-mira", name: "Mira" },
-          ],
+          hasMultipleSessionSharingIdentities: true,
+          presenceUsers: [{ self: true, id: "profile-self", name: "You" }],
           methodResponses: {
             "progressCard.get": { card: null },
-            "sessions.list": chatSessionListResponse([
-              {
-                key: selectedSessionKey,
-                kind: "direct",
-                label: "Selected session",
-                updatedAt: now - 5 * 60_000,
-              },
-              {
-                createdActor: { type: "human", id: "profile-ada", label: "Ada King" },
-                createdAt: now - 3 * 60 * 60_000,
-                key: sessionKey,
-                kind: "direct",
-                label: "Ada's session",
-                displayName: "Ada's session",
-                owner: { actor: { type: "human", id: "profile-ada", label: "Ada King" } },
-                participants: [
-                  { type: "human", id: "profile-ada", label: "Ada King" },
-                  { type: "human", id: "profile-mira", label: "Mira" },
-                ],
-                participantCount: 2,
-                updatedAt: now - 10 * 60_000,
-              },
-            ]),
+            "sessions.list": {
+              cases: [
+                ...["profile-ada", "profile-mira"].map((involvingProfileId) => ({
+                  match: { involvingProfileId },
+                  response: {
+                    ...sessionList,
+                    involvingProfileId,
+                    sessions: associatedSessions,
+                    count: 1,
+                    totalCount: 1,
+                  },
+                })),
+                { response: sessionList },
+              ],
+            },
           },
           sessionKey: selectedSessionKey,
         });
@@ -128,6 +165,14 @@ suite.define(() => {
         await expect
           .poll(() => activityPage.locator(`[data-activity-session="${sessionKey}"]`).count())
           .toBe(1);
+        expect(
+          await activityPage.locator(`[data-activity-session="${selectedSessionKey}"]`).count(),
+        ).toBe(0);
+        expect(
+          await page
+            .locator(`.sidebar-recent-session[data-session-key="${selectedSessionKey}"]`)
+            .count(),
+        ).toBe(1);
         await captureProof(page, "hovercard-identity-activity.png");
 
         await page.goBack();
@@ -157,6 +202,45 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const sessionList = {
+          ...chatSessionListResponse([
+            {
+              createdActor: {
+                type: "human",
+                id: "profile-ada",
+                identity: { type: "profile", id: "profile-ada" },
+                label: "Ada King",
+              },
+              createdAt: now - 3 * 60 * 60_000,
+              key: sessionKey,
+              kind: "direct",
+              label: "Shared thread",
+              displayName: "Shared thread",
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-ada",
+                  identity: { type: "profile", id: "profile-ada" },
+                  label: "Ada King",
+                },
+              },
+              participants: [{ identity: { type: "profile", id: "profile-mira" }, label: "Mira" }],
+              participantCount: 1,
+              updatedAt: now - 60_000,
+            },
+          ]),
+          people: [
+            {
+              identity: { type: "profile", id: "profile-ada" },
+              label: "Ada King",
+              sessionCount: 1,
+            },
+            { identity: { type: "profile", id: "profile-mira" }, label: "Mira", sessionCount: 1 },
+          ],
+          peopleSessionCount: 1,
+          peopleIncomplete: false,
+        };
+        const associatedSessions = sessionList.sessions;
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           hasMultipleSessionSharingIdentities: true,
@@ -175,20 +259,21 @@ suite.define(() => {
           ],
           methodResponses: {
             "progressCard.get": { card: null },
-            "sessions.list": chatSessionListResponse([
-              {
-                createdActor: { type: "human", id: "profile-ada", label: "Ada King" },
-                createdAt: now - 3 * 60 * 60_000,
-                key: sessionKey,
-                kind: "direct",
-                label: "Shared thread",
-                displayName: "Shared thread",
-                owner: { actor: { type: "human", id: "profile-ada", label: "Ada King" } },
-                participants: [{ type: "human", id: "profile-mira", label: "Mira" }],
-                participantCount: 1,
-                updatedAt: now - 60_000,
-              },
-            ]),
+            "sessions.list": {
+              cases: [
+                ...["profile-ada", "profile-mira"].map((involvingProfileId) => ({
+                  match: { involvingProfileId },
+                  response: {
+                    ...sessionList,
+                    involvingProfileId,
+                    sessions: associatedSessions,
+                    count: 1,
+                    totalCount: 1,
+                  },
+                })),
+                { response: sessionList },
+              ],
+            },
           },
           sessionKey,
         });

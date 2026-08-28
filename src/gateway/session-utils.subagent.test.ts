@@ -167,7 +167,11 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(row.controlOwnerSessionKey).toBe("agent:main:subagent:runtime-controller");
     expect(row.parentSessionKey).toBe("agent:main:dashboard:navigation-parent");
     expect(row.createdVia).toBe("spawn");
-    expect(row.createdActor).toEqual({ type: "agent", id: "agent:main:main" });
+    expect(row.createdActor).toEqual({
+      type: "agent",
+      id: "agent:main:main",
+      identity: { type: "agent", id: "agent:main:main" },
+    });
     expect(row.createdAt).toBe(now - 10_000);
     expect(row.forkSource).toEqual({
       sessionKey: "agent:main:main",

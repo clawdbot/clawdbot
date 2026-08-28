@@ -1,3 +1,4 @@
+import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import {
   buildControlUiResourcePath,
   parseControlUiResourcePath,
@@ -6,77 +7,20 @@ import {
   buildControlUiUserAvatarPath,
   canonicalizeControlUiUserAvatarPath,
 } from "../../../src/gateway/control-ui-user-avatar-route.js";
-import { normalizeBasePath } from "../app-route-paths.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";
+import { takeGraphemes } from "./graphemes.ts";
+import { readAvatarGatewayContext } from "./identity-avatar-context.ts";
 
 // NOTE: this is sender-controlled metadata. It must never carry the trusted
 // gateway origin — that comes only from the app connection via
 // setAvatarGatewayOrigin().
 export type IdentityAvatarInput = SenderIdentity & {
   profileAvatarUrl?: string;
+  identity?: SessionParticipantIdentity;
 };
 
 const ORIGIN_PROBE = "https://origin-probe.invalid";
-
-let appGatewayOrigin: string | null = null;
-let appGatewayResourceBasePath = "";
-let appGatewayAuthHeader: string | null = null;
-// More than one cache is keyed by the Gateway HTTP context (avatars,
-// geolocation), so every subscriber must be notified on a switch. A single slot
-// would silently drop whichever registered first.
-const gatewayContextResets = new Set<() => void>();
-
-export function registerAvatarGatewayReset(reset: () => void): void {
-  gatewayContextResets.add(reset);
-}
-
-export function readAvatarGatewayContext() {
-  return {
-    origin: appGatewayOrigin,
-    resourceBasePath: appGatewayResourceBasePath,
-    authHeader: appGatewayAuthHeader,
-  };
-}
-
-function toHttpOrigin(url: string | null | undefined): string | null {
-  if (!url) {
-    return null;
-  }
-  try {
-    const parsed = new URL(url);
-    const scheme =
-      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
-    return `${scheme}//${parsed.host}`;
-  } catch {
-    return null;
-  }
-}
-
-/** Keeps avatar routes, credentials, and cached images scoped to the current gateway. */
-export function setAvatarGatewayOrigin(
-  gatewayUrl: string | null | undefined,
-  authHeader: string | null = null,
-  resourceBasePath = "",
-): void {
-  const nextOrigin = toHttpOrigin(gatewayUrl);
-  const documentOrigin = globalThis.location?.origin;
-  const nextResourceBasePath =
-    nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";
-  const nextAuthHeader = authHeader?.trim() || null;
-  if (
-    appGatewayOrigin !== nextOrigin ||
-    appGatewayResourceBasePath !== nextResourceBasePath ||
-    appGatewayAuthHeader !== nextAuthHeader
-  ) {
-    for (const reset of gatewayContextResets) {
-      reset();
-    }
-  }
-  appGatewayOrigin = nextOrigin;
-  appGatewayResourceBasePath = nextResourceBasePath;
-  appGatewayAuthHeader = nextAuthHeader;
-}
 
 /**
  * Trust only canonical user and agent image routes on the connected Gateway.
@@ -86,7 +30,7 @@ export function setAvatarGatewayOrigin(
 export function resolveTrustedAvatarUrl(
   value: string,
   gatewayOrigin: string | null,
-  resourceBasePath = appGatewayResourceBasePath,
+  resourceBasePath = readAvatarGatewayContext().resourceBasePath,
 ): string | null {
   try {
     const parsed = new URL(value, ORIGIN_PROBE);
@@ -117,7 +61,7 @@ export type ResolvedIdentityAvatar =
 
 function initialsFromLabel(label: string): string {
   const words = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2);
-  const initials = words.map((word) => Array.from(word)[0] ?? "").join("");
+  const initials = words.map((word) => takeGraphemes(word, 1)).join("");
   return initials.toUpperCase() || "?";
 }
 
@@ -146,27 +90,37 @@ export function resolveIdentityHue(input: IdentityAvatarInput): number {
  * Resolve a Gateway user/agent avatar, else deterministic initials. Remote
  * sources (including Gravatar) remain Gateway-owned, never browser fetches.
  */
-// User-profile ids are crypto UUIDs. Chat sender metadata carries only the id
-// (the prompt-visible envelope stays free of URLs), so a UUID-shaped sender id
-// is the signal to resolve the canonical avatar route for it client-side.
+// Unqualified per-message senders keep their existing display contract pending
+// the separate transcript-provenance repair; typed participants never infer it.
 const PROFILE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvatar {
+  const identity = input.identity;
+  if (identity && identity.type !== "profile" && identity.type !== "agent") {
+    return resolveAvatarInitials(input);
+  }
   // Trusted origin comes only from the app connection, never from `input`.
-  const gatewayOrigin = appGatewayOrigin;
+  const { origin: gatewayOrigin, resourceBasePath } = readAvatarGatewayContext();
 
   const profileAvatarUrl = input.profileAvatarUrl?.trim();
   if (profileAvatarUrl) {
     const trusted = resolveTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
-    if (trusted) {
+    // A trusted image route does not change a typed participant's namespace.
+    if (
+      trusted &&
+      (!identity ||
+        parseControlUiResourcePath(
+          identity.type === "agent" ? "agentAvatar" : "userAvatar",
+          new URL(trusted, ORIGIN_PROBE).pathname,
+          resourceBasePath,
+        ).matched)
+    ) {
       return { kind: "profile", url: trusted };
     }
   }
 
-  // Sender metadata without an explicit route: a profile-id sender still has a
-  // canonical gateway avatar (upload → Gravatar proxy → 404-to-initials).
-  const id = input.id?.trim();
-  if (id && PROFILE_ID_RE.test(id)) {
+  const id = identity?.id ?? input.id?.trim();
+  if (id && (identity?.type === "profile" || (!identity && PROFILE_ID_RE.test(id)))) {
     const trusted = resolveTrustedAvatarUrl(buildControlUiUserAvatarPath(id), gatewayOrigin);
     if (trusted) {
       return { kind: "profile", url: trusted };

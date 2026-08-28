@@ -24,6 +24,7 @@ import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
 import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
@@ -426,7 +427,14 @@ export function startGatewayEventSubscriptions(params: {
     });
   });
 
-  const lifecycleUnsub = onSessionLifecycleEvent((evt) => {
+  const unsubscribeProfileChanges = onUserProfilesChanged(() => {
+    params.broadcastToConnIds(
+      "sessions.changed",
+      { reason: "profile-identity" },
+      params.sessionEventSubscribers.getAll(),
+    );
+  });
+  const unsubscribeLifecycle = onSessionLifecycleEvent((evt) => {
     dispatchEventHandler({
       loadHandler: getLifecycleEventHandler,
       event: evt,
@@ -435,6 +443,10 @@ export function startGatewayEventSubscriptions(params: {
       context: { sessionKey: evt.sessionKey },
     });
   });
+  const lifecycleUnsub = () => {
+    unsubscribeProfileChanges();
+    unsubscribeLifecycle();
+  };
 
   let taskObserverDisposed = false;
   const lastTaskSummaryById = new Map<string, string>();

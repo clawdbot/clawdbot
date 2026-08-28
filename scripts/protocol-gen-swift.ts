@@ -255,7 +255,11 @@ function stringLiteralUnionValues(schema: JsonSchema): string[] | undefined {
   return new Set(stringValues).size === stringValues.length ? stringValues : undefined;
 }
 
-function emitStruct(name: string, schema: JsonSchema): string {
+function emitStruct(
+  name: string,
+  schema: JsonSchema,
+  strictLiterals = STRICT_LITERAL_STRUCTS.has(name),
+): string {
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
   const literalProps = Object.entries(props)
@@ -277,7 +281,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
   if (Object.keys(props).length === 0) {
     return `public struct ${name}: Codable, Sendable {}\n`;
   }
-  if (STRICT_LITERAL_STRUCTS.has(name) && literalProps.length > 0) {
+  if (strictLiterals && literalProps.length > 0) {
     const literalPropByKey = new Map(literalProps.map((entry) => [entry.key, entry.literal]));
     lines.push(`public struct ${name}: Codable, Sendable {`);
     const codingKeys: string[] = [];
@@ -292,7 +296,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
       }
     }
     const initializerParams = Object.entries(props)
-      .filter(([key]) => !literalPropByKey.has(key))
+      .filter(([key]) => !literalPropByKey.has(key) || !required.has(key))
       .map(([key, prop]) => {
         const propName = safeName(key);
         const req = required.has(key);
@@ -311,7 +315,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
         Object.entries(props)
           .map(([key]) => {
             const propName = safeName(key);
-            if (literalPropByKey.has(key)) {
+            if (literalPropByKey.has(key) && required.has(key)) {
               return `        self.${propName} = ${swiftLiteralSource(literalPropByKey.get(key)!)}`;
             }
             return `        self.${propName} = ${propName}`;
@@ -339,7 +343,14 @@ function emitStruct(name: string, schema: JsonSchema): string {
             const literal = literalPropByKey.get(key);
             if (literal !== undefined) {
               const literalType = swiftType(propSchema, true, true);
-              return `        let decoded${capitalizedPropName} = try container.decode(${literalType}.self, forKey: .${propName})\n        guard decoded${capitalizedPropName} == ${swiftLiteralSource(literal)} else {\n            throw DecodingError.dataCorruptedError(\n                forKey: .${propName},\n                in: container,\n                debugDescription: "Expected ${key} to equal ${String(literal)}"\n            )\n        }\n        self.${propName} = ${swiftLiteralSource(literal)}`;
+              const decodedName = `decoded${capitalizedPropName}`;
+              const decode = `try container.decode(${literalType}.self, forKey: .${propName})`;
+              // Optional literals retain presence; decodeIfPresent would silently accept forbidden null.
+              const decodedValue = required.has(key)
+                ? decode
+                : `container.contains(.${propName})\n            ? ${decode}\n            : nil`;
+              const absent = required.has(key) ? "" : `${decodedName} == nil || `;
+              return `        let ${decodedName} = ${decodedValue}\n        guard ${absent}${decodedName} == ${swiftLiteralSource(literal)} else {\n            throw DecodingError.dataCorruptedError(\n                forKey: .${propName},\n                in: container,\n                debugDescription: "Expected ${key} to equal ${String(literal)}"\n            )\n        }\n        self.${propName} = ${required.has(key) ? swiftLiteralSource(literal) : decodedName}`;
             }
             if (required.has(key)) {
               return `        self.${propName} = try container.decode(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
@@ -354,13 +365,17 @@ function emitStruct(name: string, schema: JsonSchema): string {
           .map(([key]) => {
             const propName = safeName(key);
             const literal = literalPropByKey.get(key);
-            if (literal !== undefined) {
+            if (literal !== undefined && required.has(key)) {
               return `        try container.encode(${swiftLiteralSource(literal)}, forKey: .${propName})`;
             }
             if (required.has(key)) {
               return `        try container.encode(${propName}, forKey: .${propName})`;
             }
-            return `        try container.encodeIfPresent(${propName}, forKey: .${propName})`;
+            const validation =
+              literal === undefined
+                ? ""
+                : `        if let ${propName}, ${propName} != ${swiftLiteralSource(literal)} {\n            throw EncodingError.invalidValue(\n                ${propName},\n                .init(\n                    codingPath: container.codingPath + [CodingKeys.${propName}],\n                    debugDescription: "Expected ${key} to equal ${String(literal)}"\n                )\n            )\n        }\n`;
+            return `${validation}        try container.encodeIfPresent(${propName}, forKey: .${propName})`;
           })
           .join("\n") +
         "\n    }\n}",
@@ -658,13 +673,18 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
     const cases = objectBranches.map((branch, index) => {
       const discriminatorSchema = branch.properties?.[discriminator];
       const literal = discriminatorSchema ? literalSchemaValue(discriminatorSchema) : undefined;
-      const branchName = namedSchema(branch, true);
-      if (literal === undefined || !branchName) {
+      if (literal === undefined) {
         return undefined;
       }
+      const caseName = swiftUnionCaseName(literal, `case${index + 1}`);
+      const registeredName = namedSchema(branch, true);
+      const branchName =
+        registeredName ?? `${name}${caseName.charAt(0).toUpperCase()}${caseName.slice(1)}`;
       return {
+        branch,
         branchName,
-        caseName: swiftUnionCaseName(literal, `case${index + 1}`),
+        caseName,
+        registeredName,
         literal,
       };
     });
@@ -700,6 +720,10 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
           "            )",
         ];
     return [
+      // Inline union branches need declarations too; only registered schemas have an external owner.
+      ...resolvedCases.flatMap((entry) =>
+        entry.registeredName ? [] : [emitStruct(entry.branchName, entry.branch, true)],
+      ),
       `public enum ${name}: Codable, Sendable {`,
       ...resolvedCases.map((entry) => `    case ${entry.caseName}(${entry.branchName})`),
       "",

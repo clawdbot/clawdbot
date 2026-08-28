@@ -88,6 +88,7 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  const promptedAt = Date.now();
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
@@ -471,10 +472,10 @@ export async function spawnSubagentDirect(
         taskRowOwnership = launch.taskRowOwnership;
         acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
         recordSessionParticipantBestEffort({
-          actor: { type: "agent", id: requesterAgentId },
+          promptedAt,
+          identity: { type: "agent", id: requesterAgentId },
           agentId: targetAgentId,
           sessionKey: childSessionKey,
-          source: "agent",
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
         });
         return { runId: acceptedChildRunId };
@@ -664,6 +665,7 @@ export async function spawnSubagentDirect(
       activateCollectorSubagentRun({
         swarmSchedulerGroupKey,
         childRunId,
+        promptedAt,
         requesterAgentId,
         targetAgentId,
         childSessionKey,

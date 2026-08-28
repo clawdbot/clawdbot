@@ -3446,40 +3446,58 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.statSync(sqlitePath).isDirectory()).toBe(true);
   });
 
-  it("reports SQLite loader failures without aborting recovery", async () => {
-    const store = createLegacyStore();
-    const sqlitePath = path.join(
-      store.stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
-    fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
-    const openSqlite = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce(() => {
-      throw new Error("node:sqlite unavailable");
-    });
+  it.each(["maintenance", "inspection"])(
+    "preserves recovery state when the %s SQLite loader fails",
+    async (failure) => {
+      const store = createLegacyStore();
+      const sqlitePath = path.join(
+        store.stateDir,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+      fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
+      const openDatabase = nodeSqlite.openNodeSqliteDatabase;
+      const openSqlite = vi
+        .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+        .mockImplementation((pathname, options) => {
+          // An unavailable lease store must refuse; an unreadable agent copy is reportable.
+          if (failure === "maintenance" || path.basename(pathname) === path.basename(sqlitePath)) {
+            throw new Error("node:sqlite unavailable");
+          }
+          return openDatabase(pathname, options);
+        });
 
-    let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>> | undefined;
-    try {
-      report = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "recover",
-        store: store.storePath,
+      let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>> | undefined;
+      try {
+        const recovery = runDoctorSessionSqlite({
+          env: store.env,
+          mode: "recover",
+          store: store.storePath,
+        });
+        if (failure === "maintenance") {
+          await expect(recovery).rejects.toThrow(
+            "failed to acquire agent database maintenance lease",
+          );
+          expect(fs.readFileSync(sqlitePath, "utf8")).toBe("not a sqlite database\n");
+          return;
+        }
+        report = await recovery;
+      } finally {
+        openSqlite.mockRestore();
+      }
+
+      expect(report?.totals.issues).toBe(1);
+      expect(report?.targets[0]?.issues[0]).toMatchObject({
+        code: "sqlite_recovery_inspect_failed",
+        message: expect.stringContaining("node:sqlite unavailable"),
       });
-    } finally {
-      openSqlite.mockRestore();
-    }
-
-    expect(report?.totals.issues).toBe(1);
-    expect(report?.targets[0]?.issues[0]).toMatchObject({
-      code: "sqlite_recovery_inspect_failed",
-      message: expect.stringContaining("node:sqlite unavailable"),
-    });
-    expect(report?.targets[0]?.corruptRecovery).toBeUndefined();
-    expect(fs.existsSync(sqlitePath)).toBe(true);
-  });
+      expect(report?.targets[0]?.corruptRecovery).toBeUndefined();
+      expect(fs.existsSync(sqlitePath)).toBe(true);
+    },
+  );
 
   it("does not truncate existing SQLite transcript rows when re-importing a duplicate fragment", async () => {
     const store = createLegacyStore({

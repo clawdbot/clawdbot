@@ -3,6 +3,10 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
+import {
+  SessionParticipantSchema,
+  SessionParticipantIdentitySchema,
+} from "./session-participant.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 export const SessionPermissionModeSchema = Type.Union([
@@ -28,6 +32,8 @@ export const SessionCreatedActorSchema = closedObject({
   label: Type.Optional(NonEmptyString),
   /** Durable profile avatar route; absent for actors without a stored profile avatar. */
   avatarUrl: Type.Optional(NonEmptyString),
+  /** Display identity is separate from the actor fields used by ownership policy. */
+  identity: Type.Optional(SessionParticipantIdentitySchema),
 });
 
 /** Mutable responsibility for one session; actor display data is projected at read time. */
@@ -131,7 +137,7 @@ export const SessionRowSchema = Type.Object(
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
-    participants: Type.Optional(Type.Array(SessionCreatedActorSchema, { maxItems: 4 })),
+    participants: Type.Optional(Type.Array(SessionParticipantSchema, { maxItems: 4 })),
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),

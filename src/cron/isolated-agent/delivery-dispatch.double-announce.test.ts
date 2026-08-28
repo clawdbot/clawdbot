@@ -270,6 +270,10 @@ function makeBaseParams(overrides: {
     agentSessionKey: "agent:main",
     sourceSessionKey:
       overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
+    sourceSessionGeneration:
+      overrides.sessionTarget === "current"
+        ? { sessionId: "source-session-id", lifecycleRevision: "source-lifecycle-revision" }
+        : undefined,
     runSessionKey: overrides.runSessionKey ?? "agent:main",
     sessionId: "test-session-id",
     lifecycleRevision: "test-lifecycle-revision",
@@ -3444,12 +3448,51 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:webchat:direct:owner",
+      expectedGeneration: {
+        sessionId: "source-session-id",
+        lifecycleRevision: "source-lifecycle-revision",
+      },
       text: "durable WebChat completion",
       idempotencyKey: "cron-current-completion:cron:test-job:1000",
       provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
       config: params.cfgWithAgentDefaults,
       signal: undefined,
     });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicitly revision-less source generation", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "durable revision-less completion",
+      sessionTarget: "current",
+    });
+    params.sourceSessionGeneration = {
+      sessionId: "source-session-id",
+      lifecycleRevision: undefined,
+    };
+
+    await dispatchCronDelivery(params);
+
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedGeneration: params.sourceSessionGeneration }),
+    );
+  });
+
+  it("refuses a current-target completion without its captured source generation", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "must not attach to a future replacement",
+      sessionTarget: "current",
+    });
+    params.sourceSessionGeneration = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "current cron delivery is missing its source session generation",
+    });
+    expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalled();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 

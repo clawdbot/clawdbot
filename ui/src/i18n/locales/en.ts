@@ -3638,6 +3638,8 @@ export const en: TranslationMap = {
     },
   },
   activityFeed: {
+    partialHistory:
+      "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
     sessionsMode: "Sessions",
     searchPlaceholder: "Search session titles…",
     time: "Time",
@@ -3670,7 +3672,7 @@ export const en: TranslationMap = {
     viewingNow: "Viewing now",
     notViewing: "Not viewing a session right now.",
     notFoundTitle: "Person not found",
-    notFoundDescription: "No presence or session activity matches this identity.",
+    notFoundDescription: "No online presence or visible session association matches this identity.",
   },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",

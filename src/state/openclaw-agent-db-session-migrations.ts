@@ -303,9 +303,27 @@ export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync
   return Boolean(columns && !columns.has("route_context_json"));
 }
 
+const SESSION_RECIPIENT_AUTHORITY_SCHEMA_START =
+  "CREATE TABLE IF NOT EXISTS session_recipient_authority (";
+const SESSION_RECIPIENT_AUTHORITY_SCHEMA_END =
+  "CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert";
+
+export function withoutSessionRecipientAuthoritySchema(sql: string): string {
+  const start = sql.indexOf(SESSION_RECIPIENT_AUTHORITY_SCHEMA_START);
+  const end = sql.indexOf(SESSION_RECIPIENT_AUTHORITY_SCHEMA_END, start);
+  if (start === -1 || end === -1) {
+    throw new Error("OpenClaw session recipient authority schema markers are missing.");
+  }
+  return `${sql.slice(0, start)}${sql.slice(end)}`;
+}
+
+export function hasSessionRecipientAuthoritySchema(db: DatabaseSync): boolean {
+  return readSqliteTableColumns(db, "session_recipient_authority") !== null;
+}
+
 /** Moves the unshipped entry-local return epoch to its logical session-key owner. */
-export function migrateSessionRecipientAuthority(db: DatabaseSync, previousVersion: number): void {
-  if (previousVersion >= 18 || !readSqliteTableColumns(db, "session_recipient_authority")) {
+export function migrateSessionRecipientAuthority(db: DatabaseSync): void {
+  if (!hasSessionRecipientAuthoritySchema(db) || !readSqliteTableColumns(db, "session_nodes")) {
     return;
   }
   db.prepare(

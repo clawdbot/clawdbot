@@ -108,7 +108,7 @@ describe("agent DB conversation migration", () => {
         ('agent:main:missing', '{"label":"missing"}');
     `);
 
-    migrateSessionRecipientAuthority(database, 17);
+    migrateSessionRecipientAuthority(database);
 
     expect(
       database

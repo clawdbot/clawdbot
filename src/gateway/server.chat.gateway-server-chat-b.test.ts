@@ -2959,7 +2959,7 @@ describe("gateway server chat", () => {
         }) as RespondFn,
         context,
       });
-      expect(responses[0]?.ok).toBe(true);
+      expect(responses[0]?.ok, JSON.stringify(responses[0])).toBe(true);
       await waitForFast(async () => {
         const remaining = await fs.readdir(inboundDir).catch(() => []);
         expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);

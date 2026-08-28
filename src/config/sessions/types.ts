@@ -412,9 +412,9 @@ type SessionEntryCore = SessionRestartRecoveryState &
     sandbox?: "required";
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
     owner?: SessionOwnerAssignment;
-    /** Earliest external prompt actors, projected from the participant table. */
+    /** Retained identities, projected from the participant table before display truncation. */
     participants?: SessionParticipant[];
-    /** Total external prompt actors after excluding the effective owner. */
+    /** Raw retained identity count, including the owner, for admission-bound coverage. */
     participantCount?: number;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
     createdAt?: number;
