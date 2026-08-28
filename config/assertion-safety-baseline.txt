@@ -431,7 +431,6 @@ extensions/discord/src/send.shared.ts	4
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1
 extensions/discord/src/setup-core.ts	1
-extensions/discord/src/shared.ts	1
 extensions/discord/src/status-issues.ts	1
 extensions/discord/src/target-parsing.ts	1
 extensions/discord/src/token.ts	2
@@ -1210,7 +1209,6 @@ extensions/slack/src/security-audit.ts	6
 extensions/slack/src/send.ts	6
 extensions/slack/src/setup-core.ts	7
 extensions/slack/src/setup-surface.ts	1
-extensions/slack/src/shared.ts	1
 extensions/slack/src/streaming.ts	3
 extensions/slack/src/target-parsing.ts	1
 extensions/sms/src/accounts.ts	1
