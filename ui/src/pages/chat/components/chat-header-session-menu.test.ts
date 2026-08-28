@@ -608,9 +608,7 @@ describe("chat header session menu", () => {
       ).map(itemLabel),
     ).toEqual(["Back", "Publish draft", "Read-only", "Suggest", "Draft", "Vyctor"]);
     expect(
-      compact
-        .querySelector(".chat-pane__publish-draft")
-        ?.classList.contains("session-menu__item"),
+      compact.querySelector(".chat-pane__publish-draft")?.classList.contains("session-menu__item"),
     ).toBe(true);
     select(compact, "visibility:read-only");
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");

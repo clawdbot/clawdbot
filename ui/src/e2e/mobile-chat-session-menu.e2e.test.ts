@@ -95,11 +95,13 @@ suite.define(() => {
         await publish.waitFor();
         await menuHost.getByText("Members", { exact: true }).waitFor();
         await expect
-          .poll(() => menu.evaluate((element) => Math.round(element.getBoundingClientRect().height)))
+          .poll(() =>
+            menu.evaluate((element) => Math.round(element.getBoundingClientRect().height)),
+          )
           .toBeLessThanOrEqual(421);
-        await expect.poll(() => menu.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
-          await menu.evaluate((element) => element.clientHeight),
-        );
+        await expect
+          .poll(() => menu.evaluate((element) => element.scrollHeight))
+          .toBeGreaterThan(await menu.evaluate((element) => element.clientHeight));
         await expect
           .poll(() =>
             publish.evaluate((element) => Math.round(element.getBoundingClientRect().height)),
