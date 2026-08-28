@@ -31,6 +31,7 @@ export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/plugin-npm-package-manifest.mts",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/tsx-cli-shim.mjs",
+  "scripts/tsx.mjs",
   "scripts/plugin-npm-publish.sh",
   "scripts/plugin-npm-release-check.ts",
   "scripts/plugin-npm-release-plan.ts",

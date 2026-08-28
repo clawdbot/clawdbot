@@ -10,11 +10,7 @@ import {
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
 
-export type GitResult = {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-};
+export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
 type WorktreeListEntry = {
   path: string;

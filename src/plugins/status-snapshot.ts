@@ -3,10 +3,11 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  buildPluginCapabilitySummary,
   formatPluginCapabilityConsentRequired,
+  mergePluginDeclaredSurfaces,
   resolveAcceptedSurfaceCurrent,
-} from "./capability-consent.js";
-import { buildPluginCapabilitySummary, mergePluginDeclaredSurfaces } from "./capability-summary.js";
+} from "./capability-summary.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
@@ -16,11 +17,10 @@ import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import {
-  loadPluginRegistrySnapshotWithMetadata,
-  type PluginRegistrySnapshotDiagnostic,
-  type PluginRegistrySnapshotSource,
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type {
+  PluginRegistrySnapshotDiagnostic,
+  PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -178,27 +178,22 @@ export function buildPluginRegistrySnapshotReport(
     env,
     workspaceDir: params?.workspaceDir,
   });
-  const result = tracePluginLifecyclePhase(
+  // Status may reuse lifecycle metadata, but must not publish its own discovery as current.
+  const metadataSnapshot = tracePluginLifecyclePhase(
     "plugin registry snapshot",
     () =>
-      loadPluginRegistrySnapshotWithMetadata({
+      loadPluginMetadataSnapshot({
         config,
-        env: params?.env,
+        env,
         workspaceDir: workspace.workspaceDir,
       }),
     { surface: "status" },
   );
-  const metadataSnapshot = resolvePluginMetadataSnapshot({
-    index: result.snapshot,
-    config,
-    env,
-    workspaceDir: workspace.workspaceDir,
-  });
-  const manifestByPluginId = metadataSnapshot.byPluginId;
+  const { index, byPluginId: manifestByPluginId, registryDiagnostics } = metadataSnapshot;
   const diagnostics = [
-    ...result.snapshot.diagnostics,
+    ...index.diagnostics,
     ...collectPluginCapabilityConsentDiagnostics({
-      index: result.snapshot,
+      index,
       manifests: manifestByPluginId,
     }),
   ];
@@ -206,11 +201,12 @@ export function buildPluginRegistrySnapshotReport(
     workspaceDir: workspace.workspaceDir,
     workspaceScope: workspace.workspaceScope,
     ...createEmptyPluginRegistry(),
-    plugins: result.snapshot.plugins.map((plugin) =>
+    plugins: index.plugins.map((plugin) =>
       buildPluginRecordFromInstalledIndex(plugin, manifestByPluginId.get(plugin.pluginId)),
     ),
     diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(diagnostics, workspace),
-    registrySource: result.source,
-    registryDiagnostics: result.diagnostics,
+    registrySource:
+      metadataSnapshot.registrySource ?? (registryDiagnostics.length > 0 ? "derived" : "provided"),
+    registryDiagnostics,
   });
 }

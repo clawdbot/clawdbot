@@ -115,9 +115,9 @@ function renderUsageLoadingState(filters: UsageFilterState) {
           </div>
         </div>
         <div class="usage-loading-grid">
-          <div class="usage-skeleton-block usage-skeleton-block--tall"></div>
-          <div class="usage-skeleton-block"></div>
-          <div class="usage-skeleton-block"></div>
+          <div class="skeleton usage-skeleton-block usage-skeleton-block--tall"></div>
+          <div class="skeleton usage-skeleton-block"></div>
+          <div class="skeleton usage-skeleton-block"></div>
         </div>
       </div>
     `,

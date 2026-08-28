@@ -9,7 +9,7 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
@@ -715,15 +715,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onOpenModelSetup: () => this.context.navigate("model-setup"),
     });
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("model-providers")}</div>
-          <div class="page-subtitle">
-            ${t("modelProviders.subtitle")}
-            ${renderDocsLink(MODEL_PROVIDERS_DOCS_URL, t("common.learnMore"))}
-          </div>
-        </div>
-        <div class="page-header-actions">
+      ${renderSettingsPageHeader({
+        title: titleForRoute("model-providers"),
+        subtitle: html`${t("modelProviders.subtitle")}
+        ${renderLearnMoreLink(MODEL_PROVIDERS_DOCS_URL)}`,
+        actions: html`
           ${renderAgentScopeControl({
             agents,
             selection: this.context.agentSelection,
@@ -733,8 +729,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
           <button class="btn" @click=${() => this.context.navigate("model-setup")}>
             ${t("tabs.modelSetup")}
           </button>
-        </div>
-      </section>
+        `,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

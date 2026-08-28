@@ -481,6 +481,12 @@ suite.define(() => {
       });
       await expect.poll(async () => gateway.getRequests("wizard.next")).toHaveLength(1);
       await expect.poll(() => account.getAttribute("disabled")).not.toBeNull();
+      const busyButton = wizard.locator('button[aria-busy="true"]');
+      await expect.poll(() => busyButton.getAttribute("disabled")).not.toBeNull();
+      await expect.poll(() => busyButton.locator(".btn__spinner").count()).toBe(1);
+      await expect
+        .poll(() => wizard.locator(".channels-wizard__spinner", { hasText: "Working…" }).count())
+        .toBe(0);
       await gateway.resolveDeferred("wizard.next");
 
       const token = wizard.getByLabel("Telegram bot token");

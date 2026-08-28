@@ -3,6 +3,8 @@
 // memory, and must never re-seed roots that already hold content.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { SandboxBackendHandle } from "openclaw/plugin-sdk/sandbox";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -45,7 +47,10 @@ vi.mock("./cli.js", async (importOriginal) => {
 
 const tempWorkspaces: TempWorkspace[] = [];
 
-async function createAdoptedRemoteBackend(params: { probeStdout: string }) {
+async function createAdoptedRemoteBackend(params: {
+  probeStdout: string;
+  skillsWorkspaceDir?: string;
+}) {
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-openshell-remote-seed-",
@@ -82,8 +87,13 @@ async function createAdoptedRemoteBackend(params: { probeStdout: string }) {
     scopeKey: "agent:main",
     workspaceDir: workspace.dir,
     agentWorkspaceDir: workspace.dir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     cfg: createOpenShellBackendSandboxConfig(),
   });
+}
+
+async function finalize(backend: SandboxBackendHandle, token: unknown) {
+  await backend.finalizeExec?.({ status: "completed", exitCode: 0, timedOut: false, token });
 }
 
 function seedUploadCalls() {
@@ -135,5 +145,122 @@ describe("openshell remote-mode seed across gateway restart", () => {
       timedOut: false,
       token: execSpec.finalizeToken,
     });
+  });
+
+  it.each(["same handle", "another handle"])(
+    "starts remote operations on %s while an earlier command is still running",
+    async (handleKind) => {
+      const first = await createAdoptedRemoteBackend({ probeStdout: "1\n" });
+      const second =
+        handleKind === "same handle"
+          ? first
+          : await createAdoptedRemoteBackend({ probeStdout: "1\n" });
+      const firstExec = await first.buildExecSpec({
+        command: "wait-for-file",
+        env: {},
+        usePty: false,
+      });
+      let secondExec: Awaited<ReturnType<SandboxBackendHandle["buildExecSpec"]>> | undefined;
+      const secondPreparation = second
+        .buildExecSpec({ command: "write-file", env: {}, usePty: false })
+        .then((prepared) => {
+          secondExec = prepared;
+          return prepared;
+        });
+      try {
+        await vi.waitFor(() => expect(secondExec).toBeDefined());
+        expect(seedUploadCalls()).toHaveLength(0);
+      } finally {
+        await finalize(first, firstExec.finalizeToken);
+        const prepared = await secondPreparation;
+        await finalize(second, prepared.finalizeToken);
+      }
+    },
+  );
+
+  it("refreshes materialized skills once per handle, not between remote operations", async () => {
+    const skillsWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-openshell-remote-skills-",
+    });
+    tempWorkspaces.push(skillsWorkspace);
+    await fs.mkdir(path.join(skillsWorkspace.dir, "skills", "demo"), { recursive: true });
+    await fs.writeFile(path.join(skillsWorkspace.dir, "skills", "demo", "SKILL.md"), "# Demo\n");
+    const backend = await createAdoptedRemoteBackend({
+      probeStdout: "1\n",
+      skillsWorkspaceDir: skillsWorkspace.dir,
+    });
+    const firstExec = await backend.buildExecSpec({ command: "first", env: {}, usePty: false });
+    await finalize(backend, firstExec.finalizeToken);
+    const initialUploads = seedUploadCalls().length;
+    expect(initialUploads).toBeGreaterThan(0);
+    const initialClears = sdkMocks.runSshSandboxCommand.mock.calls.filter(([params]) =>
+      String(params.remoteCommand).includes("rm -rf"),
+    ).length;
+    expect(initialClears).toBeGreaterThan(0);
+    await backend.runShellCommand?.({ script: "printf file-operation", args: [] });
+    const secondExec = await backend.buildExecSpec({ command: "second", env: {}, usePty: false });
+    try {
+      expect(seedUploadCalls()).toHaveLength(initialUploads);
+      expect(
+        sdkMocks.runSshSandboxCommand.mock.calls.filter(([params]) =>
+          String(params.remoteCommand).includes("rm -rf"),
+        ),
+      ).toHaveLength(initialClears);
+    } finally {
+      await finalize(backend, secondExec.finalizeToken);
+    }
+  });
+
+  it("serializes initial seed publication across handles without serializing later commands", async () => {
+    const first = await createAdoptedRemoteBackend({ probeStdout: "0\n" });
+    const second = await createAdoptedRemoteBackend({ probeStdout: "1\n" });
+    const seedStarted = createDeferred<void>();
+    const releaseSeed = createDeferred<void>();
+    let seeded = false;
+    sdkMocks.runSshSandboxCommand.mockImplementation(async ({ remoteCommand }) => ({
+      stdout: String(remoteCommand).includes("ls -A")
+        ? Buffer.from(seeded ? "1\n" : "0\n")
+        : Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+      if (args[1] === "upload") {
+        seedStarted.resolve();
+        await releaseSeed.promise;
+        seeded = true;
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const firstPreparation = first.buildExecSpec({ command: "first", env: {}, usePty: false });
+    await seedStarted.promise;
+    let secondStarted = false;
+    const secondPreparation = second
+      .buildExecSpec({ command: "second", env: {}, usePty: false })
+      .then((prepared) => {
+        secondStarted = true;
+        return prepared;
+      });
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(
+        cliMocks.runOpenShellCli.mock.calls.filter(([params]) => params.args[1] === "get"),
+      ).toHaveLength(1);
+      expect(secondStarted).toBe(false);
+    } finally {
+      releaseSeed.resolve();
+    }
+    const firstExec = await firstPreparation;
+    try {
+      await vi.waitFor(() => expect(secondStarted).toBe(true));
+      expect(seedUploadCalls()).toHaveLength(1);
+    } finally {
+      await finalize(first, firstExec.finalizeToken);
+      const secondExec = await secondPreparation;
+      await finalize(second, secondExec.finalizeToken);
+    }
   });
 });

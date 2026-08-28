@@ -275,7 +275,6 @@ describe("agent runtime plugin registries", () => {
 
     const inbound = createPreparedInboundRegistryLoader()(
       {
-        agentDir: "/tmp/agent",
         allowGatewaySubagentBinding: true,
         config,
         workspaceDir,
@@ -286,6 +285,21 @@ describe("agent runtime plugin registries", () => {
 
     expect(inbound).not.toBe(activeRegistry);
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse a batch registry across metadata generations with identical config", () => {
+    const input = { config: {}, workspaceDir: "/tmp/workspace" };
+    const firstMetadata = createMetadataSnapshot(input.workspaceDir);
+    const replacementMetadata = createMetadataSnapshot(input.workspaceDir);
+    hoisted.loadPluginRegistryHandle.mockImplementation(() => createEmptyPluginRegistry());
+    const load = createPreparedInboundRegistryLoader();
+
+    const first = load(input, firstMetadata as never);
+    expect(load(input, firstMetadata as never)).toBe(first);
+    const replacement = load(input, replacementMetadata as never);
+    expect(replacement).not.toBe(first);
+    expect(load(input, replacementMetadata as never)).toBe(replacement);
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
 
   it("keeps direct no-current loads on the requested workspace", () => {

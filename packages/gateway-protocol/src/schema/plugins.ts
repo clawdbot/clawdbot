@@ -300,7 +300,6 @@ export const PluginsInstallParamsSchema = Type.Union([
     source: Type.Literal("clawhub"),
     packageName: NonEmptyString,
     version: Type.Optional(NonEmptyString),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
     acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
   }),

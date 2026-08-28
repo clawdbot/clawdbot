@@ -57,15 +57,13 @@ export function applyLegacyCompatibilityStep(params: {
     }
   }
   const hasAuthoredIncludes = containsAuthoredInclude(params.snapshot.parsed);
-  const migrationInput = hasAuthoredIncludes
-    ? params.snapshot.sourceConfig
-    : params.snapshot.parsed;
+  // State repairs must inspect resolved paths, not literal env templates.
   const {
     config: migrated,
     sourceConfig: migratedSource,
     changes,
     partiallyValid,
-  } = migrateLegacyConfig(migrationInput, {
+  } = migrateLegacyConfig(params.snapshot.sourceConfig, {
     authoredRaw: params.snapshot.parsed,
     resolvedRaw: params.snapshot.sourceConfig,
   });

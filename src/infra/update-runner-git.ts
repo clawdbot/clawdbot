@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -38,6 +39,17 @@ import type {
   UpdateRunnerOptions,
   UpdateStepResult,
 } from "./update-runner-types.js";
+
+async function readBuiltGatewayBuildId(gitRoot: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(path.join(gitRoot, "dist", "build-info.json"), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const buildId = isRecord(parsed) ? parsed.buildId : undefined;
+    return typeof buildId === "string" && buildId.trim() ? buildId.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;
@@ -547,6 +559,7 @@ export async function updateGitCheckout(params: {
     }
 
     const failedStep = findBlockingGitFailure(steps);
+    const afterBuildId = channel === "dev" ? await readBuiltGatewayBuildId(gitRoot) : null;
     const afterShaStep = await runStep(
       step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
@@ -569,6 +582,7 @@ export async function updateGitCheckout(params: {
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),
+        ...(afterBuildId ? { buildId: afterBuildId } : {}),
         ...(!failedStep && devTarget?.mode === "tracked"
           ? { upstreamRef: devTarget.upstreamRef }
           : {}),

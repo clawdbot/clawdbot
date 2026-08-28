@@ -39,6 +39,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import {
   renderSessionAttentionIcon,
@@ -115,8 +116,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
     (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
     (deriveAvatarInitial(cardName || cardAgentId) || "?");
   const newSessionAccess = host.readNewSessionAccess();
-  // The sidebar action follows gateway availability; collapsed native chrome
-  // keeps its separate offline-tolerant ⌘N mirror.
   return html`
     <div class="sidebar-brand">
       <openclaw-sidebar-agent-card
@@ -147,21 +146,14 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         }}
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
-        <openclaw-tooltip
-          .content=${newSessionAccess.allowed
-            ? t("chat.runControls.newSession")
-            : newSessionAccess.reason}
-        >
-          <button
-            class="sidebar-brand__icon sidebar-brand__new-thread"
-            type="button"
-            @click=${() => host.requestOpenNewSession(host.expandedAgentId())}
-            aria-label=${t("chat.runControls.newSession")}
-            ?disabled=${!newSessionAccess.allowed}
-          >
-            ${icons.plus}
-          </button>
-        </openclaw-tooltip>
+        ${renderNewSessionLink({
+          basePath: host.basePath,
+          agentId: host.expandedAgentId(),
+          className: "sidebar-brand__icon sidebar-brand__new-thread",
+          label: t("chat.runControls.newSession"),
+          disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+        })}
       </div>
     </div>
   `;
@@ -225,7 +217,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
       ${sessionHasBoard(mainKey)
         ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
             <span
-              class="sidebar-board-glyph"
+              class="session-row-badge"
               role="img"
               aria-label=${t("sessionsView.dashboardAvailable")}
               >${icons.layoutDashboard}</span

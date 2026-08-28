@@ -214,6 +214,7 @@ function installPrCliFixture(repoDir: string) {
     "scripts/lib/direct-run.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
     "scripts/lib/local-check-runtime.mts",
+    "scripts/tsx.mjs",
     "scripts/pr-lib/worktree.sh",
     "scripts/pr-lib/operation-lock.sh",
     "scripts/pr-lib/process-group-runner.mjs",

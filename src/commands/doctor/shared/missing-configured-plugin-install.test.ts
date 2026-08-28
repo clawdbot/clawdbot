@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import type { OpenClawConfig, PluginsConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../../../plugins/clawhub-error-codes.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -1011,40 +1010,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
-  it("adds actionable acknowledgement guidance for risky ClawHub candidate failures", async () => {
-    mocks.installPluginFromClawHub.mockResolvedValueOnce({
-      ok: false,
-      code: "clawhub_risk_acknowledgement_required",
-      error:
-        'ClawHub release "@openclaw/plugin-matrix@stable" has trust warnings. Review the package and rerun with --acknowledge-clawhub-risk to continue.',
-    });
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "matrix",
-        pluginId: "matrix",
-        meta: { label: "Matrix" },
-        install: {
-          clawhubSpec: "clawhub:@openclaw/plugin-matrix@stable",
-        },
-      },
-    ]);
-
-    const { repairMissingConfiguredPluginInstalls } =
-      await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.warnings[0]).toContain(
-      "openclaw plugins install clawhub:@openclaw/plugin-matrix@stable --acknowledge-clawhub-risk",
-    );
-  });
-
   it("adds repair warnings for blocked ClawHub update outcomes", async () => {
     const records = {
       demo: {
@@ -1095,46 +1060,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([
       'Skipped demo ClawHub update: ClawHub release "@openclaw/plugin-demo@1.2.4" cannot be installed because ClawHub flagged it as blocked or malicious. Review the security details above or choose a different version. Existing installed plugin left unchanged.',
     ]);
-  });
-
-  it("sanitizes and shell-quotes ClawHub acknowledgement guidance specs before rendering commands", async () => {
-    mocks.installPluginFromClawHub.mockResolvedValueOnce({
-      ok: false,
-      code: "clawhub_risk_acknowledgement_required",
-      error:
-        'ClawHub release "@openclaw/plugin-matrix@stable" has trust warnings. Review the package and rerun with --acknowledge-clawhub-risk to continue.',
-    });
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "matrix",
-        pluginId: "matrix",
-        meta: { label: "Matrix" },
-        install: {
-          clawhubSpec: "clawhub:@openclaw/plugin-matrix\n\u001b[31m@stable;$(touch /tmp/pwned)",
-        },
-      },
-    ]);
-
-    const { repairMissingConfiguredPluginInstalls } =
-      await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
-        },
-      },
-      env: {},
-    });
-
-    const warning = result.warnings[0] ?? "";
-    expect(warning).toContain(
-      "openclaw plugins install 'clawhub:@openclaw/plugin-matrix\\n@stable;$(touch /tmp/pwned)' --acknowledge-clawhub-risk",
-    );
-    expect(warning).not.toContain(
-      "openclaw plugins install clawhub:@openclaw/plugin-matrix\\n@stable;$(touch /tmp/pwned) --acknowledge-clawhub-risk",
-    );
-    expect(warning).not.toContain("\u001b");
-    expect(warning).not.toContain("plugin-matrix\n");
   });
 
   it("installs a missing channel plugin selected by environment config from npm", async () => {
@@ -2366,6 +2291,34 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("does not install configured plugins when plugins are globally disabled", async () => {
+    const records = {
+      brave: {
+        source: "npm" as const,
+        spec: "@openclaw/brave-plugin",
+        installPath: "/tmp/openclaw-plugins/brave",
+      },
+      discord: {
+        source: "npm" as const,
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw-plugins/discord",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        ...brokenPluginSnapshot("brave").diagnostics,
+        ...brokenPluginSnapshot("discord").diagnostics,
+      ],
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: { plugins: { installs: records } },
+      outcomes: [
+        { pluginId: "brave", status: "skipped", message: "disabled" },
+        { pluginId: "discord", status: "skipped", message: "disabled" },
+      ],
+    });
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "matrix",
@@ -2417,10 +2370,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
     });
 
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["brave", "discord"],
+        skipDisabledPlugins: true,
+      }),
+    );
     expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-    expect(result).toEqual({ changes: [], warnings: [], records: {} });
+    expect(result).toEqual({ changes: [], warnings: [], records });
   });
 
   it("does not install plugins merely listed in plugins.allow", async () => {
@@ -3295,7 +3253,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual(['Repaired missing configured plugin "demo".']);
   });
 
-  it("forwards ClawHub risk acknowledgement to persisted-record repair", async () => {
+  it("forwards capability consent to persisted-record repair", async () => {
     const records = {
       demo: {
         source: "clawhub",
@@ -3304,7 +3262,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         installPath: "/missing/demo",
       },
     };
-    const onClawHubRisk = vi.fn(async () => true);
     const onCapabilityConsent: PluginCapabilityConsentHandler = async (review) => ({
       reviewToken: review.reviewToken,
     });
@@ -3342,15 +3299,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       },
       env: {},
-      acknowledgeClawHubRisk: true,
-      onClawHubRisk,
       onCapabilityConsent,
     });
 
     const updateArg = expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
       pluginIds: ["demo"],
-      acknowledgeClawHubRisk: true,
-      onClawHubRisk,
       onCapabilityConsent,
     });
     expect(updateArg.logger).toEqual(expect.objectContaining({ terminalLinks: false }));
@@ -3426,8 +3379,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     };
     const reviewNotice =
-      "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
-      "│ • Security scan:     suspicious                                      │\n" +
+      "╭─ ClawHub Security Audit ────────────────────────────────╮\n" +
+      "│ Outcome: Review                                        │\n" +
       "╰───────────────────────────────────────────────────────────────────────╯";
     const coloredReviewNotice = `\u001b[33m${reviewNotice}\u001b[39m`;
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
@@ -3477,59 +3430,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.notices).toContain(reviewNotice);
     expect(result.notices?.[0]).not.toContain("\u001b");
     expect(result.warnings).toStrictEqual([]);
-  });
-
-  it.each([
-    {
-      name: "adds actionable acknowledgement guidance for risky persisted ClawHub repair failures",
-      spec: "clawhub:@openclaw/plugin-demo@1.0.0",
-      release: "@openclaw/plugin-demo@1.0.0",
-      expectedSpec: "clawhub:@openclaw/plugin-demo@1.0.0",
-    },
-    {
-      name: "prefixes legacy persisted ClawHub package records in acknowledgement guidance",
-      release: "@openclaw/plugin-demo@latest",
-      expectedSpec: "clawhub:@openclaw/plugin-demo",
-    },
-  ])("$name", async ({ spec, release, expectedSpec }) => {
-    const records = {
-      demo: {
-        source: "clawhub",
-        ...(spec ? { spec } : {}),
-        clawhubPackage: "@openclaw/plugin-demo",
-        installPath: "/missing/demo",
-      },
-    };
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: false,
-      config: { plugins: { installs: records } },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "skipped",
-          code: CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED,
-          message: `Skipped demo ClawHub update: ClawHub release "${release}" has trust warnings. Review the package and rerun with --acknowledge-clawhub-risk to continue. Existing installed plugin left unchanged.`,
-        },
-      ],
-    });
-
-    const { repairMissingConfiguredPluginInstalls } =
-      await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        plugins: {
-          entries: {
-            demo: { enabled: true },
-          },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.warnings[0]).toContain(
-      `openclaw plugins install ${expectedSpec} --acknowledge-clawhub-risk`,
-    );
   });
 
   it("repairs a broken managed package entry from its attributed registry diagnostic", async () => {

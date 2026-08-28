@@ -3,7 +3,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
-function renderPicker(isAdmin: boolean) {
+function renderPicker(isAdmin: boolean, autoPlacementMode?: "least-busy" | "eligible-order") {
   const state = resolveWhereChip({
     environments: [
       {
@@ -48,6 +48,7 @@ function renderPicker(isAdmin: boolean) {
       popoverOpen: true,
       popoverHiding: false,
       isAdmin,
+      ...(autoPlacementMode ? { autoPlacementMode } : {}),
       onGuardTransition: vi.fn(),
       onPopoverShow: vi.fn(),
       onPopoverHide: vi.fn(),
@@ -87,9 +88,15 @@ describe("Where chip", () => {
 
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
-    expect(writer.querySelector('[data-value="auto-device"]')?.textContent).toContain(
-      "Any available node",
+    const autoRow = writer.querySelector('[data-value="auto-device"]');
+    expect(autoRow?.textContent).toContain("Auto");
+    expect(autoRow?.querySelector(".session-menu__sub")?.textContent).toContain(
+      "Least-busy device",
     );
+    const remoteExec = renderPicker(false, "eligible-order");
+    expect(
+      remoteExec.querySelector('[data-value="auto-device"] .session-menu__sub')?.textContent,
+    ).toContain("First eligible device");
     expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
     expect(

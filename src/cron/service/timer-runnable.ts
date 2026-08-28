@@ -68,9 +68,13 @@ export function isRunnableJob(params: {
     return false;
   }
   const next = job.state.nextRunAtMs;
-  // Ordinary ticks cannot recover a missed cron slot before a future wake.
+  // A recorded startup deferral also owns the missed-slot path across restarts.
   // Keep their dominant no-due path ahead of run-history normalization.
-  if (!params.allowCronMissedRunByLastRun && hasScheduledNextRunAtMs(next) && nowMs < next) {
+  if (
+    hasScheduledNextRunAtMs(next) &&
+    nowMs < next &&
+    (!params.allowCronMissedRunByLastRun || job.state.startupCatchupAtMs === next)
+  ) {
     return false;
   }
   const lastRunStatus = resolveJobLastRunStatus(job);

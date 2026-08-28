@@ -593,12 +593,20 @@ the normal provenance and session-kind gates still apply. Configured strings
 are trimmed, with empty values dropped, then matched exactly and case-sensitively.
 There are no glob patterns, substring matches, or message-content searches.
 
+Hook sources are exact identifiers: IMAP uses `email`, Gmail hooks use `gmail`,
+and generic webhooks use `webhook`. To exclude both IMAP and Gmail ingestion,
+set `hookExternalContentSources: ["email", "gmail"]`.
+
 Lists combine with **OR**. For example, configuring a hook source and
 `chatTypes: ["group"]` excludes that hook source **and every group session**,
 not just group sessions from that source. Matching uses retained live session
-metadata. Missing metadata does not match a rule. Automatic dreaming separately
-skips retained archives; these lists do not establish whether another memory
-path can read an archived transcript.
+metadata through the configured `session.store`, including custom and shared
+stores, scoped to the source agent. Missing metadata does not match a rule.
+Older retained records may contain only a coarse `webhook` classification;
+when the original exact source is gone, neither `email` nor `webhook` is
+inferred for matching. Explicitly forget those sessions by full ID when needed.
+Automatic dreaming separately skips retained archives; these lists do not
+establish whether another memory path can read an archived transcript.
 
 ```json5
 {

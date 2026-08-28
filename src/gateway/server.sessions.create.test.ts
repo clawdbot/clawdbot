@@ -4492,29 +4492,40 @@ test("sessions.create stamps trusted operator provenance and records created", a
   });
   expect(synthetic.payload?.entry?.createdActor).toBeUndefined();
 
-  const hinted = await directSessionReq<{
-    entry?: { createdVia?: string; createdActor?: unknown };
-  }>(
-    "sessions.create",
-    { agentId: "main" },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          syntheticClient: true,
-          sessionCreation: {
-            via: "spawn",
-            actor: { type: "agent", id: "main" },
-            requesterSessionKey: "agent:main:main",
+  for (const { actor, sandbox } of [
+    { actor: { type: "agent", id: "main" }, sandbox: undefined },
+    { actor: { type: "human", id: "profile-delegated-creator" }, sandbox: "required" },
+  ] as const) {
+    // The required parent's creation policy survives removal of gateway.roles.
+    const hinted = await directSessionReq<{
+      key?: string;
+      entry?: { createdVia?: string; createdActor?: unknown; sandbox?: "required" };
+    }>(
+      "sessions.create",
+      { agentId: "main" },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true,
+            sessionCreation: {
+              via: "spawn",
+              actor,
+              sandbox,
+              requesterSessionKey: "agent:main:main",
+            },
           },
-        },
-      } as never,
-    },
-  );
-  expect(hinted.payload?.entry).toMatchObject({
-    createdVia: "spawn",
-    createdActor: { type: "agent", id: "main" },
-  });
+        } as never,
+      },
+    );
+    expect(hinted.ok, JSON.stringify(hinted.error)).toBe(true);
+    expect(hinted.payload?.entry).toMatchObject({ createdVia: "spawn", createdActor: actor });
+    expect(hinted.payload?.entry?.sandbox).toBe(sandbox);
+    const hintedKey = requireNonEmptyString(hinted.payload?.key, "delegated session key");
+    const stored = loadSessionEntry({ sessionKey: hintedKey, storePath });
+    expect(stored).toMatchObject({ createdVia: "spawn", createdActor: actor });
+    expect(stored?.sandbox).toBe(sandbox);
+  }
 });
 
 test("sessions.create reset-in-place preserves the node creation stamp", async () => {

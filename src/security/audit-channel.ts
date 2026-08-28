@@ -6,6 +6,7 @@ import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../channels/account-snapshot-fields.js";
+import { parseAccessGroupAllowFromEntry } from "../channels/allow-from.js";
 import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -340,23 +341,46 @@ export async function collectChannelSecurityFindingsCore(params: {
       });
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
-      if (includeAuditOnly && isDangerousNameMatchingEnabled(accountConfig)) {
-        findings.push({
-          checkId: `channels.${plugin.id}.allowFrom.dangerous_name_matching_enabled`,
-          severity: "info",
-          title: `${plugin.meta.label ?? plugin.id} dangerous name matching is enabled${accountNote}`,
-          detail:
-            "dangerouslyAllowNameMatching=true re-enables mutable name/email/tag matching for sender authorization. This is a break-glass compatibility mode, not a hardened default.",
-          remediation:
-            "Prefer stable sender IDs in allowlists, then disable dangerouslyAllowNameMatching.",
-        });
-      }
-
       const dmPolicy = plugin.security.resolveDmPolicy?.({
         cfg: params.cfg,
         accountId,
         account,
       });
+      const nameMatchingEnabled = isDangerousNameMatchingEnabled(accountConfig);
+      const configuredEntries = (dmPolicy?.allowFrom ?? [])
+        .map(String)
+        .filter((raw) => raw.trim() !== "*");
+      const mutableEntries = configuredEntries.filter(
+        // Symbolic groups resolve membership separately; they are not identifier entries.
+        (raw) =>
+          parseAccessGroupAllowFromEntry(raw) === null &&
+          dmPolicy?.classifyEntryAuthentication?.(raw) === "mutable",
+      ).length;
+      if (includeAuditOnly && nameMatchingEnabled) {
+        findings.push({
+          checkId: `channels.${plugin.id}.allowFrom.dangerous_name_matching_enabled`,
+          severity: "info",
+          title: `${plugin.meta.label ?? plugin.id} dangerous name matching is enabled${accountNote}`,
+          detail:
+            "dangerouslyAllowNameMatching=true enables mutable aliases (changeable/shared labels, weak even when honestly set) for sender authorization. Exact, stable identifiers with unproven ownership are a separate weak class; ingress diagnostics distinguish mutable_identifier_disabled from identifier_authentication_too_weak." +
+            (dmPolicy?.classifyEntryAuthentication
+              ? ` ${mutableEntries} of ${configuredEntries.length} allowFrom entries depend on mutable matching and would stop authorizing if dangerouslyAllowNameMatching is disabled.`
+              : ""),
+          remediation:
+            "Prefer stable sender IDs in allowlists, then disable dangerouslyAllowNameMatching.",
+        });
+      }
+
+      if (!nameMatchingEnabled && mutableEntries > 0 && dmPolicy) {
+        findings.push({
+          checkId: `channels.${plugin.id}.allowFrom.mutable_entries_inert`,
+          severity: "warn",
+          title: `${plugin.meta.label ?? plugin.id} mutable allowFrom entries are inert${accountNote}`,
+          detail: `${mutableEntries} of ${configuredEntries.length} entries in ${dmPolicy.allowFromPath}allowFrom only match mutable identifiers (display names/tags/aliases) and can never authorize a sender under the current policy, so they are silently inert.`,
+          remediation:
+            "Replace them with stable sender IDs; enabling dangerouslyAllowNameMatching is a discouraged break-glass alternative.",
+        });
+      }
       if (dmPolicy) {
         const auditState = await warnDmPolicy({
           label: `${plugin.meta.label ?? plugin.id}${accountNote}`,

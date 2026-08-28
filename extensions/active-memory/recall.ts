@@ -279,6 +279,9 @@ async function resolveActiveRecall(
       onTranscriptSources: (sources) => {
         transcriptSources = sources;
       },
+      // Completed execution owns the result; transcript recovery and cleanup
+      // must not let a later poll replace it with terminal unavailability.
+      onEmbeddedRunSettled: () => terminalMemorySearchWatch?.stop(),
     });
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
       getTranscriptSources: () => transcriptSources,

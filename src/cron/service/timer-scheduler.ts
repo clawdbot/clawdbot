@@ -52,7 +52,7 @@ export function armTimer(state: CronServiceState) {
     clearTimeout(state.timer);
   }
   state.timer = null;
-  if (state.stopped || state.schedulingPaused) {
+  if (state.stopped || state.schedulingPaused || state.startupCatchup) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler stopped");
     return;
   }
@@ -170,7 +170,7 @@ export async function onTimer(state: CronServiceState) {
 
 /** Loads due jobs, reserves them, executes, persists, and re-arms. */
 async function onAdmittedTimer(state: CronServiceState) {
-  if (state.stopped || state.schedulingPaused) {
+  if (state.stopped || state.schedulingPaused || state.startupCatchup) {
     return;
   }
   state.running = true;
@@ -186,7 +186,7 @@ async function onAdmittedTimer(state: CronServiceState) {
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      if (state.stopped) {
+      if (state.stopped || state.startupCatchup) {
         state.deps.log.warn({}, "cron: due job reservation skipped - scheduler unavailable");
         return [];
       }

@@ -622,6 +622,12 @@ wa-popover.new-session-page__select::part(body) {
   text-transform: uppercase;
 }
 
+wa-popover.new-session-page__picker-popover
+  .new-session-page__picker-root
+  > .new-session-page__menu-title:not(:first-child) {
+  margin-top: var(--space-2);
+}
+
 .new-session-page__project-search {
   display: block;
   padding: 4px 8px 6px;

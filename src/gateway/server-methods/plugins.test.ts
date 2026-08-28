@@ -471,7 +471,6 @@ describe("plugin management Gateway handlers", () => {
       source: "clawhub",
       packageName: "@openclaw/diffs",
       version: "1.2.3",
-      acknowledgeClawHubRisk: true,
       acknowledgeCapabilities: { reviewToken },
     });
 
@@ -480,7 +479,6 @@ describe("plugin management Gateway handlers", () => {
         source: "clawhub",
         packageName: "@openclaw/diffs",
         version: "1.2.3",
-        acknowledgeClawHubRisk: true,
         acknowledgeCapabilities: { reviewToken },
       },
     });
@@ -550,33 +548,6 @@ describe("plugin management Gateway handlers", () => {
       },
     });
     expect(result.error).not.toHaveProperty("details.acknowledgementToken");
-  });
-
-  it("returns structured ClawHub acknowledgement details", async () => {
-    managementMocks.install.mockRejectedValue(
-      new ManagedPluginLifecycleError("Review required", {
-        kind: "invalid-request",
-        code: "clawhub_risk_acknowledgement_required",
-        version: "1.2.3",
-        warning: "Suspicious release",
-      }),
-    );
-
-    const result = await callHandler("plugins.install", {
-      source: "clawhub",
-      packageName: "community/plugin",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "Review required",
-      details: {
-        clawhubTrustCode: "clawhub_risk_acknowledgement_required",
-        version: "1.2.3",
-        warning: "Suspicious release",
-      },
-    });
   });
 
   it("classifies ClawHub security outages as unavailable", async () => {

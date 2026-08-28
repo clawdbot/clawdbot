@@ -1,7 +1,7 @@
 // Openshell plugin module implements mirror behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode, movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 
@@ -16,42 +16,92 @@ function createExcludeMatcher(excludeDirs?: readonly string[]) {
 const runLimitedFs = pLimit(COPY_TREE_FS_CONCURRENCY);
 
 async function lstatIfExists(targetPath: string) {
-  return await runLimitedFs(async () => await fs.lstat(targetPath)).catch(() => null);
+  return await runLimitedFs(fs.lstat, targetPath).catch((error: unknown) => {
+    if (extractErrorCode(error) === "ENOENT") {
+      return null;
+    }
+    throw error;
+  });
 }
 
-async function copyTreeWithoutSymlinks(params: {
-  sourcePath: string;
+async function reconcileMirrorPath(params: {
+  sourcePath?: string;
   targetPath: string;
-  preserveTargetSymlinks?: boolean;
-}): Promise<void> {
-  const stats = await runLimitedFs(async () => await fs.lstat(params.sourcePath));
-  // Mirror sync only carries regular files and directories across the
-  // host/sandbox boundary. Symlinks and special files are dropped.
-  if (stats.isSymbolicLink()) {
-    return;
-  }
+  replace: boolean;
+}): Promise<boolean> {
   const targetStats = await lstatIfExists(params.targetPath);
-  if (params.preserveTargetSymlinks && targetStats?.isSymbolicLink()) {
-    return;
+  if (targetStats?.isSymbolicLink()) {
+    return true;
   }
-  if (stats.isDirectory()) {
-    await runLimitedFs(fs.mkdir, params.targetPath, { recursive: true });
-    const entries = await runLimitedFs(async () => await fs.readdir(params.sourcePath));
-    await Promise.all(
-      entries.map(async (entry) => {
-        await copyTreeWithoutSymlinks({
-          sourcePath: path.join(params.sourcePath, entry),
-          targetPath: path.join(params.targetPath, entry),
-          preserveTargetSymlinks: params.preserveTargetSymlinks,
-        });
-      }),
-    );
-    return;
+  const sourceStats = params.sourcePath ? await runLimitedFs(fs.lstat, params.sourcePath) : null;
+  // Source symlinks and special files never cross the sandbox boundary.
+  const sourceDir = sourceStats?.isDirectory() ? params.sourcePath : undefined;
+  const sourceFile = sourceStats?.isFile() ? params.sourcePath : undefined;
+  if (!params.replace && !sourceDir && !sourceFile) {
+    return false;
   }
-  if (stats.isFile()) {
-    await runLimitedFs(fs.mkdir, path.dirname(params.targetPath), { recursive: true });
-    await runLimitedFs(async () => await fs.copyFile(params.sourcePath, params.targetPath));
+  if (sourceDir || targetStats?.isDirectory()) {
+    if (targetStats && !targetStats.isDirectory()) {
+      await runLimitedFs(fs.rm, params.targetPath, { force: true });
+    }
+    const preservedLinks = await reconcileMirrorDirectory({
+      sourceDir,
+      targetDir: params.targetPath,
+      replace: params.replace,
+    });
+    // Host links also protect their ancestor directories. A conflicting remote
+    // file cannot replace those directories, just as it cannot replace a link.
+    if (sourceDir || preservedLinks) {
+      return preservedLinks;
+    }
+    await runLimitedFs(fs.rmdir, params.targetPath);
+  } else if (targetStats) {
+    // Unlink before copying so a host hardlink cannot redirect the new content
+    // into an inode outside the workspace.
+    await runLimitedFs(fs.rm, params.targetPath, { force: true });
   }
+  if (sourceFile) {
+    await runLimitedFs(fs.copyFile, sourceFile, params.targetPath);
+  }
+  return false;
+}
+
+async function reconcileMirrorDirectory(params: {
+  sourceDir?: string;
+  targetDir: string;
+  replace: boolean;
+  excludeDirs?: readonly string[];
+}): Promise<boolean> {
+  const { sourceDir } = params;
+  const isExcluded = createExcludeMatcher(params.excludeDirs);
+  await runLimitedFs(fs.mkdir, params.targetDir, { recursive: true });
+  const sourceEntries = new Set(
+    sourceDir ? await runLimitedFs(async () => await fs.readdir(sourceDir)) : [],
+  );
+  const targetEntries = params.replace
+    ? await runLimitedFs(async () => await fs.readdir(params.targetDir))
+    : [];
+  // Finish every mutation before returning an error and releasing the workspace lease.
+  const results = await Promise.allSettled(
+    [...new Set([...sourceEntries, ...targetEntries])]
+      .filter((entry) => !isExcluded(entry))
+      .map((entry) =>
+        reconcileMirrorPath({
+          sourcePath:
+            sourceDir && sourceEntries.has(entry) ? path.join(sourceDir, entry) : undefined,
+          targetPath: path.join(params.targetDir, entry),
+          replace: params.replace,
+        }),
+      ),
+  );
+  let preservedLinks = false;
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    preservedLinks ||= result.value;
+  }
+  return preservedLinks;
 }
 
 export async function replaceDirectoryContents(params: {
@@ -60,32 +110,7 @@ export async function replaceDirectoryContents(params: {
   /** Top-level directory names to exclude from sync (preserved in target, skipped from source). */
   excludeDirs?: readonly string[];
 }): Promise<void> {
-  const isExcluded = createExcludeMatcher(params.excludeDirs);
-  await fs.mkdir(params.targetDir, { recursive: true });
-  const existing = await fs.readdir(params.targetDir);
-  await Promise.all(
-    existing
-      .filter((entry) => !isExcluded(entry))
-      .map(async (entry) => {
-        const targetPath = path.join(params.targetDir, entry);
-        const stats = await lstatIfExists(targetPath);
-        if (stats?.isSymbolicLink()) {
-          return;
-        }
-        await runLimitedFs(fs.rm, targetPath, { recursive: true, force: true });
-      }),
-  );
-  const sourceEntries = await fs.readdir(params.sourceDir);
-  for (const entry of sourceEntries) {
-    if (isExcluded(entry)) {
-      continue;
-    }
-    await copyTreeWithoutSymlinks({
-      sourcePath: path.join(params.sourceDir, entry),
-      targetPath: path.join(params.targetDir, entry),
-      preserveTargetSymlinks: true,
-    });
-  }
+  await reconcileMirrorDirectory({ ...params, replace: true });
 }
 
 export async function stageDirectoryContents(params: {
@@ -94,18 +119,7 @@ export async function stageDirectoryContents(params: {
   /** Top-level directory names to exclude from the staged upload. */
   excludeDirs?: readonly string[];
 }): Promise<void> {
-  const isExcluded = createExcludeMatcher(params.excludeDirs);
-  await fs.mkdir(params.targetDir, { recursive: true });
-  const sourceEntries = await fs.readdir(params.sourceDir);
-  for (const entry of sourceEntries) {
-    if (isExcluded(entry)) {
-      continue;
-    }
-    await copyTreeWithoutSymlinks({
-      sourcePath: path.join(params.sourceDir, entry),
-      targetPath: path.join(params.targetDir, entry),
-    });
-  }
+  await reconcileMirrorDirectory({ ...params, replace: false });
 }
 
 export { movePathWithCopyFallback };

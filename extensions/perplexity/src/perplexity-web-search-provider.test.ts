@@ -33,9 +33,9 @@ function mockPerplexityResponseOnce(body: unknown): void {
   );
 }
 
-function createConfiguredPerplexityTool(structured: boolean) {
+function createConfiguredPerplexityTool(structured: boolean, apiKey = directPerplexityApiKey) {
   const webSearch = {
-    apiKey: directPerplexityApiKey,
+    apiKey,
     ...(structured ? {} : { baseUrl: "https://api.perplexity.ai" }),
   };
   const tool = createPerplexityWebSearchProvider().createTool({
@@ -49,6 +49,21 @@ function createConfiguredPerplexityTool(structured: boolean) {
 }
 
 describe("perplexity web search provider", () => {
+  it.each([true, false])(
+    "redacts reflected request credentials (native=%s)",
+    async (structured) => {
+      withTrustedWebSearchEndpointMock.mockReset();
+      withTrustedWebSearchEndpointMock.mockImplementationOnce(
+        async (_params: unknown, run: (response: Response) => Promise<unknown>) =>
+          run(new Response("rejected s7Key", { status: 401 })),
+      );
+      const label = structured ? "Perplexity Search" : "Perplexity";
+      await expect(
+        createConfiguredPerplexityTool(structured, "s7Key").execute({ query: "redaction" }),
+      ).rejects.toThrow(`${label} API error (401): rejected ***`);
+    },
+  );
+
   it("points missing-key users to fetch/browser alternatives", async () => {
     await withEnvAsync(
       { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },

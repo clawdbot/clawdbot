@@ -10,7 +10,7 @@ import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
 import { renderLazyElementState } from "../components/lazy-view-error.ts";
-import { installNativeTitleGuard } from "../components/tooltip.ts";
+import { installTitleTooltips } from "../components/tooltip-title.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -120,7 +120,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
         () => (this.terminalOnly ? this.context?.theme : undefined),
         (theme, notify) => theme.subscribe(notify),
       )
-      .effect(() => this.ownerDocument, installNativeTitleGuard);
+      .effect(() => this.ownerDocument, installTitleTooltips);
   }
 
   override connectedCallback() {

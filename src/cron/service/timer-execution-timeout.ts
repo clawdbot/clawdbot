@@ -108,7 +108,10 @@ export type StartupCatchupCandidate = {
 export type StartupDeferredJob = {
   jobId: string;
   delayMs?: number;
-  configRevision: string;
+  scheduleIdentity: string | undefined;
+  createdAtMs: number;
+  payloadKind: CronJob["payload"]["kind"];
+  scheduleActivatedAtMs: number | undefined;
   nextRunAtMs: number | undefined;
   lastRunAtMs: number | undefined;
   lastRunStatus: CronRunStatus | undefined;

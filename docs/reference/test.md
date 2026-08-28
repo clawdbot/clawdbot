@@ -79,6 +79,12 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
+Maintained JavaScript tooling wrappers and root package commands use tsx's
+in-process transform cache. They skip its shared disk cache before the loader
+starts, and child tooling inherits that policy. This does not relocate or clean
+temporary directories, Node or Vitest caches, or other global caches. Raw external
+`tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
@@ -91,6 +97,29 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm test:coverage:changed`                      | Unit coverage only for files changed since `origin/main`.                                                                                                                                                                                                                                                                                             |
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Classifies and runs the local changed formatting/typecheck/lint/guard plan. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof.                                                                                                                                                                                      |
+
+## Linux shell integrations
+
+The Mantis Telegram lease-fence integration tests require Linux, Bash,
+util-linux `setsid`, and coreutils (`sleep`, `cat`, and `true`). On Ubuntu,
+install the prerequisites with `sudo apt-get install bash util-linux coreutils`.
+With repository dependencies ready, run the focused proof on Linux:
+
+```bash
+node scripts/run-vitest.mjs test/scripts/run-with-lease-fence.test.ts
+```
+
+All three tests must pass: lease loss removes the command's process group,
+clean exit propagates, and stdin reaches the fenced command. Missing `setsid`
+fails the Linux suite with prerequisite guidance; it does not skip the tests.
+macOS and Windows skip this Linux workflow integration. Use Linux CI or an
+isolated Linux environment for that proof. See [Mantis](/concepts/mantis).
+
+Remote filesystem fixtures that execute GNU `stat` and `readlink` run locally
+only on Linux. The shared leading-`@` file-tool scenario
+also runs against a portable remote-only bridge on every platform. Native
+Python helper coverage remains separate, including macOS; these fixture gates
+do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend).
 
 ## Shared test state and process helpers
 

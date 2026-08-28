@@ -414,6 +414,7 @@ export async function waitForSessionTranscriptIndexReconcile(
 /** Waits only until the requested session's scheduled projection rebuild settles. */
 export async function waitForSessionTranscriptProjection(
   scope: SessionTranscriptReadScope,
+  abortSignal?: AbortSignal,
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
@@ -425,6 +426,10 @@ export async function waitForSessionTranscriptProjection(
       resolved.sessionId,
     )
   ) {
-    await delay(PROJECTION_READY_POLL_MS);
+    await delay(
+      PROJECTION_READY_POLL_MS,
+      undefined,
+      abortSignal ? { signal: abortSignal } : undefined,
+    );
   }
 }

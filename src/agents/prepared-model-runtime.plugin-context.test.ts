@@ -76,7 +76,6 @@ describe("prepared model runtime plugin metadata ownership", () => {
       expect(
         prepareOwnedPluginLoadContext(
           {
-            agentDir: "/tmp/direct-agent",
             config,
             workspaceDir,
           },
@@ -114,7 +113,6 @@ describe("prepared model runtime plugin metadata ownership", () => {
     try {
       prepareOwnedPluginLoadContext(
         {
-          agentDir: "/tmp/selected-runtime-agent",
           config,
           loadRuntimePlugins: true,
           runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
