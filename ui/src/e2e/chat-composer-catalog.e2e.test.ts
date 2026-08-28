@@ -24,6 +24,7 @@ suite.define(() => {
             name: "GPT-5.3 Codex Spark",
             provider: "codex",
             available: false,
+            unavailableReason: "missing-auth",
           },
         ],
         methodResponses: {
@@ -47,6 +48,7 @@ suite.define(() => {
                 name: "GPT-5.3 Codex Spark",
                 provider: "codex",
                 available: false,
+                unavailableReason: "missing-auth",
               },
             ],
           },
@@ -113,12 +115,14 @@ suite.define(() => {
           name: "GPT-5.6 Sol",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth" as const,
         },
         {
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth" as const,
         },
       ];
       const gateway = await installMockGateway(page, {
@@ -174,7 +178,7 @@ suite.define(() => {
         .toBe(true);
       await expect
         .poll(() => composer.locator(".chat-controls__model-catalog-state").textContent())
-        .toContain("Review the provider credential or sign-in, then retry");
+        .toContain("No models available");
       await expect.poll(() => composer.locator("textarea").isDisabled()).toBe(true);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 

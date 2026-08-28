@@ -29,6 +29,7 @@ type ChatModelSelectOption = {
   value: string;
   label: string;
   disabled?: boolean;
+  unavailableReason?: ModelCatalogEntry["unavailableReason"];
 };
 
 type ChatModelSelectState = {
@@ -167,16 +168,21 @@ function buildChatModelOptions(
       continue;
     }
     seen.add(key);
-    options.push({ ...option, ...(entry.available === false ? { disabled: true } : {}) });
+    options.push({
+      ...option,
+      ...(entry.available === false
+        ? { disabled: true, unavailableReason: entry.unavailableReason }
+        : {}),
+    });
   }
   return options;
 }
 
-export function isChatModelUnavailable(
+export function resolveChatModelUnavailableReason(
   model: string | null | undefined,
   provider: string | null | undefined,
   catalog: ModelCatalogEntry[],
-): boolean {
+): ModelCatalogEntry["unavailableReason"] {
   const value = resolvePreferredServerChatModelValue(model, provider, catalog);
   const key = normalizeChatModelAvailabilityKey(value);
   const matches = catalog.filter(
@@ -184,7 +190,31 @@ export function isChatModelUnavailable(
       normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)) ===
       key,
   );
-  return matches.length > 0 && matches.every((entry) => entry.available === false);
+  if (
+    !matches.length ||
+    matches.some((entry) => entry.available !== false || !entry.unavailableReason)
+  ) {
+    return undefined;
+  }
+  // Any recovering route can still serve the selection. Do not let an alias's
+  // permanent auth failure turn a transient catalog snapshot into a send gate.
+  if (matches.some((entry) => entry.unavailableReason === "cooldown")) {
+    return "cooldown";
+  }
+  return matches.some((entry) => entry.unavailableReason === "auth-failed")
+    ? "auth-failed"
+    : "missing-auth";
+}
+
+export function chatModelUnavailableMessage(
+  reason: ModelCatalogEntry["unavailableReason"],
+): string | undefined {
+  if (reason === "missing-auth") {
+    return t("modelSetup.missingAuth");
+  }
+  return reason === "auth-failed"
+    ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+    : undefined;
 }
 
 export function resolveChatModelSelectState(

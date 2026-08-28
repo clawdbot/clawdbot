@@ -15,7 +15,7 @@ import {
   normalizeChatModelProviderId,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
-import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
+import { resolveChatModelUnavailableReason } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
@@ -480,12 +480,16 @@ export class NewSessionModelControl {
     return this.restoringPreference;
   }
 
-  isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
-    return (
-      this.metadataState.hasSnapshot &&
-      this.metadataState.status === "ready" &&
-      isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
-    );
+  modelUnavailableReason(
+    agent: GatewayAgentRow | undefined,
+  ): ModelCatalogEntry["unavailableReason"] {
+    return this.metadataState.hasSnapshot && this.metadataState.status === "ready"
+      ? resolveChatModelUnavailableReason(
+          this.selected || agent?.model?.primary,
+          undefined,
+          this.catalog,
+        )
+      : undefined;
   }
 
   private restorePreference(

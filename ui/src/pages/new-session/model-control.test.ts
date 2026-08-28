@@ -397,12 +397,14 @@ describe("new-session model runtime", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
       {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ]);
     const control = new NewSessionModelControl(() => undefined);
@@ -424,18 +426,16 @@ describe("new-session model runtime", () => {
     const container = renderControl(control, context);
     const options = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
     expect(
-      control.isModelUnavailable({
+      control.modelUnavailableReason({
         id: "main",
         model: { primary: "openai/gpt-5.6-luna" },
       }),
-    ).toBe(true);
+    ).toBe("missing-auth");
     expect(options).toHaveLength(2);
     expect(options[0]?.textContent).toContain("Sign-in needed");
     expect([...options].every((option) => !option.disabled)).toBe(true);
     expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
-    expect(container.textContent).toContain(
-      "Authentication failed. Review the provider credential or sign-in, then retry.",
-    );
+    expect(container.textContent).toContain("No models available");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(navigate).toHaveBeenCalledWith("model-setup");
   });
@@ -509,13 +509,14 @@ describe("new-session model runtime", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ];
     const { context, request } = contextWith(coldModels);
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
 
     const offlineContext = {
       ...context,
@@ -532,7 +533,7 @@ describe("new-session model runtime", () => {
     expect(container.querySelector('[data-chat-model-catalog-state="offline"]')).not.toBeNull();
     expect(container.textContent).toContain("Offline");
     expect(container.textContent).not.toContain("Authentication failed");
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBeUndefined();
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -543,6 +544,7 @@ describe("new-session model runtime", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ];
     const availableModels: ModelCatalogEntry[] = [
@@ -552,7 +554,7 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
 
     request.mockRejectedValueOnce(new Error("refresh failed"));
     control.invalidate(false);
@@ -569,7 +571,7 @@ describe("new-session model runtime", () => {
       "GPT-5.6 Luna",
     );
     expect(container.textContent).not.toContain("Authentication failed");
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBeUndefined();
 
     request.mockResolvedValueOnce({ models: availableModels });
     control.load(context, "main", true, { agent });
@@ -581,7 +583,7 @@ describe("new-session model runtime", () => {
         ),
       ).toBeNull(),
     );
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBeUndefined();
     container = renderControl(control, context, "main", agent);
     expect(
       container.querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-luna"]')

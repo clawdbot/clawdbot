@@ -27,9 +27,7 @@ export function renderChatModelCatalogState(
       : state.status === "error"
         ? errorLabel
         : state.status === "ready"
-          ? hasOptions
-            ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-            : t("chat.modelControls.noModelsAvailable")
+          ? t("chat.modelControls.noModelsAvailable")
           : t("chat.modelControls.loadingModels");
   return html`
     <div
@@ -70,9 +68,7 @@ export function renderChatModelCatalogState(
                 onModelSetup();
               }}
             >
-              ${hasOptions
-                ? t("modelSetup.connectionFailure.action")
-                : t("chat.modelControls.emptyModelsAction")}
+              ${t("chat.modelControls.emptyModelsAction")}
             </button>
           `
         : nothing}

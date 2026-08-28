@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
+import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
@@ -187,6 +188,45 @@ function stubObjectUrls(...urls: string[]) {
 }
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it.each([
+    {
+      reason: "missing-auth",
+      message: "No provider credential is configured for this model. Set it up in Model Setup.",
+    },
+    {
+      reason: "auth-failed",
+      message: "Authentication failed. Review the provider credential or sign-in, then retry.",
+    },
+    { reason: "cooldown", message: undefined },
+    { reason: undefined, message: undefined },
+  ] as const)(
+    "blocks new sessions only for actionable $reason model availability",
+    async ({ reason, message }) => {
+      const { context, flow, place } = createDraftFixture({
+        request: async () => ({
+          models: [
+            {
+              id: "gpt-5.6-luna",
+              name: "GPT-5.6 Luna",
+              provider: "openai",
+              available: false,
+              unavailableReason: reason,
+            },
+          ],
+        }),
+      });
+      place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
+      await vi.waitFor(() =>
+        expect(peekChatMetadata(context.gateway.snapshot.client!, "main")?.models).toHaveLength(1),
+      );
+      flow.setMessage("Start this session");
+      expect(flow.submitBlock()).toEqual(
+        message ? { gate: "model-unavailable", reason: message } : undefined,
+      );
+      expect(flow.canSubmit()).toBe(message === undefined);
+    },
+  );
+
   it("keeps every blocking gate visible: canSubmit and the reason derive from one table", () => {
     const scenarios: Array<{ name: string; build: () => ReturnType<typeof createDraftFixture> }> = [
       { name: "empty draft", build: () => createDraftFixture() },
