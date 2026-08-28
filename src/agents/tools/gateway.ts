@@ -642,9 +642,10 @@ export async function callGatewayTool<T = Record<string, unknown>>(
           ...callOptions,
           params: stripNodeInvokeTurnSource(callOptions.params),
           // Older Gateways reject runtime identity metadata, so restore their
-          // paired-device identity path when replaying the legacy call shape.
+          // paired-device identity path for ordinary calls while preserving
+          // the identity bound to an approved replay.
           agentRuntimeIdentityToken: undefined,
-          deviceIdentity: undefined,
+          deviceIdentity,
         });
       }
       throw staleGatewayAgentRuntimeIdentityError(error);

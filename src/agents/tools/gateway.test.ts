@@ -730,6 +730,44 @@ describe("gateway tool defaults", () => {
     });
   });
 
+  it("preserves approval replay device identity when retrying an older gateway", async () => {
+    mocks.callGateway
+      .mockRejectedValueOnce(
+        new Error(
+          "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+        ),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      testGatewayCaller({
+        agentId: "ops",
+        sessionKey: "agent:ops:telegram:direct:alice",
+      }),
+      async () => {
+        await callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node-1",
+            command: "system.run",
+            params: { approved: true, runId: "approval-id" },
+            idempotencyKey: "invoke-approved-legacy",
+          },
+          { scopes: ["operator.write", "operator.approvals"] },
+        );
+      },
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway.mock.calls[0]?.[0].agentRuntimeIdentityToken).toEqual(
+      expect.any(String),
+    );
+    expect(mocks.callGateway.mock.calls[0]?.[0].deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(mocks.callGateway.mock.calls[1]?.[0].agentRuntimeIdentityToken).toBeUndefined();
+    expect(mocks.callGateway.mock.calls[1]?.[0].deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
   it("strips turn-source fields for gateways with the preceding node schema", async () => {
     const schemaError = Object.assign(
       new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
