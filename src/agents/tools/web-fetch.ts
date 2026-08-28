@@ -705,10 +705,18 @@ async function maybeFetchProviderWebFetchPayload(
   if (!providerFallback) {
     return null;
   }
-  const rawPayload = await providerFallback.definition.execute(
-    { url: params.urlToFetch, extractMode: params.extractMode, maxChars: params.maxChars },
-    { signal: params.signal },
-  );
+  let rawPayload: unknown;
+  try {
+    rawPayload = await providerFallback.definition.execute(
+      { url: params.urlToFetch, extractMode: params.extractMode, maxChars: params.maxChars },
+      { signal: params.signal },
+    );
+  } catch (error) {
+    // A provider failure landing after cancellation must surface the caller's abort
+    // reason, not a late error from fallback work the caller already abandoned.
+    throwIfFetchAborted(params.signal);
+    throw error;
+  }
   throwIfFetchAborted(params.signal);
   return await buildWebFetchPayload({
     providerId: providerFallback.provider.id,
@@ -754,13 +762,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     return { ...cached.value, cached: true };
   }
 
-  let payload: Record<string, unknown>;
-  try {
-    payload = await fetchWebPayload(params);
-  } catch (error) {
-    throwIfFetchAborted(params.signal);
-    throw error;
-  }
+  // Surface the original failure: a fetch that rejected because of the abort already
+  // carries the caller's reason, and replacing it here would discard transport detail.
+  const payload = await fetchWebPayload(params);
   // Publish only after guard release: cancellation or cleanup failure must not
   // leave a successful cache entry for a call that never returned its content.
   throwIfFetchAborted(params.signal);
