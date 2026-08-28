@@ -34,11 +34,20 @@ type QuickReply = messagingApi.QuickReply;
 type QuickReplyItem = messagingApi.QuickReplyItem;
 type LineLocation = NonNullable<LineChannelData["location"]>;
 
-const userProfileCache = new Map<
-  string,
-  { displayName: string; pictureUrl?: string; fetchedAt: number }
->();
-const groupNameCache = new Map<string, { groupName: string; fetchedAt: number }>();
+type LineUserProfile = { displayName: string; pictureUrl?: string };
+type LineIdentityCache<T> = {
+  values: Map<string, { value: T; fetchedAt: number }>;
+  pending: Map<string, Promise<T>>;
+};
+
+const profileCache: LineIdentityCache<LineUserProfile | null> = {
+  values: new Map(),
+  pending: new Map(),
+};
+const groupNameCache: LineIdentityCache<string | undefined> = {
+  values: new Map(),
+  pending: new Map(),
+};
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
 const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
@@ -48,30 +57,47 @@ const LINE_LOCATION_LABEL_LIMIT = 100;
 const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
 // Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
-function rememberLineIdentity<T extends { fetchedAt: number }>(
-  cache: Map<string, T>,
-  key: string,
-  value: T,
-): void {
-  cache.delete(key);
-  cache.set(key, value);
-  if (cache.size <= PROFILE_CACHE_MAX_ENTRIES) {
+function rememberLineIdentity<T>(cache: LineIdentityCache<T>, key: string, value: T): void {
+  const entry = { value, fetchedAt: Date.now() };
+  cache.values.delete(key);
+  cache.values.set(key, entry);
+  if (cache.values.size <= PROFILE_CACHE_MAX_ENTRIES) {
     return;
   }
-  for (const [cachedKey, cached] of cache) {
-    if (value.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
-      cache.delete(cachedKey);
+  for (const [cachedKey, cached] of cache.values) {
+    if (entry.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
+      cache.values.delete(cachedKey);
     }
   }
-  pruneMapToMaxSize(cache, PROFILE_CACHE_MAX_ENTRIES);
+  pruneMapToMaxSize(cache.values, PROFILE_CACHE_MAX_ENTRIES);
 }
 
-function readLineIdentityCache<T extends { fetchedAt: number }>(
-  cache: Map<string, T>,
+async function loadLineIdentity<T>(
+  cache: LineIdentityCache<T>,
   key: string,
-): T | undefined {
-  const cached = cache.get(key);
-  return cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS ? cached : undefined;
+  load: () => Promise<T>,
+): Promise<T> {
+  const cached = cache.values.get(key);
+  if (cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS) {
+    return cached.value;
+  }
+  const pending = cache.pending.get(key);
+  if (pending) {
+    return await pending;
+  }
+  const lookup = load().then((value) => {
+    rememberLineIdentity(cache, key, value);
+    return value;
+  });
+  cache.pending.set(key, lookup);
+  pruneMapToMaxSize(cache.pending, PROFILE_CACHE_MAX_ENTRIES);
+  try {
+    return await lookup;
+  } finally {
+    if (cache.pending.get(key) === lookup) {
+      cache.pending.delete(key);
+    }
+  }
 }
 
 interface LineSendOpts {
@@ -641,15 +667,20 @@ export async function showLoadingAnimation(
   }
 }
 
-async function getLineGroupSummary(
-  groupId: string,
-  opts: LineClientOpts,
-): Promise<messagingApi.GroupSummaryResponse> {
-  const { client } = createLineMessagingClient(opts);
-  return await client.getGroupSummary(groupId);
-}
-
 export type LineConversationScope = { groupId?: string; roomId?: string };
+
+function lineProfileCacheKey(
+  accountId: string,
+  userId: string,
+  scope: LineConversationScope,
+): string {
+  const conversation = scope.groupId
+    ? ["group", scope.groupId]
+    : scope.roomId
+      ? ["room", scope.roomId]
+      : ["direct"];
+  return JSON.stringify([accountId, "profile", ...conversation, userId]);
+}
 
 // A group or room member who has not added the bot as a friend is invisible to
 // the plain profile endpoint, so the sender's conversation decides which one can
@@ -672,33 +703,29 @@ function fetchLineMemberProfile(
 export async function getUserProfile(
   userId: string,
   opts: LineClientOpts & { useCache?: boolean } & LineConversationScope,
-): Promise<{ displayName: string; pictureUrl?: string } | null> {
+): Promise<LineUserProfile | null> {
   const useCache = opts.useCache ?? true;
-
-  if (useCache) {
-    const cached = readLineIdentityCache(userProfileCache, userId);
-    if (cached) {
-      return { displayName: cached.displayName, pictureUrl: cached.pictureUrl };
-    }
-  }
-
   try {
-    // Client construction resolves the account token and can throw, so it stays
-    // inside the guard: an unresolvable name degrades to the raw id, never to a
-    // failed inbound turn.
-    const { client } = createLineMessagingClient(opts);
-    const profile = await fetchLineMemberProfile(client, userId, opts);
-    const result = {
-      displayName: profile.displayName,
-      pictureUrl: profile.pictureUrl,
+    // Client construction resolves the canonical account for the cache key and
+    // can throw; an unresolvable name must never cost the inbound turn.
+    const { account, token } = resolveLineMessagingAccount(opts);
+    const cacheKey = lineProfileCacheKey(account.accountId, userId, opts);
+    const load = async () => {
+      try {
+        const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
+        const profile = await fetchLineMemberProfile(client, userId, opts);
+        return { displayName: profile.displayName, pictureUrl: profile.pictureUrl };
+      } catch (err) {
+        logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
+        return null;
+      }
     };
-
-    rememberLineIdentity(userProfileCache, userId, {
-      ...result,
-      fetchedAt: Date.now(),
-    });
-
-    return result;
+    if (!useCache) {
+      const profile = await load();
+      rememberLineIdentity(profileCache, cacheKey, profile);
+      return profile;
+    }
+    return await loadLineIdentity(profileCache, cacheKey, load);
   } catch (err) {
     logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
     return null;
@@ -719,18 +746,19 @@ export async function getLineGroupName(
   groupId: string,
   opts: LineClientOpts,
 ): Promise<string | undefined> {
-  const cached = readLineIdentityCache(groupNameCache, groupId);
-  if (cached) {
-    return cached.groupName;
-  }
   try {
-    const summary = await getLineGroupSummary(groupId, opts);
-    const groupName = summary.groupName.trim();
-    if (!groupName) {
-      return undefined;
-    }
-    rememberLineIdentity(groupNameCache, groupId, { groupName, fetchedAt: Date.now() });
-    return groupName;
+    const { account, token } = resolveLineMessagingAccount(opts);
+    const cacheKey = JSON.stringify([account.accountId, "group", groupId]);
+    return await loadLineIdentity(groupNameCache, cacheKey, async () => {
+      try {
+        const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
+        const summary = await client.getGroupSummary(groupId);
+        return summary.groupName.trim() || undefined;
+      } catch (err) {
+        logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
+        return undefined;
+      }
+    });
   } catch (err) {
     logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
     return undefined;

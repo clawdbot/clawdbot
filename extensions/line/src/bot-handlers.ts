@@ -49,7 +49,7 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
-import { getLineGroupName, pushMessageLine, replyMessageLine } from "./send.js";
+import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
@@ -399,11 +399,20 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
     if (historyKey && context.groupHistories) {
+      const sender = sourceInfo.userId
+        ? await getUserDisplayName(sourceInfo.userId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+            groupId,
+            roomId,
+          })
+        : senderId;
       createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
-          sender: `user:${senderId}`,
+          sender,
           body: rawText || `<${message.type}>`,
           timestamp: event.timestamp,
         },

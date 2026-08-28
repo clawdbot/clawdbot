@@ -111,6 +111,8 @@ describe("buildLineMessageContext", () => {
 
   beforeEach(async () => {
     logVerboseMock.mockClear();
+    getUserProfileMock.mockClear();
+    getLineGroupNameMock.mockClear();
     toInboundMediaFactsWithMetadataMock.mockClear();
     setActivePluginRegistry(
       createTestRegistry([

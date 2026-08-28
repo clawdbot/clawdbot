@@ -155,6 +155,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 const downloadLineMediaMock = vi.hoisted(() => vi.fn());
+const getUserDisplayNameMock = vi.hoisted(() => vi.fn(async (userId: string) => userId));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -168,6 +169,8 @@ vi.mock("./download.js", async (importActual) => ({
 }));
 
 vi.mock("./send.js", () => ({
+  getLineGroupName: vi.fn(),
+  getUserDisplayName: getUserDisplayNameMock,
   pushMessageLine: pairingDeliveryMocks.pushMessageLine,
   replyMessageLine: pairingDeliveryMocks.replyMessageLine,
 }));
@@ -351,6 +354,8 @@ describe("handleLineWebhookEvents", () => {
     downloadLineMediaMock.mockImplementation(async () => {
       throw new Error("downloadLineMedia should not be called from bot-handlers tests");
     });
+    getUserDisplayNameMock.mockReset();
+    getUserDisplayNameMock.mockImplementation(async (userId: string) => userId);
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -859,6 +864,7 @@ describe("handleLineWebhookEvents", () => {
   it("records unmentioned group messages as pending history", async () => {
     const processMessage = vi.fn();
     const groupHistories = new Map<string, HistoryEntry[]>();
+    getUserDisplayNameMock.mockResolvedValueOnce("Sora");
     const event = createTestMessageEvent({
       message: { id: "m-hist-1", type: "text", text: "hello history", quoteToken: "q-hist-1" },
       timestamp: 1700000000000,
@@ -879,9 +885,13 @@ describe("handleLineWebhookEvents", () => {
     const entries = groupHistories.get("group-hist-1");
     expect(entries).toHaveLength(1);
     const entry = entries?.[0];
-    expect(entry?.sender).toBe("user:user-hist");
+    expect(entry?.sender).toBe("Sora");
     expect(entry?.body).toBe("hello history");
     expect(entry?.timestamp).toBe(1700000000000);
+    expect(getUserDisplayNameMock).toHaveBeenCalledWith(
+      "user-hist",
+      expect.objectContaining({ groupId: "group-hist-1" }),
+    );
   });
 
   it("keeps a group message recorded during a mention turn instead of clearing it", async () => {

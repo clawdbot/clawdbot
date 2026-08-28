@@ -114,11 +114,31 @@ describe("LINE identity lookups", () => {
   });
 
   it("degrades to no profile when LINE cannot answer", async () => {
-    getGroupMemberProfileMock.mockRejectedValueOnce(new Error("404 not found"));
+    getGroupMemberProfileMock.mockRejectedValue(new Error("404 not found"));
 
     await expect(
       sendModule.getUserProfile("Umissing", { cfg: LINE_TEST_CFG, groupId: "Cgroup2" }),
     ).resolves.toBeNull();
+    await expect(
+      sendModule.getUserProfile("Umissing", { cfg: LINE_TEST_CFG, groupId: "Cgroup2" }),
+    ).resolves.toBeNull();
+
+    expect(getGroupMemberProfileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps profile cache entries scoped to their conversation endpoint", async () => {
+    getGroupMemberProfileMock.mockResolvedValueOnce({ displayName: "Group Sora" });
+    getRoomMemberProfileMock.mockResolvedValueOnce({ displayName: "Room Sora" });
+
+    await expect(
+      sendModule.getUserProfile("Ushared", { cfg: LINE_TEST_CFG, groupId: "Cshared" }),
+    ).resolves.toMatchObject({ displayName: "Group Sora" });
+    await expect(
+      sendModule.getUserProfile("Ushared", { cfg: LINE_TEST_CFG, roomId: "Rshared" }),
+    ).resolves.toMatchObject({ displayName: "Room Sora" });
+
+    expect(getGroupMemberProfileMock).toHaveBeenCalledTimes(1);
+    expect(getRoomMemberProfileMock).toHaveBeenCalledTimes(1);
   });
 
   it("resolves a group name once and serves the rest from cache", async () => {
@@ -134,11 +154,32 @@ describe("LINE identity lookups", () => {
     expect(getGroupSummaryMock).toHaveBeenCalledTimes(1);
   });
 
+  it("coalesces concurrent group-name cache misses", async () => {
+    let resolveSummary: (summary: { groupId: string; groupName: string }) => void = () => {};
+    getGroupSummaryMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSummary = resolve;
+      }),
+    );
+
+    const first = sendModule.getLineGroupName("Cconcurrent", { cfg: LINE_TEST_CFG });
+    const second = sendModule.getLineGroupName("Cconcurrent", { cfg: LINE_TEST_CFG });
+    expect(getGroupSummaryMock).toHaveBeenCalledTimes(1);
+
+    resolveSummary({ groupId: "Cconcurrent", groupName: "Release Squad" });
+    await expect(Promise.all([first, second])).resolves.toEqual(["Release Squad", "Release Squad"]);
+  });
+
   it("degrades to no group name when the summary call fails", async () => {
-    getGroupSummaryMock.mockRejectedValueOnce(new Error("403 forbidden"));
+    getGroupSummaryMock.mockRejectedValue(new Error("403 forbidden"));
 
     await expect(
       sendModule.getLineGroupName("Cforbidden", { cfg: LINE_TEST_CFG }),
     ).resolves.toBeUndefined();
+    await expect(
+      sendModule.getLineGroupName("Cforbidden", { cfg: LINE_TEST_CFG }),
+    ).resolves.toBeUndefined();
+
+    expect(getGroupSummaryMock).toHaveBeenCalledTimes(1);
   });
 });
