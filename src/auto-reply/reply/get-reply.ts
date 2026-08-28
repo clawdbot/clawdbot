@@ -50,7 +50,7 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
-import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
+import { normalizeThinkLevel, normalizeVerboseLevel, type ReasoningLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
@@ -738,6 +738,12 @@ export async function getReplyFromConfig(
     opts: optsWithSessionSkillOverrides,
     disabled: sessionModelSelectionLocked,
   });
+  const resolveReasoningPayloadOptions = (level: ReasoningLevel) => {
+    const reasoningPayloadsEnabled = resolvedOpts?.onReasoningLevelResolved?.(level);
+    return reasoningPayloadsEnabled === undefined
+      ? resolvedOpts
+      : { ...resolvedOpts, reasoningPayloadsEnabled };
+  };
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
@@ -952,7 +958,6 @@ export async function getReplyFromConfig(
       enableLocalPathSelfServe([finalized, sessionCtx]);
     }
     logResolverTiming("milestone", "before_fast_directive_prepared_reply");
-    resolvedOpts?.onReasoningLevelResolved?.("off");
     const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
       runPreparedReply({
         ctx,
@@ -991,7 +996,7 @@ export async function getReplyFromConfig(
         perMessageQueueMode: undefined,
         perMessageQueueOptions: undefined,
         typing,
-        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+        opts: withExtractedFileImages(resolveReasoningPayloadOptions("off"), extractedFileImages),
         defaultModel,
         timeoutMs,
         isNewSession,
@@ -1177,7 +1182,6 @@ export async function getReplyFromConfig(
   cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
   const queueModeOverride = inlineActionResult.queueModeOverride;
-  const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
@@ -1304,7 +1308,10 @@ export async function getReplyFromConfig(
   }
 
   logResolverTiming("milestone", "before_run_prepared_reply");
-  resolvedOpts?.onReasoningLevelResolved?.(resolvedReasoningLevel);
+  const preparedReplyOpts = withExtractedFileImages(
+    resolveReasoningPayloadOptions(resolvedReasoningLevel),
+    extractedFileImages,
+  );
   const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
     runPreparedReply({
       ctx,

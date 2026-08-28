@@ -489,6 +489,7 @@ export function createMatrixReplyDispatcher(config: {
       if (level !== "stream") {
         latestReasoningStreamText = "";
       }
+      return level === "on";
     },
     finalReplyDeliveryFailed: () => finalReplyDeliveryFailed,
     nonFinalReplyDeliveryFailed: () => nonFinalReplyDeliveryFailed,

@@ -3067,7 +3067,7 @@ describe("matrix monitor handler draft streaming", () => {
   type ReplyOpts = {
     preserveProgressCallbackStartOrder?: boolean;
     reasoningPayloadsEnabled?: boolean;
-    onReasoningLevelResolved?: (level: "off" | "on" | "stream") => void;
+    onReasoningLevelResolved?: (level: "off" | "on" | "stream") => boolean;
     onReasoningStream?: (payload: { text?: string }) => Promise<boolean> | boolean;
     onReasoningEnd?: () => Promise<boolean> | boolean;
     onReplyStart?: () => Promise<void> | void;

@@ -1775,6 +1775,41 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
+  it.each([
+    { level: "on" as const, enabled: true },
+    { level: "off" as const, enabled: false },
+    { level: "stream" as const, enabled: false },
+  ])(
+    "applies resolved $level durable reasoning eligibility to core accounting",
+    async ({ level, enabled }) => {
+      setNoAbort();
+      const dispatcher = createDispatcher();
+      const reasoning = { text: "thinking...", isReasoning: true } satisfies ReplyPayload;
+      const answer = { text: "The answer is 42" } satisfies ReplyPayload;
+      const onReasoningLevelResolved = vi.fn(() => enabled);
+
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ Provider: "matrix", Surface: "matrix" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { reasoningPayloadsEnabled: true, onReasoningLevelResolved },
+        replyResolver: async (_ctx, opts) => {
+          expect(opts?.onReasoningLevelResolved?.(level)).toBe(enabled);
+          await opts?.onBlockReply?.(reasoning);
+          return enabled ? answer : [reasoning, answer];
+        },
+      });
+
+      expect(onReasoningLevelResolved).toHaveBeenCalledExactlyOnceWith(level);
+      expect(
+        vi.mocked(dispatcher.sendBlockReply).mock.calls.map(([payload]) => payload.text),
+      ).toEqual(enabled ? [reasoning.text] : []);
+      expect(
+        vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
+      ).toEqual([answer.text]);
+    },
+  );
+
   it("does not redeliver a final that already settled as an identical block", async () => {
     setNoAbort();
     const delivered: Array<{ kind: string; text?: string }> = [];

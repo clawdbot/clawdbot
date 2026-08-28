@@ -187,11 +187,13 @@ describe("getReplyFromConfig configOverride", () => {
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
 
-  it.each(["on", "stream"] as const)(
+  it.each(["on", "off", "stream"] as const)(
     "reports the current-turn inline reasoning mode %s before the agent run",
     async (level) => {
       const ctx = buildGetReplyCtx();
-      const onReasoningLevelResolved = vi.fn();
+      const onReasoningLevelResolved = vi.fn(
+        (resolvedLevel: typeof level) => resolvedLevel === "on",
+      );
       mocks.resolveReplyDirectives.mockResolvedValueOnce(
         createGetReplyContinueDirectivesResult({
           body: `/reasoning ${level} explain this`,
@@ -209,7 +211,11 @@ describe("getReplyFromConfig configOverride", () => {
       await getReplyFromConfig(ctx, { onReasoningLevelResolved }, {});
 
       expect(onReasoningLevelResolved).toHaveBeenCalledExactlyOnceWith(level);
-      expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+      expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          opts: expect.objectContaining({ reasoningPayloadsEnabled: level === "on" }),
+        }),
+      );
     },
   );
 

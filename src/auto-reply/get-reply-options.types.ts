@@ -296,8 +296,8 @@ export type GetReplyOptions = {
   progressPreambleEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
   reasoningPayloadsEnabled?: boolean;
-  /** Reports the canonical reasoning visibility resolved for this turn. */
-  onReasoningLevelResolved?: (level: ReasoningLevel) => void;
+  /** Reports the canonical reasoning visibility and returns durable-payload eligibility. */
+  onReasoningLevelResolved?: (level: ReasoningLevel) => boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
   commentaryPayloadsEnabled?: boolean;
   /** Optional turn-frozen commentary owner; visibility is live by default.
