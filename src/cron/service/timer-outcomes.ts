@@ -195,14 +195,13 @@ export function applyJobResult(
       deliveryState.status,
       deliveryState.deliverySuppressionReason,
     );
-  // Best-effort or intentionally quiet completion cannot discard an undelivered one-shot.
+  // Authored completion includes intentional silence and the admitted best-effort policy.
   const shouldDelete =
     ownsSchedule &&
     isOneShotSchedule &&
     !preserveOneShotSchedule &&
     job.deleteAfterRun === true &&
-    completionStatus === "succeeded" &&
-    (deliveryState.status === "delivered" || deliveryState.status === "not-requested");
+    completionStatus === "succeeded";
   let autoDisableNotificationOwnsFailure = false;
   const finish = () => {
     finalizeCronFailureNotifications(state, {

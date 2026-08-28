@@ -309,7 +309,7 @@ describe("startup run repair auto-disable", () => {
       deliveryStatus: "unknown" as const,
       deliveryMode: "none" as const,
     },
-  ])("retains finalized one-shot after $name", (testCase) => {
+  ])("applies recorded completion to one-shot cleanup after $name", (testCase) => {
     const { completionStatus, deliveryStatus } = testCase;
     const failureNotificationDelivery =
       "failureNotificationDelivery" in testCase ? testCase.failureNotificationDelivery : undefined;
@@ -363,7 +363,7 @@ describe("startup run repair auto-disable", () => {
       },
     });
 
-    expect(restored?.shouldDelete).toBe(false);
+    expect(restored?.shouldDelete).toBe(completionStatus === "succeeded");
     expect(job).toMatchObject({
       enabled: false,
       state: {

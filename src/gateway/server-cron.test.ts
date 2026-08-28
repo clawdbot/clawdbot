@@ -1837,11 +1837,16 @@ describe("buildGatewayCronService", () => {
         expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
         const expectedDeliveryStatus = recipientReached ? "unknown" : "not-delivered";
         const required = policy !== "optional";
+        const deliveryError = `cron delivery ${recipientReached ? "outcome is unknown" : "was suppressed"}: ${reason}`;
         const updated = state.cron.getJob(job.id);
-        expect(updated?.state).toMatchObject({
-          lastDeliveryStatus: expectedDeliveryStatus,
-          lastDeliveryError: `cron delivery ${recipientReached ? "outcome is unknown" : "was suppressed"}: ${reason}`,
-        });
+        if (required) {
+          expect(updated?.state).toMatchObject({
+            lastDeliveryStatus: expectedDeliveryStatus,
+            lastDeliveryError: deliveryError,
+          });
+        } else {
+          expect(updated).toBeUndefined();
+        }
         const finished = runCronChangedMock.mock.calls
           .map(([event]) => requireRecord(event, "cron_changed event"))
           .find((event) => event.action === "finished" && event.jobId === job.id);
@@ -1849,6 +1854,7 @@ describe("buildGatewayCronService", () => {
           status: "ok",
           completionStatus: required ? (recipientReached ? "unknown" : "failed") : "succeeded",
           deliveryStatus: expectedDeliveryStatus,
+          deliveryError,
         });
         if (recipientReached) {
           expect(finished).not.toHaveProperty("delivered");
@@ -2339,7 +2345,7 @@ describe("buildGatewayCronService", () => {
       completion: "failed",
     },
     { name: "explicit required", bestEffort: false, retained: true, completion: "failed" },
-    { name: "explicit best-effort", bestEffort: true, retained: true, completion: "succeeded" },
+    { name: "explicit best-effort", bestEffort: true, retained: false, completion: "succeeded" },
   ])(
     "keeps script execution successful after $name announce failure",
     async ({ name, bestEffort, retained, completion }) => {
@@ -2482,17 +2488,15 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
-      expect(state.cron.getJob(job.id)?.state).toMatchObject({
-        lastRunStatus: "ok",
-        lastDeliveryStatus: "not-delivered",
-        lastDelivered: false,
-        deliverySuppressionReason: "empty",
-      });
+      expect(state.cron.getJob(job.id)).toBeUndefined();
       expect(runCronChangedMock.mock.calls.map(([event]) => event)).toContainEqual(
         expect.objectContaining({
           jobId: job.id,
           action: "finished",
+          status: "ok",
           completionStatus: "succeeded",
+          deliveryStatus: "not-delivered",
+          delivered: false,
           deliverySuppressionReason: "empty",
         }),
       );
