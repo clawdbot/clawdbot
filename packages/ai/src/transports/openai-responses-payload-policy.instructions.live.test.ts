@@ -10,9 +10,9 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 // actually accepts top-level `instructions` the way openclaw assumes, or
 // that HTTP continuation still works once the system prompt moved out of
 // `input`. This test captures the literal request bytes that leave the
-// process for the real API by wrapping globalThis.fetch (not a proxy, so the
-// model's baseUrl stays genuinely unset/native -- a loopback proxy baseUrl
-// would itself defeat the native-route classification under test).
+// process for the real API by wrapping globalThis.fetch. This avoids a proxy
+// while retaining the explicit native OpenAI baseUrl below; a loopback proxy
+// baseUrl would itself defeat the native-route classification under test.
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1";
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
