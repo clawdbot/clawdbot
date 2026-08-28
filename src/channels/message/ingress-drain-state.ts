@@ -14,6 +14,48 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
   return error instanceof IngressAdoptionLostError;
 }
 
+type IngressDispatchQuiescence = {
+  task: Promise<void>;
+  isDispatchSettled: () => boolean;
+  markDispatchSettled: () => void;
+  markDeferred: () => void;
+  markDeferredSettled: () => void;
+};
+
+export function createIngressDispatchQuiescence(): IngressDispatchQuiescence {
+  let dispatchSettled = false;
+  let deferred = false;
+  let deferredSettled = false;
+  let resolveTask!: () => void;
+  const task = new Promise<void>((resolve) => {
+    resolveTask = resolve;
+  });
+  const resolveIfQuiesced = () => {
+    if (dispatchSettled && !deferred) {
+      resolveTask();
+    }
+  };
+  return {
+    task,
+    isDispatchSettled: () => dispatchSettled,
+    markDispatchSettled: () => {
+      dispatchSettled = true;
+      resolveIfQuiesced();
+    },
+    markDeferred: () => {
+      // Settlement may race ahead of the dispatcher's deferred return.
+      if (!deferredSettled) {
+        deferred = true;
+      }
+    },
+    markDeferredSettled: () => {
+      deferredSettled = true;
+      deferred = false;
+      resolveIfQuiesced();
+    },
+  };
+}
+
 export type ChannelIngressDrainDispatchResult =
   | { kind: "completed" }
   | { kind: "deferred" }
@@ -34,6 +76,8 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   guillotined: boolean;
   /** Closed code: pre-adoption supersede has claimed settle ownership. */
   superseded: boolean;
+  quiescence: IngressDispatchQuiescence;
+  stallSettlementTask?: Promise<void>;
   /** Single settle owner for complete / fail / release / supersede / guillotine. */
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };

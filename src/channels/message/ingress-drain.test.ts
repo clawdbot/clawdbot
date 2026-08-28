@@ -284,31 +284,29 @@ describe("channel ingress drain", () => {
       await queue.enqueue("released-stall", { text: "x" }, { laneKey: "shared" });
       const refreshClaim = vi.fn(async () => true);
       queue.refreshClaim = refreshClaim;
+      let deferredLifecycle: ChannelIngressDispatchLifecycle | undefined;
       const drain = createChannelIngressDrain<Payload>({
         queue,
         now: () => clock,
         claimLeaseMs: 3_000,
         adoptionStallTimeoutMs: 2_000,
         deferredLaneOccupancy: "release",
-        dispatchClaimedEvent: async () => ({ kind: "deferred" }),
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          return { kind: "deferred" };
+        },
       });
 
       await drain.drainOnce();
-      await vi.waitFor(() => expect(drain.activeLaneKeys()).toEqual(new Set()));
-      clock += 1_000;
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(refreshClaim).toHaveBeenCalledTimes(1);
-
-      clock += 1_000;
-      await vi.advanceTimersByTimeAsync(1_000);
+      clock += 2_000;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(refreshClaim).toHaveBeenCalledTimes(2);
+      expect(await queue.listClaims()).toHaveLength(1);
+      expect(deferredLifecycle?.abortSignal.aborted).toBe(true);
+      await deferredLifecycle?.onAbandoned();
       await vi.waitFor(async () => expect(await queue.listClaims()).toEqual([]));
-      expect(await queue.listFailed?.()).toEqual([]);
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
-        {
-          id: "released-stall",
-          attempts: 1,
-          lastError: expect.stringContaining("handler-timeout"),
-        },
+      expect(await queue.listPending({ limit: "all" })).toEqual([
+        expect.objectContaining({ id: "released-stall", attempts: 1 }),
       ]);
       drain.dispose();
     });

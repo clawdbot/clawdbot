@@ -1547,6 +1547,8 @@ describe("startTelegramWebhook", () => {
         expect(seenUpdateIds).toEqual([40]);
 
         finishFirstUpdate?.();
+        await yieldWebhookTask();
+        await vi.advanceTimersByTimeAsync(1_000);
         await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40, 40]));
         finishRetry?.();
         await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40, 40, 41]));
