@@ -13,7 +13,6 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { resolveBundledPluginPublicModulePath } from "../test-utils/bundled-plugin-public-surface.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 
@@ -30,10 +29,9 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
       throw new Error("prepared harness discovery must not activate state stores");
     });
   const workspaceDir = fs.realpathSync(makePluginLoaderTempDir());
-  const entrypoint = resolveBundledPluginPublicModulePath({
-    pluginId: "copilot",
-    artifactBasename: "index.ts",
-  });
+  // This composition uses the checkout's source fixture, not installed plugin resolution.
+  const bundledRoot = path.resolve(import.meta.dirname, "../../extensions");
+  const entrypoint = path.join(bundledRoot, "copilot", "index.ts");
   const copilotModule = await loadBundledPluginPublicSurface({
     pluginId: "copilot",
     artifactBasename: "index.ts",
@@ -45,7 +43,6 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     return copilotModule;
   });
   vi.spyOn(pluginModuleRuntime, "createPluginModuleLoader").mockReturnValue(loadModule);
-  const bundledRoot = path.dirname(path.dirname(entrypoint));
   const env = {
     ...process.env,
     OPENCLAW_STATE_DIR: fs.realpathSync(makePluginLoaderTempDir()),

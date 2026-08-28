@@ -18,6 +18,7 @@ import {
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
 import {
+  buildVitestRunPlans,
   hasImportGraphImpactOnTargets,
   resolveChangedTestTargetPlan,
 } from "../../scripts/test-projects.test-support.mts";
@@ -99,13 +100,35 @@ describe("CI changed Node test plan", () => {
     "extensions/copilot/harness.ts",
     "extensions/copilot/openclaw.plugin.json",
   ])("keeps host discovery proof when only %s changes", (changedPath) => {
+    const hostTest = "src/agents/prepared-model-runtime.copilot.integration.test.ts";
     const shards = createChangedNodeTestShards([changedPath]);
-    expect(shards?.flatMap((shard) => shard.targets ?? [])).toContain(
-      "src/agents/prepared-model-runtime.copilot.integration.test.ts",
-    );
-    expect(shards?.flatMap((shard) => shard.configs)).toContain(
-      resolveExtensionTestConfig("extensions/copilot"),
-    );
+    expect(shards).not.toBeNull();
+    expect(shards).toHaveLength(2);
+    expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([hostTest]);
+    expect(shards?.flatMap((shard) => shard.configs)).toEqual([
+      "test/vitest/vitest.extensions.config.ts",
+    ]);
+    expect(buildVitestRunPlans([hostTest])).toEqual([
+      {
+        config: "test/vitest/vitest.agents-core.config.ts",
+        forwardedArgs: [],
+        includePatterns: [hostTest],
+        watchMode: false,
+      },
+    ]);
+    expect(
+      buildVitestRunPlans([
+        "extensions/copilot/index.test.ts",
+        "extensions/copilot/harness.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.extensions.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/copilot/index.test.ts", "extensions/copilot/harness.test.ts"],
+        watchMode: false,
+      },
+    ]);
   });
 
   it.each([
