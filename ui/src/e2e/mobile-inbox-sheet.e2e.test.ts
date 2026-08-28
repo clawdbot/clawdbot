@@ -39,6 +39,8 @@ suite.define(() => {
       startTop: number;
       finalTop: number;
       duration: number;
+      tabTrackWidth: number;
+      tabWidths: number[];
     }> = [];
 
     for (const theme of ["light", "dark"] as const) {
@@ -77,6 +79,10 @@ suite.define(() => {
         const close = element.querySelector<HTMLElement>(".sidebar-issues-panel__mobile-close")!;
         const header = element.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
         const list = element.querySelector<HTMLElement>(".sidebar-issues-panel__list-wrap")!;
+        const tabTrack = element
+          .querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!
+          .shadowRoot!.querySelector<HTMLElement>(".tabs")!;
+        const tabs = Array.from(element.querySelectorAll<HTMLElement>("wa-tab.hub-tab"));
         return {
           closeBackground: getComputedStyle(close).backgroundColor,
           closeBorderRadius: getComputedStyle(close).borderRadius,
@@ -90,6 +96,8 @@ suite.define(() => {
           headerBackground: getComputedStyle(header).backgroundColor,
           listBackground: getComputedStyle(list).backgroundColor,
           startTop,
+          tabTrackWidth: tabTrack.getBoundingClientRect().width,
+          tabWidths: tabs.map((tab) => tab.getBoundingClientRect().width),
         };
       });
       results.push(result);
@@ -104,6 +112,18 @@ suite.define(() => {
               height: 30px;
               border: 0;
               background: transparent;
+            }
+            .shell--mobile-nav .sidebar-issues-panel__tabs::part(tabs) {
+              gap: var(--space-1);
+              padding-inline: 8px;
+            }
+            .shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab {
+              min-width: auto;
+              flex: 0 1 auto;
+            }
+            .shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
+              width: auto;
+              justify-content: normal;
             }
             .shell--mobile-nav .sidebar-issues-panel__list-wrap { background: transparent; }
           `,
@@ -149,7 +169,11 @@ suite.define(() => {
       expect(result.closeHeight).toBe(36);
       expect(result.closeBorderWidth).toBe("1px");
       expect(result.closeBorderRadius).toBe("9999px");
-      expect(result.closeBackground).toBe("rgba(0, 0, 0, 0)");
+      expect(result.closeBackground).not.toBe("rgba(0, 0, 0, 0)");
+      expect(result.tabWidths).toHaveLength(4);
+      for (const tabWidth of result.tabWidths) {
+        expect(tabWidth).toBeCloseTo(result.tabTrackWidth / 4, 1);
+      }
     }
   });
 

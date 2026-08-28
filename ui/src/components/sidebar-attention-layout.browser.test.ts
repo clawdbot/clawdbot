@@ -96,7 +96,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         </div>
       </div>
     `;
-    document.body.append(fixture);
+    const shell = document.createElement("div");
+    shell.className = "shell shell--mobile-nav";
+    shell.append(fixture);
+    document.body.append(shell);
 
     await customElements.whenDefined("wa-tab-group");
     const group = fixture.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
@@ -118,6 +121,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const item = fixture.querySelector<HTMLElement>("[data-attention-kind]");
     const summary = fixture.querySelector<HTMLElement>(".sidebar-issues-panel__summary");
     const track = group!.shadowRoot?.querySelector<HTMLElement>(".tabs");
+    const tabs = Array.from(fixture.querySelectorAll<HTMLElement>("wa-tab.hub-tab"));
 
     expect(group?.scrollWidth).toBe(group?.clientWidth);
     expect(getComputedStyle(group!).overflowX).toBe("hidden");
@@ -130,6 +134,18 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(Number.parseFloat(getComputedStyle(track!).borderBottomWidth)).toBeGreaterThan(0);
     expect(track!.getBoundingClientRect().width).toBeCloseTo(
       group!.getBoundingClientRect().width,
+      1,
+    );
+    const tabWidth = tabs[0]!.getBoundingClientRect().width;
+    expect(tabs.every((tab) => Math.abs(tab.getBoundingClientRect().width - tabWidth) < 1)).toBe(
+      true,
+    );
+    expect(tabs[0]!.getBoundingClientRect().left).toBeCloseTo(
+      track!.getBoundingClientRect().left,
+      1,
+    );
+    expect(tabs.at(-1)!.getBoundingClientRect().right).toBeCloseTo(
+      track!.getBoundingClientRect().right,
       1,
     );
     // Count badges render as pills separated from the tab label.
@@ -176,7 +192,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(close.getBoundingClientRect().height).toBe(36);
     expect(getComputedStyle(close).borderTopWidth).toBe("1px");
     expect(getComputedStyle(close).borderRadius).toBe("9999px");
-    expect(getComputedStyle(close).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(close).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
     expect(getComputedStyle(panel).backgroundColor).toBe(getComputedStyle(header).backgroundColor);
     expect(getComputedStyle(header).backgroundColor).not.toBe(
       getComputedStyle(list).backgroundColor,

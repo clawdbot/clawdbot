@@ -138,7 +138,7 @@
   place-items: center;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  background: transparent;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
   transition: transform 140ms var(--ease-out);
 }
 
@@ -193,6 +193,21 @@
   box-sizing: border-box;
   width: 100%;
   padding-inline: 8px;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__tabs::part(tabs) {
+  gap: 0;
+  padding-inline: 0;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
+  width: 100%;
+  justify-content: center;
 }
 
 .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
