@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 const itUnix = process.platform === "win32" ? it.skip : it;
 const runCommandWithTimeoutMock = vi.fn();
@@ -29,8 +29,8 @@ describe("ensureDependency binary availability", () => {
     "checks the installed executable when installer creates it: %s",
     async (createsBinary) => {
       const { ensureDependency } = await loadGmailSetupUtils();
-      await withOpenClawTestState({ label: "dependency-probe" }, async (state) => {
-        const binDir = state.path("bin");
+      await withTestDir({ prefix: "openclaw-dependency-probe-" }, async (root) => {
+        const binDir = path.join(root, "bin");
         await fs.mkdir(binDir);
         const writeExecutable = async (name: string) => {
           const executable = path.join(binDir, name);
@@ -38,7 +38,7 @@ describe("ensureDependency binary availability", () => {
           await fs.chmod(executable, 0o755);
         };
         await writeExecutable("brew");
-        await withEnvAsync({ PATH: binDir, XDG_CONFIG_HOME: state.path("config") }, () =>
+        await withEnvAsync({ PATH: binDir, XDG_CONFIG_HOME: path.join(root, "config") }, () =>
           withMockedPlatform("darwin", async () => {
             runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
               expect(argv).toEqual(["brew", "install", "fixture-probe-formula"]);
