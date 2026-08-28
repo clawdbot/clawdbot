@@ -676,6 +676,12 @@ export function createChangedCheckPlan(
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
+  // Typechecking alone accepts extension imports; the graph guard also covers
+  // shared test/tooling dependencies that core tests can pull into their graph.
+  if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
+    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
+  }
+
   if (runAll || lanes.scripts || result.paths.includes("scripts/check-script-erasability.mjs")) {
     add("script TypeScript erasability", ["check:script-erasability"]);
   }
@@ -779,6 +785,7 @@ export function createChangedCheckPlan(
     lanes.liveDockerTooling &&
     result.paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "source")
   ) {
+    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
     addLint("lint core", ["lint:core"]);
   }

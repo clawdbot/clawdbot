@@ -411,6 +411,7 @@ describe("scripts/changed-lanes", () => {
       `pnpm format:check --no-error-on-unmatched-pattern -- ${lanes.paths.join(" ")}`,
       "pnpm deps:patches:check",
       "node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD",
+      "pnpm lint:tmp:tsgo-core-boundary",
       "pnpm tsgo:test:root",
       "pnpm lint:scripts",
     ]);
@@ -1469,6 +1470,7 @@ describe("scripts/changed-lanes", () => {
       // orphan an export here too.
       "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       "test temp creation report (warning-only)",
+      "core tsgo graph boundary",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -1869,6 +1871,27 @@ describe("scripts/changed-lanes", () => {
       name: "extension test core imports",
       args: ["lint:plugins:no-extension-test-core-imports"],
     });
+  });
+
+  it.each([
+    ["src/agents/prepared-model-runtime.copilot.integration.test.ts", true],
+    ["src/plugins/loader.ts", true],
+    ["src/gateway/gateway-acp-bind.live.test.ts", true],
+    ["packages/normalization-core/src/result.ts", true],
+    ["ui/src/app.ts", true],
+    ["test/helpers/temp-dir.ts", true],
+    ["test/tsconfig/tsconfig.core.test.agents-root.json", true],
+    ["scripts/check-tsgo-core-boundary.mts", true],
+    ["scripts/lib/tsgo-core-test-shards.mts", true],
+    ["scripts/check-changed.mts", true],
+    ["tsconfig.json", true],
+    ["docs/ci.md", false],
+    ["extensions/copilot/index.ts", false],
+  ])("routes the core tsgo graph boundary for %s: %s", (changedPath, expected) => {
+    const commands = createChangedCheckPlan(detectChangedLanes([changedPath])).commands;
+    expect(commands.some((command) => command.args[0] === "lint:tmp:tsgo-core-boundary")).toBe(
+      expected,
+    );
   });
 
   it("runs deprecation hygiene checks for outcome-changing paths and all lanes", () => {
