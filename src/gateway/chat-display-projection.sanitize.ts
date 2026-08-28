@@ -1,11 +1,7 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  buildInboundMediaUriFromPath,
-  classifyMediaReferenceSource,
-  parseInboundMediaUri,
-} from "../media/media-reference.js";
+import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -27,6 +23,7 @@ import {
   takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
+import { redactResponsesInputImage } from "./chat-display-projection.inline-media.js";
 import {
   isSuppressedControlReplyText,
   stripSuppressedControlReplyToken,
@@ -47,46 +44,6 @@ type ChatHistorySanitizeOptions = {
   includeCommentaryFallbacks?: boolean;
   redactInlineMedia?: boolean;
 };
-
-function redactResponsesInputImage(entry: Record<string, unknown>): boolean {
-  if (entry.type !== "input_image") {
-    return false;
-  }
-  let changed = false;
-  if (
-    typeof entry.image_url === "string" &&
-    classifyMediaReferenceSource(entry.image_url).isDataUrl
-  ) {
-    const imageUrl = entry.image_url;
-    delete entry.image_url;
-    entry.omitted = true;
-    entry.bytes = Buffer.byteLength(imageUrl, "utf8");
-    changed = true;
-  }
-  const imageUrl = readRecord(entry.image_url);
-  if (imageUrl && typeof imageUrl.url === "string") {
-    if (classifyMediaReferenceSource(imageUrl.url).isDataUrl) {
-      const projectedImageUrl = { ...imageUrl };
-      const url = projectedImageUrl.url as string;
-      delete projectedImageUrl.url;
-      projectedImageUrl.omitted = true;
-      projectedImageUrl.bytes = Buffer.byteLength(url, "utf8");
-      entry.image_url = projectedImageUrl;
-      changed = true;
-    }
-  }
-  const source = readRecord(entry.source);
-  if (source && typeof source.data === "string") {
-    const projectedSource = { ...source };
-    const data = projectedSource.data as string;
-    delete projectedSource.data;
-    projectedSource.omitted = true;
-    projectedSource.bytes = Buffer.byteLength(data, "utf8");
-    entry.source = projectedSource;
-    changed = true;
-  }
-  return changed;
-}
 
 function projectChatHistoryMediaReference(value: unknown): string | undefined {
   if (typeof value !== "string") {
