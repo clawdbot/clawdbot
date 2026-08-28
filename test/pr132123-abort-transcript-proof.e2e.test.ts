@@ -220,7 +220,9 @@ describe("PR #132123 real gateway proof", () => {
         expect(second.status).toBe("started");
         await secondStreamStarted.promise;
         // Let the streamed text settle into the live run buffer before aborting.
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 500);
+        });
 
         const abort = await gateway.client.request<{ aborted?: boolean }>(
           "chat.abort",
