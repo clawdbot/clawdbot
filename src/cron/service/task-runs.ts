@@ -15,8 +15,8 @@ import {
   findTaskByRunId,
   recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
-import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
+import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import {
   bindTaskRunExecution,
   listTaskRecordsByRuntimeSourceIdFromSqlite,
@@ -49,7 +49,6 @@ import type {
   CronCompletionStatus,
   CronFailureNotificationDelivery,
   CronJob,
-} from "../types.js";
   CronRunErrorClassification,
   CronRunStatus,
 } from "../types.js";

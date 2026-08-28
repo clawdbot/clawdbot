@@ -288,7 +288,8 @@ describe("cron failure alert persistence", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
     expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
       lastFailureAlertAtMs: firstAlertAt,
-      lastFailureNotificationDeliveryStatus: "unknown",
+      lastFailureNotificationDelivered: true,
+      lastFailureNotificationDeliveryStatus: "delivered",
     });
 
     now += 30_000;

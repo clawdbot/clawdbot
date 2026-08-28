@@ -833,9 +833,11 @@ describe("CronService persists delivered status", () => {
       },
     });
 
-    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
-    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
-    expect(updated?.state.lastFailureNotificationDeliveryError).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDelivered).toBe(false);
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastFailureNotificationDeliveryError).toBe(
+      "failure alert transport unavailable",
+    );
     expect(failureNotificationDelivery!).toEqual({ status: "unknown" });
   });
 
