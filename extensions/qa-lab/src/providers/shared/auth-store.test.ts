@@ -14,6 +14,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirHarness } from "../../temp-dir.test-helper.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./auth-store.js";
+import { stageQaMockAuthProfiles } from "./mock-auth.js";
 
 const tempDirs = createTempDirHarness();
 
@@ -84,7 +85,7 @@ describe("QA auth profile store", () => {
   });
 
   it.each(["future", "invalid"] as const)(
-    "stages concurrent isolated profiles without reading %s outer state",
+    "stages concurrent isolated profiles and config without reading %s outer state",
     async (outerKind) => {
       const hostStateDir = await tempDirs.makeTempDir("openclaw-qa-auth-unreadable-host-");
       const hostDatabasePath = path.join(hostStateDir, "state", "openclaw.sqlite");
@@ -104,25 +105,31 @@ describe("QA auth profile store", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", hostStateDir);
       vi.stubEnv("OPENCLAW_AGENT_DIR", path.join(hostStateDir, "relocated-agent"));
 
-      await Promise.all(
+      const configs = await Promise.all(
         qaRoots.map((stateDir, index) =>
-          writeQaAuthProfiles({
-            agentId: "qa",
+          stageQaMockAuthProfiles({
+            cfg: {},
+            agentIds: ["qa"],
             stateDir,
-            profiles: {
-              [`qa-${index}`]: {
-                type: "api_key",
-                provider: "openai",
-                key: `qa-placeholder-${index}`,
-              },
-            },
+            providers: [index === 0 ? "openai" : "anthropic"],
           }),
         ),
       );
 
       for (const [index, stateDir] of qaRoots.entries()) {
+        const provider = index === 0 ? "openai" : "anthropic";
+        const profileId = `qa-mock-${provider}`;
         const store = readQaAuthProfiles(path.join(stateDir, "agents", "qa", "agent"));
-        expect(Object.keys(store.profiles)).toEqual([`qa-${index}`]);
+        expect(Object.keys(store.profiles)).toEqual([profileId]);
+        expect(configs[index]?.auth).toEqual({
+          profiles: {
+            [profileId]: {
+              provider,
+              mode: "api_key",
+              displayName: `QA mock ${provider} credential`,
+            },
+          },
+        });
       }
       expect(await fs.readFile(hostDatabasePath)).toEqual(hostBefore);
       expect(process.env.OPENCLAW_STATE_DIR).toBe(hostStateDir);
