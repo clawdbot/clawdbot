@@ -45,8 +45,6 @@ Connect the channel your team lives in. Example: a Slack bot, allowed in one tea
       mode: "socket",
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
-      dmPolicy: "open",
-      allowFrom: ["*"],
       groupPolicy: "allowlist",
       channels: {
         C0123456789: { requireMention: true },
@@ -56,7 +54,7 @@ Connect the channel your team lives in. Example: a Slack bot, allowed in one tea
 }
 ```
 
-Group chats are a first-class deployment. The defaults are already team-shaped: group access is allowlisted per room, and replies require a mention, so the bot participates when addressed and stays quiet otherwise. In a private room whose members you trust, that is all the gating you need; for broad or public rooms, add sender allowlists and `contextVisibility` - see [Groups](/channels/groups).
+Group chats are a first-class deployment. The defaults are already team-shaped: group access is allowlisted per room, replies require a mention, and DMs stay on the pairing default - the first time a teammate DMs the bot they get a pairing code, approved with `openclaw pairing approve slack <code>`. So the bot participates when addressed and stays quiet otherwise. In a private room whose members you trust, that is all the gating you need; for broad or public rooms, add sender allowlists and `contextVisibility` - see [Groups](/channels/groups).
 
 If the same people should be allowed across several channels, define the list once as an [access group](/channels/access-groups) and reference it from each channel's allowlist.
 
