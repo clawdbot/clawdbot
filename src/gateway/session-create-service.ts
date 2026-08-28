@@ -126,6 +126,7 @@ export function resolveSessionCreateModelSelection(
   // remains the sole live-catalog availability validator.
   const resolved = resolveSessionPatchModelSelection({
     cfg,
+    agentId,
     catalog: [],
     raw: model,
     defaultProvider: defaults.provider,
@@ -191,6 +192,7 @@ async function existingModelSelectionWouldChange(params: {
   const catalog = await params.loadGatewayModelCatalog();
   const resolved = resolveSessionPatchModelSelection({
     cfg: params.cfg,
+    agentId: params.agentId,
     catalog,
     raw: requestedModel,
     defaultProvider: params.defaultProvider,
@@ -209,6 +211,7 @@ async function existingModelSelectionWouldChange(params: {
   if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
     const resolvedSubagentDefault = resolveSessionPatchModelSelection({
       cfg: params.cfg,
+      agentId: params.agentId,
       catalog,
       raw: params.subagentModelHint,
       defaultProvider: params.defaultProvider,
