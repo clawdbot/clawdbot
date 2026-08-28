@@ -19,8 +19,8 @@ import type {
   CronJob,
   CronMessageChannel,
 } from "../types.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { persist } from "./store.js";
 import { enqueueCronNotification } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
@@ -194,33 +194,59 @@ export function resolveFailureAlert(
 }
 
 /**
- * Writes the settled failure-alert send outcome back onto the live stored job.
- * The alert path clones the job before dispatch, so the async send can only
- * reach persisted state by looking the job up in the store again.
+ * Commits the settled failure-alert send outcome onto the authoritative cron
+ * row through the row-scoped runtime transaction. The write is fenced to the
+ * alert identity captured at dispatch, so a superseding alert or run cannot
+ * be overwritten by a late completion, and a recipient already reached is
+ * never downgraded to not-delivered.
  */
 function recordFailureNotificationDeliveryOutcome(
   state: CronServiceState,
   params: {
     jobId: string;
+    alertAtMs: number | undefined;
     delivered: boolean;
     error?: string;
   },
 ): void {
-  const liveJob = state.store?.jobs.find((job) => job.id === params.jobId);
-  if (!liveJob) {
-    return;
-  }
-  liveJob.state.lastFailureNotificationDelivered = params.delivered;
-  liveJob.state.lastFailureNotificationDeliveryStatus = params.delivered
-    ? "delivered"
-    : "not-delivered";
-  liveJob.state.lastFailureNotificationDeliveryError = params.error;
-  void persist(state).catch((err: unknown) => {
+  try {
+    const committedJob = commitCronRuntimeRows({
+      state,
+      jobIds: [params.jobId],
+      operationLabel: "cron.failure-alert-outcome",
+      mutate: ({ jobs }) => {
+        const job = jobs.get(params.jobId);
+        const authoritativeAlertAtMs = job?.state.lastFailureAlertAtMs;
+        if (
+          !job ||
+          (authoritativeAlertAtMs !== undefined &&
+            params.alertAtMs !== undefined &&
+            authoritativeAlertAtMs > params.alertAtMs)
+        ) {
+          // A newer alert already replaced the pending outcome this completion belongs to.
+          return { value: undefined };
+        }
+        if (job.state.lastFailureNotificationDelivered === true) {
+          // An earlier settled attempt of this alert already reached the recipient.
+          return { value: undefined };
+        }
+        job.state.lastFailureNotificationDelivered = params.delivered;
+        job.state.lastFailureNotificationDeliveryStatus = params.delivered
+          ? "delivered"
+          : "not-delivered";
+        job.state.lastFailureNotificationDeliveryError = params.error;
+        return { upsertJobIds: [job.id], value: job };
+      },
+    });
+    if (committedJob) {
+      applyCronRuntimeRowsToState(state, [committedJob]);
+    }
+  } catch (err: unknown) {
     state.deps.log.warn(
       { jobId: params.jobId, err: String(err) },
       "cron: failure alert delivery outcome persist failed",
     );
-  });
+  }
 }
 
 function transportFailureAlert(
@@ -232,6 +258,7 @@ function transportFailureAlert(
     route: ResolvedFailureAlert;
   },
 ): void {
+  const alertAtMs = params.job.state.lastFailureAlertAtMs;
   let pendingFallback = true;
   let reachedRecipient = false;
   const fallback = (reached = false) => {
@@ -244,6 +271,7 @@ function transportFailureAlert(
     fallback();
     recordFailureNotificationDeliveryOutcome(state, {
       jobId: params.job.id,
+      alertAtMs,
       delivered: false,
     });
     return;
@@ -269,6 +297,7 @@ function transportFailureAlert(
     .then(() => {
       recordFailureNotificationDeliveryOutcome(state, {
         jobId: params.job.id,
+        alertAtMs,
         delivered: reachedRecipient,
       });
     })
@@ -278,10 +307,13 @@ function transportFailureAlert(
         "cron: failure alert delivery failed",
       );
       fallback();
+      // The recipient-reached callback is the delivery fact; a later
+      // transport exception does not un-deliver an alert that landed.
       recordFailureNotificationDeliveryOutcome(state, {
         jobId: params.job.id,
-        delivered: false,
-        error: err instanceof Error ? err.message : String(err),
+        alertAtMs,
+        delivered: reachedRecipient,
+        ...(reachedRecipient ? {} : { error: err instanceof Error ? err.message : String(err) }),
       });
     });
 }

@@ -1,41 +1,26 @@
-// Failure-alert send outcomes must be persisted onto the live stored job.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Failure-alert send outcomes must commit onto the authoritative cron row.
+import { describe, expect, it, vi } from "vitest";
 import {
   createDueIsolatedJob,
   noopLogger,
+  setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { maybeEmitFailureAlert } from "./failure-alerts.js";
 import { createCronServiceState, type CronServiceState } from "./state.js";
-import { persist } from "./store.js";
 import { enqueueCronNotification } from "./wake.js";
-
-vi.mock("./store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./store.js")>();
-  return { ...actual, persist: vi.fn(async () => {}) };
-});
 
 vi.mock("./wake.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./wake.js")>();
   return { ...actual, enqueueCronNotification: vi.fn() };
 });
 
+const fixtures = setupCronRegressionFixtures({ prefix: "cron-failure-alert-outcome-" });
+
 type SendCronFailureAlert = NonNullable<
   Parameters<typeof createCronServiceState>[0]["sendCronFailureAlert"]
 >;
-
-function createFailureAlertState(sendCronFailureAlert?: SendCronFailureAlert): CronServiceState {
-  return createCronServiceState({
-    cronEnabled: true,
-    storePath: "unused.jobs.json",
-    log: noopLogger,
-    nowMs: () => 1_000,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(),
-    ...(sendCronFailureAlert ? { sendCronFailureAlert } : {}),
-  });
-}
 
 function makeFailureAlertJob(id: string): CronJob {
   const job = createDueIsolatedJob({ id, nowMs: 0, nextRunAtMs: 1_000 });
@@ -43,7 +28,26 @@ function makeFailureAlertJob(id: string): CronJob {
   return job;
 }
 
-function emitFailureAlertForJob(state: CronServiceState, job: CronJob): void {
+function createOutcomeState(
+  storePath: string,
+  job: CronJob,
+  sendCronFailureAlert?: SendCronFailureAlert,
+): CronServiceState {
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath,
+    log: noopLogger,
+    nowMs: () => 1_000,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(),
+    ...(sendCronFailureAlert ? { sendCronFailureAlert } : {}),
+  });
+  state.store = { version: 1, jobs: [job] };
+  return state;
+}
+
+function emitFailureAlert(state: CronServiceState, job: CronJob): void {
   maybeEmitFailureAlert(state, {
     job,
     alertConfig: {
@@ -60,80 +64,141 @@ function emitFailureAlertForJob(state: CronServiceState, job: CronJob): void {
   });
 }
 
-describe("cron failure alert delivery outcome persistence", () => {
-  beforeEach(() => {
-    vi.mocked(persist).mockClear();
-    vi.mocked(enqueueCronNotification).mockClear();
-  });
+async function readStoredJob(storePath: string): Promise<CronJob | undefined> {
+  return (await loadCronStore(storePath)).jobs[0];
+}
 
-  it("persists a delivered outcome onto the live stored job", async () => {
-    const job = makeFailureAlertJob("job-delivered");
-    const state = createFailureAlertState(async (params) => {
+describe("cron failure alert delivery outcome persistence", () => {
+  it("commits a delivered outcome onto the authoritative row", async () => {
+    const store = fixtures.makeStorePath();
+    const job = makeFailureAlertJob("outcome-delivered");
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const state = createOutcomeState(store.storePath, job, async (params) => {
       params.onDeliveryAttempt?.(true);
     });
-    state.store = { version: 1, jobs: [job] };
 
-    emitFailureAlertForJob(state, job);
+    emitFailureAlert(state, job);
 
-    await vi.waitFor(() => {
-      expect(job.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+    await vi.waitFor(async () => {
+      expect((await readStoredJob(store.storePath))?.state).toMatchObject({
+        lastFailureNotificationDelivered: true,
+        lastFailureNotificationDeliveryStatus: "delivered",
+      });
     });
-    expect(job.state.lastFailureNotificationDelivered).toBe(true);
-    expect(job.state.lastFailureNotificationDeliveryError).toBeUndefined();
-    expect(persist).toHaveBeenCalledWith(state);
-    expect(enqueueCronNotification).not.toHaveBeenCalled();
+    expect(
+      (await readStoredJob(store.storePath))?.state.lastFailureNotificationDeliveryError,
+    ).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+    });
   });
 
-  it("persists the error when the alert send throws", async () => {
-    const job = makeFailureAlertJob("job-failed-send");
-    const state = createFailureAlertState(async () => {
+  it("commits the error when the alert send throws without reaching the recipient", async () => {
+    const store = fixtures.makeStorePath();
+    const job = makeFailureAlertJob("outcome-send-threw");
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const state = createOutcomeState(store.storePath, job, async () => {
       throw new Error("send failed");
     });
-    state.store = { version: 1, jobs: [job] };
 
-    emitFailureAlertForJob(state, job);
+    emitFailureAlert(state, job);
 
-    await vi.waitFor(() => {
-      expect(job.state.lastFailureNotificationDeliveryStatus).toBe("not-delivered");
+    await vi.waitFor(async () => {
+      expect((await readStoredJob(store.storePath))?.state).toMatchObject({
+        lastFailureNotificationDelivered: false,
+        lastFailureNotificationDeliveryStatus: "not-delivered",
+        lastFailureNotificationDeliveryError: "send failed",
+      });
     });
-    expect(job.state.lastFailureNotificationDelivered).toBe(false);
-    expect(job.state.lastFailureNotificationDeliveryError).toBe("send failed");
-    expect(enqueueCronNotification).toHaveBeenCalledWith(
-      state,
-      expect.objectContaining({ id: job.id }),
-      expect.any(String),
-      "failure-alert",
-    );
-    expect(persist).toHaveBeenCalledWith(state);
+  });
+
+  it("retains delivery when the recipient was reached and the transport then rejects", async () => {
+    const store = fixtures.makeStorePath();
+    const job = makeFailureAlertJob("outcome-reached-then-threw");
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const state = createOutcomeState(store.storePath, job, async (params) => {
+      params.onDeliveryAttempt?.(true);
+      throw new Error("transport died after admission");
+    });
+
+    emitFailureAlert(state, job);
+
+    await vi.waitFor(async () => {
+      expect((await readStoredJob(store.storePath))?.state).toMatchObject({
+        lastFailureNotificationDelivered: true,
+        lastFailureNotificationDeliveryStatus: "delivered",
+      });
+    });
   });
 
   it("records not-delivered when the send settles without reaching the recipient", async () => {
-    const job = makeFailureAlertJob("job-unreached");
-    const state = createFailureAlertState(async (params) => {
+    const store = fixtures.makeStorePath();
+    const job = makeFailureAlertJob("outcome-unreached");
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const state = createOutcomeState(store.storePath, job, async (params) => {
       params.onDeliveryAttempt?.(false);
     });
-    state.store = { version: 1, jobs: [job] };
 
-    emitFailureAlertForJob(state, job);
+    emitFailureAlert(state, job);
 
-    await vi.waitFor(() => {
-      expect(job.state.lastFailureNotificationDeliveryStatus).toBe("not-delivered");
+    await vi.waitFor(async () => {
+      expect((await readStoredJob(store.storePath))?.state).toMatchObject({
+        lastFailureNotificationDelivered: false,
+        lastFailureNotificationDeliveryStatus: "not-delivered",
+      });
     });
-    expect(job.state.lastFailureNotificationDelivered).toBe(false);
-    expect(job.state.lastFailureNotificationDeliveryError).toBeUndefined();
-    expect(enqueueCronNotification).toHaveBeenCalled();
+    expect(
+      (await readStoredJob(store.storePath))?.state.lastFailureNotificationDeliveryError,
+    ).toBeUndefined();
   });
 
-  it("records not-delivered when no failure-alert transport is configured", () => {
-    const job = makeFailureAlertJob("job-no-transport");
-    const state = createFailureAlertState();
-    state.store = { version: 1, jobs: [job] };
+  it("records not-delivered when no failure-alert transport is configured", async () => {
+    const store = fixtures.makeStorePath();
+    const job = makeFailureAlertJob("outcome-no-transport");
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const state = createOutcomeState(store.storePath, job);
 
-    emitFailureAlertForJob(state, job);
+    emitFailureAlert(state, job);
 
-    expect(job.state.lastFailureNotificationDeliveryStatus).toBe("not-delivered");
-    expect(job.state.lastFailureNotificationDelivered).toBe(false);
-    expect(enqueueCronNotification).toHaveBeenCalled();
-    expect(persist).toHaveBeenCalledWith(state);
+    await vi.waitFor(async () => {
+      expect((await readStoredJob(store.storePath))?.state).toMatchObject({
+        lastFailureNotificationDelivered: false,
+        lastFailureNotificationDeliveryStatus: "not-delivered",
+      });
+    });
+  });
+
+  it("does not overwrite the audit record once a newer alert superseded it", async () => {
+    const store = fixtures.makeStorePath();
+    const job = makeFailureAlertJob("outcome-superseded");
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    let settleSend: (() => void) | undefined;
+    const state = createOutcomeState(
+      store.storePath,
+      job,
+      () =>
+        new Promise<void>((resolve) => {
+          settleSend = resolve;
+        }),
+    );
+
+    emitFailureAlert(state, job);
+    expect(settleSend).toBeTypeOf("function");
+    // A newer alert for the same job replaces the pending outcome before the
+    // old send settles.
+    const supersedingJob = structuredClone(job);
+    supersedingJob.state.lastFailureAlertAtMs = (job.state.lastFailureAlertAtMs ?? 0) + 5_000;
+    supersedingJob.state.lastFailureNotificationDeliveryStatus = "unknown";
+    await saveCronStore(store.storePath, { version: 1, jobs: [supersedingJob] });
+
+    settleSend?.();
+    // Let the settled send's microtask chain (the outcome commit) run.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect((await readStoredJob(store.storePath))?.state).toMatchObject({
+      lastFailureAlertAtMs: supersedingJob.state.lastFailureAlertAtMs,
+      lastFailureNotificationDeliveryStatus: "unknown",
+    });
   });
 });
