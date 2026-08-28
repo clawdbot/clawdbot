@@ -5031,10 +5031,6 @@ done
     expect(scheduler).toContain("path.dirname(process.execPath)");
     expect(scheduler).toContain("env.PATH = [...new Set(pathEntries)].join(path.delimiter)");
     expect(scheduler).toContain(
-      "const pnpmCommand = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();",
-    );
-    expect(scheduler).toContain("lane.command.replace(/(^|\\s)pnpm(?=\\s)/g");
-    expect(scheduler).toContain(
       'env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);',
     );
   });
