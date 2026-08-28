@@ -190,28 +190,75 @@ async function startWatcher(
 }
 
 describe("IMAP watcher protocol boundary", () => {
-  it("dispatches no-evidence mail at an explicit unverified floor", async () => {
-    const { server, state, context, authenticator, dispatchHookAgentTurn } = await startWatcher({
-      account: {
-        senderAuth: { min: "unverified", trustedAuthservIds: [], acceptTrustedAuthservId: false },
-      },
-    });
-    await vi.waitFor(async () =>
-      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
-    );
-    authenticator.mockResolvedValue(createImapAuthResult("none"));
-    server.append(
-      "From: trusted@example.com\r\nSubject: Unproven\r\n\r\nNo authentication evidence",
-    );
-    await vi.waitFor(async () =>
-      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
-    );
-    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
-    expect(context.logger.info).toHaveBeenCalledWith(
-      expect.stringContaining("strength=unverified run=mail-run"),
-    );
-    expect(await state.skips.lookup("inbox:dmarc-none")).toBeUndefined();
-  });
+  it.each([
+    ["unverified", "none", "", "strength=unverified"],
+    ["verified", "pass", "", "strength=verified"],
+    [
+      "asserted",
+      "none",
+      "Authentication-Results: mx.example.com; dmarc=pass\r\n",
+      "strength=asserted",
+    ],
+    ["token", "none", "To: reader+secret-token@example.com\r\n", "gate=token"],
+  ] as const)(
+    "dispatches %s mail with the actual admission evidence",
+    async (gate, dmarc, headers, log) => {
+      const { server, state, context, authenticator, dispatchHookAgentTurn } = await startWatcher({
+        account: {
+          senderAuth: {
+            min: gate === "token" ? "verified" : gate,
+            trustedAuthservIds: ["mx.example.com"],
+            acceptTrustedAuthservId: gate === "asserted",
+          },
+          addressTokens: [{ token: "secret-token", senders: ["trusted@example.com"] }],
+        },
+      });
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
+      );
+      authenticator.mockResolvedValue(createImapAuthResult(dmarc));
+      server.append(
+        `From: trusted@example.com\r\n${headers}Subject: Admission\r\n\r\nEmail content`,
+      );
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
+      );
+      expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
+      expect(authenticator).toHaveBeenCalledTimes(gate === "token" ? 0 : 1);
+      expect(context.logger.info).toHaveBeenCalledWith(
+        `imap: account=inbox uid=2 domain=example.com ${log} run=mail-run`,
+      );
+      expect(await state.skips.lookup("inbox:dmarc-none")).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["From: trusted@example.com, attacker@evil.example", "invalid-from", "unknown"],
+    ["From: attacker@evil.example", "sender-not-allowed", "evil.example"],
+  ])(
+    "records pre-auth rejection for %s without claiming strength",
+    async (from, reason, domain) => {
+      const { server, state, context, authenticator, dispatchHookAgentTurn } = await startWatcher({
+        account: {
+          addressTokens: [{ token: "secret-token", senders: ["@evil.example"] }],
+        },
+      });
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
+      );
+      server.append(`${from}\r\nTo: reader+secret-token@example.com\r\n\r\nRejected mail`);
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
+      );
+      expect(authenticator).not.toHaveBeenCalled();
+      expect(dispatchHookAgentTurn).not.toHaveBeenCalled();
+      expect(context.logger.warn).toHaveBeenCalledWith(
+        `imap: account=inbox uid=2 domain=${domain} gate=${reason}`,
+      );
+      expect(await state.skips.lookup(`inbox:${reason}`)).toEqual({ count: 1 });
+      expect(await state.claims.lookup("attempt:inbox:17:2")).toBeUndefined();
+    },
+  );
 
   it.each(["rejected admission", "throwing admission", "transient authentication"] as const)(
     "retries %s without waiting for another email",

@@ -118,6 +118,9 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
+  const active = parts.some(
+    (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
+  );
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part unless the presentation opts out.
@@ -138,7 +141,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">${renderStreamGroupParts(parts, opts, "standalone")}</div>
-      ${footerStartedAt !== null
+      ${footerStartedAt !== null && !active
         ? html`
             <div class="chat-group-footer">
               <div class="chat-group-footer__meta">

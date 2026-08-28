@@ -317,8 +317,8 @@ export async function dispatchCronDelivery(
         isCronSessionKey(params.agentSessionKey) &&
         isSameSessionKey(deliverySessionKey, params.agentSessionKey);
 
-      // Track bestEffort partial failures so we can log them and avoid
-      // marking the job as delivered when payloads were silently dropped.
+      // The batch outcome owns failure state; per-payload errors can belong to
+      // a proven-not-sent attempt that succeeds on retry.
       let hadPartialFailure = false;
       let completedByConcurrentDelivery = false;
       let payloadMayHaveReachedRecipientBeforeFailure = false;
@@ -348,8 +348,6 @@ export async function dispatchCronDelivery(
       const attemptedPayloadsForMirror: NormalizedOutboundPayload[] = [];
       const onError = params.deliveryBestEffort
         ? (err: unknown, _payload: unknown) => {
-            hadPartialFailure = true;
-            deliveryError ??= formatErrorMessage(err);
             logCronDeliveryErrorDeferred(
               `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
             );

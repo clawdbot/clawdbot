@@ -1,4 +1,8 @@
 import {
+  buildControlUiResourcePath,
+  parseControlUiResourcePath,
+} from "../../../src/gateway/control-ui-resource-routes.js";
+import {
   buildControlUiUserAvatarPath,
   canonicalizeControlUiUserAvatarPath,
 } from "../../../src/gateway/control-ui-user-avatar-route.js";
@@ -75,12 +79,9 @@ export function setAvatarGatewayOrigin(
 }
 
 /**
- * Returns a browser-safe avatar URL, or null. Only the canonical
- * /api/users/<id>/avatar route is trusted (pathname pinned, fragment dropped).
- * The query is preserved: the gateway stamps a ?v=<updatedAt> revision there so
- * replacing an image invalidates its bounded authenticated blob-cache entry.
- * Relative paths resolve against the trusted gateway origin; absolute URLs
- * must match that origin.
+ * Trust only canonical user and agent image routes on the connected Gateway.
+ * Keep revision queries for cache invalidation, drop fragments, and apply the
+ * mount once: agent URLs arrive already prefixed, unlike user-profile URLs.
  */
 export function resolveTrustedAvatarUrl(
   value: string,
@@ -90,14 +91,17 @@ export function resolveTrustedAvatarUrl(
   try {
     const parsed = new URL(value, ORIGIN_PROBE);
     const relativeRoute = parsed.origin === ORIGIN_PROBE;
-    const canonicalPathname = canonicalizeControlUiUserAvatarPath(
-      parsed.pathname,
-      relativeRoute ? "" : resourceBasePath,
-    );
-    if (!canonicalPathname) {
+    const userPath = canonicalizeControlUiUserAvatarPath(parsed.pathname, resourceBasePath);
+    const agentPath = parseControlUiResourcePath("agentAvatar", parsed.pathname, resourceBasePath);
+    const pathname = userPath
+      ? `${resourceBasePath}${userPath}`
+      : agentPath.matched && agentPath.value
+        ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentPath.value)
+        : null;
+    if (!pathname) {
       return null;
     }
-    const suffix = `${resourceBasePath}${canonicalPathname}${parsed.search}`;
+    const suffix = `${pathname}${parsed.search}`;
     if (relativeRoute) {
       return gatewayOrigin ? new URL(suffix, gatewayOrigin).toString() : suffix;
     }
@@ -139,10 +143,8 @@ export function resolveIdentityHue(input: IdentityAvatarInput): number {
 }
 
 /**
- * Resolves a trusted gateway avatar route, else deterministic initials.
- * Gravatar is served by the gateway inside the profile avatar route itself, so
- * the client never constructs a Gravatar URL — it only ever renders the
- * canonical /api/users/<id>/avatar endpoint or falls back to initials.
+ * Resolve a Gateway user/agent avatar, else deterministic initials. Remote
+ * sources (including Gravatar) remain Gateway-owned, never browser fetches.
  */
 // User-profile ids are crypto UUIDs. Chat sender metadata carries only the id
 // (the prompt-visible envelope stays free of URLs), so a UUID-shaped sender id

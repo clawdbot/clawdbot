@@ -487,6 +487,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
   it.each(["exec", "wait"] as const)(
     "does not publish a snapshot after its catalog closes during %s",
     async (phase) => {
+      // Worker startup must not consume the host budget before close_owner dispatches.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const owner = createSubscribedCodeModeHarness({ name: `close-during-${phase}` });
       const closeOwner = pluginToolWithExecute("close_owner", "Close the run catalog", async () => {
         clearToolSearchCatalog(owner);
@@ -511,9 +513,12 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         } else {
           completion = execute();
         }
-        await expect(completion).rejects.toThrow(
-          "Tool Search catalog is unavailable for this run.",
-        );
+        expect(resultDetails(await completion)).toMatchObject({
+          status: "failed",
+          code: "aborted",
+          telemetry: { catalogSize: 1, callCount: 1 },
+        });
+        expect(owner.catalogRef.current).toBeUndefined();
         expect(closeOwner.execute).toHaveBeenCalledOnce();
         expect(testing.activeRuns.size).toBe(0);
         expect(testing.resumingRunIds.size).toBe(0);
@@ -521,6 +526,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       } finally {
         clearToolSearchCatalog(owner);
         owner.dispose();
+        vi.useRealTimers();
       }
     },
   );
@@ -566,33 +572,43 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     { kind: "run-owner loss", close: "abort" },
     { kind: "snapshot expiry", close: "expire" },
     { kind: "gateway shutdown", close: "shutdown" },
+    { kind: "catalog closure during wait", close: "catalog" },
   ] as const)(
     "settles an abort-ignoring subscribed tool exactly once after $kind",
     async ({ close }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const downstream = createDeferred();
+      const started = createDeferred();
       const harness = createSubscribedCodeModeHarness({
         name: `closure-${close}`,
         timeoutMs: 2_000,
       });
       const target = pluginToolWithExecute("stalled_target", "Ignore cancellation", async () => {
+        started.resolve();
         await downstream.promise;
         return jsonResult({ late: true });
       });
-      applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
+      const continuation = pluginToolWithExecute(
+        "continue_after_target",
+        "Continue the guest",
+        async () => jsonResult({ continued: true }),
+      );
+      applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target, continuation] });
 
       try {
-        const suspended = resultDetails(
-          await expectDefined(harness.tools[0], "Code Mode exec test invariant").execute(
-            `code-call-${close}`,
-            {
-              code: `const target = stalled_target({});
-                await yield_control("pause");
-                try { return await target; } catch (error) { return error.message; }`,
-            },
-          ),
+        const execution = expectDefined(harness.tools[0], "Code Mode exec test invariant").execute(
+          `code-call-${close}`,
+          {
+            code: `const target = stalled_target({});
+                try { await target; } catch (error) { return error.message; }
+                return await continue_after_target({});`,
+          },
         );
+        await started.promise;
+        await vi.advanceTimersByTimeAsync(2_000);
+        const suspended = resultDetails(await execution);
         expect(suspended.status).toBe("waiting");
-        await vi.waitFor(() => expect(target.execute).toHaveBeenCalledOnce());
+        expect(target.execute).toHaveBeenCalledOnce();
         expect(countActiveToolExecutions(harness.runId)).toBe(1);
 
         const parked = testing.activeRuns.get(suspended.runId as string);
@@ -603,6 +619,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         }
         const settlements = vi.fn();
         void pending.promise.then(settlements);
+        const cancel = vi.spyOn(pending, "cancel");
         const waiting = expectDefined(harness.tools[1], "Code Mode wait test invariant").execute(
           `code-wait-${close}`,
           { runId: suspended.runId },
@@ -615,6 +632,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         } else if (close === "expire") {
           parked.expiresAt = Date.now() - 1;
           testing.removeExpiredRuns();
+        } else if (close === "catalog") {
+          clearToolSearchCatalog(harness);
         } else {
           disposeAllCodeModeRuns();
         }
@@ -622,19 +641,34 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         const settlement = await pending.promise;
         expect(settlement).toMatchObject({ id: pending.id, ok: false });
         expect(settlement.ok ? "" : settlement.error).toMatch(/cancel|abort|expir|owner|shut/i);
-        expect(resultDetails(await waiting).status).not.toBe("waiting");
+        const result = resultDetails(await waiting);
+        expect(result.status).not.toBe("waiting");
+        if (close === "catalog") {
+          expect(result).toMatchObject({
+            status: "failed",
+            code: "aborted",
+            telemetry: suspended.telemetry,
+          });
+          expect(harness.catalogRef.current).toBeUndefined();
+        }
         await vi.waitFor(() => expect(countActiveToolExecutions(harness.runId)).toBe(0));
         expect(settlements).toHaveBeenCalledOnce();
+        expect(cancel).toHaveBeenCalledOnce();
         expect(harness.subscription.getItemLifecycle().activeCount).toBe(0);
         expect(testing.activeRuns.size).toBe(0);
+        expect(testing.resumingRunIds.size).toBe(0);
 
         downstream.resolve();
         await Promise.resolve();
         expect(target.execute).toHaveBeenCalledOnce();
+        expect(continuation.execute).not.toHaveBeenCalled();
         expect(settlements).toHaveBeenCalledOnce();
+        expect(cancel).toHaveBeenCalledOnce();
       } finally {
         downstream.resolve();
+        clearToolSearchCatalog(harness);
         harness.dispose();
+        vi.useRealTimers();
       }
     },
   );

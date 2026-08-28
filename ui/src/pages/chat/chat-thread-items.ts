@@ -277,7 +277,7 @@ export function findCanvasInsertionIndex(
   return maximumIndex;
 }
 
-export function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
+function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
   for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
     const value = message[field];
     if (typeof value === "string" && value.trim()) {
@@ -568,7 +568,9 @@ export function hasRenderableNormalizedMessage(
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
   const media = role === "user" && readTranscriptMediaEntries(message).length;
-  return Boolean(normalized.content.length || normalized.replyTarget || label || media);
+  return Boolean(
+    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+  );
 }
 
 export function sanitizeStreamText(text: string): string {

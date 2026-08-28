@@ -158,6 +158,7 @@ async function runRecallSubagent(params: {
   fastMode?: ActiveMemoryFastMode;
   abortSignal?: AbortSignal;
   onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
+  onEmbeddedRunSettled?: () => void;
 }): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.runtimeConfig, params.agentId);
   const agentDir = resolveAgentDir(params.runtimeConfig, params.agentId);
@@ -262,56 +263,58 @@ async function runRecallSubagent(params: {
       channelId: params.channelId,
     });
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
-    const result = await params.api.runtime.agent.runEmbeddedAgent({
-      sessionId: subagentSessionId,
-      sessionKey: subagentSessionKey,
-      agentId: params.agentId,
-      sessionTarget: {
-        agentId: params.agentId,
+    const result = await params.api.runtime.agent
+      .runEmbeddedAgent({
         sessionId: subagentSessionId,
         sessionKey: subagentSessionKey,
-        storePath,
-      },
-      messageChannel,
-      messageProvider,
-      sessionFile: runtimeSessionFile,
-      workspaceDir,
-      agentDir,
-      config: params.runtimeConfig,
-      prompt,
-      provider: modelRef.provider,
-      model: modelRef.model,
-      lane: ACTIVE_MEMORY_RECALL_LANE,
-      timeoutMs: embeddedTimeoutMs,
-      runId: subagentSessionId,
-      trigger: "manual",
-      conversationRecall: params.conversationRecall,
-      toolsAllow: [...params.config.toolsAllow],
-      disableMessageTool: true,
-      allowGatewaySubagentBinding: true,
-      bootstrapContextMode: "lightweight",
-      verboseLevel: "off",
-      thinkLevel: params.config.thinking,
-      fastMode: params.fastMode,
-      reasoningLevel: "off",
-      silentExpected: true,
-      authProfileFailurePolicy: "local",
-      // On subscription-only claude-cli setups, direct provider API calls
-      // either fail with a billing rejection or silently draw metered extra
-      // usage; route recall through the CLI backend so it runs on plan
-      // limits like the session's main turns.
-      cliBackendDispatch: "subscription-auth",
-      cleanupBundleMcpOnRunEnd: true,
-      abortSignal: params.abortSignal,
-      onAgentToolResult: (event) => {
-        const evidence = readMemoryToolResultEvidence({
-          ...event,
-          toolsAllow: params.config.toolsAllow,
-        });
-        harnessHasUsableMemoryResult ||= evidence.hasUsableMemoryResult;
-        harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
-      },
-    });
+        agentId: params.agentId,
+        sessionTarget: {
+          agentId: params.agentId,
+          sessionId: subagentSessionId,
+          sessionKey: subagentSessionKey,
+          storePath,
+        },
+        messageChannel,
+        messageProvider,
+        sessionFile: runtimeSessionFile,
+        workspaceDir,
+        agentDir,
+        config: params.runtimeConfig,
+        prompt,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        lane: ACTIVE_MEMORY_RECALL_LANE,
+        timeoutMs: embeddedTimeoutMs,
+        runId: subagentSessionId,
+        trigger: "manual",
+        conversationRecall: params.conversationRecall,
+        toolsAllow: [...params.config.toolsAllow],
+        disableMessageTool: true,
+        allowGatewaySubagentBinding: true,
+        bootstrapContextMode: "lightweight",
+        verboseLevel: "off",
+        thinkLevel: params.config.thinking,
+        fastMode: params.fastMode,
+        reasoningLevel: "off",
+        silentExpected: true,
+        authProfileFailurePolicy: "local",
+        // On subscription-only claude-cli setups, direct provider API calls
+        // either fail with a billing rejection or silently draw metered extra
+        // usage; route recall through the CLI backend so it runs on plan
+        // limits like the session's main turns.
+        cliBackendDispatch: "subscription-auth",
+        cleanupBundleMcpOnRunEnd: true,
+        abortSignal: params.abortSignal,
+        onAgentToolResult: (event) => {
+          const evidence = readMemoryToolResultEvidence({
+            ...event,
+            toolsAllow: params.config.toolsAllow,
+          });
+          harnessHasUsableMemoryResult ||= evidence.hasUsableMemoryResult;
+          harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
+        },
+      })
+      .finally(params.onEmbeddedRunSettled);
     const activeSessionFile =
       readActiveMemorySessionFileFromRunResult(result) ?? runtimeSessionFile;
     transcriptSources = collectActiveMemoryTranscriptSources({
