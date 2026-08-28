@@ -1,4 +1,7 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/account-helpers";
 // Zalouser plugin module implements accounts behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -73,6 +76,11 @@ export function resolveZalouserAccountSync(params: {
     enabled,
     profile,
     authenticated: false,
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg: params.cfg,
+      accountId,
+      resolveChannelLimitMb: () => merged.mediaMaxMb,
+    }),
     config: merged,
   };
 }

@@ -6,6 +6,8 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as loggingConfigModule from "../logging/config.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
@@ -71,6 +73,97 @@ const OPENAI_REASONING_REPLAY_METADATA = {
 } as const;
 
 describe("redactTranscriptMessage", () => {
+  it.each(["default", "custom", "registered"] as const)(
+    "preserves canonical tool correlation IDs while applying %s redaction to payloads",
+    (policy) => {
+      const ids =
+        policy === "default"
+          ? [
+              "call_lookup|fc-jztpgrWaMLTnokJk",
+              "call_lookup|fc-jztDifferentokJk",
+              "call_lookup:nested:1|fc-jztpgrWaMLTnokJk",
+            ]
+          : [
+              "call_lookup|opaque-first-identity",
+              "call_lookup|opaque-second-identity",
+              "call_lookup:nested:1|opaque-first-identity",
+            ];
+      const payload = {
+        id: ids[0],
+        role: "toolResult",
+        toolCallId: ids[1],
+        assistant: {
+          role: "assistant",
+          content: ids.map((id) => ({ type: "toolCall", id })),
+        },
+      };
+      const message = castAgentMessage({
+        role: "assistant",
+        content: ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+      });
+      const config = cfg(
+        "tools",
+        policy === "custom" ? [String.raw`call_lookup[^\s"]+`] : undefined,
+      );
+      if (policy === "registered") {
+        ids.forEach(registerSecretValueForRedaction);
+      }
+      try {
+        const assistant = redactTranscriptMessage(message, config);
+        expect(assistant).toMatchObject({ content: ids.map((id) => ({ type: "toolCall", id })) });
+        const blocks = msgContent(assistant) as Array<{ arguments: unknown }>;
+        const results = ids.map((toolCallId) =>
+          redactTranscriptMessage(
+            castAgentMessage({
+              role: "toolResult",
+              toolCallId,
+              toolName: "lookup",
+              content: [{ type: "text", text: JSON.stringify(payload) }],
+              details: payload,
+              isError: false,
+              timestamp: 1,
+            }),
+            config,
+          ),
+        );
+        expect(results).toMatchObject(
+          ids.map((toolCallId) => ({ role: "toolResult", toolCallId })),
+        );
+        const userPayload = redactTranscriptMessage(
+          castAgentMessage({ role: "user", content: msgContent(message), toolCallId: ids[0] }),
+          config,
+        );
+        const noncanonical = [
+          {
+            role: "assistant",
+            id: ids[0],
+            content: [{ type: "text", id: ids[1], text: "visible" }],
+          },
+          { role: "assistant", content: [{ type: "toolCall", id: payload }] },
+          { role: "assistant", content: [msgContent(message)] },
+          { role: "toolResult", toolCallId: [ids[0]], content: [] },
+        ].map((value) => redactTranscriptMessage(castAgentMessage(value), config));
+        const redactedPayloads = JSON.stringify([
+          blocks.map((block) => block.arguments),
+          results.map((result) => {
+            expect(result.role).toBe("toolResult");
+            return result.role === "toolResult" ? [result.content, result.details] : [];
+          }),
+          userPayload,
+          noncanonical,
+        ]);
+        for (const id of ids) {
+          expect(redactedPayloads).not.toContain(id);
+        }
+        expect(msgContent(message)).toEqual(
+          ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+        );
+      } finally {
+        resetSecretRedactionRegistryForTest();
+      }
+    },
+  );
+
   it("redacts text block matching default patterns (sk- token)", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz end");
     const result = redactTranscriptMessage(msg, cfg("tools"));
@@ -80,6 +173,59 @@ describe("redactTranscriptMessage", () => {
     ).text;
     expect(text).not.toContain("sk-abcdef1234567890xyz");
     expect(text).toContain("end");
+  });
+
+  it("preserves source assignments in tool results while redacting explicit credentials", () => {
+    const sourceLines = [
+      "        if let token = timeObserverToken {",
+      "        if let token=timeObserverToken {",
+      "        let token = ForwardingCancellableTokenReference",
+      "    token = get_bearer_token()",
+      '        token = "LibraryViewController.swift"',
+      "        secret = resolvedSecret",
+      "        password = getpass()",
+      '        credential = "fixture"',
+      "        jwt = decodedPayload",
+      "        let API_TOKEN = timeObserverToken",
+      "API_TOKEN = computeToken()",
+      "API_KEY: str = computeKey()",
+      "        register(timeObserverToken)",
+      "        struct.timeObserverToken",
+    ];
+    const apiKey = "sk-abcdef1234567890abcdef1234567890";
+    const envToken = "environment-token-value-1234567890";
+    const input = [...sourceLines, `"apiKey": "${apiKey}"`, `API_TOKEN=${envToken}`].join("\n");
+    const msg = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: input }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "tool result text block",
+    ).text;
+
+    for (const sourceLine of sourceLines) {
+      expect(text).toContain(sourceLine);
+    }
+    expect(text).not.toContain(apiKey);
+    expect(text).toContain(envToken);
+  });
+
+  it("keeps broad assignment masking for non-tool transcript messages", () => {
+    const credential = "assistant-credential-value-127697";
+    const result = redactTranscriptMessage(textMessage(`password = ${credential}`), cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "assistant text block",
+    ).text;
+
+    expect(text).not.toContain(credential);
   });
 
   it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {

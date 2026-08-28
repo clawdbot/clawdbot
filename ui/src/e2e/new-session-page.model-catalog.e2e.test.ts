@@ -9,12 +9,18 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const captureCatalogRetryProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const catalogRetryProofDir = path.join(
   process.cwd(),
   ".artifacts",
   "control-ui-e2e",
   "new-session-catalog-retry",
+);
+const skeletonGapProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "new-session-skeleton-gap",
 );
 
 function catalogDiscoveryRequests(
@@ -30,6 +36,129 @@ function catalogDiscoveryRequests(
 }
 
 suite.define(() => {
+  it("keeps composer actions fixed while model metadata loads", async () => {
+    if (captureUiProof) {
+      await mkdir(skeletonGapProofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.6-luna",
+      heldMethods: ["chat.metadata"],
+      models: [
+        {
+          available: true,
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          reasoning: true,
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const modelSkeleton = page.locator(".chat-controls__model-trigger-skeleton");
+      await expect.poll(() => modelSkeleton.isVisible()).toBe(true);
+      const modelTrigger = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      const actions = page.locator(".new-session-page__composer .agent-chat__composer-actions");
+      const loadingModelBox = await modelTrigger.boundingBox();
+      const loadingActionsBox = await actions.boundingBox();
+      expect(loadingModelBox).not.toBeNull();
+      expect(loadingActionsBox).not.toBeNull();
+      expect(
+        (loadingActionsBox?.x ?? 0) - ((loadingModelBox?.x ?? 0) + (loadingModelBox?.width ?? 0)),
+      ).toBeLessThan(16);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(skeletonGapProofDir, "after.png"),
+        });
+      }
+
+      await gateway.resolveDeferred("chat.metadata");
+      const effortPicker = page.locator(
+        ".new-session-page__composer .chat-controls__effort-picker:not(.chat-controls__effort-picker--reserved)",
+      );
+      await expect.poll(() => effortPicker.isVisible()).toBe(true);
+      const readyActionsBox = await actions.boundingBox();
+      expect(readyActionsBox).not.toBeNull();
+      expect(readyActionsBox?.x).toBeCloseTo(loadingActionsBox?.x ?? 0, 0);
+      expect(readyActionsBox?.width).toBeCloseTo(loadingActionsBox?.width ?? 0, 0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("selects a context window before creating a session", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.6-luna",
+      methodResponses: {
+        "sessions.create": { key: "agent:main:context-window", runStarted: true },
+      },
+      models: [
+        {
+          available: true,
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+        },
+        {
+          available: true,
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+      await page.locator('[data-chat-model-option="anthropic/claude-fable-5"]').click();
+      await modelSelect.click();
+
+      const contextWindowToggle = page.locator('[data-chat-context-window-toggle="200k"]');
+      await expect.poll(() => contextWindowToggle.isVisible()).toBe(true);
+      expect(await contextWindowToggle.getAttribute("aria-checked")).toBe("true");
+      await contextWindowToggle.click();
+      await expect
+        .poll(() => page.locator("[data-chat-model-context-badge]").textContent())
+        .toContain("200K");
+
+      await page.locator(".new-session-page__message").fill("use the smaller window");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "use the smaller window",
+        model: "anthropic/claude-fable-5",
+        contextWindow: "200k",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows metadata failure truthfully and recovers when the picker opens", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -80,11 +209,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.metadata");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      const errorState = page.locator('[data-chat-model-catalog-state="error"]');
-      await pollLocatorText(
-        errorState.locator(".chat-controls__model-catalog-state-label > span"),
-      ).toBe("Models unavailable");
-      expect(await errorState.count()).toBe(1);
+      await expect.poll(() => modelSelect.getAttribute("title")).toBe("Models unavailable");
       expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
 
       await modelSelect.click();
@@ -140,13 +265,19 @@ suite.define(() => {
       const modelSelect = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
+      await expect.poll(() => modelSelect.getAttribute("aria-disabled")).toBe("false");
       await modelSelect.click();
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
 
-      // The picker's own revalidation lands after the rows render, so wait for it.
+      // Explicit picker discovery refreshes the recovered metadata owner once.
       await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({
+          params: { view: "configured", agentId: "main", refresh: true },
+        }),
+      ]);
       expect(await gateway.getRequests("chat.metadata")).toEqual([
         expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
@@ -157,15 +288,15 @@ suite.define(() => {
     }
   });
 
-  it("shows a retryable CLI-agent failure and recovers both picker catalogs", async () => {
-    if (captureCatalogRetryProof) {
+  it("recovers a failed CLI-agent catalog without reloading model metadata for its retry", async () => {
+    if (captureUiProof) {
       await mkdir(catalogRetryProofDir, { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
-      ...(captureCatalogRetryProof
+      ...(captureUiProof
         ? { recordVideo: { dir: catalogRetryProofDir, size: { height: 900, width: 1280 } } }
         : {}),
     });
@@ -237,7 +368,7 @@ suite.define(() => {
       ).toBe("GPT-5.6 Luna");
       expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
       await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
-      if (captureCatalogRetryProof) {
+      if (captureUiProof) {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
@@ -274,7 +405,7 @@ suite.define(() => {
           catalogDiscoveryRequests(await gateway.getRequests("sessions.catalog.list")),
         )
         .toHaveLength(3);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
       await expect
         .poll(() => page.locator('[data-chat-model-target="anthropic"]').isVisible())
         .toBe(true);
@@ -287,7 +418,7 @@ suite.define(() => {
         page.locator('[data-chat-model-target="anthropic"] .chat-controls__model-option-name'),
       ).toBe("Claude Code");
       expect(await errorState.count()).toBe(0);
-      if (captureCatalogRetryProof) {
+      if (captureUiProof) {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,

@@ -7,17 +7,19 @@ import {
   ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
   migrateOpenClawAgentDatabaseForMaintenance,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
 import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 
 /** Reclaim free pages from one agent session SQLite database. */
 export function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
-  options: { env?: NodeJS.ProcessEnv; migrateOlderSchema?: boolean } = {},
+  options: { env?: NodeJS.ProcessEnv; operation?: "import-finalize" } = {},
 ): DoctorSessionSqliteCompactReport {
-  const sqlitePath = resolveTargetSqlitePath(target);
+  const databaseOptions = resolveTargetSqliteOptions(target, options.env);
+  const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
   const stat = readSessionDatabaseStat(sqlitePath);
   if (!stat) {
@@ -48,26 +50,24 @@ export function compactDoctorSessionSqliteTarget(
       );
     }
   };
-  if (options.migrateOlderSchema) {
+  if (options.operation === "import-finalize") {
     migrateOpenClawAgentDatabaseForMaintenance({
-      agentId: target.agentId,
+      agentId: databaseOptions.agentId,
       pathname: sqlitePath,
     });
     requireQuarantineCleared();
   }
 
   const compact = compactDoctorSqliteFile({
+    operation: options.operation,
     afterSuccess: () => {
       requireQuarantineCleared();
-      ensureOpenClawAgentDatabasePermissions(sqlitePath, {
-        agentId: target.agentId,
-        path: sqlitePath,
-      });
+      ensureOpenClawAgentDatabasePermissions(sqlitePath, databaseOptions);
     },
     sqlitePath,
     validateBeforeMutation: (database) =>
       assertOpenClawAgentDatabaseForMaintenance(database, {
-        agentId: target.agentId,
+        agentId: databaseOptions.agentId,
         pathname: sqlitePath,
       }),
   });

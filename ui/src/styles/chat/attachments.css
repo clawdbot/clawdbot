@@ -1,0 +1,86 @@
+.chat-attachment-file-icon {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  color: var(--file-icon-glyph);
+}
+
+.chat-attachment-file-icon[data-mode="large-placeholder"] {
+  width: 44px;
+  height: 44px;
+}
+
+.chat-attachment-file-icon[data-mode="preview-with-favicon"] {
+  width: 20px;
+  height: 20px;
+}
+
+.chat-attachment-file-icon__large,
+.chat-attachment-file-icon__compact {
+  position: absolute;
+  inset: 0;
+  display: none;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.chat-attachment-file-icon[data-mode="large-placeholder"] .chat-attachment-file-icon__large {
+  display: block;
+  background-image: var(--chat-file-icon-shell-dark);
+}
+
+.chat-attachment-file-icon[data-mode="preview-with-favicon"] .chat-attachment-file-icon__compact {
+  display: block;
+  background-image: var(--chat-file-icon-compact-dark);
+}
+
+:root[data-theme-mode="light"]
+  .chat-attachment-file-icon[data-mode="large-placeholder"]
+  .chat-attachment-file-icon__large {
+  background-image: var(--chat-file-icon-shell-light);
+}
+
+:root[data-theme-mode="light"]
+  .chat-attachment-file-icon[data-mode="preview-with-favicon"]
+  .chat-attachment-file-icon__compact {
+  background-image: var(--chat-file-icon-compact-light);
+}
+
+.chat-attachment-file-icon__overlay {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  width: 14px;
+  height: 14px;
+  background-color: var(--chat-file-icon-accent, currentColor);
+  -webkit-mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
+  mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
+}
+
+.chat-attachment-file-icon--unavailable
+  :is(.chat-attachment-file-icon__large, .chat-attachment-file-icon__compact) {
+  opacity: 0.42;
+}
+
+.chat-assistant-attachment-card__title--unavailable {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-decoration-thickness: 1px;
+}
+
+.chat-assistant-attachment-card--recoverable {
+  color: var(--warn);
+}
+
+.chat-assistant-attachment-card--definitive {
+  color: var(--danger);
+}
+
+.chat-assistant-attachment-card--recoverable .chat-assistant-attachment-card__status-meta,
+.chat-assistant-attachment-card--definitive .chat-assistant-attachment-card__status-meta,
+.chat-assistant-attachment-card--recoverable .chat-attachment-file-icon,
+.chat-assistant-attachment-card--definitive .chat-attachment-file-icon {
+  color: currentColor;
+}

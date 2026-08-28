@@ -29,6 +29,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).toContain("skills.changed");
   });
 
+  it("advertises profile-scoped preference invalidation updates", () => {
+    expect(GATEWAY_EVENTS).toContain("users.prefs.changed");
+  });
+
   it("advertises portal replace-set updates", () => {
     expect(GATEWAY_EVENTS).toContain("portal.changed");
   });
@@ -73,7 +77,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-64)).toEqual([
+    expect(listGatewayMethods().slice(-66)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -138,6 +142,8 @@ describe("listGatewayMethods", () => {
       "tools.github.authorize.cancel",
       "sessions.github.publish",
       "diagnostics.lanes",
+      "session.members.listEvidence",
+      "plugins.inspect",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -203,6 +209,23 @@ describe("listGatewayMethods", () => {
     expect(descriptor?.controlPlaneWrite).toBeUndefined();
   });
 
+  it("classifies cron mutations as control-plane writes", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+
+    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run"]) {
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope: "operator.admin",
+        controlPlaneWrite: true,
+      });
+    }
+    for (const method of ["cron.get", "cron.list", "cron.status", "cron.runs"]) {
+      expect(
+        descriptors.find((descriptor) => descriptor.name === method)?.controlPlaneWrite,
+      ).toBeUndefined();
+    }
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("node.runnerInventory.update");
@@ -243,7 +266,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-71)).toEqual([
+    expect(coreMethods.slice(-73)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -315,6 +338,8 @@ describe("listGatewayMethods", () => {
       "tools.github.authorize.cancel",
       "sessions.github.publish",
       "diagnostics.lanes",
+      "session.members.listEvidence",
+      "plugins.inspect",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -355,6 +380,9 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("sessions.assignOwner")).toBe(methods.indexOf("sessions.move") + 1);
     expect(methods.indexOf("progressCard.get")).toBe(methods.indexOf("sessions.assignOwner") + 1);
     expect(methods.indexOf("progressCard.put")).toBe(methods.indexOf("progressCard.get") + 1);
+    expect(methods.indexOf("session.members.listEvidence")).toBe(
+      methods.indexOf("diagnostics.lanes") + 1,
+    );
   });
 
   it("advertises the versioned Talk session RPCs", () => {

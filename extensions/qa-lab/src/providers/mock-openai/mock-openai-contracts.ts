@@ -371,6 +371,7 @@ export type MockScenarioState = {
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
+  repeatedRequestRecoveryAttempts: number;
   toolLoopReadAttempts: number;
 };
 

@@ -1,5 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { coerceNodeInvokeInputPayload } from "./invoke-payload.js";
+import { coerceNodeInvokeInputPayload, coerceNodeInvokePayload } from "./invoke-payload.js";
+
+describe("coerceNodeInvokePayload", () => {
+  it.each([
+    ["preserves the exact owning session", "agent:main:managed", "agent:main:managed"],
+    ["normalizes the owning session", "  agent:main:managed  ", "agent:main:managed"],
+    ["omits an absent owning session", undefined, undefined],
+    ["omits a blank owning session", "  ", undefined],
+    ["omits a non-string owning session", 42, undefined],
+  ])("%s", (_name, sessionKey, expectedSessionKey) => {
+    expect(
+      coerceNodeInvokePayload({
+        id: "invoke-1",
+        nodeId: "node-1",
+        command: "plugin.workspace",
+        sessionKey,
+      }),
+    ).toEqual({
+      id: "invoke-1",
+      nodeId: "node-1",
+      command: "plugin.workspace",
+      paramsJSON: null,
+      timeoutMs: null,
+      idempotencyKey: null,
+      ...(expectedSessionKey ? { sessionKey: expectedSessionKey } : {}),
+    });
+  });
+});
 
 describe("coerceNodeInvokeInputPayload", () => {
   it("accepts a bounded well-formed input payload", () => {

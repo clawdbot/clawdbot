@@ -3,6 +3,7 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -59,6 +60,9 @@ const validationMocks = vi.hoisted(() => ({
 const backupMocks = vi.hoisted(() => ({
   maintainConfigBackups: vi.fn<typeof import("./backup-rotation.js").maintainConfigBackups>(),
 }));
+const fileLockMocks = vi.hoisted(() => ({
+  withFileLock: vi.fn<typeof import("../infra/file-lock.js").withFileLock>(),
+}));
 
 vi.mock("./io.js", async () => ({
   ...(await vi.importActual<typeof import("./io.js")>("./io.js")),
@@ -73,6 +77,10 @@ vi.mock("./backup-rotation.js", async (importOriginal) => {
     maintainConfigBackups: backupMocks.maintainConfigBackups,
   };
 });
+vi.mock("../infra/file-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/file-lock.js")>()),
+  withFileLock: fileLockMocks.withFileLock,
+}));
 
 function createSnapshot(params: {
   hash: string;
@@ -168,6 +176,7 @@ describe("config mutate helpers", () => {
     ioMocks.resolveConfigSnapshotHash.mockImplementation(
       (snapshot: { hash?: string }) => snapshot.hash ?? null,
     );
+    fileLockMocks.withFileLock.mockImplementation(async (_filePath, _options, fn) => await fn());
     delete process.env.OPENCLAW_NIX_MODE;
   });
 
@@ -482,6 +491,85 @@ describe("config mutate helpers", () => {
     expect(result.result).toBe("created");
     expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
     expect(ioMocks.writeConfigFile).toHaveBeenCalledOnce();
+  });
+
+  it.each(["EACCES", "EPERM", "EROFS"] as const)(
+    "diagnoses %s config lock failures at the config directory",
+    async (code) => {
+      const configDir = await suiteRootTracker.make(`lock-permission-${code.toLowerCase()}`);
+      const configPath = path.join(configDir, "openclaw.json");
+      const lockPath = `${configPath}.lock`;
+      const failure = Object.assign(new Error(`${code}: permission denied, open '${lockPath}'`), {
+        code,
+        path: lockPath,
+      });
+      fileLockMocks.withFileLock.mockRejectedValueOnce(failure);
+      const snapshot = createSnapshot({ hash: "hash-1", path: configPath, sourceConfig: {} });
+
+      await expect(replaceConfigFile({ snapshot, nextConfig: {} })).rejects.toMatchObject({
+        name: "Error",
+        message: `OpenClaw cannot write to the config directory ${configDir}. Fix its ownership or permissions, then try again. Underlying error: ${failure.message}`,
+        cause: failure,
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "diagnoses config lock failures through a symlinked config directory",
+    async () => {
+      const root = await suiteRootTracker.make("lock-permission-symlink");
+      const realConfigDir = path.join(root, "real");
+      const configuredDir = path.join(root, "configured");
+      await fs.mkdir(realConfigDir);
+      await fs.symlink(realConfigDir, configuredDir);
+      const configPath = path.join(configuredDir, "openclaw.json");
+      const lockPath = path.join(realConfigDir, "openclaw.json.lock");
+      const failure = Object.assign(new Error(`EACCES: permission denied, open '${lockPath}'`), {
+        code: "EACCES",
+        path: lockPath,
+      });
+      fileLockMocks.withFileLock.mockRejectedValueOnce(failure);
+      const snapshot = createSnapshot({ hash: "hash-1", path: configPath, sourceConfig: {} });
+
+      await expect(replaceConfigFile({ snapshot, nextConfig: {} })).rejects.toMatchObject({
+        message: `OpenClaw cannot write to the config directory ${configuredDir}. Fix its ownership or permissions, then try again. Underlying error: ${failure.message}`,
+        cause: failure,
+      });
+    },
+  );
+
+  it("preserves a permission failure raised outside the config directory", async () => {
+    const configDir = await suiteRootTracker.make("lock-unrelated-permission");
+    const configPath = path.join(configDir, "openclaw.json");
+    // The caller's mutation runs inside the lock scope, so its own EACCES must not be
+    // relabelled as a config-directory permission problem.
+    const failure = Object.assign(
+      new Error("EACCES: permission denied, open '/elsewhere/secret'"),
+      {
+        code: "EACCES",
+        path: "/elsewhere/secret",
+      },
+    );
+    fileLockMocks.withFileLock.mockRejectedValueOnce(failure);
+    const snapshot = createSnapshot({ hash: "hash-1", path: configPath, sourceConfig: {} });
+
+    await expect(replaceConfigFile({ snapshot, nextConfig: {} })).rejects.toBe(failure);
+  });
+
+  it.each([
+    new ConfigMutationConflictError("stale"),
+    Object.assign(new Error("lock timed out"), {
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+      lockPath: "/tmp/openclaw.json.lock",
+    }),
+    new Error("unexpected lock failure"),
+  ])("preserves non-permission config lock failures", async (failure) => {
+    const configDir = await suiteRootTracker.make("lock-error");
+    const configPath = path.join(configDir, "openclaw.json");
+    fileLockMocks.withFileLock.mockRejectedValueOnce(failure);
+    const snapshot = createSnapshot({ hash: "hash-1", path: configPath, sourceConfig: {} });
+
+    await expect(replaceConfigFile({ snapshot, nextConfig: {} })).rejects.toBe(failure);
   });
 
   it("rejects stale replace attempts when the base hash changed", async () => {
@@ -1278,6 +1366,43 @@ describe("config mutate helpers", () => {
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
     await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(
       `${JSON.stringify({ entries: {} }, null, 2)}\n`,
+    );
+  });
+
+  it("rejects non-finite numbers before serializing single-file top-level include writes", async () => {
+    const home = await suiteRootTracker.make("include-non-finite");
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-include-non-finite",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig: {
+          plugins: {
+            entries: {
+              demo: { config: { timeout: Infinity } },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("Value must be a finite number, got Infinity");
+
+    await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
     );
   });
 

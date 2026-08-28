@@ -41,6 +41,7 @@ import {
   readSetupConfigFileSnapshot,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
+  requestTelemetryConsent,
   resolveQuickstartGatewayDefaults,
   writeWizardConfigFile,
 } from "./setup.shared.js";
@@ -120,6 +121,8 @@ async function runSetupWizardOnce(
     runtime.exit(1);
     return;
   }
+
+  baseConfig = await requestTelemetryConsent({ opts, prompter, config: baseConfig });
 
   const compatibilityNotices = snapshot.valid
     ? buildPluginCompatibilitySnapshotNotices({ config: baseConfig })
@@ -459,13 +462,9 @@ async function runSetupWizardOnce(
     const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
       secretInputMode: opts.secretInputMode,
-      ...(opts.remoteUrl !== undefined && storedRemoteUrl
-        ? { edgeAuthOriginUrl: storedRemoteUrl }
-        : {}),
+      ...(opts.remoteUrl !== undefined ? { remoteOriginUrl: storedRemoteUrl } : {}),
     });
-    if (opts.skipBootstrap) {
-      nextConfig = applySkipBootstrapConfig(nextConfig);
-    }
+    nextConfig = opts.skipBootstrap ? applySkipBootstrapConfig(nextConfig) : nextConfig;
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     prompter.disableBackNavigation?.();
     await writeSetupConfigFile(nextConfig, {
@@ -522,18 +521,16 @@ async function runSetupWizardOnce(
     requestedWorkspaceDir,
     { allowWorkspaceChange: allowWorkspaceChange || !hasAuthoredRoster },
   );
-  if (opts.skipBootstrap) {
-    nextConfig = applySkipBootstrapConfig(nextConfig);
-  }
+  nextConfig = opts.skipBootstrap ? applySkipBootstrapConfig(nextConfig) : nextConfig;
   const preModelAuthConfig = nextConfig;
   let stagedModelAuth: SetupModelAuthCandidate | undefined;
-  const hasExplicitAuthSetup = opts.authChoice !== undefined && opts.authChoice !== "skip";
-  if (!keepExistingModelConfig || hasExplicitAuthSetup) {
+  if (!keepExistingModelConfig || (opts.authChoice !== undefined && opts.authChoice !== "skip")) {
     stagedModelAuth = await runSetupModelAuthStep({
       config: nextConfig,
       opts,
       prompter,
       runtime,
+      pendingAgent: firstAgent && { ...firstAgent, workspaceDir },
       preserveExistingModelSelection: keepExistingModelConfig,
     });
     nextConfig = stagedModelAuth.config;

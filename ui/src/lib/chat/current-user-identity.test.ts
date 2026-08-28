@@ -26,5 +26,16 @@ describe("resolveCurrentUserIdentity", () => {
       profileAvatarUrl: "/avatars/alice.png",
     });
     expect(resolveCurrentUserIdentity(hello, "missing-browser")).toBeNull();
+    expect(
+      resolveCurrentUserIdentity(hello, "missing-browser", {
+        id: "alice@example.com",
+        name: "Updated Alice",
+        avatarUrl: "/avatars/alice-v2.png",
+      }),
+    ).toEqual({
+      id: "alice@example.com",
+      name: "Updated Alice",
+      profileAvatarUrl: "/avatars/alice-v2.png",
+    });
   });
 });

@@ -117,8 +117,18 @@ describe("project protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts projectId as an additive sessions.create parameter", () => {
+  it("accepts bounded project identity and remote URL as additive sessions.create parameters", () => {
     expect(validateSessionsCreateParams({ agentId: "main", projectId: "openclaw" })).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", projectId: "" })).toBe(false);
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        projectGitUrl: "https://github.com/openclaw/openclaw.git",
+      }),
+    ).toBe(true);
+    expect(validateSessionsCreateParams({ agentId: "main", projectGitUrl: "" })).toBe(false);
+    expect(
+      validateSessionsCreateParams({ agentId: "main", projectGitUrl: "x".repeat(2_049) }),
+    ).toBe(false);
   });
 });

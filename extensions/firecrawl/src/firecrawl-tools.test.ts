@@ -1548,12 +1548,13 @@ describe("firecrawl tools", () => {
       headers: { "content-type": "application/json" },
     });
     const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+    global.fetch = vi.fn(async () => streamed.response) as typeof fetch;
 
     await expect(
-      firecrawlClientTesting.readFirecrawlJsonResponse(
-        streamed.response,
-        "Firecrawl Search API error",
-      ),
+      runActualFirecrawlSearch({
+        query: "openclaw bounded search response",
+        access: "keyless",
+      }),
     ).rejects.toThrow("Firecrawl Search API error: JSON response exceeds 16777216 bytes");
 
     expect(streamed.getReadCount()).toBeLessThan(32);

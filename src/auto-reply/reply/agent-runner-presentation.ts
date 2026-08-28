@@ -80,9 +80,11 @@ export function createAgentTurnPresentation(params: {
     if (!text) {
       return { skip: true };
     }
+    const conversationContext =
+      params.turn.sessionCtx.agentText ?? params.turn.sessionCtx.BodyForAgent;
     const sanitized = errorContext
-      ? renderUserFacingText(text, { errorContext: true })
-      : sanitizeUserFacingText(text);
+      ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
+      : sanitizeUserFacingText(text, { conversationContext, streaming: true });
     return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
   };
 

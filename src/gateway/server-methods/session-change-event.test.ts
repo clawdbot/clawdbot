@@ -208,8 +208,53 @@ describe("sessions.changed coalescing", () => {
         hasActiveRun: true,
       }),
       expect.anything(),
-      expect.anything(),
+      expect.objectContaining({
+        agentId: "ops",
+        sessionKeys: ["global"],
+      }),
     );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty("agentId");
+    expect(payload).not.toHaveProperty("goal");
+  });
+
+  it("keeps a retired fixed-store owner private after the mutation commits", () => {
+    const config = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const context = createContext(new Set(["conn-1"]), config);
+
+    emitSessionsChanged(context, { reason: "update", sessionKey: "global" });
+
+    expect(mocks.loadRow).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", reason: "update" }),
+      new Set(["conn-1"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    for (const field of [
+      "agentId",
+      "key",
+      "label",
+      "session",
+      "goal",
+      "status",
+      "hasActiveRun",
+      "activeRunIds",
+    ]) {
+      expect(payload, field).not.toHaveProperty(field);
+    }
   });
 
   it("tombstones exact run ids when lifecycle projection takes ownership", () => {

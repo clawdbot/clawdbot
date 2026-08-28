@@ -307,7 +307,7 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
-    @Test(arguments: ["holiday", "KYOTO", "session-123", "  HoLiDaY  "])
+    @Test(arguments: ["holiday", "KYOTO", "session-123", "team planning", "  HoLiDaY  "])
     func `sidebar search matches every canonical gateway session field`(_ query: String) {
         let matching = self.entry(
             key: "agent:main:roadmap",
@@ -315,7 +315,8 @@ struct ChatSessionSidebarModelTests {
             label: "Summer holiday",
             subject: "Kyoto itinerary",
             sessionId: "session-123",
-            updatedAt: 200)
+            updatedAt: 200,
+            category: "Team Planning")
         let other = self.entry(
             key: "agent:main:other",
             displayName: "Unrelated",
@@ -679,6 +680,39 @@ struct ChatSessionSidebarModelTests {
 
         #expect(replayed[0].observerDigest?.headline == "Current work status")
         #expect(replayed[0].observerDigest?.revision == 4)
+    }
+
+    @Test func `global observer events require the active agent owner`() {
+        let running = self.entry(
+            key: "global",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])
+        let accepted = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "work",
+                runid: "run-work",
+                revision: 1,
+                updatedat: 100,
+                headline: "Work status",
+                health: .onTrack),
+            to: [running],
+            activeAgentId: "work")
+        let rejected = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "main",
+                runid: "run-work",
+                revision: 2,
+                updatedat: 200,
+                headline: "Foreign status",
+                health: .stuck),
+            to: accepted,
+            activeAgentId: "work")
+
+        #expect(accepted[0].observerDigest?.headline == "Work status")
+        #expect(rejected[0].observerDigest?.headline == "Work status")
     }
 
     @Test func `run rollover clears a stale digest before the replacement event`() throws {

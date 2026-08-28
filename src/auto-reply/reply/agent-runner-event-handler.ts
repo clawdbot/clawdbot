@@ -41,8 +41,6 @@ export function createAgentRunEventHandler(params: {
   onCompactionCompleted: () => number;
   messageToolDeliveryState: MessageToolDeliveryState;
 }): NonNullable<RunEmbeddedAgentParams["onAgentEvent"]> {
-  const commentaryTextByItem = new Map<string, string>();
-  const lastEmittedCommentaryByItem = new Map<string, string>();
   const shouldSuppressProgressAfterMessageToolDelivery = () =>
     params.sourceRepliesAreToolOnly &&
     params.messageToolDeliveryState.completed &&
@@ -151,33 +149,6 @@ export function createAgentRunEventHandler(params: {
       params.messageToolDeliveryState.completed = true;
     }
 
-    if (
-      evt.stream === "assistant" &&
-      readStringValue(evt.data.phase) === "commentary" &&
-      !shouldSuppressProgressAfterMessageToolDelivery()
-    ) {
-      const commentaryItemId = readStringValue(evt.data.itemId) ?? "";
-      const snapshotText = readStringValue(evt.data.text);
-      const deltaText = readStringValue(evt.data.delta);
-      const accumulated =
-        evt.data.replace === true && snapshotText
-          ? snapshotText
-          : deltaText
-            ? `${commentaryTextByItem.get(commentaryItemId) ?? ""}${deltaText}`
-            : (snapshotText ?? "");
-      commentaryTextByItem.set(commentaryItemId, accumulated);
-      const commentaryText = accumulated.replace(/\s+/g, " ").trim();
-      if (commentaryText && lastEmittedCommentaryByItem.get(commentaryItemId) !== commentaryText) {
-        lastEmittedCommentaryByItem.set(commentaryItemId, commentaryText);
-        await params.turn.opts?.onItemEvent?.({
-          itemId: commentaryItemId || undefined,
-          kind: "preamble",
-          title: "Preamble",
-          phase: "update",
-          progressText: commentaryText,
-        });
-      }
-    }
     if (
       evt.stream === "item" &&
       !hideItemFromChannelProgress &&

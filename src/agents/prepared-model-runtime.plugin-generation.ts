@@ -17,6 +17,7 @@ export function createPreparedPluginGeneration(params: {
   pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
   preparedStaticProviderCatalog: PreparedModelRuntimePluginGeneration["preparedStaticProviderCatalog"];
   providerStaticModels: PreparedModelRuntimePluginGeneration["providerStaticModels"];
+  preferBuiltPluginArtifacts?: boolean;
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration;
   runtimePluginRegistry: PreparedModelRuntimePluginGeneration["pluginRegistry"];
 }): PreparedModelRuntimePluginGeneration {
@@ -35,6 +36,7 @@ export function createPreparedPluginGeneration(params: {
     ...(params.inboundPluginRegistry
       ? { inboundPluginRegistry: params.inboundPluginRegistry }
       : {}),
+    ...(params.preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
     ...(params.mediaCapabilityProviders
       ? { mediaCapabilityProviders: params.mediaCapabilityProviders }
       : {}),

@@ -6,7 +6,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayClientOptions } from "../gateway-rpc.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import { applyParentDefaultHelpAction } from "../program/parent-default-help.js";
-import { isCronMachineOutput } from "./output-mode.js";
+import { CRON_GATEWAY_OPTION_NAMES, isCronMachineOutput } from "./output-mode.js";
 import {
   registerCronAddCommand,
   registerCronListCommand,
@@ -15,15 +15,6 @@ import {
 import { registerCronEditCommand } from "./register.cron-edit.js";
 import { registerCronScratchCommand } from "./register.cron-scratch.js";
 import { registerCronSimpleCommands } from "./register.cron-simple.js";
-
-const CRON_GATEWAY_OPTION_NAMES = [
-  "url",
-  "port",
-  "token",
-  "password",
-  "timeout",
-  "expectFinal",
-] as const;
 
 function inheritCronGatewayOptions(command: Command): void {
   for (const name of CRON_GATEWAY_OPTION_NAMES) {

@@ -30,6 +30,7 @@ import type {
 import type {
   TelegramAmbientTranscriptWatermark,
   TelegramChannelIngressResolver,
+  TelegramMediaRef,
 } from "./bot-message-context.types.js";
 import {
   isTelegramSpooledReplayUpdate,
@@ -240,12 +241,20 @@ export function createTelegramInboundProcessing({
     const nativeMedia = resolveTelegramPrimaryMedia(msg);
     const mediaRuntime = resolveMediaRuntime();
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
+    let unavailable: TelegramMediaRef["unavailable"];
     try {
       media = await resolveMedia({
         ctx,
         maxBytes: mediaMaxBytes,
         ...mediaRuntime,
       });
+      if (mediaRuntime.abortSignal?.aborted) {
+        const abortError =
+          mediaRuntime.abortSignal.reason ?? new Error("telegram media hydration owner aborted");
+        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: abortError });
+        releaseDispatchDedupeClaims(dispatchDedupeClaims, abortError);
+        return { kind: "ignored" };
+      }
       if (media) {
         await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
       }
@@ -261,11 +270,12 @@ export function createTelegramInboundProcessing({
         return { kind: "ignored" };
       }
       if (isMediaSizeLimitError(mediaErr)) {
+        const limitMb =
+          mediaErr instanceof TelegramBotApiFileTooLargeError
+            ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
+            : Math.round(mediaMaxBytes / (1024 * 1024));
+        unavailable = { reason: "oversize", limitMb };
         if (sendOversizeWarning && mediaDisposition !== "silent-ingest") {
-          const limitMb =
-            mediaErr instanceof TelegramBotApiFileTooLargeError
-              ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
-              : Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,
@@ -288,6 +298,7 @@ export function createTelegramInboundProcessing({
           releaseDispatchDedupeClaims(dispatchDedupeClaims, mediaErr);
           return { kind: "ignored" };
         }
+        unavailable = { reason: "download-failed" };
         if (mediaDisposition !== "silent-ingest") {
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
@@ -311,10 +322,11 @@ export function createTelegramInboundProcessing({
             ? {
                 path: media.path,
                 contentType: media.contentType,
+                ...(media.fileName ? { fileName: media.fileName } : {}),
                 kind: media.kind,
                 stickerMetadata: media.stickerMetadata,
               }
-            : { kind: nativeMedia.kind },
+            : { kind: nativeMedia.kind, unavailable },
         ]
       : [];
     const conversationKey = buildTelegramInboundDebounceConversationKey({

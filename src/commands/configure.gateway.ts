@@ -9,6 +9,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
+import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
 import {
@@ -17,11 +18,13 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
+import { isLoopbackAddress } from "../gateway/net.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { t } from "../wizard/i18n/index.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
-import { password, select, text } from "./configure.shared.js";
+import { confirm, password, select, text } from "./configure.shared.js";
 import {
   guardCancel,
   normalizeGatewayTokenInput,
@@ -160,7 +163,7 @@ export async function promptGatewayConfig(
   }
 
   // trusted-proxy + loopback is valid when the reverse proxy runs on the same
-  // host (e.g. cloudflared, nginx, Caddy). trustedProxies must include 127.0.0.1.
+  // host, with the loopback source in trustedProxies and allowLoopback consent.
   if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
     note(
       "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
@@ -172,9 +175,7 @@ export async function promptGatewayConfig(
   let gatewayToken: SecretInput | undefined;
   let gatewayTokenForCalls: string | undefined;
   let gatewayPassword: string | undefined;
-  let trustedProxyConfig:
-    | { userHeader: string; requiredHeaders?: string[]; allowUsers?: string[] }
-    | undefined;
+  let trustedProxyConfig: GatewayTrustedProxyConfig | undefined;
   let trustedProxies: string[] | undefined;
   let next = cfg;
 
@@ -316,10 +317,34 @@ export async function promptGatewayConfig(
     );
     trustedProxies = normalizeStringEntries(trustedProxiesRaw.split(","));
 
+    const existingProxy =
+      cfg.gateway?.auth?.mode === "trusted-proxy" ? cfg.gateway.auth.trustedProxy : undefined;
+    let allowLoopback = existingProxy?.allowLoopback;
+    // Classify CIDR base addresses with the same loopback rules as runtime auth.
+    if (trustedProxies.some((address) => isLoopbackAddress(address.split("/")[0]))) {
+      const title = t("wizard.gateway.trustedProxyLoopbackTitle");
+      note(t("wizard.gateway.trustedProxyLoopbackWarning"), title);
+      allowLoopback =
+        guardCancel(
+          await confirm({
+            message: t("wizard.gateway.trustedProxyAllowLoopback"),
+            initialValue: allowLoopback === true,
+          }),
+          runtime,
+          1,
+        ) || undefined;
+      if (!allowLoopback) {
+        note(t("wizard.gateway.trustedProxyLoopbackRefused"), title);
+      }
+    }
+
     trustedProxyConfig = {
+      // Retain unprompted policy, including device enrollment, on same-mode reruns.
+      ...existingProxy,
       userHeader: normalizeOptionalString(userHeader) ?? "",
       requiredHeaders: requiredHeaders.length > 0 ? requiredHeaders : undefined,
       allowUsers: allowUsers.length > 0 ? allowUsers : undefined,
+      allowLoopback,
     };
   }
 

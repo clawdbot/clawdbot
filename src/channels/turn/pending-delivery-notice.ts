@@ -18,37 +18,6 @@ function noticeId(intentId: string): string {
   return `main-session-restart-recovery:pending-final:${intentId}`;
 }
 
-async function acknowledgePendingDeliveryNotice(params: {
-  sessionKey: string;
-  storePath: string;
-  sessionId: string;
-  intentId: string;
-  idempotencyKey: string;
-}): Promise<void> {
-  if (
-    !(
-      await appendAssistantMessageToSessionTranscript({
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-        expectedSessionId: params.sessionId,
-        text: PENDING_DELIVERY_NOTICE,
-        idempotencyKey: params.idempotencyKey,
-      })
-    ).ok
-  ) {
-    return;
-  }
-  await updateSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
-    (current) =>
-      current.sessionId === params.sessionId &&
-      current.pendingDeliveryNotice?.intentId === params.intentId
-        ? { pendingDeliveryNotice: undefined, updatedAt: Date.now() }
-        : null,
-    { skipMaintenance: true, takeCacheOwnership: true },
-  );
-}
-
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
@@ -74,6 +43,7 @@ export async function deliverPendingDeliveryNotice(
     return;
   }
   const idempotencyKey = noticeId(notice.intentId);
+  let delivered: boolean;
   try {
     const outcome = await runtime.sendRecoveryNotice({
       channel: context.channel,
@@ -83,48 +53,44 @@ export async function deliverPendingDeliveryNotice(
       text: PENDING_DELIVERY_NOTICE,
       idempotencyKey,
     });
-    if (outcome.suppressed) {
-      // Zero platform results: nothing user-visible was sent. Retain the debt
-      // terminally instead of appending a transcript entry that claims it was.
-      await updateSessionEntry({ sessionKey, storePath }, (current) =>
-        current.sessionId === entry.sessionId &&
-        current.pendingDeliveryNotice?.intentId === notice.intentId
-          ? {
-              pendingDeliveryNotice: { ...notice, state: "unresolved" as const },
-              updatedAt: Date.now(),
-            }
-          : null,
-      );
-      return;
-    }
+    delivered = !outcome.suppressed;
   } catch {
     const owner = findDeliveryIntentOwner(idempotencyKey);
-    if (owner?.status === "completed") {
-      await acknowledgePendingDeliveryNotice({
+    if (owner?.status !== "completed" && owner?.status !== "failed") {
+      return;
+    }
+    delivered = owner.status === "completed";
+  }
+  if (
+    delivered &&
+    !(
+      await appendAssistantMessageToSessionTranscript({
         sessionKey,
         storePath,
-        sessionId: entry.sessionId,
-        intentId: notice.intentId,
+        expectedSessionId: entry.sessionId,
+        text: PENDING_DELIVERY_NOTICE,
         idempotencyKey,
-      });
-    } else if (owner?.status === "failed") {
-      await updateSessionEntry({ sessionKey, storePath }, (current) =>
-        current.sessionId === entry.sessionId &&
-        current.pendingDeliveryNotice?.intentId === notice.intentId
-          ? {
-              pendingDeliveryNotice: { ...notice, state: "unresolved" as const },
-              updatedAt: Date.now(),
-            }
-          : null,
-      );
-    }
+      })
+    ).ok
+  ) {
     return;
   }
-  await acknowledgePendingDeliveryNotice({
-    sessionKey,
-    storePath,
-    sessionId: entry.sessionId,
-    intentId: notice.intentId,
-    idempotencyKey,
-  });
+  await updateSessionEntry(
+    { sessionKey, storePath },
+    (current) =>
+      current.sessionId === entry.sessionId &&
+      current.pendingDeliveryNotice?.intentId === notice.intentId &&
+      current.pendingDeliveryNotice.state !== "acknowledged"
+        ? {
+            // Retain the terminal fact: queue settlement may replay after this
+            // acknowledgment, and one intent must never owe its notice again.
+            pendingDeliveryNotice: {
+              ...current.pendingDeliveryNotice,
+              state: delivered ? "acknowledged" : "unresolved",
+            },
+            updatedAt: Date.now(),
+          }
+        : null,
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
 }

@@ -241,9 +241,6 @@ describe("check-deadcode-exports", () => {
       ]),
     );
     expect(knipConfig.workspaces["extensions/diffs"].entry).toContain("src/viewer-client.ts!");
-    expect(knipConfig.workspaces["extensions/matrix"].entry).toContain(
-      "src/plugin-entry.runtime.js!",
-    );
     expect(knipConfig.workspaces["extensions/mxc"].entry).toContain("src/mxc-spawn-launcher.mjs!");
     expect(knipConfig.workspaces["extensions/qa-lab"].entry).toContain("src/ci-smoke-plan.ts!");
   });

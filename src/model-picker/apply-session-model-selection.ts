@@ -2,7 +2,7 @@ import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
 } from "../agents/agent-runtime-id.js";
-import { resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, normalizeProviderId } from "../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
@@ -62,6 +62,7 @@ export type ApplySessionModelSelectionParams = {
   modelCatalog: readonly ModelCatalogEntry[];
   thinkingCatalog?: readonly ModelCatalogEntry[];
   canPersistStickyModelSelection?: boolean;
+  stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
@@ -317,10 +318,14 @@ export async function applySessionModelSelection(
   const effectiveModelRef = `${provider}/${model}`;
   const changed = applied.changed || thinkingRemap !== undefined;
   const configuredDefaultUpdate =
-    params.canPersistStickyModelSelection === true && !request.isDefault
+    params.canPersistStickyModelSelection === true &&
+    (!request.isDefault || params.stickyModelSelectionTarget)
       ? persistStickyModelSelectionBestEffort({
           agentId: params.agentId,
           model: effectiveModelRef,
+          ...(params.stickyModelSelectionTarget
+            ? { target: params.stickyModelSelectionTarget }
+            : {}),
         })
       : undefined;
   if (changed) {

@@ -12,6 +12,7 @@ import {
   createAnthropicGuard,
   createMonotonicUlidFactory,
   createOpenAiGuard,
+  effectiveGuardPolicyVersion,
   formatHandleEpoch,
   InvalidDeliveryReceiptError,
   parseHandleEpoch,
@@ -140,6 +141,7 @@ export class ReefMessageFlow {
       replay: ReplayStore;
       reviews: ReviewApprovalStore;
       delivered: ReefDeliveredStore;
+      authoritySignal?: AbortSignal;
       onIngress: (message: ReefIngressMessage) => Promise<void>;
       onOwnerNotice: (text: string) => Promise<void>;
     },
@@ -157,6 +159,8 @@ export class ReefMessageFlow {
       onPlatformSendDispatch?: () => Promise<void>;
     } = {},
   ): Promise<string> {
+    const signal = this.options.authoritySignal;
+    signal?.throwIfAborted();
     const friend = this.options.trust.get(peer);
     if (
       !friend ||
@@ -182,9 +186,10 @@ export class ReefMessageFlow {
       recipientEncryptionPublicKey: friend.x25519PublicKey,
       guard: this.options.guard,
       audit: this.options.audit,
-      policyVersion: this.requireGuardConfig().policyVersion,
+      policyVersion: this.guardPolicyVersion(),
       reviewGate: (request) => this.options.reviews.request(request),
     });
+    signal?.throwIfAborted();
     // Persist the exact peer/id/body binding before the relay can return a
     // receipt. Only a matching durable record may later authorize a resend turn.
     if (!matchesReefPeerIdentity(this.options.trust.get(peer), recipient)) {
@@ -205,7 +210,9 @@ export class ReefMessageFlow {
     // Guard/review/encryption are local and may reject safely. Mark ambiguity
     // only at the relay boundary so recovery never treats those failures as sent.
     await context.onPlatformSendDispatch?.();
-    await this.options.transport.sendEnvelope(peer, result.envelope);
+    signal?.throwIfAborted();
+    await this.options.transport.sendEnvelope(peer, result.envelope, signal);
+    signal?.throwIfAborted();
     return id;
   }
 
@@ -401,7 +408,7 @@ export class ReefMessageFlow {
         replayStore: this.options.replay,
         guard: this.options.guard,
         audit: this.options.audit,
-        policyVersion: this.requireGuardConfig().policyVersion,
+        policyVersion: this.guardPolicyVersion(),
         reviewGate: (request) => this.options.reviews.request(request),
       });
     } catch (error) {
@@ -452,6 +459,11 @@ export class ReefMessageFlow {
     }
     return this.options.config.guard;
   }
+
+  private guardPolicyVersion(): string {
+    const guard = this.requireGuardConfig();
+    return effectiveGuardPolicyVersion(guard.policyVersion, guard.rules);
+  }
 }
 
 export function createConfiguredGuard(
@@ -471,6 +483,7 @@ export function createConfiguredGuard(
     apiKey: guardCredential,
     pinnedModel: config.guard.pinnedModel,
     timeoutMs: config.guard.timeoutMs,
+    rules: config.guard.rules,
     fetch: fetcher,
   };
   return config.guard.provider === "openai"

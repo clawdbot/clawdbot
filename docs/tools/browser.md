@@ -298,9 +298,14 @@ main model can read the screenshot directly.
 <Accordion title="Ports and reachability">
 
 - Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). `OPENCLAW_GATEWAY_PORT` takes priority over `gateway.port`; either shifts the derived ports in the same family.
-- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` from a range starting 9 ports above the control port (default `18800`-`18899`); set those only for
-  remote CDP profiles or existing-session endpoint attach. `cdpUrl` defaults to
-  the managed local CDP port when unset.
+- Local `openclaw` profiles use a CDP port range starting 9 ports above the control port (default `18800`-`18899`). OpenClaw allocates from that range for
+  the implicit default profile and for profiles created with
+  `openclaw browser create-profile`, writing the chosen `cdpPort` into the
+  config. A profile you declare by hand must set `cdpPort` itself, or `cdpUrl`
+  for a remote endpoint: the schema rejects an `openclaw` or `clawd` profile
+  that sets neither with `Profile must set cdpPort or cdpUrl`.
+  `existing-session` profiles take the endpoint from `cdpUrl` and ignore
+  `cdpPort`; `extension` profiles own their relay port and reject `cdpUrl`.
 - Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
   managed-Chrome startup use built-in deadlines.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per

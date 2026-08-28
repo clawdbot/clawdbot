@@ -3,8 +3,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import { constants as osConstants } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import path from "node:path";
+import { createTempDirTracker } from "../test/helpers/temp-dir.ts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -31,6 +32,7 @@ import {
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
+  terminateVitestProcessGroupForTimeout,
 } from "./vitest-process-group.mts";
 
 type VitestFs = {
@@ -650,7 +652,7 @@ export function resolveVitestSpawnParams(
   platform: NodeJS.Platform = process.platform,
 ): PnpmRunnerParams {
   return {
-    env: resolveVitestProcessEnv(env),
+    env: resolveVitestProcessEnv(resolveVitestCompileCacheSafeEnv(env)),
     detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: ["inherit", "pipe", "pipe"],
   };
@@ -1067,7 +1069,6 @@ export function installVitestNoOutputWatchdog(params: {
   streams?: Array<WatchdogStream | null>;
   timeoutMs: number | null;
   heartbeatMs?: number | null;
-  label?: string;
   forceKillAfterMs?: number;
   log?: (message: string) => void;
   onTimeout?: () => void;
@@ -1089,8 +1090,6 @@ export function installVitestNoOutputWatchdog(params: {
       : null;
   const streams =
     params.streams?.filter((stream): stream is WatchdogStream => stream !== null) ?? [];
-  const label = params.label?.trim();
-  const suffix = label ? ` (${label})` : "";
 
   let active = true;
   let silenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1130,7 +1129,7 @@ export function installVitestNoOutputWatchdog(params: {
         return;
       }
       silentForMs += heartbeatMs;
-      params.log?.(`[vitest] still running with no output for ${silentForMs}ms${suffix}.`);
+      params.log?.(`[vitest] still running with no output for ${silentForMs}ms.`);
       if (silentForMs + heartbeatMs < timeoutMs) {
         scheduleHeartbeatTimer();
       }
@@ -1151,9 +1150,8 @@ export function installVitestNoOutputWatchdog(params: {
       clearHeartbeatTimer();
       timedOut = true;
       params.log?.(
-        `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group${suffix}.`,
+        `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group.`,
       );
-      params.onTimeout?.();
       if (forceKillAfterMs > 0) {
         clearForceKillTimer();
         forceKillTimer = setTimeoutFn(() => {
@@ -1161,11 +1159,12 @@ export function installVitestNoOutputWatchdog(params: {
             return;
           }
           params.log?.(
-            `[vitest] process group still alive after ${forceKillAfterMs}ms; sending SIGKILL${suffix}.`,
+            `[vitest] process group still alive after ${forceKillAfterMs}ms; sending SIGKILL.`,
           );
           params.onForceKill?.();
         }, forceKillAfterMs);
       }
+      params.onTimeout?.();
     }, timeoutMs);
   };
 
@@ -1252,20 +1251,37 @@ export function spawnWatchedVitestProcess({
   pnpmArgs,
   spawnParams,
   env,
-  label,
   onNoOutputTimeout,
 }: {
   pnpmArgs: string[];
   spawnParams: PnpmRunnerParams;
   env: NodeJS.ProcessEnv;
-  label?: string;
   onNoOutputTimeout?: () => void;
 }) {
   let forwardedSignal: NodeSignal | null = null;
-  const child = spawnVitestProcess({
-    pnpmArgs,
-    spawnParams,
-  });
+  let diagnosticsCompletion: Promise<void> | null = null;
+  const tempDirs = createTempDirTracker();
+  let childSpawnParams = spawnParams;
+  // The POSIX completion contract joins all workers before deleting SQLite files.
+  // Own a fresh namespace outside worker module resets, never ambient PID directories.
+  if (spawnParams.detached && shouldUseDetachedVitestProcessGroup()) {
+    const childEnv = spawnParams.env ?? process.env;
+    const tempRoot = tempDirs.make(
+      "oc-vt-",
+      fs.realpathSync(childEnv.TMPDIR || childEnv.TMP || childEnv.TEMP || tmpdir()),
+    );
+    childSpawnParams = {
+      ...spawnParams,
+      env: { ...childEnv, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot },
+    };
+  }
+  let child: ChildProcess;
+  try {
+    child = spawnVitestProcess({ pnpmArgs, spawnParams: childSpawnParams });
+  } catch (error) {
+    tempDirs.cleanup();
+    throw error;
+  }
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
@@ -1278,17 +1294,19 @@ export function spawnWatchedVitestProcess({
     streams: [child.stdout, child.stderr],
     timeoutMs: resolveVitestNoOutputTimeoutMs(env),
     heartbeatMs: resolveVitestNoOutputHeartbeatMs(env),
-    label,
     log: (message) => {
       console.error(message);
     },
     onTimeout: () => {
-      onNoOutputTimeout?.();
-      forwardSignalToVitestProcessGroup({
+      const termination = terminateVitestProcessGroupForTimeout({
         child,
-        signal: "SIGTERM",
         kill: process.kill.bind(process),
+        log: (message) => {
+          console.error(message);
+        },
+        onTimeout: onNoOutputTimeout,
       });
+      diagnosticsCompletion = termination.diagnostics;
     },
     onForceKill: () => {
       forwardSignalToVitestProcessGroup({
@@ -1320,12 +1338,21 @@ export function spawnWatchedVitestProcess({
     }),
     forwardedOutput,
   ])
-    .then(([{ code, signal }]) => {
+    .then(async ([{ code, signal }]) => {
+      await diagnosticsCompletion;
+      tempDirs.cleanup();
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
       }
       return { code, signal: normalizeNodeSignal(signal) };
+    })
+    .catch((error: unknown) => {
+      // A failed spawn owns no handles. A failed group join may still own them.
+      if (!child.pid) {
+        tempDirs.cleanup();
+      }
+      throw error;
     })
     .finally(teardown);
 
@@ -1412,7 +1439,6 @@ async function main(
         ],
         spawnParams: resolveVitestSpawnParams(spawnEnv),
         env: spawnEnv,
-        label: guardedVitestArgs.join(" "),
       }),
     );
     if (exitCode !== 0) {

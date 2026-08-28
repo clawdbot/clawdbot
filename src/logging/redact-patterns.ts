@@ -72,6 +72,10 @@ const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_ASSIG
 const CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS})=([^\s#"'\x60<>]+)/g`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
+const STRUCTURED_JSON_SECRET_REDACT_PATTERN = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`;
+const STRUCTURED_JSON_PAYMENT_REDACT_PATTERN = String.raw`"(?:${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`;
+const AMBIGUOUS_QUOTED_SECRET_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`;
+const AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`;
 // Pure-base64 prefixes require a non-alphanumeric boundary and skip explicit data-URL payloads.
 export const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
 export const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
@@ -126,9 +130,10 @@ export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
 export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
-  String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|authorization|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material|${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`,
-  String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`,
-  String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`,
+  STRUCTURED_JSON_SECRET_REDACT_PATTERN,
+  STRUCTURED_JSON_PAYMENT_REDACT_PATTERN,
+  AMBIGUOUS_QUOTED_SECRET_FIELD_REDACT_PATTERN,
+  AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN,
   String.raw`--(?:${CLI_SECRET_FLAG_KEYS})=([^\s"']+)`,
   String.raw`--(?:${CLI_SECRET_FLAG_KEYS})\s+(?!(?:or|and)\b(?=\s+--))(["']?)([^\s"']+)\1`,
   AUTHORIZATION_BEARER_REDACT_PATTERN,
@@ -184,7 +189,7 @@ export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
   String.raw`(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})`,
   String.raw`(pplx-[A-Za-z0-9_-]{10,})`,
   String.raw`(fal_[A-Za-z0-9_-]{10,})`,
-  String.raw`(fc-[A-Za-z0-9]{10,})`,
+  String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fc-[A-Za-z0-9]{10,})`,
   String.raw`(bb_live_[A-Za-z0-9_-]{10,})`,
   String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(gAAAA[A-Za-z0-9_=-]{20,})`,
   String.raw`(sk_live_[A-Za-z0-9]{10,})`,
@@ -242,3 +247,24 @@ export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
   TELEGRAM_TOKEN_REDACT_PATTERN,
   AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
 ];
+
+export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
+  ENV_ASSIGNMENT_REDACT_PATTERN,
+  ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
+  STRUCTURED_JSON_SECRET_REDACT_PATTERN,
+  AMBIGUOUS_QUOTED_SECRET_FIELD_REDACT_PATTERN,
+  AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN,
+  STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
+  STANDALONE_ASSIGNMENT_REDACT_PATTERN,
+  CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN,
+  CONFIG_ASSIGNMENT_REDACT_PATTERN,
+  CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN,
+  CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN,
+  CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN,
+]);
+
+// Tool output commonly contains source code. Keep key-name matching in logs, direct `.env` reads,
+// and payment JSON; other model-visible text relies on registered and recognizable secret values.
+export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly string[] = DEFAULT_REDACT_PATTERNS.filter(
+  (pattern) => !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern),
+);

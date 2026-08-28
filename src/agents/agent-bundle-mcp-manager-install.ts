@@ -27,7 +27,6 @@ type RuntimeEntryParams = {
   agentDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  idleTtlMs: number;
   includeServerNames?: ReadonlySet<string>;
   excludeServerNames?: ReadonlySet<string>;
   safeServerNamesByServer?: ReadonlyMap<string, string>;
@@ -49,7 +48,6 @@ type SessionMcpRuntimeManagerInstall = {
     agentDir?: string;
     cfg?: OpenClawConfig;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    idleTtlMs: number;
     oauthRequesterNameSet: ReadonlySet<string>;
     mcpServers: Record<string, BundleMcpServerConfig>;
     resolverRequesterServerNames: readonly string[];
@@ -126,13 +124,11 @@ export function createSessionMcpRuntimeManagerInstall(
         })
       ) {
         store.runtimesBySessionId.delete(params.runtimeKey);
-        store.idleTtlMsBySessionId.delete(params.runtimeKey);
         store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
         await existing.dispose();
       } else {
         reconcileReusableRetirement(params.sessionId, existing);
         existing.markUsed();
-        store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
         return existing;
       }
     }
@@ -151,7 +147,6 @@ export function createSessionMcpRuntimeManagerInstall(
       store.createInFlight.delete(params.runtimeKey);
       const staleRuntime = await inFlight.promise.catch(() => undefined);
       store.runtimesBySessionId.delete(params.runtimeKey);
-      store.idleTtlMsBySessionId.delete(params.runtimeKey);
       store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
       await staleRuntime?.dispose();
     }
@@ -177,7 +172,6 @@ export function createSessionMcpRuntimeManagerInstall(
       reconcileReusableRetirement(params.sessionId, runtime);
       runtime.markUsed();
       store.runtimesBySessionId.set(params.runtimeKey, runtime);
-      store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       return runtime;
     });
     store.createInFlight.set(params.runtimeKey, {
@@ -202,7 +196,6 @@ export function createSessionMcpRuntimeManagerInstall(
     agentDir?: string;
     cfg?: OpenClawConfig;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    idleTtlMs: number;
     safeServerNamesByServer: ReadonlyMap<string, string>;
     includeServerNames: ReadonlySet<string>;
     requesterConnect?: RequesterMcpConnect;
@@ -240,7 +233,6 @@ export function createSessionMcpRuntimeManagerInstall(
     ) {
       reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();
-      store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
         connectionHash,
         resolvedAt: store.now(),
@@ -249,7 +241,6 @@ export function createSessionMcpRuntimeManagerInstall(
     }
     if (existing) {
       store.runtimesBySessionId.delete(params.runtimeKey);
-      store.idleTtlMsBySessionId.delete(params.runtimeKey);
       store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
       await existing.dispose();
     }
@@ -261,7 +252,6 @@ export function createSessionMcpRuntimeManagerInstall(
       agentDir: params.agentDir,
       cfg: params.cfg,
       manifestRegistry: params.manifestRegistry,
-      idleTtlMs: params.idleTtlMs,
       includeServerNames: params.includeServerNames,
       safeServerNamesByServer: params.safeServerNamesByServer,
       connectionOverrides: params.connectionOverrides,
@@ -295,7 +285,6 @@ export function createSessionMcpRuntimeManagerInstall(
     agentDir?: string;
     cfg?: OpenClawConfig;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    idleTtlMs: number;
     oauthRequesterNameSet: ReadonlySet<string>;
     mcpServers: Record<string, BundleMcpServerConfig>;
     resolverRequesterServerNames: readonly string[];
@@ -353,7 +342,6 @@ export function createSessionMcpRuntimeManagerInstall(
     ) {
       reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();
-      store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       return existing;
     }
 
@@ -386,7 +374,6 @@ export function createSessionMcpRuntimeManagerInstall(
       agentDir: params.agentDir,
       cfg: params.cfg,
       manifestRegistry: params.manifestRegistry,
-      idleTtlMs: params.idleTtlMs,
       safeServerNamesByServer: params.safeServerNamesByServer,
       includeServerNames: activeNameSet,
       requesterConnect,

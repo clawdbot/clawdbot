@@ -107,14 +107,6 @@ describe("shouldDeferWake", () => {
       ).toEqual({ defer: false });
     });
 
-    it("defers acp spawn stream wakes when they use event intent", () => {
-      expect(decide({ ...afterRun, source: "acp-spawn", reason: "acp:spawn:stream" })).toEqual({
-        defer: true,
-        reason: "not-due",
-        retryAtMs: 79_000,
-      });
-    });
-
     it("flood guard still applies to 'wake' as a backstop against unexpected loops", () => {
       const now = 1_000_000;
       const recentRunStarts = [

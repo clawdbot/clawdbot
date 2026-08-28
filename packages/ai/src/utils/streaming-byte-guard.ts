@@ -43,6 +43,10 @@ export function createSseByteGuard(
   let total = 0;
   let overflowedFlag = false;
   let cancelledFlag = false;
+  const cancelReaderBestEffort = (reason?: unknown): void => {
+    // Upstream cancellation may never settle; cleanup cannot gate the primary outcome.
+    void reader.cancel(reason).catch(() => undefined);
+  };
   return {
     read: async () => {
       if (overflowedFlag || cancelledFlag) {
@@ -58,11 +62,7 @@ export function createSseByteGuard(
         overflowedFlag = true;
         cancelledFlag = true;
         const err = onOverflow({ size: next, maxBytes: opts.maxBytes });
-        try {
-          await reader.cancel(err);
-        } catch {
-          // best-effort cancellation; caller observes the overflow error
-        }
+        cancelReaderBestEffort(err);
         throw err;
       }
       total = next;
@@ -74,11 +74,7 @@ export function createSseByteGuard(
         return;
       }
       cancelledFlag = true;
-      try {
-        await reader.cancel(reason);
-      } catch {
-        // best-effort cancellation
-      }
+      cancelReaderBestEffort(reason);
     },
     totalBytes: () => total,
     overflowed: () => overflowedFlag,

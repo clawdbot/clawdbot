@@ -4,16 +4,33 @@ import { z } from "zod";
 export const TELEGRAM_DESKTOP_VERSION = "7.0.9";
 export const TELEGRAM_DESKTOP_AWS_IMAGE = "telegram-desktop=7.0.9";
 export const TELEGRAM_DESKTOP_DOCKER_IMAGE = "openclaw-telegram-desktop:7.0.9";
+export const RECORDER_AUTHORIZATION_FAILURE_FILENAME =
+  "telegram-desktop-authorization-failure.json";
+
+export const recorderAuthorizationFailureSchema = z.object({
+  acceptedTokenCount: z.number().int().nonnegative(),
+  classification: z.enum(["main-window-timeout", "qr-unreadable", "token-accepted-no-transition"]),
+  failedAt: z.string(),
+  loginScreenshotPath: z.string().optional(),
+  qrAttemptCount: z.number().int().positive(),
+});
+
+export const recorderAuthorizationFailureFactSchema = z.object({
+  failures: z.array(recorderAuthorizationFailureSchema).min(1),
+  schemaVersion: z.literal(1),
+});
+
+export type RecorderAuthorizationFailure = z.infer<typeof recorderAuthorizationFailureSchema>;
 
 const recorderSessionBaseSchema = z.object({
   artifacts: z.record(z.string(), z.string()).optional(),
   chat: z.string().regex(/^-100\d+$/u),
   cleanupErrors: z.array(z.string()).optional(),
   desktopSessionId: z.string().min(1),
-  keepBox: z.boolean(),
   leaseId: z.string().min(1),
   /** False when `--lease-id` borrowed an existing box: the recorder never stops it. */
   leaseOwned: z.boolean(),
+  outputDir: z.string().min(1),
   recordFps: z.number().int().positive(),
   remotePaths: z.object({
     desktopLog: z.string(),
@@ -22,11 +39,12 @@ const recorderSessionBaseSchema = z.object({
     finalScreenshot: z.string(),
     video: z.string(),
   }),
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   startedAt: z.string(),
   /** Telegram Desktop window as placed on the recorded desktop; the crop uses it. */
   window: z.object({
     height: z.number().int().positive(),
+    id: z.string().regex(/^0x[0-9a-f]+$/iu),
     width: z.number().int().positive(),
     x: z.number().int().nonnegative(),
     y: z.number().int().nonnegative(),
@@ -60,6 +78,7 @@ export type StartOptions = {
   outputDir: string;
   provider: RecorderProvider;
   recordFps: number;
+  sessionPath: string;
   ttl: string;
   userDriver: string[];
 };
@@ -68,6 +87,13 @@ export type ViewOptions = {
   command: "view";
   messageId: string;
   sessionPath: string;
+};
+
+export type ActionsOptions = {
+  actionsFile: string;
+  command: "actions";
+  sessionPath: string;
+  timeoutSeconds: number;
 };
 
 export type ScreenshotOptions = {
@@ -79,7 +105,12 @@ export type ScreenshotOptions = {
 export type StopOptions = {
   command: "stop";
   crop?: "telegram-window";
-  keepBox: boolean;
+  sessionPath: string;
+  since?: string;
+};
+
+export type TeardownOptions = {
+  command: "teardown";
   sessionPath: string;
 };
 
@@ -100,22 +131,26 @@ export type ArtifactsOptions = {
 
 type RecorderOptions =
   | ArtifactsOptions
+  | ActionsOptions
   | RecoverOptions
   | ScreenshotOptions
   | StartOptions
   | StatusOptions
   | StopOptions
+  | TeardownOptions
   | ViewOptions;
 
 export function recorderUsageText(): string {
   return [
     "Usage:",
     "  pnpm qa:telegram-desktop-recorder artifacts --session <recorder.json>",
-    '  pnpm qa:telegram-desktop-recorder start --output-dir <dir> --chat <-100groupId> --user-driver "<space-separated cmd prefix>" [options]',
+    '  pnpm qa:telegram-desktop-recorder start --session <recorder.json> --output-dir <dir> --chat <-100groupId> --user-driver "<space-separated cmd prefix>" [options]',
     "  pnpm qa:telegram-desktop-recorder view --session <recorder.json> --message-id <id>",
+    "  pnpm qa:telegram-desktop-recorder actions --session <recorder.json> --actions-file <json> [--timeout-seconds <seconds>]",
     "  pnpm qa:telegram-desktop-recorder screenshot --session <recorder.json> [--output <png>]",
     "  pnpm qa:telegram-desktop-recorder recover --session <recorder.json>",
-    "  pnpm qa:telegram-desktop-recorder stop --session <recorder.json> [--crop telegram-window] [--keep-box]",
+    "  pnpm qa:telegram-desktop-recorder stop --session <recorder.json> [--crop telegram-window] [--since <ISO timestamp>]",
+    "  pnpm qa:telegram-desktop-recorder teardown --session <recorder.json>",
     "  pnpm qa:telegram-desktop-recorder status --session <recorder.json>",
     "",
     "Start options:",
@@ -163,7 +198,17 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     throw new Error(recorderUsageText());
   }
   const parsedCommand = z
-    .enum(["artifacts", "recover", "screenshot", "start", "status", "stop", "view"])
+    .enum([
+      "actions",
+      "artifacts",
+      "recover",
+      "screenshot",
+      "start",
+      "status",
+      "stop",
+      "teardown",
+      "view",
+    ])
     .safeParse(rawCommand);
   if (!parsedCommand.success) {
     throw new Error(`Unknown command: ${rawCommand}\n\n${recorderUsageText()}`);
@@ -176,7 +221,7 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     if (!flag) {
       break;
     }
-    if (flag === "--json" || flag === "--keep-box") {
+    if (flag === "--json") {
       switches.add(flag);
       continue;
     }
@@ -200,16 +245,19 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
           "--output-dir",
           "--provider",
           "--record-fps",
+          "--session",
           "--ttl",
           "--user-driver",
         ])
       : command === "view"
         ? new Set(["--message-id", "--session"])
-        : command === "screenshot"
-          ? new Set(["--output", "--session"])
-          : command === "stop"
-            ? new Set(["--crop", "--session"])
-            : new Set(["--session"]);
+        : command === "actions"
+          ? new Set(["--actions-file", "--session", "--timeout-seconds"])
+          : command === "screenshot"
+            ? new Set(["--output", "--session"])
+            : command === "stop"
+              ? new Set(["--crop", "--session", "--since"])
+              : new Set(["--session"]);
   for (const flag of values.keys()) {
     if (!allowed.has(flag)) {
       throw new Error(`${flag} is not available for ${command}.`);
@@ -217,9 +265,6 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
   }
   if (switches.has("--json") && command !== "start") {
     throw new Error(`--json is not available for ${command}.`);
-  }
-  if (switches.has("--keep-box") && command !== "stop") {
-    throw new Error(`--keep-box is not available for ${command}.`);
   }
   if (command === "start") {
     const chat = requiredString(values, "--chat");
@@ -256,6 +301,7 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
       outputDir: requiredString(values, "--output-dir"),
       provider,
       recordFps: positiveInteger(values.get("--record-fps") ?? "24", "--record-fps"),
+      sessionPath: requiredString(values, "--session"),
       ttl: values.get("--ttl") ?? "2h",
       userDriver,
     };
@@ -266,18 +312,27 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     positiveInteger(messageId, "--message-id");
     return { command, messageId, sessionPath };
   }
+  if (command === "actions") {
+    return {
+      actionsFile: requiredString(values, "--actions-file"),
+      command,
+      sessionPath,
+      timeoutSeconds: positiveInteger(values.get("--timeout-seconds") ?? "60", "--timeout-seconds"),
+    };
+  }
   if (command === "screenshot") {
     return { command, output: values.get("--output"), sessionPath };
   }
   if (command === "stop") {
     const crop = values.get("--crop");
-    if (crop === undefined) {
-      return { command, keepBox: switches.has("--keep-box"), sessionPath };
-    }
-    if (crop !== "telegram-window") {
+    if (crop !== undefined && crop !== "telegram-window") {
       throw new Error("--crop must be telegram-window.");
     }
-    return { command, crop, keepBox: switches.has("--keep-box"), sessionPath };
+    const since = values.get("--since");
+    if (since !== undefined && !Number.isFinite(Date.parse(since))) {
+      throw new Error("--since must be an ISO timestamp.");
+    }
+    return { command, ...(crop ? { crop } : {}), sessionPath, ...(since ? { since } : {}) };
   }
   return { command, sessionPath };
 }

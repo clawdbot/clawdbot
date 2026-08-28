@@ -77,6 +77,7 @@ type SystemAgentTuiRoute = {
 };
 
 const SYSTEM_AGENT_SESSION_KEY = buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID });
+const SYSTEM_AGENT_HISTORY_LIMIT = 200;
 
 function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
   return new SystemAgentChatEngine({
@@ -142,7 +143,7 @@ class SystemAgentTuiBackend implements TuiBackend {
     private readonly route: SystemAgentTuiRoute,
   ) {
     this.engine = engine;
-    this.messages.push(message("assistant", welcome));
+    this.appendMessage(message("assistant", welcome));
   }
 
   setRequestExitHandler(handler: () => void): void {
@@ -171,7 +172,7 @@ class SystemAgentTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
     const text = opts.message.trim();
-    this.messages.push(message("user", opts.message));
+    this.appendMessage(message("user", opts.message));
     // Keep the backend queue ahead of the engine queue so a failed inference
     // turn can retire the session before an already-submitted host command runs.
     const response = this.responseQueue.then(() => this.respond(runId, opts.sessionKey, text));
@@ -183,15 +184,16 @@ class SystemAgentTuiBackend implements TuiBackend {
     return { ok: true, aborted: false };
   }
 
-  async loadHistory(): Promise<{
+  async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }): Promise<{
     sessionId: string;
     messages: SystemAgentHistoryMessage[];
     thinkingLevel: string;
     verboseLevel: string;
   }> {
+    const limit = Math.min(opts.limit ?? SYSTEM_AGENT_HISTORY_LIMIT, SYSTEM_AGENT_HISTORY_LIMIT);
     return {
       sessionId: "openclaw",
-      messages: this.messages,
+      messages: limit > 0 ? this.messages.slice(-limit) : [],
       thinkingLevel: this.route.thinkingLevel,
       verboseLevel: "off",
     };
@@ -259,11 +261,8 @@ class SystemAgentTuiBackend implements TuiBackend {
     this.engine = createChatEngine(this.opts);
     this.engineDisposal = null;
     const overview = await loadOverviewForTui(this.opts);
-    this.messages.splice(
-      0,
-      this.messages.length,
-      message("assistant", formatSystemAgentStartupMessage(overview)),
-    );
+    this.messages.length = 0;
+    this.appendMessage(message("assistant", formatSystemAgentStartupMessage(overview)));
     return { ok: true };
   }
 
@@ -301,6 +300,13 @@ class SystemAgentTuiBackend implements TuiBackend {
     return this.engineDisposal;
   }
 
+  private appendMessage(entry: SystemAgentHistoryMessage): void {
+    this.messages.push(entry);
+    if (this.messages.length > SYSTEM_AGENT_HISTORY_LIMIT) {
+      this.messages.splice(0, this.messages.length - SYSTEM_AGENT_HISTORY_LIMIT);
+    }
+  }
+
   private nextSeq(): number {
     this.seq += 1;
     return this.seq;
@@ -324,7 +330,7 @@ class SystemAgentTuiBackend implements TuiBackend {
       "assistant",
       text || "OpenClaw listened and found nothing to change.",
     );
-    this.messages.push(assistant);
+    this.appendMessage(assistant);
     this.emit("chat", {
       runId,
       sessionKey,
@@ -497,7 +503,7 @@ export async function runSystemAgentTui(
       await runTui({
         local: true,
         session: SYSTEM_AGENT_SESSION_KEY,
-        historyLimit: 200,
+        historyLimit: SYSTEM_AGENT_HISTORY_LIMIT,
         backend,
         config: {},
         title: "openclaw setup",

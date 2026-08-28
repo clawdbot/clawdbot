@@ -70,7 +70,11 @@ function sessionPage(face: BoardFace) {
       return await loadChatRoute(context, location, face, signal);
     },
     component: () =>
-      import("./chat-page.ts").then(() => ({
+      Promise.all([
+        import("./chat-page.ts"),
+        import("../../styles/chat/composer-progress.css"),
+        import("../../styles/chat/composer-queue.css"),
+      ]).then(() => ({
         header: true,
         // ChatPage's bounded inner cache owns per-session teardown, so session
         // routes share the outer owner while their data and URL keep changing.

@@ -3,6 +3,7 @@ import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
@@ -14,6 +15,7 @@ import type {
   ToolCardOutcome,
 } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
+import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
@@ -29,7 +31,6 @@ import {
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -40,10 +41,6 @@ export {
   WIDGET_PROMPT_EVENT,
   type WidgetPromptEventDetail,
 } from "./widget-card.ts";
-
-type FullMessageRequest = NonNullable<
-  Extract<SidebarContent, { kind: "markdown" }>["fullMessageRequest"]
->;
 
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {
@@ -67,7 +64,9 @@ function formatToolOutputForSidebar(text: string): string {
   const trimmed = text.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      return "```json\n" + JSON.stringify(JSON.parse(trimmed), null, 2) + "\n```";
+      JSON.parse(trimmed);
+      // Keep the source literal: reserialization can change numbers, escapes, and duplicate keys.
+      return "```json\n" + trimmed + "\n```";
     } catch {
       return text;
     }
@@ -147,25 +146,17 @@ function handleRawDetailsToggle(event: Event) {
   body.hidden = expanded;
 }
 
-function buildSidebarContent(
-  value: string,
-  options?: {
-    rawText?: string | null;
-    fullMessageRequest?: FullMessageRequest;
-  },
-): SidebarContent {
+function buildSidebarContent(value: string, options?: { rawText?: string | null }): SidebarContent {
   return {
     kind: "markdown",
     content: value,
     ...(options?.rawText ? { rawText: options.rawText } : {}),
-    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
 }
 
 function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
-  options?: { fullMessageRequest?: FullMessageRequest },
 ): SidebarContent | null {
   if (preview.kind !== "canvas" || preview.render !== "url" || !preview.viewId || !preview.url) {
     return null;
@@ -180,20 +171,7 @@ function buildPreviewSidebarContent(
     // trusted global embed mode would re-grant same-origin to widget script.
     ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
     ...(rawText ? { rawText } : {}),
-    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
-}
-
-function buildToolSidebarFullMessageRequest(
-  card: ToolCard,
-  sessionKey: string | undefined,
-): FullMessageRequest | undefined {
-  if (!sessionKey || !card.messageId) {
-    return undefined;
-  }
-  // A transcript entry can contain multiple tool blocks. Until the request can
-  // identify a specific block, upgrading by message id can show the wrong tool.
-  return undefined;
 }
 
 export function renderRawOutputToggle(text: string) {
@@ -324,26 +302,6 @@ export function syncToolDisclosureOverflow(event: Event): void {
     "chat-tool-disclosure--overflowing",
     Boolean(content && content.scrollWidth > content.clientWidth),
   );
-}
-
-export function toggleToolDisclosureKeepingScroll(event: Event, toggle: () => void): void {
-  const target = event.currentTarget;
-  const row = target instanceof Element ? target.closest<HTMLElement>(".chat-virtual-row") : null;
-  const scroller = row?.closest<HTMLElement>(".chat-thread");
-  const rowTop = row?.getBoundingClientRect().top;
-  toggle();
-  if (!row || !scroller || rowTop === undefined) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    // ResizeObserver runs after rAF. Wait one more frame so TanStack applies
-    // its end-anchor delta before we restore this disclosure row's position.
-    requestAnimationFrame(() => {
-      if (row.isConnected) {
-        scroller.scrollTop += row.getBoundingClientRect().top - rowTop;
-      }
-    });
-  });
 }
 
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
@@ -718,6 +676,7 @@ function renderToolCardModes(
   diff: NonNullable<ToolCallView["diff"]>,
   outcome: ToolCardOutcome,
   isError: boolean,
+  file: DiffFilePaths,
 ) {
   const active = isError ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
@@ -737,7 +696,7 @@ function renderToolCardModes(
         ${t("chat.toolCards.raw")}
       </wa-tab>
       <wa-tab-panel id=${`${card.id}-diff-panel`} name="diff" ?active=${active === "diff"}>
-        ${renderDiffBlock(diff, outcome)}
+        ${renderDiffBlock(diff, outcome, undefined, file)}
       </wa-tab-panel>
       <wa-tab-panel id=${`${card.id}-raw-panel`} name="raw" ?active=${active === "raw"}>
         ${renderToolDataBlock({
@@ -903,8 +862,7 @@ export function renderToolCard(
               type="button"
               aria-expanded=${String(expanded)}
               aria-label=${resolveToolRowText(card, opts.runActive)}
-              @click=${(event: MouseEvent) =>
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id))}
+              @click=${() => opts.onToggleExpanded(card.id)}
             ></button>
             <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
             <span class="chat-tool-disclosure__content"
@@ -928,7 +886,7 @@ export function renderToolCard(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id));
+                opts.onToggleExpanded(card.id);
               }
             }}
           >
@@ -986,15 +944,13 @@ export function renderExpandedToolCardContent(
       ? resolveToolWorkspaceFilePath(card, view)
       : null;
   const canOpenSidebar = Boolean(onOpenSidebar);
-  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText, { fullMessageRequest })
+      ? buildPreviewSidebarContent(card.preview, card.outputText)
       : null;
   const sidebarActionContent =
     previewSidebarContent ??
     buildSidebarContent(buildToolCardSidebarContent(card), {
-      fullMessageRequest,
       rawText: card.outputText ?? null,
     });
   const visiblePreview = card.preview
@@ -1023,18 +979,7 @@ export function renderExpandedToolCardContent(
     : nothing;
   const diffCopyAction =
     view.diff && view.diff.length > 0
-      ? html`
-          <openclaw-tooltip content=${t("common.copy")}>
-            <button
-              class="chat-tool-card__action-btn"
-              type="button"
-              @click=${() => void copyToClipboard(serializeDiff(view.diff ?? []))}
-              aria-label=${t("common.copy")}
-            >
-              <span class="chat-tool-card__action-icon">${icons.copy}</span>
-            </button>
-          </openclaw-tooltip>
-        `
+      ? renderCopyButton(serializeDiff(view.diff), t("common.copy"))
       : nothing;
 
   // Command calls render terminal-style: `$ command` + raw output. Remaining
@@ -1058,6 +1003,7 @@ export function renderExpandedToolCardContent(
   // Edits and writes with a resolvable diff render it inline. When raw output
   // also exists, the shared tab primitive owns both views and their semantics.
   if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
+    const file = view.fileOperations?.[0] ?? { path: view.target ?? "" };
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__header">
@@ -1069,8 +1015,8 @@ export function renderExpandedToolCardContent(
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
         ${hasOutput
-          ? renderToolCardModes(card, view.diff, outcome, isError)
-          : renderDiffBlock(view.diff, outcome)}
+          ? renderToolCardModes(card, view.diff, outcome, isError, file)
+          : renderDiffBlock(view.diff, outcome, undefined, file)}
         ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;

@@ -18,11 +18,13 @@ import {
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
-import type {
-  GatewayServiceEnv,
-  GatewayServiceEnvironmentValueSource,
-  GatewayServiceInstallArgs,
-  GatewayServiceManageArgs,
+import {
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceEnv,
+  type GatewayServiceEnvironmentValueSource,
+  type GatewayServiceInstallArgs,
+  type GatewayServiceManageArgs,
 } from "./service-types.js";
 import {
   assertSystemdAvailable,
@@ -60,7 +62,8 @@ function collectSystemdInlineManagedKeys(params: {
     keys.delete(key);
   }
   for (const [rawKey, value] of Object.entries(params.environment ?? {})) {
-    if (typeof value !== "string" || !value.trim()) {
+    // Clearing NODE_OPTIONS must also remove stale env-file flags that override inline values.
+    if (typeof value !== "string" || (!value.trim() && rawKey !== "NODE_OPTIONS")) {
       continue;
     }
     const key = normalizeServiceEnvKey(rawKey);
@@ -163,7 +166,7 @@ async function writeSystemdUnit({
 
   const unitPath = resolveSystemdUnitPath(env);
   const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
-    (await readSystemdServiceExecStart(env))?.environment,
+    resolveManagedGatewayServiceCommand(await readSystemdServiceExecStart(env))?.environment,
   );
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   await assertSystemdManagedPathIsNotSymlink(unitPath);
@@ -547,7 +550,11 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
 
   const runAfterReloadRetry = async (action: "enable" | "restart") => {
     const result = await execSystemctlUser(params.env, [action, unitName]);
-    if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
+    if (
+      result.code === 0 ||
+      result.termination !== "exit" ||
+      !isSystemdUnitMissingDetail(readSystemctlDetail(result))
+    ) {
       return result;
     }
     const retryReload = await reloadSystemd();
@@ -573,6 +580,14 @@ export async function installSystemdService(
 ): Promise<{ unitPath: string }> {
   const { unitPath, backedUp } = await writeSystemdUnit(args);
   await activateSystemdService({ env: args.env });
+  if (
+    args.warn &&
+    hasGatewayServiceLauncherOverride(await readSystemdServiceExecStart(args.env).catch(() => null))
+  ) {
+    args.warn(
+      "Systemd drop-in overrides the managed service command or working directory; inspect, update, or remove the drop-in because reinstalling the base unit does not change the effective launcher.",
+    );
+  }
   writeFormattedLines(
     args.stdout,
     [

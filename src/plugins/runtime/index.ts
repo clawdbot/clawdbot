@@ -189,6 +189,7 @@ function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
   return {
     list: unavailable,
     invoke: unavailable,
+    openDuplex: unavailable,
   };
 }
 
@@ -269,6 +270,11 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     gateway: _options.gateway ?? createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent,
+    hooks: _options.hooks ?? {
+      dispatchHookAgentTurn: async () => {
+        throw new Error("Plugin hook runtime is only available inside the Gateway.");
+      },
+    },
     subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
     nodes: _options.nodes ?? createUnavailableNodesRuntime(),
     sandbox: createRuntimeSandbox(agent),

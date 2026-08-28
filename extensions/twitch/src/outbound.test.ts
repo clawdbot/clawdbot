@@ -169,10 +169,11 @@ describe("outbound", () => {
       const { sendMessageTwitchInternal } = await import("./send.js");
 
       setupAccountContext();
+      const receipt = twitchTestReceipt("twitch-msg-123");
       vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
         ok: true,
         messageId: "twitch-msg-123",
-        receipt: twitchTestReceipt("twitch-msg-123"),
+        receipt,
       });
 
       const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
@@ -186,7 +187,11 @@ describe("outbound", () => {
               text: "Hello Twitch!",
               accountId: "default",
             });
-            expect(result?.receipt?.platformMessageIds).toEqual(["twitch-msg-123"]);
+            expect(result?.receipt).toBe(receipt);
+            expect(result).toMatchObject({
+              messageId: "twitch-msg-123",
+              timestamp: expect.any(Number),
+            });
           },
           media: async () => {
             const result = await twitchMessageAdapter.send?.media?.({
@@ -196,7 +201,12 @@ describe("outbound", () => {
               mediaUrl: "https://example.com/image.png",
               accountId: "default",
             });
-            expect(result?.receipt?.platformMessageIds).toEqual(["twitch-msg-123"]);
+            expect(result?.receipt).toBe(receipt);
+            expect(result).toMatchObject({
+              messageId: "twitch-msg-123",
+              timestamp: expect.any(Number),
+            });
+            expect(result?.receipt.parts.map((part) => part.kind)).toEqual(["text"]);
             expect(sendMessageTwitchInternal).toHaveBeenLastCalledWith(
               "testchannel",
               "image https://example.com/image.png",
@@ -226,40 +236,6 @@ describe("outbound", () => {
         { capability: "reconcileUnknownSend", status: "not_declared" },
         { capability: "afterSendSuccess", status: "not_declared" },
         { capability: "afterCommit", status: "not_declared" },
-      ]);
-    });
-
-    it("adapts outbound progress into message receipts", async () => {
-      const progress = {
-        channel: "twitch",
-        messageId: "twitch-progress-1",
-        receipt: twitchTestReceipt("twitch-progress-1"),
-      };
-      const sendText = twitchOutbound.sendText;
-      if (!sendText) {
-        throw new Error("Twitch text sending is not available.");
-      }
-      const sendSpy = vi.spyOn(twitchOutbound, "sendText").mockImplementationOnce(async (ctx) => {
-        await ctx.onDeliveryResult?.(progress);
-        return progress;
-      });
-      const onDeliveryResult = vi.fn();
-
-      try {
-        await twitchMessageAdapter.send?.text?.({
-          cfg: mockConfig,
-          to: "#testchannel",
-          text: "Hello Twitch!",
-          accountId: "default",
-          onDeliveryResult,
-        });
-      } finally {
-        sendSpy.mockRestore();
-      }
-
-      expect(onDeliveryResult).toHaveBeenCalledOnce();
-      expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt.platformMessageIds).toEqual([
-        "twitch-progress-1",
       ]);
     });
   });

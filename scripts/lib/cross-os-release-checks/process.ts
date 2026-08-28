@@ -16,6 +16,7 @@ import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import { toStringifiedError } from "../error-format.mts";
+import { terminateManagedChild } from "../managed-child-process.mts";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
   Cleanup,
@@ -195,15 +196,12 @@ export async function stopGateway(gateway: GatewayHandle | null) {
 }
 
 function signalChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // The child may have exited before its process group was signaled.
-    }
-  }
-  child.kill(signal);
+  terminateManagedChild(child, signal, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 export function registerActiveChildProcessTree(child: ChildProcess) {

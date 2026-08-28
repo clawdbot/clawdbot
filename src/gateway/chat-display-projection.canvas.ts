@@ -65,19 +65,24 @@ export function isToolResultHistoryBlockType(type: unknown): boolean {
 export function projectToolResultDetails(
   details: unknown,
   maxChars: number,
-): Record<string, unknown> | undefined {
+): { details: Record<string, unknown> | undefined; truncated: boolean } {
   const record = readRecord(details);
   if (!record) {
-    return undefined;
+    return { details: undefined, truncated: false };
   }
   const projected: Record<string, unknown> = {};
+  // The diff is the one display-capped field here; surface the fact so the
+  // message-level marker covers capped tool-result details too.
+  let truncated = false;
   for (const key of ["changed", "created"] as const) {
     if (typeof record[key] === "boolean") {
       projected[key] = record[key];
     }
   }
   if (typeof record.diff === "string" && record.diff.trim()) {
-    projected.diff = truncateChatHistoryText(record.diff, maxChars).text;
+    const diff = truncateChatHistoryText(record.diff, maxChars);
+    projected.diff = diff.text;
+    truncated = diff.truncated;
   }
   if (Array.isArray(record.approvalReviews)) {
     const reviews = record.approvalReviews
@@ -109,7 +114,7 @@ export function projectToolResultDetails(
       mcpApp: preview.mcpApp,
     };
   }
-  return Object.keys(projected).length > 0 ? projected : undefined;
+  return { details: Object.keys(projected).length > 0 ? projected : undefined, truncated };
 }
 
 export function messageHasToolResultShape(message: Record<string, unknown>): boolean {

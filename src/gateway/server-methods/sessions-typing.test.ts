@@ -252,6 +252,8 @@ describe("session typing handler", () => {
       ];
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
+      const recordClientActivity = vi.fn();
+      requestContext.recordClientActivity = recordClientActivity;
       const params = { sessionKey, sessionId: "session-main", context: requestContext };
       const tabOne = client("multi", "multi-tab-1");
       const tabTwo = client("multi", "multi-tab-2");
@@ -277,6 +279,9 @@ describe("session typing handler", () => {
       });
       await vi.advanceTimersByTimeAsync(500);
       expect(broadcast.mock.calls.map((call) => call[1].typing)).toEqual([true, false]);
+      expect(recordClientActivity.mock.calls).toEqual([[tabOne], [tabTwo]]);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(recordClientActivity).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -376,6 +381,8 @@ describe("session typing handler", () => {
         client: client("alice", "alice-tab"),
         context: context(broadcast),
       };
+      const recordClientActivity = vi.fn();
+      params.context.recordClientActivity = recordClientActivity;
 
       expect(await callTyping({ ...params, typing: true })).toEqual({
         ok: true,
@@ -394,6 +401,41 @@ describe("session typing handler", () => {
       });
       await vi.advanceTimersByTimeAsync(900);
       expect(broadcast).toHaveBeenCalledTimes(1);
+      expect(recordClientActivity).toHaveBeenCalledTimes(2);
+      await callTyping({ ...params, typing: true });
+      expect(recordClientActivity).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("does not record malformed, hidden, or unauthorized typing", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:typing-activity-authorization";
+      const scope = { agentId: "main", sessionKey };
+      const entry = {
+        sessionId: "typing-activity",
+        updatedAt: 1,
+        createdActor: { type: "human" as const, id: "owner" },
+      };
+      await upsertSessionEntryCore(scope, { ...entry, visibility: "draft" });
+      const requestContext = context();
+      const recordClientActivity = vi.fn();
+      requestContext.recordClientActivity = recordClientActivity;
+      const params = {
+        sessionKey,
+        sessionId: entry.sessionId,
+        typing: true,
+        client: client("viewer", "typing-viewer"),
+        context: requestContext,
+      };
+      await callTyping({ ...params, sessionKey: "" });
+      await callTyping(params);
+      expect(recordClientActivity).not.toHaveBeenCalled();
+      await upsertSessionEntryCore(scope, { ...entry, visibility: "shared" });
+      await callTyping(params);
+      expect(recordClientActivity).toHaveBeenCalledExactlyOnceWith(params.client);
+      await upsertSessionEntryCore(scope, { ...entry, visibility: "shared", incognito: true });
+      await callTyping(params);
+      expect(recordClientActivity).toHaveBeenCalledExactlyOnceWith(params.client);
     });
   });
 });

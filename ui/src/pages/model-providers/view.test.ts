@@ -47,6 +47,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
     mutationBlockedReason: null,
+    providerUsageStalled: false,
     probeAvailable: true,
     busy: {},
     messages: {},
@@ -553,7 +554,6 @@ describe("renderModelProviders", () => {
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
     expect(text(readiness)).toContain("Connect a verified AI model");
     expect(text(readiness)).toContain("Model required");
-    expect(text(readiness)).toContain("Connect a verified AI model");
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
     expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain(
       "Credentials configured",

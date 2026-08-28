@@ -22,58 +22,109 @@ import {
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { extractRawText } from "../../../lib/chat/message-extract.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
-import { formatUiError } from "../../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
+import { safeAttachmentHref, safeAudioAttachmentHref } from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
+import "./chat-audio-player.ts";
+import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
+import { isSvgImageMediaPath } from "./chat-message-media.ts";
+import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import "./session-diff-panel.ts";
 
-type DetailUnavailableReason = NonNullable<
-  Extract<SidebarContent, { kind: "markdown" }>["unavailableReason"]
->;
-type SidebarFullMessageRequest = Parameters<SidebarFullMessageLoader>[0];
-
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 
-function hasFullMessageRequest(
-  content: ChatDetailPanelContent,
-): content is ChatDetailPanelContent & {
-  fullMessageRequest: SidebarFullMessageRequest;
-} {
-  return Boolean(
-    content.fullMessageRequest && (content.kind === "markdown" || content.kind === "canvas"),
-  );
-}
-
-function formatUnavailableReason(reason: DetailUnavailableReason | null | undefined): string {
-  switch (reason) {
-    case "oversized":
-      return t("chat.detailPanel.fullContentOversized");
-    case "not_visible":
-      return t("chat.detailPanel.fullContentNotVisible");
-    default:
-      return t("chat.detailPanel.fullContentUnavailable");
+function isCrossOriginHttpSource(source: string): boolean {
+  try {
+    const url = new URL(source, window.location.href);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
+    );
+  } catch {
+    return false;
   }
 }
 
-function extractMessageText(message: unknown): string | null {
-  if (!message || typeof message !== "object") {
-    return null;
+function renderSidebarAttachment(
+  content: Extract<SidebarContent, { kind: "attachment" }>,
+  onRequestUpdate: () => void,
+  runtime: AttachmentSidebarRuntime,
+) {
+  const liveSource = content.resolveSource?.(onRequestUpdate, runtime);
+  const source = content.resolveSource ? liveSource : content;
+  const sourceHref = source?.src ?? "";
+  const src =
+    content.attachmentKind === "audio" || content.mimeType?.toLowerCase().startsWith("audio/")
+      ? safeAudioAttachmentHref(sourceHref)
+      : safeAttachmentHref(sourceHref);
+  const authToken = content.resolveSource
+    ? (liveSource?.authToken ?? null)
+    : (content.authToken ?? null);
+  const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (!src) {
+    return html`<div class="sidebar-attachment-preview__unavailable">
+      ${t("chat.attachments.previewUnavailable")}
+    </div>`;
   }
-  if ("text" in message && typeof message.text === "string") {
-    return message.text;
+  if (content.attachmentKind === "video" || mimeType.startsWith("video/")) {
+    return html`<openclaw-chat-video-player
+      .src=${src}
+      .sourceIdentity=${content.sourceIdentity ?? content.src ?? src}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .playback=${source?.playback ?? content.playback ?? "native"}
+      .authToken=${authToken}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+      .mediaWidth=${source?.width ?? content.width}
+      .mediaHeight=${source?.height ?? content.height}
+    ></openclaw-chat-video-player>`;
   }
-  return extractRawText(message);
+  if (content.attachmentKind === "audio" || mimeType.startsWith("audio/")) {
+    return html`<openclaw-chat-audio-player
+      .src=${src}
+      .sourceIdentity=${content.sourceIdentity ?? content.src ?? src}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .playback=${source?.playback ?? content.playback ?? "native"}
+      .authToken=${authToken}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+      .serverDurationMs=${source?.durationMs ?? content.durationMs}
+      .voiceNote=${content.voiceNote === true}
+    ></openclaw-chat-audio-player>`;
+  }
+  const inferTypeFromExtension = !mimeType || mimeType === "application/octet-stream";
+  const blockedExternalSvg =
+    (mimeType === "image/svg+xml" ||
+      (inferTypeFromExtension &&
+        (isSvgImageMediaPath(content.sourceIdentity ?? "", undefined) ||
+          isSvgImageMediaPath(src, undefined) ||
+          isSvgImageMediaPath(content.title, undefined)))) &&
+    isCrossOriginHttpSource(src);
+  if (
+    !blockedExternalSvg &&
+    (content.attachmentKind === "image" || mimeType.startsWith("image/"))
+  ) {
+    return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
+  }
+  return html`<div class="chat-assistant-attachment-card chat-assistant-attachment-card--compact">
+    ${renderAttachmentCardHeader({
+      kind: content.attachmentKind ?? "document",
+      label: content.title,
+      mimeType: content.mimeType ?? undefined,
+      sizeBytes: source?.sizeBytes ?? content.sizeBytes,
+      downloadHref: src,
+      visualMode: "large-placeholder",
+    })}
+  </div> `;
 }
-
 function toPlainTextCodeFence(value: string, language = ""): string {
   const fenceHeader = language ? `\`\`\`${language}` : "```";
   return `${fenceHeader}\n${value}\n\`\`\``;
@@ -91,7 +142,6 @@ export function buildRawContent(
       kind: "markdown",
       content: toPlainTextCodeFence(rawText),
       rawText,
-      ...(content.unavailableReason ? { unavailableReason: content.unavailableReason } : {}),
     };
   }
   if (content.kind === "file") {
@@ -100,7 +150,6 @@ export function buildRawContent(
       kind: "markdown",
       content: toPlainTextCodeFence(rawText, content.language),
       rawText,
-      ...(content.unavailableReason ? { unavailableReason: content.unavailableReason } : {}),
     };
   }
   if (content.rawText?.trim()) {
@@ -108,7 +157,6 @@ export function buildRawContent(
       kind: "markdown",
       content: toPlainTextCodeFence(content.rawText, "json"),
       rawText: content.rawText,
-      ...(content.unavailableReason ? { unavailableReason: content.unavailableReason } : {}),
     };
   }
   return null;
@@ -138,6 +186,8 @@ type MarkdownSidebarProps = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   embedded?: boolean;
+  onAttachmentUpdate: () => void;
+  attachmentRuntime: AttachmentSidebarRuntime;
 };
 
 function renderMarkdownSidebar(props: MarkdownSidebarProps) {
@@ -168,13 +218,15 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       ? content.title?.trim() || t("chat.detailPanel.renderPreview")
       : content?.kind === "image"
         ? content.title.trim() || t("chat.detailPanel.imagePreview")
-        : content?.kind === "file"
-          ? content.name.trim() || t("chat.detailPanel.file")
-          : content?.kind === "session-diff"
-            ? t("chat.sessionDiff.title")
-            : content?.kind === "markdown"
-              ? t("chat.detailPanel.markdownPreview")
-              : t("chat.detailPanel.toolDetails");
+        : content?.kind === "attachment"
+          ? content.title.trim() || t("chat.detailPanel.file")
+          : content?.kind === "file"
+            ? content.name.trim() || t("chat.detailPanel.file")
+            : content?.kind === "session-diff"
+              ? t("chat.sessionDiff.title")
+              : content?.kind === "markdown"
+                ? t("chat.detailPanel.markdownPreview")
+                : t("chat.detailPanel.toolDetails");
   return html`
     <div class="sidebar-panel">
       ${props.embedded
@@ -218,8 +270,9 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                 ? html`<openclaw-session-diff
                     .loader=${content.load}
                     .loadFileText=${content.loadFileText ?? null}
+                    .execNode=${props.fileView?.execNode ?? null}
                     .openFile=${content.openFile ?? null}
-                    .revealFile=${content.revealFile ?? null}
+                    .revealFile=${props.fileView?.onReveal ?? null}
                   ></openclaw-session-diff>`
                 : content.kind === "canvas"
                   ? html`
@@ -282,35 +335,50 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                             : nothing}
                         </div>
                       `
-                    : html`
-                        <section class="sidebar-markdown-shell">
-                          <div class="sidebar-markdown-shell__toolbar">
-                            <div class="sidebar-markdown-shell__intro">
-                              <div class="sidebar-markdown-shell__eyebrow">
-                                ${icons.scrollText}
-                                <span>${t("chat.detailPanel.renderedMarkdown")}</span>
-                              </div>
-                              <div class="sidebar-markdown-shell__hint">
-                                ${t("chat.detailPanel.renderedMarkdownHint")}
-                              </div>
-                            </div>
-                            <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
-                              ${t("chat.detailPanel.viewRawText")}
-                            </button>
-                          </div>
-                          ${markdownHtml
-                            ? html`
-                                <article class="sidebar-markdown-reader sidebar-markdown">
-                                  ${unsafeHTML(markdownHtml)}
-                                </article>
-                              `
-                            : html`
-                                <div class="sidebar-markdown-empty">
-                                  ${t("chat.detailPanel.noPreviewableMarkdown")}
+                    : content.kind === "attachment"
+                      ? html`<div class="sidebar-attachment-preview">
+                          ${renderSidebarAttachment(
+                            content,
+                            props.onAttachmentUpdate,
+                            props.attachmentRuntime,
+                          )}
+                        </div>`
+                      : html`
+                          <section class="sidebar-markdown-shell">
+                            <div class="sidebar-markdown-shell__toolbar">
+                              <div class="sidebar-markdown-shell__intro">
+                                <div class="sidebar-markdown-shell__eyebrow">
+                                  ${icons.scrollText}
+                                  <span>${t("chat.detailPanel.renderedMarkdown")}</span>
                                 </div>
-                              `}
-                        </section>
-                      `
+                                <div class="sidebar-markdown-shell__hint">
+                                  ${t("chat.detailPanel.renderedMarkdownHint")}
+                                </div>
+                              </div>
+                              <button
+                                @click=${props.onViewRawText}
+                                class="btn btn--sm"
+                                type="button"
+                              >
+                                ${t("chat.detailPanel.viewRawText")}
+                              </button>
+                            </div>
+                            ${markdownHtml
+                              ? html`
+                                  <article
+                                    class="sidebar-markdown-reader sidebar-markdown"
+                                    dir=${detectTextDirection(content.content)}
+                                  >
+                                    ${unsafeHTML(markdownHtml)}
+                                  </article>
+                                `
+                              : html`
+                                  <div class="sidebar-markdown-empty">
+                                    ${t("chat.detailPanel.noPreviewableMarkdown")}
+                                  </div>
+                                `}
+                          </section>
+                        `
             : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `}
       </div>
     </div>
@@ -328,6 +396,7 @@ export function renderSidebarPanel(
   const fillHost =
     props.content?.kind === "file" ||
     props.content?.kind === "markdown" ||
+    props.content?.kind === "attachment" ||
     props.content?.kind === "session-diff";
   return html`
     <div
@@ -343,58 +412,6 @@ export function renderSidebarPanel(
       ${renderMarkdownSidebar(props)}
     </div>
   `;
-}
-
-export async function upgradeSidebarMessage(
-  content: ChatDetailPanelContent,
-  loadFullMessage: SidebarFullMessageLoader | null | undefined,
-): Promise<{ content: ChatDetailPanelContent; error: string | null } | { error: string } | null> {
-  if (!hasFullMessageRequest(content) || !loadFullMessage) {
-    return null;
-  }
-  const request = content.fullMessageRequest;
-  try {
-    const result = await loadFullMessage(request);
-    if (!result?.ok || !result.message || typeof result.message !== "object") {
-      return {
-        content: {
-          ...content,
-          unavailableReason: result?.unavailableReason ?? "not_found",
-        },
-        error: formatUnavailableReason(result?.unavailableReason ?? "not_found"),
-      };
-    }
-    const fetchedText = extractMessageText(result.message);
-    const rawText =
-      fetchedText ??
-      (typeof content.rawText === "string"
-        ? content.rawText
-        : content.kind === "markdown"
-          ? content.content
-          : null);
-    return {
-      content:
-        content.kind === "markdown"
-          ? {
-              ...content,
-              content: rawText || content.content,
-              rawText: rawText || content.rawText || content.content,
-              unavailableReason: null,
-            }
-          : {
-              ...content,
-              rawText: rawText || content.rawText || null,
-              unavailableReason: null,
-            },
-      error: null,
-    };
-  } catch (error) {
-    return {
-      error: t("chat.detailPanel.fullContentLoadFailed", {
-        error: formatUiError(error),
-      }),
-    };
-  }
 }
 
 type SidebarNavigationCallbacks = {

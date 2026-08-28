@@ -2,6 +2,10 @@ import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/i
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
+  createChannelAdmissionDecisionReceipt,
+  type ChannelAdmissionDecisionReceiptInput,
+} from "./admission-decision-receipt.js";
+import {
   finalizedContextScopeKey,
   INVALID_SCOPE_VALUE,
   ownDataValue,
@@ -24,6 +28,7 @@ type ChannelAdmissionContribution = Readonly<{
   decision?: Readonly<{
     participantAware: boolean;
     outcomeAffecting: boolean;
+    identifierAuthentication: "affected" | "evaluated" | "not-evaluated";
   }>;
 }>;
 
@@ -46,6 +51,7 @@ type ConsumedChannelAdmissionEvidence = Readonly<{
   invoker: { state: "present"; kind: "person"; rawPrincipalRef: string } | { state: "unknown" };
   assuranceRef?: string;
   decisionCoverage?: "enforced" | "attribution-only" | "unknown" | "unsupported";
+  identifierAuthentication?: "affected" | "evaluated" | "not-evaluated" | "unknown";
 }>;
 
 type ChannelIngressResolutionBinding = Readonly<{
@@ -53,6 +59,7 @@ type ChannelIngressResolutionBinding = Readonly<{
   accountId?: string;
   rawPrincipalRef: string | number | null | undefined;
   participantOutcomeAffecting: boolean;
+  identifierAuthentication: "affected" | "evaluated" | "not-evaluated";
   owner?: ChannelAdmissionEvidenceOwner;
   ownerEpoch?: object;
   scope?: ChannelIngressResolutionScope;
@@ -215,6 +222,7 @@ export function recordChannelIngressResolution(params: {
   accountId?: string;
   rawPrincipalRef: string | number | null | undefined;
   participantOutcomeAffecting: boolean;
+  identifierAuthentication: "affected" | "evaluated" | "not-evaluated";
   scope: ChannelIngressResolutionScope;
 }): ResolvedChannelMessageIngress {
   const owner = state.ownerByChannelId.get(params.channelId);
@@ -226,6 +234,7 @@ export function recordChannelIngressResolution(params: {
       accountId: params.accountId,
       rawPrincipalRef: params.rawPrincipalRef,
       participantOutcomeAffecting: params.participantOutcomeAffecting,
+      identifierAuthentication: params.identifierAuthentication,
       owner: activeOwner,
       ownerEpoch: activeOwner?.epoch,
       scope: Object.freeze({ conversation: Object.freeze({ ...params.scope.conversation }) }),
@@ -435,6 +444,7 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
             decision: Object.freeze({
               participantAware: contribution.participant.state === "present",
               outcomeAffecting: binding.participantOutcomeAffecting,
+              identifierAuthentication: binding.identifierAuthentication,
             }),
           }),
         });
@@ -642,6 +652,7 @@ export function consumeChannelAdmissionEvidence(
       ingressState: "unsupported",
       invoker: { state: "unknown" },
       decisionCoverage: "unsupported",
+      identifierAuthentication: "unknown",
     });
   }
 
@@ -657,12 +668,22 @@ export function consumeChannelAdmissionEvidence(
       ingressState: "unknown",
       invoker: { state: "unknown" },
       decisionCoverage: "unknown",
+      identifierAuthentication: "unknown",
     });
   }
 
   const everyDecisionEnforced = contributions.every(
     (item) => item.decision?.participantAware && item.decision.outcomeAffecting,
   );
+  const identifierAuthentication = contributions.some(
+    (item) => item.decision?.identifierAuthentication === "affected",
+  )
+    ? "affected"
+    : contributions.some((item) => item.decision?.identifierAuthentication === "evaluated")
+      ? "evaluated"
+      : contributions.every((item) => item.decision?.identifierAuthentication === "not-evaluated")
+        ? "not-evaluated"
+        : "unknown";
   return freezeConsumed({
     ingressState: "present",
     invoker: {
@@ -672,74 +693,18 @@ export function consumeChannelAdmissionEvidence(
     },
     assuranceRef: "channel-admission",
     decisionCoverage: everyDecisionEnforced ? "enforced" : "attribution-only",
+    identifierAuthentication,
   });
 }
 
 /** Queue the channel decision after its exact identity tuple on the shared audit FIFO. */
 export function recordChannelAdmissionDecision(params: {
-  contextId: string;
-  executionId: string;
-  runId: string;
-  occurredAt: number;
-  coverageState: NonNullable<ConsumedChannelAdmissionEvidence["decisionCoverage"]>;
+  contextId: ChannelAdmissionDecisionReceiptInput["contextId"];
+  executionId: ChannelAdmissionDecisionReceiptInput["executionId"];
+  runId: ChannelAdmissionDecisionReceiptInput["runId"];
+  occurredAt: ChannelAdmissionDecisionReceiptInput["occurredAt"];
+  coverageState: ChannelAdmissionDecisionReceiptInput["coverageState"];
+  identifierAuthentication: ChannelAdmissionDecisionReceiptInput["identifierAuthentication"];
 }): boolean {
-  const missingEvidence =
-    params.coverageState === "unknown"
-      ? ["channel.admission_evidence"]
-      : params.coverageState === "unsupported"
-        ? ["channel.adapter_identity"]
-        : params.coverageState === "attribution-only"
-          ? ["decision.participant_effect"]
-          : [];
-  return (
-    state.decisionSink?.({
-      schemaVersion: 1,
-      receiptId: `${params.contextId}:channel-admission`,
-      contextId: params.contextId,
-      executionId: params.executionId,
-      runId: params.runId,
-      occurredAt: params.occurredAt,
-      action: {
-        family: "channel",
-        operation: "admission",
-        summary: "Channel ingress admitted this agent execution.",
-      },
-      decision: {
-        outcome:
-          params.coverageState === "unknown" || params.coverageState === "unsupported"
-            ? "unknown"
-            : "allowed",
-        reasonCode:
-          params.coverageState === "enforced"
-            ? "channel_ingress_participant_enforced"
-            : params.coverageState === "attribution-only"
-              ? "channel_ingress_attribution_only"
-              : params.coverageState === "unsupported"
-                ? "channel_ingress_identity_unsupported"
-                : "channel_ingress_identity_unknown",
-      },
-      enforcement: {
-        coverageState: params.coverageState,
-        evaluatorRef: "channel-ingress",
-        policyRefs: [],
-        grantRefs: [],
-        contextFieldsUsed: params.coverageState === "enforced" ? ["invoker.principal"] : [],
-      },
-      source: {
-        owner: "channel-ingress",
-        recordRef: `${params.contextId}:channel-admission`,
-        decisionBoundary: "channel-ingress.run-admission",
-      },
-      missingEvidence,
-      remediation:
-        params.coverageState === "enforced"
-          ? []
-          : [
-              {
-                code: "treat_as_diagnostic_provenance",
-                text: "Treat this receipt as diagnostic provenance, not authorization.",
-              },
-            ],
-    }) ?? false
-  );
+  return state.decisionSink?.(createChannelAdmissionDecisionReceipt(params)) ?? false;
 }

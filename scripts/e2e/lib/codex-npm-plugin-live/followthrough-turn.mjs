@@ -47,7 +47,6 @@ const result = await agentCommandFromIngress(
     messageChannel: "webchat",
     channel: "webchat",
     sourceReplyDeliveryMode: "message_tool_only",
-    senderIsOwner: true,
     allowModelOverride: true,
     // The embedded one-shot path retires bundled runtime resources; the Codex
     // harness uses this signal to close its shared app-server client and child.

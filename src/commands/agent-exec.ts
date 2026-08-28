@@ -651,8 +651,9 @@ export async function agentExecCommand(
     // Auth, session keys, and SQLite ownership must share one resolved owner.
     // Splitting these paths can select an agent's store but emit a `main` key.
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
-    restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths = await import("../config/paths.js");
+    const storedAuthStateDir = runtimePaths.resolveStateDir();
+    restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths.pinRuntimePaths();
     if (opts.stateDir) {
       const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
@@ -735,7 +736,11 @@ export async function agentExecCommand(
     const runWithAuthScope = () =>
       opts.authEnvOnly === true
         ? withEnvOnlyAuthProfileStore(runWithPluginInstallRoots)
-        : withAuthProfileStoreAgentDir(storedAuthAgentDir, runWithPluginInstallRoots);
+        : withAuthProfileStoreAgentDir(
+            storedAuthAgentDir,
+            storedAuthStateDir,
+            runWithPluginInstallRoots,
+          );
     const result = await withHostExecInheritedEnvOmitted(
       listKnownProviderAuthEnvVarNames({ env: process.env }),
       runWithAuthScope,

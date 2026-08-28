@@ -14,6 +14,14 @@ vi.spyOn(handleActionModule, "handleDiscordMessageAction").mockImplementation(
 );
 const { discordMessageActions } = await import("./channel-actions.js");
 
+type DiscordDiscovery = ReturnType<NonNullable<typeof discordMessageActions.describeMessageTool>>;
+function schemaForAction(discovery: DiscordDiscovery, action: string) {
+  const schema = discovery?.schema;
+  return (Array.isArray(schema) ? schema : schema ? [schema] : []).find((entry) =>
+    entry.actions?.some((candidate) => candidate === action),
+  );
+}
+
 describe("discordMessageActions", () => {
   it("returns no tool actions when no token-sourced Discord accounts are enabled", () => {
     withEnv({ DISCORD_BOT_TOKEN: undefined }, () => {
@@ -54,7 +62,6 @@ describe("discordMessageActions", () => {
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.schema).toBeUndefined();
     expect(discovery?.actions).toEqual([
       "send",
       "poll",
@@ -328,6 +335,25 @@ describe("discordMessageActions", () => {
       "event-list",
       "event-create",
     ]);
+    expect(schemaForAction(defaultDiscovery, "send")).toMatchObject({
+      actions: ["send"],
+      properties: {
+        components: { description: expect.stringContaining("Discord Components V2") },
+      },
+    });
+    expect(schemaForAction(workDiscovery, "react")).toMatchObject({
+      actions: expect.arrayContaining(["react", "reactions"]),
+      properties: {
+        emoji: { description: expect.stringContaining('action:"emoji-list"') },
+      },
+    });
+    expect(schemaForAction(workDiscovery, "send")).toMatchObject({
+      actions: ["send"],
+      visibility: "all-configured",
+      properties: {
+        components: { description: expect.stringContaining("Discord Components V2") },
+      },
+    });
   });
 
   it("hides upload-file when Discord message actions are disabled", () => {
@@ -348,10 +374,15 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("upload-file");
     expect(discovery?.actions).not.toContain("read");
     expect(discovery?.actions).not.toContain("edit");
-    expect(discovery?.actions).not.toContain("delete");
+    expect(schemaForAction(discovery, "send")).toMatchObject({
+      actions: ["send"],
+      properties: {
+        components: { description: expect.stringContaining("Discord Components V2") },
+      },
+    });
   });
 
-  it("does not expose Discord-native message tool schema", () => {
+  it("describes usable custom emoji formats and available server emoji discovery", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
         channels: {
@@ -361,7 +392,28 @@ describe("discordMessageActions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toBeUndefined();
+    expect(schemaForAction(discovery, "react")).toMatchObject({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: {
+          description: expect.stringMatching(
+            /Unicode.*name:id.*<:name:id>.*<a:name:id>.*emoji-list/,
+          ),
+        },
+      },
+    });
+    expect(schemaForAction(discovery, "send")).toMatchObject({
+      actions: ["send"],
+      properties: {
+        components: {
+          description: expect.stringContaining("Discord Components V2"),
+          properties: {
+            blocks: { type: "array" },
+            modal: { type: "object" },
+          },
+        },
+      },
+    });
   });
 
   it.each(["read", "search", "edit", "delete", "react", "pin", "channel-info"])(
@@ -413,7 +465,7 @@ describe("discordMessageActions", () => {
         action: "send",
         cfg: {} as OpenClawConfig,
         params: {
-          components: {
+          components: JSON.stringify({
             text: "Choose",
             blocks: [
               {
@@ -421,7 +473,7 @@ describe("discordMessageActions", () => {
                 buttons: [{ label: "Yes", callbackData: "yes" }],
               },
             ],
-          },
+          }),
           embeds: undefined,
           filename: "photo.png",
         },

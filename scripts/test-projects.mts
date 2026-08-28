@@ -5,6 +5,12 @@ import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import { formatMs } from "./lib/check-timing-summary.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
+import {
+  isE2eBuildSkipped,
+  resolveVitestPretestBuildMode,
+  runE2eGlobalSetup,
+} from "./lib/vitest-build-prerequisites.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
@@ -84,13 +90,12 @@ function cleanupVitestRunSpec(spec: VitestRunSpec) {
   }
 }
 
-function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[], label: string) {
+function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[]) {
   let noOutputTimedOut = false;
   return new Promise<VitestCommandOutcome>((resolve, reject) => {
     const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
       pnpmArgs,
       env: spec.env,
-      label,
       onNoOutputTimeout: () => {
         noOutputTimedOut = true;
       },
@@ -126,16 +131,12 @@ async function runVitestSpec(spec: VitestRunSpec) {
   try {
     if (spec.preflightPnpmArgs) {
       console.error(`[test] preflight ${spec.config}`);
-      const preflightResult = await runPnpmSpecCommand(
-        spec,
-        spec.preflightPnpmArgs,
-        `${spec.config}:preflight`,
-      );
+      const preflightResult = await runPnpmSpecCommand(spec, spec.preflightPnpmArgs);
       if (preflightResult.code !== 0 || preflightResult.signal) {
         return preflightResult;
       }
     }
-    return await runPnpmSpecCommand(spec, spec.pnpmArgs, spec.config);
+    return await runPnpmSpecCommand(spec, spec.pnpmArgs);
   } finally {
     cleanupVitestRunSpec(spec);
   }
@@ -307,6 +308,35 @@ async function main() {
     printNoChangedTestTargets(args, process.cwd(), baseEnv);
     printTestSummary("skipped", 0, performance.now() - suiteStartedAt);
     return;
+  }
+
+  const pretestBuildMode = resolveVitestPretestBuildMode(
+    runSpecs.map((spec) => ({ configs: [spec.config], includePatterns: spec.includePatterns })),
+  );
+  const runBuildCommand = (commandArgs: string[], env: NodeJS.ProcessEnv) =>
+    runManagedCommand({ bin: process.execPath, args: commandArgs, cwd: process.cwd(), env });
+  const e2eSpecs = runSpecs.filter((spec) => spec.config === "test/vitest/vitest.e2e.config.ts");
+  if (e2eSpecs.length > 0) {
+    if (!isE2eBuildSkipped(baseEnv)) {
+      console.error("[test] preparing E2E runtime before Vitest workers");
+      await runE2eGlobalSetup(runBuildCommand, baseEnv);
+      // E2E preparation also covers runtime/private-QA readers. Only a completed
+      // owner may tell config-level setup to reuse that shared generation.
+      for (const spec of e2eSpecs) {
+        spec.env = { ...spec.env, OPENCLAW_E2E_USE_PREBUILT_DIST: "1" };
+      }
+    }
+  } else if (pretestBuildMode) {
+    console.error(`[test] preparing ${pretestBuildMode} runtime before Vitest workers`);
+    const code = await runBuildCommand(["scripts/run-node.mjs", "--version"], {
+      ...baseEnv,
+      ...(pretestBuildMode === "private-qa" ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}),
+    });
+    if (code !== 0) {
+      printTestSummary("failed", 0, performance.now() - suiteStartedAt);
+      process.exitCode = code;
+      return;
+    }
   }
 
   const isFullSuiteRun =

@@ -31,6 +31,27 @@ async function withChatPage(run: (page: Page) => Promise<void>): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([
+    { draft: "Draft from a shared link", name: "a one-shot chat draft" },
+    { draft: undefined, name: "an existing session URL" },
+  ])("preserves remaining URL state while resolving $name", async ({ draft }) => {
+    await withChatPage(async (page) => {
+      await installMockGateway(page, { historyMessages: [] });
+      const sessionUrl = new URL(controlUiSessionUrl(suite.server.baseUrl, "main"));
+      if (draft !== undefined) {
+        sessionUrl.searchParams.set("draft", draft);
+      }
+      sessionUrl.searchParams.set("panel", "details");
+      sessionUrl.hash = "#pane";
+
+      await page.goto(sessionUrl.href);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => composer.inputValue()).toBe(draft ?? "");
+      await expect.poll(() => new URL(page.url()).search).toBe("?panel=details");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#pane");
+    });
+  });
+
   it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page, {
@@ -766,7 +787,7 @@ suite.define(() => {
     });
   });
 
-  it("sends /stop to the exact selected channel session and clears its working indicator", async () => {
+  it("sends annotated /stop to the exact selected channel session and clears its working indicator", async () => {
     await withChatPage(async (page) => {
       const channelSessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
       const gateway = await installMockGateway(page, {
@@ -791,6 +812,27 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list");
       const workingIndicator = page.locator(".chat-working-indicator");
       await workingIndicator.waitFor({ state: "visible", timeout: 10_000 });
+
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:browser-annotation", {
+            cancelable: true,
+            detail: {
+              modelContext: "Review the annotated page",
+              dataUrl:
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+              fileName: "annotated-page.png",
+              card: {
+                title: "Annotated page",
+                displayUrl: "example.com",
+                markedRegionCount: 1,
+                inspectedElement: false,
+              },
+            },
+          }),
+        );
+      });
+      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
 
       await composer.fill("/stop");
       await page.getByRole("option", { name: /\/stop/ }).waitFor();
@@ -824,6 +866,7 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await workingIndicator.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
       await expectRequestCountStable(gateway, "chat.abort", 0);
       await expectRequestCountStable(gateway, "chat.send", 0);
       await expect.poll(() => page.getByRole("listbox").count()).toBe(0);

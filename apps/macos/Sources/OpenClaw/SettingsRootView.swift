@@ -17,7 +17,7 @@ struct SettingsRootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
-    private let isPreview = ProcessInfo.processInfo.isPreview
+    private let isPreview = ProcessInfo.processInfo.isPreview || ProcessInfo.processInfo.isRunningTests
     private let isNixMode = ProcessInfo.processInfo.isNixMode
 
     init(
@@ -204,6 +204,10 @@ struct SettingsRootView: View {
             ForEach(self.cachedDetailTabs) { tab in
                 self.detailView(for: tab)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // Keep inactive native scroll views mounted but zero-area; full-size overlaps steal wheel events.
+                    .frame(
+                        width: tab == self.selectedTab ? nil : 0,
+                        height: tab == self.selectedTab ? nil : 0)
                     .opacity(tab == self.selectedTab ? 1 : 0)
                     .allowsHitTesting(tab == self.selectedTab)
                     .disabled(tab != self.selectedTab)

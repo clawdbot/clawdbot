@@ -121,6 +121,47 @@ describe("memory-lancedb doctor migration", () => {
     migratedConnection.close();
   });
 
+  test("keeps literal $ patterns in home when expanding a tilde dbPath", async () => {
+    const home = path.join(getTmpDir(), "home$&d");
+    const dollarDbPath = path.join(home, "lancedb-dollar");
+    const connection = await lancedb.connect(dollarDbPath);
+    const table = await connection.createTable("memories", [
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        text: "legacy shared memory",
+        vector: [1, 0],
+        importance: 0.7,
+        category: "fact",
+        createdAt: 1,
+      },
+    ]);
+    table.close();
+    connection.close();
+
+    const config = {
+      agents: { list: [{ id: "main", default: true }] },
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: { dbPath: "~/lancedb-dollar" },
+          },
+        },
+      },
+    };
+    const params = {
+      config,
+      env: { ...process.env, HOME: home },
+      stateDir: getTmpDir(),
+      oauthDir: path.join(getTmpDir(), "oauth"),
+      context: unusedDoctorContext,
+    };
+    const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining(dollarDbPath)],
+    });
+  });
+
   test("deletes only structurally complete legacy envelope rows", async () => {
     const benignRows = [
       {

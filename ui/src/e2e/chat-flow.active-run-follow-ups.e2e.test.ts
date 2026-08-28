@@ -1,4 +1,7 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -98,46 +101,6 @@ suite.define(() => {
     }
   });
 
-  it("steers a queued follow-up with modified Enter in Enter shortcut mode", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("keep the first shortcut run active");
-      await page.getByRole("button", { name: "Send message" }).click();
-      await gateway.waitForRequest("chat.send");
-      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
-
-      const steerText = "steer this keyboard follow-up now";
-      await composer.fill(steerText);
-      await composer.press("Control+Enter");
-
-      const firstRunSends = await waitForRequests(gateway, "chat.send", 2);
-      const steerParams = requireRecord(firstRunSends[1]?.params);
-      expect(steerParams).toMatchObject({
-        deliver: false,
-        message: steerText,
-        queueMode: "steer",
-        sessionKey: "main",
-      });
-      expect(steerParams).not.toHaveProperty("expectedRunId");
-      expect(steerParams).not.toHaveProperty("expectedLeafEntryId");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("keeps the active run across a live steer operation", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -197,7 +160,8 @@ suite.define(() => {
         stream: "item",
         ts: Date.now(),
       });
-      await page.getByText(commentaryText, { exact: true }).waitFor();
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText(commentaryText, { exact: true }).waitFor();
       const emitTool = (data: Record<string, unknown>) =>
         gateway.emitGatewayEvent("agent", {
           data,
@@ -227,7 +191,9 @@ suite.define(() => {
         steerParams.idempotencyKey,
         "steer chat send idempotency key",
       );
-      await expect.poll(() => page.getByText(commentaryText, { exact: true }).count()).toBe(1);
+      await expect
+        .poll(() => transcript.getByText(commentaryText, { exact: true }).count())
+        .toBe(1);
       await gateway.resolveDeferred("chat.send", { runId: steerRunId, status: "started" });
       const steerUser = {
         __openclaw: {
@@ -277,7 +243,16 @@ suite.define(() => {
         result: "process complete",
         toolCallId: "callProcess",
       });
-      const finalText = "UI4_LONG_BASE UI4_STEER_OK";
+      const workingRowKey = await page
+        .locator("[data-virtual-row-key^='agent-run:']")
+        .last()
+        .getAttribute("data-virtual-row-key");
+      const finalText = Array.from(
+        { length: 18 },
+        (_, index) =>
+          `Terminal response paragraph ${index + 1}. ` +
+          "The durable reply must replace every transient projection before the browser paints.",
+      ).join("\n\n");
       await gateway.emitGatewayEvent("chat", {
         deltaText: finalText,
         message: {
@@ -289,27 +264,102 @@ suite.define(() => {
         sessionKey: "main",
         state: "delta",
       });
+      const streamingBubble = page.locator(".chat-bubble.streaming", {
+        hasText: "Terminal response paragraph 1.",
+      });
+      await streamingBubble.waitFor();
+      const streamingRow = streamingBubble.locator(
+        "xpath=ancestor::div[contains(@class, 'chat-virtual-row')]",
+      );
+      await streamingRow.waitFor();
+      expect(await streamingRow.getAttribute("data-virtual-row-key")).not.toBe(workingRowKey);
+      const steerBubble = page.locator(".chat-group.user", { hasText: steerText }).last();
+      const steerElement = await steerBubble.elementHandle();
+      // Scrolling between separate protocol reads can make adjacent rows appear to overlap.
+      const [steerBounds, streamingBounds] = await streamingBubble.evaluate(
+        (streaming, steer) =>
+          [steer, streaming].map((element) => {
+            if (!element?.isConnected || element.getClientRects().length === 0) {
+              return null;
+            }
+            const { y, height } = element.getBoundingClientRect();
+            return { y, height };
+          }),
+        steerElement,
+      );
+      await steerElement?.dispose();
+      expect(steerBounds).not.toBeNull();
+      expect(streamingBounds).not.toBeNull();
+      expect(streamingBounds!.y).toBeGreaterThanOrEqual(steerBounds!.y + steerBounds!.height - 1);
+      const durableFinalMessage = {
+        role: "assistant",
+        content: [{ text: finalText, type: "text" }],
+        __openclaw: { id: "ui4-final", seq: 5 },
+      };
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: [runId],
         clientRunId: runId,
         hasActiveRun: true,
-        message: {
-          role: "assistant",
-          content: [{ text: finalText, type: "text" }],
-          __openclaw: { id: "ui4-final", seq: 5 },
-        },
+        message: durableFinalMessage,
         messageId: "ui4-final",
         messageSeq: 5,
-        session: {
-          activeRunIds: [runId],
-          hasActiveRun: true,
-          key: "main",
-          kind: "direct",
-          status: "running",
-          updatedAt: Date.now(),
-        },
+        runId,
         sessionKey: "main",
       });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            let frames = 12;
+            const wait = () => {
+              frames -= 1;
+              if (frames <= 0) {
+                resolve();
+                return;
+              }
+              requestAnimationFrame(wait);
+            };
+            requestAnimationFrame(wait);
+          }),
+      );
+      await streamingBubble.waitFor({ state: "detached" });
+      expect(
+        await page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).count(),
+      ).toBe(1);
+      const overlaps = await page.locator(".chat-thread").evaluate((thread) => {
+        const rows = Array.from(thread.querySelectorAll<HTMLElement>(".chat-virtual-row"))
+          .map((row) => {
+            const rect = row.getBoundingClientRect();
+            return {
+              bottom: rect.bottom,
+              key: row.dataset.virtualRowKey ?? "",
+              top: rect.top,
+            };
+          })
+          .filter((row) => row.bottom > row.top)
+          .toSorted((left, right) => left.top - right.top);
+        return rows.slice(1).flatMap((row, index) => {
+          const previous = rows[index];
+          return previous && row.key !== previous.key && row.top < previous.bottom - 1
+            ? [`${previous.key}->${row.key}`]
+            : [];
+        });
+      });
+      expect(overlaps).toEqual([]);
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        clientRunId: runId,
+        hasActiveRun: false,
+        message: durableFinalMessage,
+        messageId: "ui4-final",
+        messageSeq: 5,
+        runId,
+        sessionKey: "main",
+      });
+      await expect
+        .poll(() =>
+          page.locator("[data-virtual-row-key^='agent-run:'] .chat-bubble.streaming").count(),
+        )
+        .toBe(0);
       await gateway.emitChatFinal({ runId, text: finalText });
       await expect
         .poll(() =>
@@ -319,6 +369,249 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-work-group", { hasText: "used process" }).count())
         .toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it.each(["before", "after"] as const)(
+    "keeps cumulative stream text ordered when history resolves %s the live steer event",
+    async (historyOrder) => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const runId = "run-steer-order";
+      const steerRunId = "steer-order";
+      const startedAt = Date.now() - 3_000;
+      const initialText = "Explain the long running operation.";
+      const beforeText = "This explanation streamed before the steering message.";
+      const steerText = "Now focus on the remaining work.";
+      const afterText = "This continuation streamed after the steering message.";
+      const userMessage = {
+        role: "user",
+        content: initialText,
+        timestamp: startedAt - 1_000,
+        __openclaw: { id: "order-user", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const steerMessage = {
+        role: "user",
+        content: steerText,
+        timestamp: startedAt + 1_000,
+        __openclaw: {
+          id: "order-steer",
+          idempotencyKey: `${steerRunId}:user`,
+          seq: 2,
+          steerTargetRunId: runId,
+        },
+      };
+      const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "main" };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [userMessage],
+        inFlightRun: { runId, startedAt, text: "" },
+        sessionInfo,
+      });
+      const emitSteer = () =>
+        gateway.emitGatewayEvent("session.message", {
+          ...sessionInfo,
+          clientRunId: steerRunId,
+          message: steerMessage,
+          messageId: "order-steer",
+          messageSeq: 2,
+          sessionKey: "main",
+        });
+      const emitDelta = (text: string) =>
+        gateway.emitGatewayEvent("chat", {
+          message: { role: "assistant", content: [{ type: "text", text }] },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const transcript = page.locator(".chat-thread-inner");
+        await transcript.getByText(initialText, { exact: true }).waitFor();
+        await emitDelta(beforeText);
+        await transcript.getByText(beforeText, { exact: true }).waitFor();
+        if (historyOrder === "after") {
+          await emitSteer();
+          await transcript.getByText(steerText, { exact: true }).waitFor();
+        }
+
+        await gateway.setMethodResponse("chat.history", {
+          messages: [userMessage, steerMessage],
+          inFlightRun: { runId, startedAt, text: beforeText },
+          sessionInfo,
+        });
+        const startupsBefore = (await gateway.getRequests("chat.startup")).length;
+        await gateway.deferNext("chat.startup");
+        await gateway.setOnline(false);
+        await waitForControlUiGatewayReconnecting(page);
+        await gateway.setOnline(true);
+        await gateway.waitForRequest("chat.startup", { after: startupsBefore });
+        await gateway.resolveDeferred("chat.startup");
+        await transcript.getByText(steerText, { exact: true }).waitFor();
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
+        if (historyOrder === "before") {
+          await emitSteer();
+        }
+        await emitDelta(`${beforeText}\n\n${afterText}`);
+
+        try {
+          await expect
+            .poll(() =>
+              transcript
+                .locator(".chat-bubble .chat-text")
+                .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim())),
+            )
+            .toEqual([initialText, beforeText, steerText, afterText]);
+        } finally {
+          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          if (artifactDir) {
+            await mkdir(artifactDir, { recursive: true });
+            await page.screenshot({
+              fullPage: true,
+              path: path.join(artifactDir, `steer-history-${historyOrder}-live-event.png`),
+            });
+          }
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
+  it("replaces a retained cumulative steer prefix with split history around keyed commentary", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const runId = "run-steer-split";
+    const steerRunId = "steer-split";
+    const startedAt = Date.now() - 5_000;
+    const initialText = "Explain the long running operation.";
+    const beforeText = "A B";
+    const commentaryText = "Checking the intermediate result.";
+    const steerText = "Now focus on the remaining work.";
+    const afterText = "The remaining work continues after steering.";
+    const userMessage = {
+      role: "user",
+      content: initialText,
+      timestamp: startedAt - 1_000,
+      __openclaw: { id: "split-user", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const steerMessage = {
+      role: "user",
+      content: steerText,
+      timestamp: startedAt + 3_000,
+      __openclaw: {
+        id: "split-steer",
+        idempotencyKey: `${steerRunId}:user`,
+        seq: 5,
+        steerTargetRunId: runId,
+      },
+    };
+    const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "main" };
+    const gateway = await installMockGateway(page, {
+      historyMessages: [userMessage],
+      inFlightRun: { runId, startedAt, text: "" },
+      sessionInfo,
+    });
+    const emitDelta = (text: string) =>
+      gateway.emitGatewayEvent("chat", {
+        message: { role: "assistant", content: [{ type: "text", text }] },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+    const capture = async (name: string) => {
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, `steer-split-commentary-${name}.png`),
+        });
+      }
+    };
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const transcript = page.locator(".chat-thread-inner");
+      const bubbleTexts = () =>
+        transcript
+          .locator(".chat-bubble .chat-text")
+          .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim()));
+      await transcript.getByText(initialText, { exact: true }).waitFor();
+      await emitDelta(beforeText);
+      await transcript.getByText(beforeText, { exact: true }).waitFor();
+      // The live steer closes one combined segment before split history replaces it.
+      await gateway.emitGatewayEvent("session.message", {
+        ...sessionInfo,
+        clientRunId: steerRunId,
+        message: steerMessage,
+        messageId: "split-steer",
+        messageSeq: 5,
+        sessionKey: "main",
+      });
+      await expect.poll(bubbleTexts).toEqual([initialText, beforeText, steerText]);
+      await capture("retained-prefix");
+
+      await gateway.setMethodResponse("chat.history", {
+        messages: [
+          userMessage,
+          {
+            role: "assistant",
+            content: "A",
+            timestamp: startedAt,
+            __openclaw: { id: "split-a", idempotencyKey: runId, seq: 2 },
+          },
+          {
+            role: "assistant",
+            content: commentaryText,
+            timestamp: startedAt + 1_000,
+            __openclaw: { id: "split-commentary", idempotencyKey: runId, seq: 3 },
+            openclawStreamFallback: {
+              itemId: "split-commentary-item",
+              source: "segment",
+              replacementText: commentaryText,
+              runId,
+            },
+          },
+          {
+            role: "assistant",
+            content: "B",
+            timestamp: startedAt + 2_000,
+            __openclaw: { id: "split-b", idempotencyKey: runId, seq: 4 },
+          },
+          steerMessage,
+        ],
+        inFlightRun: { runId, startedAt, text: beforeText },
+        sessionInfo,
+      });
+      const startupsBefore = (await gateway.getRequests("chat.startup")).length;
+      await gateway.deferNext("chat.startup");
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: startupsBefore });
+      await gateway.resolveDeferred("chat.startup");
+      await transcript.getByText(commentaryText, { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await emitDelta(`${beforeText} ${afterText}`);
+
+      try {
+        await expect
+          .poll(bubbleTexts)
+          .toEqual([initialText, "A", commentaryText, "B", steerText, afterText]);
+      } finally {
+        await capture("recovered-continuation");
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -351,8 +644,126 @@ suite.define(() => {
 
       const queuedRow = page.locator(".chat-queue__item", { hasText: queuedText });
       await queuedRow.waitFor({ timeout: 10_000 });
-      await queuedRow.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
       await expectRequestCountStable(gateway, "chat.send", 1);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("projects one disconnected state for an offline steer follow-up", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("steer");
+      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("keep the disconnect run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+
+      const followUpText = "steer after the gateway returns";
+      await composer.fill(followUpText);
+      await page.locator(".agent-chat__composer-actions .chat-send-btn--send").click();
+
+      const rows = page.locator(".chat-queue__item");
+      await expect.poll(() => rows.count()).toBe(1);
+      await expect.poll(() => rows.getByText("Waiting for reconnect").count()).toBe(1);
+      expect(await rows.getByText("Steer", { exact: true }).count()).toBe(0);
+      await expectRequestCountStable(gateway, "chat.send", 1);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("sends a queued follow-up after an exact terminal session publication", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionInfo: { hasActiveRun: false, status: "done" },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const initialText = "keep this run active until session state settles it";
+      await composer.fill(initialText);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const initialSend = await gateway.waitForRequest("chat.send");
+      const initialSendParams = requireRecord(initialSend.params);
+      const activeRunId = requireString(initialSendParams.idempotencyKey, "active chat run id");
+      const activeSessionKey = requireString(initialSendParams.sessionKey, "active session key");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const followUp = "send after the missed terminal event";
+      await composer.fill(followUp);
+      await page.getByRole("button", { name: "Queue message" }).click();
+      const queuedRow = page.locator(".chat-queue__item", { hasText: followUp });
+      await queuedRow.waitFor({ timeout: 10_000 });
+      await expectRequestCountStable(gateway, "chat.send", 1);
+
+      await gateway.setHistoryMessages([
+        {
+          __openclaw: {
+            idempotencyKey: `${activeRunId}:user`,
+          },
+          content: [{ text: initialText, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+      ]);
+      const sessionListsBeforeTerminal = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        activeRunIds: [activeRunId],
+        hasActiveRun: true,
+        key: activeSessionKey,
+        kind: "direct",
+        reason: "lifecycle",
+        status: "running",
+        updatedAt: Date.now(),
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(sessionListsBeforeTerminal);
+      await gateway.resolveDeferred(
+        "sessions.list",
+        chatSessionListResponse([
+          {
+            activeRunIds: [],
+            hasActiveRun: false,
+            key: activeSessionKey,
+            kind: "direct",
+            label: "Main",
+            lastRunId: activeRunId,
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        ]),
+      );
+
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({ message: followUp });
+      await queuedRow.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }

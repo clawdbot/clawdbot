@@ -42,23 +42,13 @@ export type HeartbeatToolResponse = {
 const OUTCOMES = new Set<string>(HEARTBEAT_TOOL_OUTCOMES);
 const PRIORITIES = new Set<string>(HEARTBEAT_TOOL_PRIORITIES);
 
-function readBooleanAlias(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 /** Validate and normalize unknown heartbeat tool output. */
 export function normalizeHeartbeatToolResponse(value: unknown): HeartbeatToolResponse | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const outcome = readString(value.outcome);
-  const notify = readBooleanAlias(value, "notify");
+  const notify = typeof value.notify === "boolean" ? value.notify : undefined;
   const summary = readString(value.summary);
   if (!outcome || !OUTCOMES.has(outcome) || notify === undefined || !summary) {
     return undefined;

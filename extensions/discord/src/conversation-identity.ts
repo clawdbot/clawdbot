@@ -34,6 +34,18 @@ export function resolveDiscordConversationIdentity(params: {
     : buildDiscordConversationIdentity("channel", params.channelId);
 }
 
+export function resolveDiscordRuntimeBindingConversationId(params: {
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  userId?: string | null;
+  channelId: string;
+}): string {
+  if (params.isDirectMessage && !params.isGroupDm) {
+    return buildDiscordConversationIdentity("user", params.userId) ?? params.channelId;
+  }
+  return params.channelId;
+}
+
 export function resolveDiscordCurrentConversationIdentity(params: {
   chatType?: string | null;
   from?: string | null;

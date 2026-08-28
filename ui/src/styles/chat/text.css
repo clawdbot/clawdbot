@@ -19,11 +19,19 @@
 }
 
 .chat-text {
+  font-family: var(--font-chat);
   font-size: var(--chat-text-size);
   line-height: 1.5;
   color: var(--chat-text);
   overflow-wrap: anywhere;
   word-break: break-word;
+  /* Serif chat faces need macOS stem darkening to stay crisp at chat size:
+     the app-wide `antialiased` (base.css body) thins their hairlines into
+     gray smear. applyChatFontSmoothing (app/typography.ts) sets `auto` when
+     the resolved chat typeface is a serif; unset falls back to the inherited
+     app-wide smoothing. */
+  -webkit-font-smoothing: var(--chat-font-smoothing, inherit);
+  -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
 }
 
 .chat-message-disclosure {
@@ -166,7 +174,6 @@
 .markdown-table__viewport {
   max-width: 100%;
   overflow-x: auto;
-  scrollbar-width: thin;
 }
 
 .markdown-table--can-scroll-right .markdown-table__viewport {
@@ -300,7 +307,6 @@
     color-mix(in srgb, var(--accent) 6%, var(--secondary))
   );
   color: var(--text-strong);
-  font-family: var(--font-body);
   font-weight: 600;
 }
 
@@ -417,7 +423,6 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(details) {
-  box-sizing: border-box;
   width: 100%;
   padding: var(--space-4);
   border: 1px solid var(--border);
@@ -616,20 +621,16 @@
    purpose: each renderer's own :where(a) and code rules would otherwise win on
    source order, and sidebar-markdown.css is imported after this file. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link {
+  position: relative;
   color: var(--link);
   /* File links are href-less anchors (driven by data-file-path), so the UA
      link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
   text-decoration: none;
-  /* Atomic: prose cannot break between the glyph and the label, or at a hyphen
-     inside it. max-width keeps a label the parser could not shorten wrapping
-     inside the chip; the chat scroller's overflow-x: hidden would clip it.
-     The wrap policy is declared here rather than inherited: .chat-text sets
-     overflow-wrap: anywhere but .sidebar-markdown sets no wrapping policy, so
-     an unbreakable label would size the capped box past the panel, whose body
-     hides horizontal overflow, and be clipped instead of wrapping. */
+  /* Keep the glyph and label atomic while long labels wrap inside both renderers. */
   display: inline-block;
   max-width: 100%;
+  padding-inline-start: 1.28em;
   overflow-wrap: anywhere;
 }
 
@@ -644,22 +645,20 @@
    stays out of the accessibility tree and out of copied text, and currentColor
    keeps it on the link color in every theme. Sized in em so it tracks
    --chat-text-size and the user's text-scale setting. The default glyph is the
-   generic document; kinds below match components/file-kind.ts, whose icons are
-   the same Lucide set the file preview modal renders as SVG.
-   Stays `inline`: an atomic box carries its own break opportunity and would push
-   a too-wide label whole to the next line, stranding the glyph. Inline boxes
-   ignore width/height, so 1em comes from padding-inline-start and a mask size. */
+   generic document; kinds below match components/file-kind.ts. Its own concrete
+   paint box keeps WebKit from leaking the mask across inline fragment edges. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link::before {
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z'/%3E%3Cpolyline points='14 2 14 8 20 8'/%3E%3Cline x1='16' x2='8' y1='13' y2='13'/%3E%3Cline x1='16' x2='8' y1='17' y2='17'/%3E%3Cline x1='10' x2='8' y1='9' y2='9'/%3E%3C/svg%3E");
 
   content: "";
-  display: inline;
-  padding-inline-start: 1em;
-  margin-inline-end: 0.28em;
-  vertical-align: -0.14em;
+  position: absolute;
+  inset-inline-start: 0;
+  top: calc((1lh - 1em) / 2);
+  width: 1em;
+  height: 1em;
   background: currentColor;
-  mask: var(--file-glyph) left center / 1em 1em no-repeat;
-  -webkit-mask: var(--file-glyph) left center / 1em 1em no-repeat;
+  mask: var(--file-glyph) center / contain no-repeat;
+  -webkit-mask: var(--file-glyph) center / contain no-repeat;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="code"]::before {
@@ -730,7 +729,6 @@
 
 :is(.chat-text, .sidebar-markdown) .markdown-external-image {
   display: flex;
-  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;

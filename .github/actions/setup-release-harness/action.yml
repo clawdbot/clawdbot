@@ -10,9 +10,9 @@ runs:
     - name: Setup trusted release harness package manager
       uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
       with:
+        cache-mode: off
         node-version: ${{ inputs.node-version }}
         package-manager-file: .release-harness/package.json
-        use-actions-cache: "false"
 
     - name: Install trusted release harness dependencies
       shell: bash

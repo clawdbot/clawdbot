@@ -36,7 +36,7 @@ function makeContext(
 ): ResolverContext {
   return createResolverContext({
     sourceConfig,
-    env: {},
+    env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME },
     ...(manifestRegistry ? { manifestRegistry } : {}),
   });
 }
@@ -162,6 +162,128 @@ describe("collectPluginConfigAssignments", () => {
     const assignment = requireAssignment(context, 0);
     expect(assignment.path).toBe("plugins.entries.acpx.config.mcpServers.github.env.GITHUB_TOKEN");
     expect(assignment.expected).toBe("string");
+  });
+
+  it("keeps dotted plugin identities and plugin-local route paths distinct", () => {
+    const pluginIds = ["foo.config.bar", "foo"] as const;
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: pluginIds.map((id) => ({
+        id,
+        origin: "config",
+        configContracts: {
+          secretInputs: {
+            paths: [
+              {
+                path: id === "foo" ? "bar.config.token" : "token",
+                ownerKind: "route",
+              },
+            ],
+          },
+        },
+      })),
+      diagnostics: [],
+    });
+
+    const context = collectAssignments(
+      asConfig({
+        plugins: {
+          entries: {
+            "foo.config.bar": { enabled: true, config: { token: envRef("DOTTED_TOKEN") } },
+            foo: {
+              enabled: true,
+              config: { bar: { config: { token: envRef("NESTED_TOKEN") } } },
+            },
+          },
+        },
+      }),
+      pluginIds.map((id) => [id, "config"]),
+    );
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: 'plugins.entries["foo.config.bar"].config.token',
+        ownerKind: "route",
+        ownerId: 'plugins.entries["foo.config.bar"].config.token',
+        ref: { id: "DOTTED_TOKEN" },
+      },
+      {
+        path: "plugins.entries.foo.config.bar.config.token",
+        ownerKind: "route",
+        ownerId: "plugins.entries.foo.config.bar.config.token",
+        ref: { id: "NESTED_TOKEN" },
+      },
+    ]);
+    expect(new Set(context.assignments.map(({ ownerId }) => ownerId)).size).toBe(2);
+  });
+
+  it("collects and applies dotted wildcard keys separately from nested record keys", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "distinct-keys",
+          origin: "config",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "*.token" }, { path: "*.*.token" }],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = createPluginConfig("distinct-keys", {
+      "alpha.beta": { token: envRef("DOTTED_TOKEN") },
+      alpha: { beta: { token: envRef("NESTED_TOKEN") } },
+    });
+    const context = collectAssignments(config, [["distinct-keys", "config"]]);
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: 'plugins.entries.distinct-keys.config["alpha.beta"].token',
+        ref: { id: "DOTTED_TOKEN" },
+      },
+      {
+        path: "plugins.entries.distinct-keys.config.alpha.beta.token",
+        ref: { id: "NESTED_TOKEN" },
+      },
+    ]);
+    requireAssignment(context, 0).apply("resolved-dotted");
+    requireAssignment(context, 1).apply("resolved-nested");
+    expect(config.plugins?.entries?.["distinct-keys"]?.config).toMatchObject({
+      "alpha.beta": { token: "resolved-dotted" },
+      alpha: { beta: { token: "resolved-nested" } },
+    });
+  });
+
+  it("keeps installed web-provider headers unknown while applying exact dotted keys", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "custom-search",
+          origin: "config",
+          contracts: { webSearchProviders: ["custom-search"] },
+          configContracts: {
+            secretInputs: { paths: [{ path: "webSearch.headers.*", expected: "string" }] },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = createPluginConfig("custom-search", {
+      webSearch: { headers: { "X.Trace": envRef("CUSTOM_TRACE") } },
+    });
+    const context = collectAssignments(config, [["custom-search", "config"]]);
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: 'plugins.entries.custom-search.config.webSearch.headers["X.Trace"]',
+        ownerKind: "unknown",
+      },
+    ]);
+    requireAssignment(context, 0).apply("resolved-trace");
+    expect(config.plugins?.entries?.["custom-search"]?.config).toMatchObject({
+      webSearch: { headers: { "X.Trace": "resolved-trace" } },
+    });
   });
 
   it("collects contracts from a secondary agent workspace registry", () => {

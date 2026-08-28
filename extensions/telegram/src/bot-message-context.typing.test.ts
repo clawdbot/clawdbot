@@ -197,6 +197,14 @@ describe("buildTelegramMessageContext typing", () => {
     expect(first).toHaveBeenCalledExactlyOnceWith(expectedBinding);
     expect(last).toHaveBeenCalledExactlyOnceWith(expectedBinding);
     expect(ctx?.ctxPayload.MessageSid).toBe("102");
+    expect(buildInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversation: expect.objectContaining({
+          routePeer: { kind: "group", id: "-1001234567890:topic:99" },
+          parentId: "-1001234567890",
+        }),
+      }),
+    );
   });
 
   it("does not send forum topic typing for unaddressed require-mention messages", async () => {

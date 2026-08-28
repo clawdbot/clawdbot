@@ -887,7 +887,7 @@ export async function sanitizeSessionHistory(params: {
       ? sanitizeToolUseResultPairingForModel(openAISafeToolCalls, false)
       : openAISafeToolCalls;
   const sanitizedToolIds =
-    policy.sanitizeToolCallIds && policy.toolCallIdMode
+    !isOpenAIResponsesApi && policy.sanitizeToolCallIds && policy.toolCallIdMode
       ? sanitizeToolCallIdsForCloudCodeAssist(pairedToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
           duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,

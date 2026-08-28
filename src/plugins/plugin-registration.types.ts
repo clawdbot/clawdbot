@@ -4,6 +4,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { Command } from "commander";
 import type { MessageReceipt } from "../channels/message/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ApprovalScope } from "../infra/approval-scope.js";
 import type {
   DiagnosticEventPrivateData,
   DiagnosticEventInput,
@@ -221,11 +222,13 @@ type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
   request: (input: {
     title: string;
     description: string;
+    scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     toolName?: string;
     toolCallId?: string;
     agentId?: string;
     sessionKey?: string;
+    allowedDecisions?: readonly OpenClawPluginNodeInvokeApprovalDecision[];
     timeoutMs?: number;
   }) => Promise<{
     id?: string;

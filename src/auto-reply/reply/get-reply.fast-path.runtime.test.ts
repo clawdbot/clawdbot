@@ -1,6 +1,14 @@
 // Tests runtime-loaded fast-path command behavior for get-reply.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import {
   createReplyRuntimeMocks,
   createTempHomeHarness,
@@ -47,6 +55,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetReplyRuntimeMocks(agentMocks);
+    setActivePluginRegistry(createTestRegistry([]));
   });
 
   afterEach(() => {
@@ -87,6 +96,95 @@ describe("getReplyFromConfig fast-path runtime", () => {
       expect(text).toBe("ok");
       expect(seenPrompt).toContain("[media attached: 2 files]");
       expect(seenPrompt).toContain("hello");
+    });
+  });
+
+  it("handles dock on the native fast path before agent admission", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeReplyConfig(home) as OpenClawConfig;
+      const storePath = `${home}/sessions.sqlite`;
+      const sessionKey = "agent:main:telegram:123";
+      cfg.session = {
+        store: storePath,
+        identityLinks: { alice: ["telegram:UserCase123", "discord:UserCase123"] },
+      };
+      const entry = {
+        sessionId: "session-dock-fast-path",
+        updatedAt: 1,
+        delivery: {
+          kind: "external",
+          route: {
+            channel: "telegram",
+            accountId: "primary",
+            target: { to: "UserCase123", chatType: "direct" },
+          },
+          context: { channel: "telegram", to: "UserCase123", accountId: "primary" },
+          origin: {
+            provider: "telegram",
+            surface: "telegram",
+            chatType: "direct",
+            from: "telegram:UserCase123",
+            to: "UserCase123",
+            accountId: "primary",
+          },
+        },
+      } satisfies SessionEntry;
+      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            plugin: createChannelTestPluginBase({
+              id: "telegram",
+              capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+              config: { defaultAccountId: () => "primary" },
+            }),
+            source: "test",
+          },
+          {
+            pluginId: "discord",
+            plugin: createChannelTestPluginBase({
+              id: "discord",
+              capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+              config: { defaultAccountId: () => "default" },
+            }),
+            source: "test",
+          },
+        ]),
+      );
+
+      const reply = await getReplyFromConfig(
+        {
+          Body: "/dock-discord",
+          BodyForAgent: "/dock-discord",
+          RawBody: "/dock-discord",
+          CommandBody: "/dock-discord",
+          CommandSource: "native",
+          CommandAuthorized: true,
+          SenderId: "UserCase123",
+          From: "telegram:UserCase123",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+        },
+        undefined,
+        cfg,
+      );
+
+      expect(reply).toEqual({
+        text: "Docked replies to discord.",
+        replyToId: undefined,
+        replyToCurrent: false,
+      });
+      expect(agentMocks.runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(
+        projectSessionDeliveryFields(loadSessionEntry({ storePath, sessionKey })?.delivery),
+      ).toMatchObject({
+        lastChannel: "discord",
+        lastTo: "UserCase123",
+        lastAccountId: "default",
+      });
     });
   });
 

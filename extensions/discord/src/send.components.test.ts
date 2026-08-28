@@ -36,9 +36,12 @@ vi.mock("./send.outbound.js", () => ({
 }));
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
-vi.mock("./runtime-api.js", () => ({
-  loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
-}));
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
+  return { ...actual, loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock };
+});
 
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
 let editDiscordComponentMessage: typeof import("./send.components.js").editDiscordComponentMessage;
@@ -183,6 +186,46 @@ describe("sendDiscordComponentMessage", () => {
 
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("msg-progress");
+  });
+
+  it("rechecks delivery authority before each retried component post", async () => {
+    let authorityActive = true;
+    const loopback = await createDiscordLoopbackRest({
+      status: (request) => {
+        if (request.method === "POST") {
+          authorityActive = false;
+          return 503;
+        }
+        return 200;
+      },
+    });
+    try {
+      const authorityRevoked = new Error("delivery authority revoked");
+      const onPlatformSendDispatch = vi.fn(async () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      });
+
+      await expect(
+        sendDiscordComponentMessage(
+          "channel:789",
+          { blocks: [{ type: "actions", buttons: [{ label: "Open" }] }] },
+          {
+            cfg: DISCORD_TEST_CFG,
+            rest: loopback.rest,
+            token: "test-token",
+            onPlatformSendDispatch,
+          },
+        ),
+      ).rejects.toBe(authorityRevoked);
+
+      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(1);
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("edits component messages and refreshes component registry entries", async () => {
@@ -455,6 +498,152 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     } finally {
       await loopback.close();
     }
+  });
+
+  it("derives an extension from MIME type when component media has no filename", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("png"),
+      contentType: "image/png",
+    });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "image",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/unnamed",
+      },
+    );
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
+    const files = body.files as Array<{ name?: string }>;
+    expect(files[0]?.name).toBe("upload.png");
+    expect((body.components as Array<{ type?: number }>).length).toBeGreaterThan(0);
+  });
+
+  it("preserves an explicit component attachment name before inferred filename and MIME fallback", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("png"),
+      contentType: "image/png",
+      fileName: "report.pdf",
+    });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "image",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+        blocks: [{ type: "file", file: "attachment://upload" }],
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/unnamed",
+      },
+    );
+
+    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
+    const files = body.files as Array<{ name?: string }>;
+    expect(files[0]?.name).toBe("upload");
+  });
+
+  it("keeps explicit filename ahead of loader filename and MIME fallback", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("png"),
+      contentType: "image/png",
+      fileName: "report.pdf",
+    });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "image",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/unnamed",
+        filename: "operator.bin",
+      },
+    );
+
+    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
+    const files = body.files as Array<{ name?: string }>;
+    expect(files[0]?.name).toBe("operator.bin");
+  });
+
+  it.each([
+    { label: "unknown MIME", contentType: "application/x-unknown" },
+    { label: "missing MIME", contentType: undefined },
+  ])("keeps generic upload fallback for $label", async ({ contentType }) => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("opaque"),
+      ...(contentType ? { contentType } : {}),
+    });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "file",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/unnamed",
+      },
+    );
+
+    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
+    const files = body.files as Array<{ name?: string }>;
+    expect(files[0]?.name).toBe("upload");
   });
 
   it("treats bare numeric component send targets as channels", async () => {

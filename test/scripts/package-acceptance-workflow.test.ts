@@ -1,14 +1,16 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -54,6 +56,7 @@ const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
+const ACTIONS_CACHE_V6 = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
 const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const FULL_RELEASE_CHILD_DISPATCHES = [
@@ -62,7 +65,7 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
     kind: "ci",
     nonceSuffix: "-ci",
     runName: "CI",
-    stepName: "Dispatch and monitor CI",
+    stepName: "Dispatch CI",
     workflow: "ci.yml",
   },
   {
@@ -70,7 +73,7 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
     kind: "plugin-prerelease",
     nonceSuffix: "-plugin-prerelease",
     runName: "Plugin Prerelease",
-    stepName: "Dispatch and monitor plugin prerelease",
+    stepName: "Dispatch plugin prerelease",
     workflow: "plugin-prerelease.yml",
   },
   {
@@ -78,7 +81,7 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
     kind: "release-checks",
     nonceSuffix: "-release-checks",
     runName: "OpenClaw Release Checks",
-    stepName: "Dispatch and monitor release checks",
+    stepName: "Dispatch release checks",
     workflow: "openclaw-release-checks.yml",
   },
   {
@@ -86,7 +89,7 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
     kind: "npm-telegram",
     nonceSuffix: "-npm-telegram",
     runName: "NPM Telegram Beta E2E",
-    stepName: "Dispatch and monitor npm Telegram E2E",
+    stepName: "Dispatch npm Telegram E2E",
     workflow: "npm-telegram-beta-e2e.yml",
   },
   {
@@ -94,7 +97,7 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
     kind: "performance",
     nonceSuffix: "",
     runName: "OpenClaw Performance",
-    stepName: "Dispatch and monitor OpenClaw Performance",
+    stepName: "Dispatch OpenClaw Performance",
     workflow: "openclaw-performance.yml",
   },
 ] as const;
@@ -118,9 +121,11 @@ const RELEASE_FILTER_VALIDATOR = "scripts/github/validate-release-suite-filters.
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
-const SETUP_NODE_V6 = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e";
+const SETUP_NODE_V6 = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const RUN_TESTBOX_WITH_FAILURE_REPORTING =
+  "useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
@@ -507,6 +512,26 @@ function workflowMatrixEntry(path: string, jobName: string, suiteId: string): Wo
   return entry;
 }
 
+function runFocusedLiveSuiteValidation(suiteId: string, overrides: Record<string, string> = {}) {
+  const step = workflowStep(
+    workflowJob(LIVE_E2E_WORKFLOW, "validate_live_suite_filter"),
+    "Validate focused live suite filter",
+  );
+  return spawnSync("bash", ["-c", step.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      LIVE_SUITE_FILTER: suiteId,
+      RELEASE_TEST_PROFILE: "full",
+      INCLUDE_REPO_E2E: "true",
+      INCLUDE_LIVE_SUITES: "true",
+      LIVE_MODELS_ONLY: "false",
+      LIVE_MODEL_PROVIDERS: "",
+      ...overrides,
+    },
+  });
+}
+
 function expectTextToIncludeAll(text: string | undefined, snippets: string[]): void {
   if (text === undefined) {
     throw new Error("Expected text to be defined before checking snippets");
@@ -588,6 +613,7 @@ if (args[0] === "workflow" && args[1] === "run") {
     html_url: url,
     id: Number(env.MOCK_GH_RUN_ID),
     path: env.MOCK_GH_RUN_PATH,
+    run_attempt: Number(env.MOCK_GH_RUN_ATTEMPT),
     status: nextStatus(),
     workflow_id: Number(env.MOCK_GH_RUN_WORKFLOW_ID),
   }));
@@ -708,6 +734,7 @@ exit 0
         stepEnv.CHILD_WORKFLOW_REF,
       MOCK_GH_RUN_ID: "101",
       MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
+      MOCK_GH_RUN_ATTEMPT: "1",
       MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
       MOCK_GH_RUN_WORKFLOW_ID: "789",
       MOCK_GH_STATUSES: '["completed"]',
@@ -808,6 +835,101 @@ function runPackageAcceptanceProfile(params: {
   return { outputs, result };
 }
 
+function runPackageAcceptanceRegistryInputValidation(params: {
+  candidateArtifactJson?: string;
+  prepublishPluginRegistryJson?: string;
+}) {
+  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+  const script = workflowStep(job, "Validate prerelease plugin registry input").run;
+  if (!script) {
+    throw new Error("Expected package acceptance registry input validation script");
+  }
+  const workdir = tempDirs.make("package-acceptance-registry-input-");
+  const outputPath = resolve(workdir, "github-output");
+  const result = spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      CANDIDATE_ARTIFACT_JSON: params.candidateArtifactJson ?? "",
+      GITHUB_OUTPUT: outputPath,
+      PATH: process.env.PATH,
+      PREPUBLISH_PLUGIN_REGISTRY_JSON: params.prepublishPluginRegistryJson ?? "",
+    },
+  });
+  const output = result.status === 0 ? readFileSync(outputPath, "utf8") : "";
+  return { output, result };
+}
+
+function packageAcceptanceRegistryTuple(overrides: Record<string, string> = {}) {
+  return {
+    prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-123-2",
+    prepublishPluginRegistryArtifactId: "456",
+    prepublishPluginRegistryArtifactDigest: "a".repeat(64),
+    prepublishPluginRegistryArtifactRunId: "123",
+    prepublishPluginRegistryArtifactRunAttempt: "2",
+    prepublishPluginRegistryManifestSha256: "b".repeat(64),
+    ...overrides,
+  };
+}
+
+function runPackageAcceptanceResolveScript(params: {
+  prepublishPluginRegistryJson?: string;
+  source: "artifact" | "npm" | "ref" | "trusted-url" | "url";
+  telegramMode: "mock-openai" | "none";
+}) {
+  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+  const script = workflowStep(job, "Resolve package candidate").run;
+  if (!script) {
+    throw new Error("Expected package acceptance resolve script");
+  }
+  const workdir = tempDirs.make("package-acceptance-resolve-");
+  const binDir = resolve(workdir, "bin");
+  const capturePath = resolve(workdir, "node-args");
+  const outputPath = resolve(workdir, "github-output");
+  const artifactDir = resolve(workdir, ".artifacts/package-candidate-input");
+  mkdirSync(binDir, { recursive: true });
+  mkdirSync(artifactDir, { recursive: true });
+  const nodePath = resolve(binDir, "node");
+  const artifactPath = resolve(artifactDir, "openclaw-current.tgz");
+  const artifactBody = "package acceptance artifact";
+  writeFileSync(artifactPath, artifactBody);
+  writeFileSync(
+    nodePath,
+    `#!/bin/sh
+printf "%s\\n" "$@" > "$CAPTURE_PATH"
+if [ "$SOURCE" = "artifact" ]; then
+  mkdir -p .artifacts/docker-e2e-package
+  printf '{"name":"openclaw","sha256":"%s","packageSourceSha":"%s","version":"%s"}\\n' \
+    "$PACKAGE_SHA256" "$PACKAGE_SOURCE_SHA" "$PACKAGE_VERSION" \
+    > .artifacts/docker-e2e-package/package-candidate.json
+fi
+`,
+  );
+  chmodSync(nodePath, 0o755);
+  const result = spawnSync("bash", ["-c", script], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      CAPTURE_PATH: capturePath,
+      GITHUB_OUTPUT: outputPath,
+      OPENCLAW_TRUSTED_PACKAGE_TOKEN: "",
+      PACKAGE_FILE_NAME: "openclaw-current.tgz",
+      PACKAGE_REF: "HEAD",
+      PACKAGE_SHA256: createHash("sha256").update(artifactBody).digest("hex"),
+      PACKAGE_SOURCE_SHA: "a".repeat(40),
+      PACKAGE_SPEC: "openclaw@beta",
+      PACKAGE_URL: "https://example.invalid/openclaw.tgz",
+      PACKAGE_VERSION: "2026.8.26",
+      PATH: `${binDir}:${process.env.PATH}`,
+      PREPUBLISH_PLUGIN_REGISTRY_JSON: params.prepublishPluginRegistryJson ?? "",
+      SOURCE: params.source,
+      TELEGRAM_MODE: params.telegramMode,
+      TRUSTED_SOURCE_ID: "",
+    },
+  });
+  const args = result.status === 0 ? readFileSync(capturePath, "utf8") : "";
+  return { args, result };
+}
+
 function runNpmTelegramInputValidation(overrides: Record<string, string>) {
   const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
   const script = workflowStep(job, "Validate inputs and secrets").run;
@@ -830,6 +952,12 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
       PACKAGE_SPEC: "openclaw@beta",
       PACKAGE_VERSION: "",
       PATH: process.env.PATH,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "",
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "",
       PROVIDER_MODE: "mock-openai",
       ...overrides,
     },
@@ -2209,7 +2337,7 @@ describe("package acceptance workflow", () => {
     expect(setupPnpmAction).toContain('case "$package_manager" in');
     expect(setupPnpmAction).toContain('corepack prepare "$package_manager" --activate');
     expect(setupPnpmAction).toContain(
-      "if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}",
+      "if: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' }}",
     );
     expect(setupPnpmAction).toContain(
       "key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}",
@@ -2594,6 +2722,17 @@ describe("package acceptance workflow", () => {
       description: "Acceptance profile: smoke, package, telegram, product, full, or custom",
       options: ["smoke", "package", "telegram", "product", "full", "custom"],
     });
+    const dispatchInputs = parsedWorkflow.on?.workflow_dispatch?.inputs;
+    const callInputs = parsedWorkflow.on?.workflow_call?.inputs;
+    expect(dispatchInputs?.prepublish_plugin_registry_json).toBeUndefined();
+    expect(dispatchInputs?.advisory).toEqual(callInputs?.advisory);
+    expect(callInputs?.advisory).toEqual({
+      description: "Treat acceptance failures as advisory for the caller",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(25);
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
@@ -2656,6 +2795,7 @@ describe("package acceptance workflow", () => {
     expect(packageTelegram.with?.advisory).toBe(
       "${{ inputs.advisory || inputs.telegram_advisory || false }}",
     );
+    expect(packageTelegram.with).not.toHaveProperty("allow_older_binary_destructive_actions");
     expect(workflow).toContain(
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
     );
@@ -2670,6 +2810,49 @@ describe("package acceptance workflow", () => {
     expect(packageTelegram.with?.package_source_sha).toBe(
       "${{ needs.resolve_package.outputs.package_source_sha }}",
     );
+    const registryInputs = {
+      prepublish_plugin_registry_artifact_name:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '' }}",
+      prepublish_plugin_registry_artifact_id:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
+      prepublish_plugin_registry_artifact_digest:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}",
+      prepublish_plugin_registry_artifact_run_id:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
+      prepublish_plugin_registry_artifact_run_attempt:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}",
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
+    };
+    expect(packageTelegram.with).toMatchObject(registryInputs);
+    const registryInputSchema = Object.fromEntries(
+      Object.keys(registryInputs).map((name) => [
+        name,
+        expect.objectContaining({ default: "", required: false, type: "string" }),
+      ]),
+    );
+    const npmTelegramInputs = readWorkflow(NPM_TELEGRAM_WORKFLOW).on;
+    expect(npmTelegramInputs?.workflow_call?.inputs).toMatchObject(registryInputSchema);
+    expect(npmTelegramInputs?.workflow_dispatch?.inputs).toMatchObject(registryInputSchema);
+    expect(npmTelegramWorkflow).toContain(
+      "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple.",
+    );
+    expect(npmTelegramWorkflow).toContain(
+      "Prerelease plugin registry inputs require an artifact-backed OpenClaw package.",
+    );
+    expect(npmTelegramWorkflow).toContain(
+      'expected_registry_suffix="-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}"',
+    );
+    expect(npmTelegramWorkflow).toContain(
+      '"docker-e2e-prepublish-plugin-registry${expected_registry_suffix}" | \\\n' +
+        '                "package-acceptance-telegram-plugin-registry${expected_registry_suffix}"',
+    );
+    expect(npmTelegramWorkflow).not.toContain(
+      "Prerelease plugin registry and package artifacts must come from the same workflow run attempt.",
+    );
+    expect(npmTelegramWorkflow).toContain('verify-upload "Prerelease plugin registry"');
+    expect(npmTelegramWorkflow).toContain("Download prerelease plugin registry artifact");
+    expect(npmTelegramWorkflow).toContain("--required-packages-json '[\"@openclaw/codex\"]'");
     expect(packageTelegram.secrets).toEqual({
       OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
@@ -2677,6 +2860,17 @@ describe("package acceptance workflow", () => {
     });
     expect(dockerAcceptance.with?.ref).toBe(
       "${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
+    );
+    expect(dockerAcceptance.with?.advisory).toBe("${{ inputs.advisory || false }}");
+    expect(dockerAcceptanceRegistry.with?.advisory).toBe("${{ inputs.advisory || false }}");
+    expect(dockerAcceptance.with?.prepublish_plugin_registry_artifact_name).toContain(
+      "startsWith(",
+    );
+    expect(dockerAcceptance.with?.prepublish_plugin_registry_artifact_name).toContain(
+      "'docker-e2e-prepublish-plugin-registry-'",
+    );
+    expect(packageTelegram.with?.prepublish_plugin_registry_artifact_name).not.toContain(
+      "startsWith(",
     );
     expect(npm12Install.if).toBe("inputs.suite_profile != 'telegram'");
     expect(dockerAcceptance.if).toBe(
@@ -2718,6 +2912,101 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("Published upgrade survivor baseline:");
     expect(workflow).toContain("Published upgrade survivor baselines:");
     expect(workflow).toContain("Published upgrade survivor scenarios:");
+  });
+
+  it("normalizes one closed prerelease registry tuple before child workflows", () => {
+    const tuple = packageAcceptanceRegistryTuple();
+    const direct = runPackageAcceptanceRegistryInputValidation({
+      prepublishPluginRegistryJson: JSON.stringify(tuple),
+    });
+    expect(direct.result.status, direct.result.stderr).toBe(0);
+    expect(direct.output).toContain(`json=${JSON.stringify(tuple)}\n`);
+
+    const candidate = runPackageAcceptanceRegistryInputValidation({
+      candidateArtifactJson: JSON.stringify({
+        imageArtifactName: "image-123-2",
+        ...tuple,
+      }),
+    });
+    expect(candidate.result.status, candidate.result.stderr).toBe(0);
+    expect(candidate.output).toContain(`json=${JSON.stringify(tuple)}\n`);
+
+    const identical = runPackageAcceptanceRegistryInputValidation({
+      candidateArtifactJson: JSON.stringify(tuple),
+      prepublishPluginRegistryJson: JSON.stringify(tuple),
+    });
+    expect(identical.result.status, identical.result.stderr).toBe(0);
+    expect(identical.output).toContain(`json=${JSON.stringify(tuple)}\n`);
+  });
+
+  it("rejects partial or ambiguous prerelease registry tuples before child workflows", () => {
+    const tuple = packageAcceptanceRegistryTuple();
+    const partial = runPackageAcceptanceRegistryInputValidation({
+      prepublishPluginRegistryJson: JSON.stringify({
+        prepublishPluginRegistryArtifactId: tuple.prepublishPluginRegistryArtifactId,
+      }),
+    });
+    expect(partial.result.status).toBe(1);
+    expect(partial.result.stderr).toContain(
+      "Prerelease plugin registry JSON must contain one complete immutable tuple.",
+    );
+
+    const ambiguous = runPackageAcceptanceRegistryInputValidation({
+      candidateArtifactJson: JSON.stringify(tuple),
+      prepublishPluginRegistryJson: JSON.stringify(
+        packageAcceptanceRegistryTuple({
+          prepublishPluginRegistryArtifactId: "789",
+        }),
+      ),
+    });
+    expect(ambiguous.result.status).toBe(1);
+    expect(ambiguous.result.stderr).toContain("Prerelease plugin registry inputs disagree.");
+  });
+
+  it("generates a Telegram-only registry only for direct ref or artifact candidates", () => {
+    for (const source of ["ref", "artifact"] as const) {
+      const generated = runPackageAcceptanceResolveScript({
+        source,
+        telegramMode: "mock-openai",
+      });
+      expect(generated.result.status, generated.result.stderr).toBe(0);
+      expect(generated.args).toContain("--plugin-registry-output-dir\n");
+      expect(generated.args).toContain(".artifacts/package-acceptance-telegram-plugin-registry\n");
+      expect(generated.args).toContain('--required-plugin-packages-json\n["@openclaw/codex"]\n');
+    }
+
+    for (const source of ["npm", "url", "trusted-url"] as const) {
+      const skipped = runPackageAcceptanceResolveScript({
+        source,
+        telegramMode: "mock-openai",
+      });
+      expect(skipped.result.status, skipped.result.stderr).toBe(0);
+      expect(skipped.args).not.toContain("--plugin-registry-output-dir");
+    }
+
+    const telegramDisabled = runPackageAcceptanceResolveScript({
+      source: "ref",
+      telegramMode: "none",
+    });
+    expect(telegramDisabled.result.status, telegramDisabled.result.stderr).toBe(0);
+    expect(telegramDisabled.args).not.toContain("--plugin-registry-output-dir");
+  });
+
+  it("reuses a supplied registry and keeps generated artifact names distinct from Docker", () => {
+    const tuple = packageAcceptanceRegistryTuple();
+    const reused = runPackageAcceptanceResolveScript({
+      prepublishPluginRegistryJson: JSON.stringify(tuple),
+      source: "ref",
+      telegramMode: "mock-openai",
+    });
+    expect(reused.result.status, reused.result.stderr).toBe(0);
+    expect(reused.args).not.toContain("--plugin-registry-output-dir");
+
+    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    expect(workflow).toContain(
+      "package-acceptance-telegram-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(workflow).toContain('"docker-e2e-prepublish-plugin-registry-" +');
   });
 
   it("selects one normalized Telegram scenario without enabling broad acceptance lanes", () => {
@@ -2774,7 +3063,7 @@ describe("package acceptance workflow", () => {
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const performanceJob = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance"),
-      "Dispatch and monitor OpenClaw Performance",
+      "Dispatch OpenClaw Performance",
     ).run;
 
     expect(workflow).toContain("TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}");
@@ -2798,14 +3087,14 @@ describe("package acceptance workflow", () => {
     expect(releaseChecksWorkflow).toContain(
       "codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}",
     );
-    expect(workflow).toContain("--json status,conclusion,url,attempt,headSha,jobs");
+    expect(workflow).toContain("full-release-validation-state.mjs verify");
     expect(workflow).toContain(
       'gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha',
     );
     expect(workflow).toContain(
       "Child workflow ref ${CHILD_WORKFLOW_REF} moved to ${current_workflow_sha}, expected ${PARENT_WORKFLOW_SHA}; refusing dispatch.",
     );
-    expect(workflow).toContain('if [[ "$head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then');
+    expect(workflow).toContain('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then');
     expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
     expect(performanceJob).toContain(
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
@@ -2821,15 +3110,14 @@ describe("package acceptance workflow", () => {
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
     );
     expect(workflow).toContain(
-      "child run used workflow SHA ${head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}",
+      "full-release-decision-${{ github.run_id }}-${{ github.run_attempt }}",
     );
     expect(workflow).toContain(
-      "Use the SHA-pinned release helper when a moving branch cannot stay fixed",
+      "full-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
     );
-    expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
     expect(releaseChecksWorkflow).toContain(
-      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
+      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
     );
     expect(releaseChecksWorkflow).toContain(
       "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
@@ -2840,11 +3128,11 @@ describe("package acceptance workflow", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const performanceStep = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance"),
-      "Dispatch and monitor OpenClaw Performance",
+      "Dispatch OpenClaw Performance",
     );
     const summaryStep = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
-      "Verify child workflow results",
+      "Verify exact release state artifacts",
     );
 
     expect(performanceStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
@@ -2854,13 +3142,9 @@ describe("package acceptance workflow", () => {
       "fail_on_regression=false",
       '-f fail_on_regression="$fail_on_regression"',
       "Release impact: advisory",
-      "advisory for beta",
     ]);
     expect(summaryStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
-    expectTextToIncludeAll(summaryStep.run, [
-      '[[ "$RELEASE_PROFILE" == "beta" ]] && performance_advisory=1',
-      'check_child "product_performance" "$PERFORMANCE_RUN_ID" "$performance_required" "$performance_advisory"',
-    ]);
+    expect(summaryStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
     expect(workflow).toContain('performanceBlocking: ($releaseProfile != "beta")');
     expect(workflow).toContain('blocking: ($releaseProfile != "beta")');
   });
@@ -2885,472 +3169,211 @@ describe("package acceptance workflow", () => {
     ]);
   });
 
-  it("keeps child-job fail-fast polling best-effort", () => {
-    for (const child of FULL_RELEASE_CHILD_DISPATCHES.slice(0, 3)) {
-      const dispatch = workflowStep(
-        workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, child.jobName),
-        child.stepName,
-      );
-      expect(dispatch.env?.CHILD_WORKFLOW_KIND).toBe(child.kind);
-      expect(dispatch.run).toContain("continuing with authoritative workflow conclusion.");
-    }
-  });
-
-  it("adopts exact full-release child runs without retrying ambiguous dispatch posts", () => {
+  it("dispatches exact child identities without owning child completion", () => {
     const dispatchScripts = FULL_RELEASE_CHILD_DISPATCHES.map((child) => {
       const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, child.jobName);
       const step = workflowStep(job, child.stepName);
       expect(step.env?.CHILD_WORKFLOW_KIND).toBe(child.kind);
+      expect(job["timeout-minutes"]).toBe(15);
+      expect(job.outputs).toMatchObject({
+        run_attempt: "${{ steps.dispatch.outputs.run_attempt }}",
+        run_id: "${{ steps.dispatch.outputs.run_id }}",
+        url: "${{ steps.dispatch.outputs.url }}",
+      });
       return step.run ?? "";
     });
     expect(new Set(dispatchScripts).size).toBe(1);
-
     for (const script of dispatchScripts) {
       expect(script.match(/gh workflow run/gu)).toHaveLength(1);
-      expect(script).not.toContain("gh_with_retry workflow run");
       expectTextToIncludeAll(script, [
         "The dispatch POST is one-shot",
-        'encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF"',
-        'gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha',
-        '"$current_workflow_sha" != "$PARENT_WORKFLOW_SHA"',
-        "refusing dispatch.",
-        "set +e",
-        "dispatch_status=$?",
-        'if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]',
-        "dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling.",
-        'sed -nE "s#^https://github[.]com/${GITHUB_REPOSITORY}/actions/runs/([0-9]+)\\$#\\1#p"',
         'validate_child_run "$run_id"',
-        'DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF"',
-        ".display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF",
-        "Multiple runs matched ${dispatch_run_name}; refusing to guess.",
-        "The dispatch was not retried to avoid creating a duplicate child.",
-        "adopted exact run ${run_id}",
+        'child_run_attempt="$(jq -r \'.run_attempt // ""\' <<< "$run_json")"',
+        'echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"',
+        'echo "run_attempt=${child_run_attempt}" >> "$GITHUB_OUTPUT"',
+        'echo "url=${url}" >> "$GITHUB_OUTPUT"',
       ]);
-      expect(script.indexOf("dispatch failed with non-ambiguous status")).toBeLessThan(
-        script.indexOf('run_id=""'),
-      );
+      expect(script).not.toContain("while true");
+      expect(script).not.toContain("gh run cancel");
+      expect(script).not.toContain("fail_fast_failed_jobs");
     }
-
-    const parsedWorkflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
-    const transientPattern = parsedWorkflow.env?.GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN;
-    expect(transientPattern).toBeDefined();
-    const transientError = new RegExp(transientPattern ?? "", "u");
-    for (const message of [
-      "could not create workflow dispatch event: HTTP 500: Failed to run workflow dispatch",
-      "gh: HTTP 502",
-      "500 Internal Server Error",
-      "invalid character '<' looking for beginning of value",
-      "error connecting to api.github.com",
-      "context deadline exceeded",
-      "read: connection reset by peer",
-      "connect: connection refused",
-      "net/http: TLS handshake timeout",
-      "read: i/o timeout",
-      "network is unreachable",
-      "unexpected EOF",
-      'Post "https://api.github.com/repos/openclaw/openclaw/actions/workflows/ci.yml/dispatches": EOF',
-      "EOF",
-      "ETIMEDOUT",
-      "ECONNRESET",
-      "EAI_AGAIN",
-    ]) {
-      expect(transientError.test(message), message).toBe(true);
-    }
-    for (const message of [
-      "HTTP 400: Bad Request",
-      "HTTP 401: Bad credentials",
-      "HTTP 403: Resource not accessible by integration",
-      "HTTP 404: workflow not found",
-      "HTTP 422: Validation Failed",
-      "HTTP 429: too many requests",
-      "unknown flag --field",
-      "EOFError while parsing local input",
-    ]) {
-      expect(transientError.test(message), message).toBe(false);
-    }
-
-    const summaryScript =
-      workflowStep(
-        workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
-        "Verify child workflow results",
-      ).run ?? "";
-    for (const script of [...dispatchScripts, summaryScript]) {
-      expect(script.match(/gh_with_retry\(\)/gu)).toHaveLength(1);
-      expectTextToIncludeAll(script, [
-        '"$output" == *"HTTP 429"*',
-        '"$output" == *"abuse detection"*',
-        '"$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN',
-        'return "$status"',
-      ]);
-    }
-
-    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
-    const retryCalls = workflow.split("\n").filter((line) => line.includes("gh_with_retry "));
-    expect(retryCalls.length).toBeGreaterThan(0);
-    for (const call of retryCalls) {
-      expect(call).toMatch(/gh_with_retry (api|run view)/u);
-    }
-    expect(workflow).not.toMatch(/gh_with_retry (workflow run|run cancel)/u);
-    expectTextToIncludeAll(workflow, [
-      'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"',
-      'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease"',
-      'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-release-checks"',
-      'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
-      'args+=(-f dispatch_id="$dispatch_id")',
-    ]);
-    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
-      "format('CI {0}', inputs.dispatch_id)",
-    );
-    expect(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8")).toContain(
-      "format('Plugin Prerelease {0}', inputs.dispatch_id)",
-    );
-    expect(readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8")).toContain(
-      "format('OpenClaw Release Checks {0}', inputs.dispatch_id)",
-    );
-    expect(readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8")).toContain(
-      "format('NPM Telegram Beta E2E {0}', inputs.dispatch_id)",
-    );
-    expect(readWorkflow(PLUGIN_PRERELEASE_WORKFLOW).concurrency?.group).toBe(
-      "plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}",
-    );
-    expect(readWorkflow(RELEASE_CHECKS_WORKFLOW).concurrency?.group).toBe(
-      "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}",
-    );
   });
 
   it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "adopts and validates the run URL returned for $jobName without listing runs",
+    "adopts and validates the exact $jobName run without waiting for terminal status",
     (child) => {
       const { calls, result } = runFullReleaseChildDispatch(child, {
         MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+        MOCK_GH_STATUSES: '["in_progress"]',
       });
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-      expect(
-        calls.filter(({ args }) =>
-          args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
-        ),
-      ).toHaveLength(0);
-      expect(
-        calls.some(({ args }) => args.some((value) => value.endsWith("/actions/runs/101"))),
-      ).toBe(true);
       expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+      expect(result.stdout).toContain("Dispatched");
     },
   );
 
-  it("recovers by exact name when a successful dispatch returns no run URL", () => {
+  it("recovers one ambiguous dispatch by exact name without reposting", () => {
     const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
-      MOCK_GH_DISPATCH_OUTPUT: "",
+      MOCK_GH_DISPATCH_ERROR: "HTTP 500: Failed to run workflow dispatch",
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-    expect(
-      calls.filter(({ args }) =>
-        args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
-      ),
-    ).toHaveLength(1);
+    expect(calls.some(({ args }) => args.includes("-X"))).toBe(true);
+    expect(result.stderr).toContain("adopted exact run 101");
   });
 
-  it.each([
-    ["workflow", { MOCK_GH_RUN_WORKFLOW_ID: "790" }],
-    ["title", { MOCK_GH_RUN_TITLE: "Unrelated workflow run" }],
-    ["head branch", { MOCK_GH_RUN_HEAD_BRANCH: "other" }],
-    ["event", { MOCK_GH_RUN_EVENT: "push" }],
-  ] as const)("refuses a returned run URL with the wrong %s", (label, overrides) => {
-    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+  it("keeps dispatch provenance failures separate from cancellation policy", () => {
+    const moved = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_CURRENT_SHA: "c".repeat(40),
+    });
+    expect(moved.result.status).toBe(1);
+    expect(moved.result.stderr).toContain("refusing dispatch");
+    expect(moved.calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(0);
+
+    const mismatched = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_CHILD_SHA: "c".repeat(40),
       MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
-      ...overrides,
     });
+    expect(mismatched.result.status).toBe(1);
+    expect(mismatched.result.stderr).toContain("expected parent workflow SHA");
+    expect(
+      mismatched.calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel"),
+    ).toHaveLength(0);
+  });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      label === "title"
-        ? "Refusing to adopt ci.yml run 101: run never became readable with display title"
-        : "Refusing to adopt unvalidated ci.yml run 101",
+  it("runs Release Decision and Diagnostic Drain in parallel from exact child tuples", () => {
+    const executionPlan = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_execution_plan");
+    const decision = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_decision");
+    const drain = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "diagnostic_drain");
+    const summary = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
+    const decisionStep = workflowStep(decision, "Evaluate release decision");
+    const drainStep = workflowStep(drain, "Drain child diagnostics");
+    const decisionUpload = workflowStep(decision, "Upload release decision");
+    const drainUpload = workflowStep(drain, "Upload diagnostic drain manifest");
+    const planStep = workflowStep(executionPlan, "Seal immutable release execution plan");
+    const planCache = workflowStep(executionPlan, "Cache immutable release execution plan");
+    const planRestore = workflowStep(
+      executionPlan,
+      "Restore immutable release execution plan artifact",
     );
-    expect(
-      calls.some(({ args }) =>
-        args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
-      ),
-    ).toBe(false);
-    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
-  });
+    const planUpload = workflowStep(executionPlan, "Upload immutable release execution plan");
+    const manifestStep = workflowStep(summary, "Write release validation manifest");
+    const selectState = workflowStep(summary, "Select newest compatible release state artifacts");
+    const decisionDownloads = workflowStep(summary, "Download release decision attempts");
+    const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
-  it("refuses a nonnumeric exact-name candidate without cancellation ownership", () => {
-    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
-      MOCK_GH_DISPATCH_OUTPUT: "",
-      MOCK_GH_MATCHES: '["not-a-run-id"]',
+    expect(decision.needs).toEqual(["resolve_target", "release_execution_plan"]);
+    expect(drain.needs).toEqual(["resolve_target", "release_execution_plan"]);
+    expect(decision.if).toBe("always()");
+    expect(drain.if).toBe("always()");
+    expect(decisionStep.run).toBe(drainStep.run);
+    expect(decisionStep.env).toMatchObject({
+      FAIL_FAST: "${{ inputs.fail_fast }}",
+      FULL_RELEASE_STATE_MODE: "decision",
     });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Refusing to adopt invalid ci.yml run ID not-a-run-id");
-    expect(
-      calls.some(({ args }) => args.some((value) => value.endsWith("/actions/runs/not-a-run-id"))),
-    ).toBe(false);
-    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
-  });
-
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "rejects moved workflow refs before dispatching $jobName",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_CURRENT_SHA: "c".repeat(40),
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("refusing dispatch.");
-      expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(0);
-    },
-  );
-
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "adopts the one exact $jobName child after an ambiguous dispatch without reposting",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_DISPATCH_ERROR: "HTTP 500: Failed to run workflow dispatch",
-      });
-      const dispatchCalls = calls.filter(({ args }) => args[0] === "workflow");
-      const adoptionCall = calls.find(({ args }) => args.includes("-X"));
-
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stderr).toContain("adopted exact run 101");
-      expect(dispatchCalls).toHaveLength(1);
-      expect(dispatchCalls[0]?.args.slice(0, 5)).toEqual([
-        "workflow",
-        "run",
-        child.workflow,
-        "--ref",
-        "main",
-      ]);
-      expect(adoptionCall).toMatchObject({
-        childWorkflowRef: "main",
-        dispatchRunName: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
-      });
-      expect(adoptionCall?.args).toContain(
-        "[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]",
+    expect(drainStep.env).toMatchObject({
+      FAIL_FAST: "false",
+      FULL_RELEASE_STATE_MODE: "drain",
+    });
+    expectTextToIncludeAll(decisionStep.run, [
+      'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
+    ]);
+    expect(planStep.run).toContain("FULL_RELEASE_PLAN_INPUTS_JSON");
+    expect(planStep.env).toMatchObject({
+      EVIDENCE_CHANGED_PATHS: "${{ needs.evidence_reuse.outputs.changed_paths || '[]' }}",
+      EVIDENCE_RUN_ID: "${{ needs.evidence_reuse.outputs.evidence_run_id }}",
+      TRUSTED_WORKFLOW_JSON: "${{ needs.resolve_target.outputs.trusted_workflow_json }}",
+    });
+    expect(planStep.env).not.toHaveProperty("EVIDENCE_MANIFEST");
+    expect(planStep.run).not.toContain("EVIDENCE_MANIFEST");
+    expect(planStep.run).toContain('--arg evidenceRunId "$EVIDENCE_RUN_ID"');
+    expect(planStep.run).toContain('--argjson trustedWorkflow "$TRUSTED_WORKFLOW_JSON"');
+    expect(planCache.uses).toBe(ACTIONS_CACHE_V6);
+    expect(planCache["continue-on-error"]).toBe(true);
+    expect(planCache.with).toMatchObject({
+      key: "full-release-execution-plan-v1-${{ github.run_id }}",
+    });
+    expect(planCache.with).not.toHaveProperty("fail-on-cache-miss");
+    expect(planRestore.if).toBe(
+      "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
+    );
+    expect(planRestore.with).toMatchObject({
+      "github-token": "${{ github.token }}",
+      name: "full-release-execution-plan-${{ github.run_id }}",
+      "run-id": "${{ github.run_id }}",
+    });
+    expect(planUpload.if).toBe("always()");
+    expect(planUpload.with?.name).toBe("full-release-execution-plan-${{ github.run_id }}");
+    expect(manifestStep.env).not.toHaveProperty("EVIDENCE_MANIFEST");
+    expect(manifestStep.run).toContain(
+      'EVIDENCE_MANIFEST="$(jq -c \'.evidenceReuse.sourceManifest // empty\' "$RELEASE_EXECUTION_PLAN_PATH")"',
+    );
+    expect(manifestStep.run).not.toContain("needs.evidence_reuse.outputs");
+    expect(decisionUpload.with?.name).toBe(
+      "full-release-decision-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(drainUpload.with?.name).toBe(
+      "full-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(decisionDownloads.with).toMatchObject({
+      path: "${{ runner.temp }}/full-release-decision-attempts",
+      pattern: "full-release-decision-${{ github.run_id }}-*",
+    });
+    expect(drainDownloads.with).toMatchObject({
+      path: "${{ runner.temp }}/full-release-diagnostic-attempts",
+      pattern: "full-release-diagnostics-${{ github.run_id }}-*",
+    });
+    expect(selectState.run).toBe("node scripts/full-release-validation-state.mjs select");
+    expect(summary.needs).toEqual(expect.arrayContaining(["release_decision", "diagnostic_drain"]));
+    for (const jobId of [
+      "docker_runtime_assets_preflight",
+      "prepare_release_candidate",
+      "normal_ci",
+      "plugin_prerelease",
+      "release_checks",
+      "npm_telegram",
+      "performance",
+    ]) {
+      expect(String(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, jobId).if)).toContain(
+        "github.run_attempt == 1",
       );
-      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
-    },
-  );
-
-  it("leaves the adopted child running when the monitor receives SIGTERM", () => {
-    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
-      MOCK_GH_STATUSES: '["in_progress"]',
-      MOCK_SLEEP_SIGNAL: "TERM",
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBeNull();
-    expect(result.signal).toBe("SIGTERM");
-    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+    }
   });
 
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "refuses duplicate exact adoption candidates for $jobName",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_MATCHES: "[101, 102]",
-      });
+  it("builds a rerun-all manifest from sealed plan A instead of retry-B job outputs", () => {
+    const summary = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
+    const manifest = workflowStep(summary, "Write release validation manifest");
+    const evidenceDispatch = workflowStep(summary, "Request release evidence update");
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Multiple runs matched");
-      expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
-    },
-  );
-
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "refuses to adopt or retry a non-transient $jobName dispatch failure",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_DISPATCH_ERROR: "HTTP 422: Validation Failed",
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("refusing adoption polling");
-      expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-      expect(calls.some(({ args }) => args.includes("-X"))).toBe(false);
-      expect(calls.some(({ args }) => args[0] === "run" && args[1] === "cancel")).toBe(false);
-    },
-  );
-
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "cancels exactly the identified $jobName child when its workflow SHA differs",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_CHILD_SHA: "c".repeat(40),
-        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("expected parent workflow SHA");
-      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toEqual([
-        expect.objectContaining({ args: ["run", "cancel", "101"] }),
-      ]);
-    },
-  );
-
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "leaves the adopted $jobName child running when monitoring fails unexpectedly",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_STATUS_ERROR: "HTTP 403: Resource not accessible by integration",
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("HTTP 403");
-      expect(
-        calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel"),
-        `${result.stdout}\n${result.stderr}\n${JSON.stringify(calls)}`,
-      ).toEqual([]);
-    },
-  );
-
-  it.each(FULL_RELEASE_CHILD_DISPATCHES.slice(0, 4))(
-    "cancels the exact $jobName child after its first blocking failed job",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        FAIL_FAST: "true",
-        MOCK_GH_JOBS: JSON.stringify([
-          {
-            conclusion: "failure",
-            html_url: "https://github.com/openclaw/openclaw/actions/runs/101/job/201",
-            name: "Run package acceptance",
-            status: "completed",
-            url: "https://github.com/openclaw/openclaw/actions/runs/101/job/201",
-          },
-        ]),
-        MOCK_GH_STATUSES: JSON.stringify([
-          "in_progress",
-          "in_progress",
-          "in_progress",
-          "in_progress",
-          "in_progress",
-          "in_progress",
-          "completed",
-        ]),
-      });
-
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-      expect(result.stdout).toContain("has failed child jobs before the workflow completed");
-      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(1);
-    },
-  );
-
-  it("keeps CI fail-fast job lookups advisory and npm Telegram fail-closed without cancellation", () => {
-    const overrides = {
-      FAIL_FAST: "true",
-      MOCK_GH_JOBS_ERROR: "HTTP 403: Resource not accessible by integration",
-      MOCK_GH_STATUSES: JSON.stringify([
-        "in_progress",
-        "in_progress",
-        "in_progress",
-        "in_progress",
-        "in_progress",
-        "in_progress",
-        "completed",
-      ]),
-    };
-    const normalCi = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], overrides);
-    const npmTelegram = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[3], overrides);
-
-    expect(normalCi.result.status, normalCi.result.stderr).toBe(0);
-    expect(normalCi.result.stdout).toContain("continuing with authoritative workflow conclusion.");
-    expect(npmTelegram.result.status).toBe(1);
-    expect(
-      npmTelegram.calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel"),
-      `${npmTelegram.result.stdout}\n${npmTelegram.result.stderr}\n${JSON.stringify(npmTelegram.calls)}`,
-    ).toEqual([]);
-  });
-
-  it.each([
-    { expectedStatus: 0, jobName: "Run QA Lab parity lane (sqlite)" },
-    { expectedStatus: 0, jobName: "Run QA Lab live Discord lane" },
-    { expectedStatus: 0, jobName: "Run repo/live E2E validation / Docker live" },
-    {
-      expectedStatus: 0,
-      jobName: "Run package acceptance / Telegram package acceptance / mock-openai",
-    },
-    { expectedStatus: 1, jobName: "Run repo/live E2E validation / Repo E2E" },
-    { expectedStatus: 1, jobName: "Run package acceptance / Verify package integrity" },
-  ])("preserves beta fail-fast ownership for $jobName", ({ expectedStatus, jobName }) => {
-    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[2], {
-      FAIL_FAST: "true",
-      MOCK_GH_JOBS: JSON.stringify([
-        {
-          conclusion: "failure",
-          html_url: "https://github.com/openclaw/openclaw/actions/runs/101/job/201",
-          name: jobName,
-          status: "completed",
-        },
-      ]),
-      MOCK_GH_STATUSES: JSON.stringify([
-        "in_progress",
-        "in_progress",
-        "in_progress",
-        "in_progress",
-        "in_progress",
-        "in_progress",
-        "completed",
-      ]),
-      RELEASE_PROFILE: "beta",
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(expectedStatus);
-    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(
-      expectedStatus,
+    expect(manifest.env).not.toHaveProperty("TARGET_SHA");
+    expect(manifest.env).not.toHaveProperty("NORMAL_CI_RUN_ID");
+    expect(manifest.env).not.toHaveProperty("EVIDENCE_REUSE");
+    expectTextToIncludeAll(manifest.run, [
+      'TARGET_SHA="$(jq -r \'.targetSha\' "$RELEASE_EXECUTION_PLAN_PATH")"',
+      'NORMAL_CI_RUN_ID="$(jq -r \'.children[] | select(.key == "normalCi") | .runId\' "$RELEASE_EXECUTION_PLAN_PATH")"',
+      'EVIDENCE_RUN_ID="$(jq -r \'.evidenceReuse.selectedRunId // ""\' "$RELEASE_EXECUTION_PLAN_PATH")"',
+      'EVIDENCE_MANIFEST="$(jq -c \'.evidenceReuse.sourceManifest // empty\' "$RELEASE_EXECUTION_PLAN_PATH")"',
+      'PERFORMANCE_CONCLUSION="$(jq -r \'.children.productPerformance.conclusion // ""\' "$DIAGNOSTIC_DRAIN_PATH")"',
+    ]);
+    expect(manifest.run).not.toContain("needs.evidence_reuse.outputs");
+    expect(evidenceDispatch.run).toContain(
+      'EVIDENCE_REUSE="$(jq -r \'.evidenceReuse.requested\' "$RELEASE_EXECUTION_PLAN_PATH")"',
     );
+    expect(evidenceDispatch.env).not.toHaveProperty("EVIDENCE_REUSE");
   });
 
-  it.each([
-    { expectedStatus: 0, failOnRegression: "false", profile: "beta" },
-    { expectedStatus: 1, failOnRegression: "true", profile: "stable" },
-  ])(
-    "keeps failed product performance $profile release behavior unchanged",
-    ({ expectedStatus, failOnRegression, profile }) => {
-      const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[4], {
-        MOCK_GH_CONCLUSION: "failure",
-        RELEASE_PROFILE: profile,
-      });
-      const dispatch = calls.find(({ args }) => args[0] === "workflow");
+  it("pins every Full Release Validation artifact download to the canonical action", () => {
+    const workflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
+    const downloadSteps = Object.values(workflow.jobs ?? {}).flatMap((job) =>
+      (job.steps ?? []).filter((step) => step.uses?.startsWith("actions/download-artifact@")),
+    );
 
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(expectedStatus);
-      expect(dispatch?.args).toContain(`fail_on_regression=${failOnRegression}`);
-      if (profile === "beta") {
-        expect(result.stdout).toContain("advisory for beta");
-      }
-    },
-  );
-
-  it.each([
-    { expectedStatus: 0, failingJob: "Run optional live-provider check" },
-    { expectedStatus: 1, failingJob: "Run package acceptance" },
-  ])("keeps Tideclaw alpha package-safety lanes blocking", ({ expectedStatus, failingJob }) => {
-    const { result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[2], {
-      CHILD_WORKFLOW_REF: "tideclaw/alpha/2026-08-01-0000Z",
-      MOCK_GH_CONCLUSION: "failure",
-      MOCK_GH_JOBS: JSON.stringify([
-        {
-          conclusion: "success",
-          html_url: "https://github.com/openclaw/openclaw/actions/runs/101/job/201",
-          name: "Verify release checks",
-          status: "completed",
-        },
-        {
-          conclusion: "failure",
-          html_url: "https://github.com/openclaw/openclaw/actions/runs/101/job/202",
-          name: failingJob,
-          status: "completed",
-        },
-      ]),
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(expectedStatus);
-    if (expectedStatus === 0) {
-      expect(result.stdout).toContain("accepted Tideclaw alpha advisory lanes");
-    } else {
-      expect(result.stdout).toContain("package-safety Tideclaw alpha release-check lane");
+    expect(downloadSteps).toHaveLength(6);
+    for (const step of downloadSteps) {
+      expect(step.uses).toBe(DOWNLOAD_ARTIFACT_V8);
     }
   });
 
@@ -3474,7 +3497,9 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("Download current-run OpenClaw Docker E2E package");
     expect(workflow).toContain("Download previous-run OpenClaw Docker E2E package");
-    expect(workflow).toContain("inputs.package_artifact_id != ''");
+    expect(workflow).toContain(
+      "needs.validate_selected_ref.outputs.package_artifact_present == 'true'",
+    );
     expect(workflow).toContain(
       'bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"',
     );
@@ -3592,7 +3617,7 @@ describe("package artifact reuse", () => {
       prepareDockerImageStepNames.indexOf(planStepName),
     );
     expect(workflowStep(prepareDockerImage, setupCandidateStepName)).toMatchObject({
-      if: "(steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
+      if: "(steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
       uses: "./.github/actions/setup-node-env",
     });
     expect(workflowStep(prepareDockerImage, planStepName).env).toEqual({
@@ -3699,11 +3724,11 @@ describe("package artifact reuse", () => {
     const prepare = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "prepare_release_candidate");
     const pluginDispatch = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "plugin_prerelease"),
-      "Dispatch and monitor plugin prerelease",
+      "Dispatch plugin prerelease",
     );
     const releaseDispatch = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks"),
-      "Dispatch and monitor release checks",
+      "Dispatch release checks",
     );
 
     expect(prepare.uses).toBe("./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
@@ -3724,7 +3749,7 @@ describe("package artifact reuse", () => {
     expect(releaseDispatch.run).toContain(
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
-    expect(workflow).toContain("Shared release candidate preparation ended with");
+    expect(workflow).toContain("prepareCandidateResult: $prepareCandidateResult");
   });
 
   it("enables prerelease plugin companions for scheduled ref validation", () => {
@@ -3744,6 +3769,76 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}");
     expect(readFileSync("scripts/lib/extension-test-plan.mts", "utf8")).toContain(
       '"test/vitest/vitest.extension-memory.config.ts": 1',
+    );
+  });
+
+  it.each(["beta", "minimum", "stable", "full"])(
+    "accepts every runnable focused live suite for the %s profile",
+    (profile) => {
+      const suiteIds = new Set(["openshell-e2e", "live-cache", "docker-live-models"]);
+      for (const jobName of [
+        "validate_live_provider_suites",
+        "validate_live_docker_provider_suites",
+        "validate_live_media_provider_suites",
+      ]) {
+        const entries = workflowJob(LIVE_E2E_WORKFLOW, jobName).strategy?.matrix?.include;
+        expect(entries?.length, jobName).toBeGreaterThan(0);
+        for (const entry of entries ?? []) {
+          if (!entry.profiles?.split(/\s+/u).includes(profile)) {
+            continue;
+          }
+          for (const suiteId of [entry.suite_id, entry.suite_group]) {
+            if (suiteId) {
+              suiteIds.add(suiteId);
+            }
+          }
+        }
+      }
+
+      for (const suiteId of suiteIds) {
+        const result = runFocusedLiveSuiteValidation(suiteId, { RELEASE_TEST_PROFILE: profile });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain(`Focused live suite filter is valid: ${suiteId}`);
+      }
+    },
+  );
+
+  it("accepts the OpenCode Go aggregate for its stable smoke lane", () => {
+    const result = runFocusedLiveSuiteValidation("native-live-src-gateway-profiles-opencode-go", {
+      RELEASE_TEST_PROFILE: "stable",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each<{ suiteId: string; env?: Record<string, string> }>([
+    { suiteId: "native-live-src-gateway-profiles-opencode-go-unknown" },
+    { suiteId: "native-live-extensions-media-video-e" },
+    { suiteId: "unknown-live-suite" },
+    {
+      suiteId: "native-live-src-gateway-profiles-opencode-go-kimi",
+      env: { RELEASE_TEST_PROFILE: "stable" },
+    },
+    {
+      suiteId: "native-live-extensions-media-video-a",
+      env: { RELEASE_TEST_PROFILE: "beta" },
+    },
+    {
+      suiteId: "native-live-src-gateway-profiles-opencode-go-kimi",
+      env: { INCLUDE_LIVE_SUITES: "false" },
+    },
+    {
+      suiteId: "native-live-extensions-media-video-a",
+      env: { LIVE_MODELS_ONLY: "true" },
+    },
+    { suiteId: "openshell-e2e", env: { INCLUDE_REPO_E2E: "false" } },
+    { suiteId: "docker-live-models", env: { INCLUDE_LIVE_SUITES: "false" } },
+  ])("rejects unavailable focused suite $suiteId with $env", ({ suiteId, env }) => {
+    const result = runFocusedLiveSuiteValidation(suiteId, env);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `live_suite_filter '${suiteId}' does not match any runnable suite`,
     );
   });
 
@@ -3771,25 +3866,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
     );
-    expect(workflow).toContain('add_profile_suite docker-live-models "beta minimum stable full"');
-    expect(workflow).toContain(
-      'add_profile_suite native-live-src-gateway-core "beta minimum stable full"',
-    );
-    expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-docker "beta minimum stable full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker-full "full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
-    expect(workflow).toContain(
-      'add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"',
-    );
-    expect(workflow).toContain(
-      'add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"',
-    );
-    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai-zai "full"');
-    expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
-    expect(workflow).toContain('add_profile_suite live-cli-cache-docker "stable full"');
-    expect(workflow).toContain('add_profile_suite live-subagent-announce-docker "stable full"');
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
@@ -4011,7 +4087,6 @@ describe("package artifact reuse", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const providerSuites = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_docker_provider_suites");
     const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mts", "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const harness = readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8");
     const codexLiveTest = readFileSync("src/gateway/gateway-codex-harness.live.test.ts", "utf8");
     const liveDockerAuth = readFileSync("scripts/lib/live-docker-auth.sh", "utf8");
@@ -4119,15 +4194,6 @@ describe("package artifact reuse", () => {
     expect(scenarios).toMatch(
       /liveDockerScriptCommand\(\s*"test-live-subagent-announce-docker\.sh"/u,
     );
-    expect(scheduler).toContain("function liveDockerHarnessScriptCommand");
-    expect(scheduler).toContain("const LIVE_DOCKER_DEFAULT_HARNESS_DIR");
-    expect(scheduler).toContain('path.basename(SCRIPT_ROOT_DIR) === ".release-harness"');
-    expect(scheduler).toContain("ROOT_DIR !== SCRIPT_ROOT_DIR");
-    expect(scheduler).toContain(
-      'harness="\\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"',
-    );
-    expect(scheduler).not.toContain("harness=.release-harness");
-    expect(scheduler).toContain('liveDockerHarnessScriptCommand("test-live-build-docker.sh")');
     expect(liveDockerAuth).toContain("codex-cli | openai)");
     expect(liveDockerAuth).toContain("openclaw_live_init_docker_run_args()");
     expect(liveDockerAuth).toContain("openclaw_live_stage_profile_into_home()");
@@ -4312,6 +4378,7 @@ describe("package artifact reuse", () => {
       "BYTEPLUS_API_KEY",
       "CEREBRAS_API_KEY",
       "DEEPINFRA_API_KEY",
+      "DEEPSEEK_API_KEY",
       "DASHSCOPE_API_KEY",
       "GROQ_API_KEY",
       "KIMI_API_KEY",
@@ -4388,6 +4455,58 @@ describe("package artifact reuse", () => {
         expect(step.env?.[key]).toBe("${{ secrets." + key + " }}");
       }
     }
+    for (const workflowPath of [LIVE_E2E_WORKFLOW, PACKAGE_ACCEPTANCE_WORKFLOW]) {
+      expect(readWorkflow(workflowPath).on?.workflow_call).toMatchObject({
+        secrets: { DEEPSEEK_API_KEY: { required: false } },
+      });
+    }
+    for (const [jobName, job] of Object.entries(readWorkflow(LIVE_E2E_WORKFLOW).jobs ?? {})) {
+      if (job.steps?.some((step) => step.run === `bash ${CI_HYDRATE_LIVE_AUTH_SCRIPT}`)) {
+        expect(job.env?.DEEPSEEK_API_KEY, jobName).toBe("${{ secrets.DEEPSEEK_API_KEY }}");
+      }
+    }
+    for (const workflowPath of [
+      RELEASE_CHECKS_WORKFLOW,
+      SCHEDULED_LIVE_CHECKS_WORKFLOW,
+      PACKAGE_ACCEPTANCE_WORKFLOW,
+    ]) {
+      for (const [jobName, job] of Object.entries(readWorkflow(workflowPath).jobs ?? {})) {
+        if (
+          job.uses === `./${LIVE_E2E_WORKFLOW}` ||
+          job.uses === `./${PACKAGE_ACCEPTANCE_WORKFLOW}`
+        ) {
+          expect(job.secrets, `${workflowPath}:${jobName}`).toMatchObject({
+            DEEPSEEK_API_KEY: "${{ secrets.DEEPSEEK_API_KEY }}",
+          });
+        }
+      }
+    }
+    const hydrationHome = tempDirs.make("live-auth-hydration-");
+    const hydrated = spawnSync(
+      "bash",
+      [
+        "-euc",
+        `bash "$1" "$2"
+unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY
+source "$2"
+printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
+        "hydrate-live-auth",
+        CI_HYDRATE_LIVE_AUTH_SCRIPT,
+        resolve(hydrationHome, "live.profile"),
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          PATH: process.env.PATH,
+          HOME: hydrationHome,
+          DEEPSEEK_API_KEY: "deepseek-sentinel",
+          DEEPINFRA_API_KEY: "deepinfra-sentinel",
+        },
+      },
+    );
+    expect(hydrated.status, hydrated.stderr).toBe(0);
+    expect(hydrated.stdout).toBe("deepseek-sentinel\ndeepinfra-sentinel\n");
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [
@@ -4424,21 +4543,27 @@ describe("package artifact reuse", () => {
       workflowJob(CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW, "build-artifacts"),
       "Run Testbox",
     );
-    const runWindowsTestboxStep = workflowStep(
-      workflowJob(WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW, "windows"),
-      "Run Testbox",
-    );
+    const windowsTestboxJob = workflowJob(WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW, "windows");
+    const runWindowsTestboxStep = workflowStep(windowsTestboxJob, "Run Testbox");
+    const windowsTestboxActionMarker = workflowStep(windowsTestboxJob, "Testbox action marker");
 
     expect(workflow).not.toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
     expect(setupNodeWith).not.toHaveProperty("dependency-cache");
     expect(setupNodeWith).not.toHaveProperty("sticky-disk");
-    expect(setupNodeWith["use-actions-cache"]).toBe("true");
+    expect(setupNodeWith["cache-mode"]).toBe("restore");
     expect(checkTestboxJob["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
-    expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
+    for (const step of [
+      runTestboxStep,
+      runArmTestboxStep,
+      runBuildArtifactsTestboxStep,
+      windowsTestboxActionMarker,
+    ]) {
+      expect(step.uses).toBe(RUN_TESTBOX_WITH_FAILURE_REPORTING);
+    }
     expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.run).toContain(
@@ -4470,6 +4595,49 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("provider_mode:");
     expect(workflow).toContain("provider_mode must be mock-openai or live-frontier");
     expect(workflow).toContain("run_package_telegram_e2e:");
+  });
+
+  it("forwards optional RTT scenario selection from manual and reusable Telegram inputs", () => {
+    const workflow = readWorkflow(NPM_TELEGRAM_WORKFLOW);
+    const expectedInput = {
+      default: "",
+      description: "Optional Telegram QA scenario id for repeated RTT sampling",
+      required: false,
+      type: "string",
+    };
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.rtt_scenario).toEqual(expectedInput);
+    expect(workflow.on?.workflow_call?.inputs?.rtt_scenario).toEqual(expectedInput);
+    expect(
+      workflowStep(
+        workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e"),
+        "Run package Telegram E2E",
+      ).env?.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS,
+    ).toBe("${{ inputs.rtt_scenario }}");
+  });
+
+  it("requires explicit approval for historical package destructive actions", () => {
+    const workflow = readWorkflow(NPM_TELEGRAM_WORKFLOW);
+    const expectedInput = {
+      default: false,
+      description:
+        "Allow destructive actions for intentional historical downgrade or recovery proof",
+      required: false,
+      type: "boolean",
+    };
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.allow_older_binary_destructive_actions).toEqual(
+      expectedInput,
+    );
+    expect(workflow.on?.workflow_call?.inputs?.allow_older_binary_destructive_actions).toEqual(
+      expectedInput,
+    );
+    expect(
+      workflowStep(
+        workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e"),
+        "Run package Telegram E2E",
+      ).env?.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS,
+    ).toBe("${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}");
   });
 
   it.each(["stable", "full"])(
@@ -4718,9 +4886,11 @@ describe("package artifact reuse", () => {
       artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
       package_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
       package_sha256:
-        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
+        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
       package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
       package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
+      prepublish_plugin_registry_json:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}",
       suite_profile: "custom",
     });
     expect(releaseChecksTargetSummary.env).toMatchObject({
@@ -4733,7 +4903,7 @@ describe("package artifact reuse", () => {
       enable_prepublish_plugin_registry:
         '${{ contains(fromJSON(\'["artifact","ref"]\'), inputs.source) }}',
       prepublish_plugin_registry_manifest_sha256:
-        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
+        "${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
     });
     expect(workflow).toContain(
       "candidate_artifact_json cannot be combined with release package specs.",
@@ -4751,7 +4921,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain(
-      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
+      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
     );
     expect(workflow).toContain(
       "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
@@ -4761,7 +4931,7 @@ describe("package artifact reuse", () => {
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
     expect(workflow).toContain(
-      "package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
+      "package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(String(packageAcceptanceJob.with?.docker_lanes ?? "").split(/\s+/u)).toEqual([
@@ -5210,7 +5380,7 @@ describe("package artifact reuse", () => {
 
     expect(trustedCheckout).toMatchObject({
       if: eligibilityCondition,
-      uses: "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
       with: {
         "persist-credentials": false,
         ref: "${{ github.workflow_sha }}",
@@ -5420,8 +5590,8 @@ describe("package artifact reuse", () => {
       },
       {
         workflowPath: MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW,
-        jobName: "run_telegram_desktop_proof",
-        stepName: "Upload Mantis Telegram desktop artifacts",
+        jobName: "run_telegram_visible_proof",
+        stepName: "Upload Mantis Telegram artifacts",
       },
       {
         workflowPath: MANTIS_TELEGRAM_LIVE_WORKFLOW,
@@ -5517,9 +5687,9 @@ describe("package artifact reuse", () => {
     expect(job["runs-on"]).toBe("blacksmith-32vcpu-ubuntu-2404");
     expect(job.env?.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE).toBe("${{ inputs.release_test_profile }}");
     expect(setupNode.with).toMatchObject({
+      "cache-mode": "off",
       "install-bun": "false",
       "install-deps": "false",
-      "use-actions-cache": "false",
     });
   });
 
@@ -5683,12 +5853,9 @@ describe("package artifact reuse", () => {
     const toolingIdentity = workflowStep(resolveTargetJob, "Resolve trusted workflow identity");
     const releaseInputValidation = workflowStep(resolveTargetJob, "Validate release inputs");
     const evidenceReuseStep = workflowStep(evidenceReuseJob, "Find reusable validation evidence");
-    const releaseChecksDispatchStep = workflowStep(
-      releaseChecksJob,
-      "Dispatch and monitor release checks",
-    );
-    const dispatchStep = workflowStep(npmTelegramJob, "Dispatch and monitor npm Telegram E2E");
-    const verificationStep = workflowStep(summaryJob, "Verify child workflow results");
+    const releaseChecksDispatchStep = workflowStep(releaseChecksJob, "Dispatch release checks");
+    const dispatchStep = workflowStep(npmTelegramJob, "Dispatch npm Telegram E2E");
+    const verificationStep = workflowStep(summaryJob, "Verify exact release state artifacts");
     const manifestStep = workflowStep(summaryJob, "Write release validation manifest");
 
     expect(workflowInputs).toMatchObject({
@@ -5744,10 +5911,8 @@ describe("package artifact reuse", () => {
     ]);
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
     expect(npmTelegramJob.needs).toEqual(["resolve_target", "evidence_reuse"]);
-    expect(npmTelegramJob["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile == 'full' && 360 || 120 }}",
-    );
-    expect(performanceJob["timeout-minutes"]).toBe(360);
+    expect(npmTelegramJob["timeout-minutes"]).toBe(15);
+    expect(performanceJob["timeout-minutes"]).toBe(15);
     expect(npmTelegramJob.if).toContain(
       'contains(fromJSON(\'["all","npm-telegram"]\'), inputs.rerun_group)',
     );
@@ -5792,7 +5957,6 @@ describe("package artifact reuse", () => {
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_KIND: "npm-telegram",
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
-      FAIL_FAST: "${{ inputs.fail_fast }}",
       GH_TOKEN: "${{ github.token }}",
       PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}",
       PARENT_WORKFLOW_SHA: "${{ github.sha }}",
@@ -5818,48 +5982,34 @@ describe("package artifact reuse", () => {
       "allowUnreleasedChangelog: $allowUnreleasedChangelog",
     ]);
     expect(verificationStep.env).toMatchObject({
-      SKIP_PACKAGE_TELEGRAM_E2E: "${{ inputs.skip_package_telegram_e2e }}",
+      RELEASE_PROFILE: "${{ inputs.release_profile }}",
+      RERUN_GROUP: "${{ inputs.rerun_group }}",
     });
-    expect(verificationStep.run).toContain("Package Telegram E2E deferred:");
+    expect(verificationStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
     expectTextToIncludeAll(dispatchStep.run, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
       'dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"',
-      'dispatch_and_wait npm-telegram-beta-e2e.yml "$dispatch_run_name" "${args[@]}"',
+      'dispatch_child npm-telegram-beta-e2e.yml "$dispatch_run_name" "${args[@]}"',
       ".display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF",
       "The dispatch was not retried to avoid creating a duplicate child.",
       'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
-      "Still waiting on ${workflow} after ${elapsed_minutes}m:",
+      'echo "run_attempt=${child_run_attempt}" >> "$GITHUB_OUTPUT"',
       '-f harness_ref="$TARGET_SHA"',
       'args=(-f package_spec="$PACKAGE_SPEC"',
       'args+=(-f scenario="$SCENARIO")',
     ]);
     expect(dispatchStep.run).not.toContain("package_artifact");
+    expect(dispatchStep.run).not.toContain("allow_older_binary_destructive_actions");
     expectTextToIncludeAll(workflow, [
       '-f rerun_group="$RERUN_GROUP"',
       'args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")',
       'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
-      'case "$RERUN_GROUP" in',
-      "install-smoke|cross-os|live-e2e|package|qa-parity|qa-live)",
       "cancel-in-progress: false",
-      "Verify release checks accepted Tideclaw alpha advisory lanes",
-      "release_checks_advisory_only",
-      "release_check_blocking_job",
-      'if [[ "$RERUN_GROUP" == "npm-telegram" || ( "$RERUN_GROUP" == "all"',
-      "npm_telegram_required=1",
-      "Reused evidence did not record the required npm Telegram child run.",
-      'check_child "npm_telegram" "" "$npm_telegram_required"',
-      'if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then',
-      'or (.name | startswith("Run QA Lab runtime-pair lane ("))',
-      'or .name == "Run QA Lab live Discord lane"',
-      'or (.name | startswith("Run package acceptance / Telegram package acceptance / ")))',
-      "is a package-safety Tideclaw alpha release-check lane",
-      '"Run package acceptance" | \\',
-      '"Run package acceptance / "*)',
-      'check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 1',
-      "gh run cancel",
+      "FULL_RELEASE_PLAN_INPUTS_JSON",
+      "full-release-validation-policy.mjs",
+      "full-release-validation-state.mjs verify",
+      'FAIL_FAST: "false"',
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
-      "Sorry. Your account was suspended",
-      'gh_with_retry run view "$run_id" --json status,conclusion,url,attempt,headSha,jobs',
     ]);
     expect(workflow).not.toContain("force-cancel");
     expect(workflow).not.toContain("workflow_ref:");
@@ -6043,6 +6193,69 @@ describe("package artifact reuse", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       "Artifact-backed Telegram E2E requires all artifact identity fields or none.",
+    );
+  });
+
+  it("accepts direct package artifacts and validates an optional registry tuple", () => {
+    const packageTuple = {
+      PACKAGE_ARTIFACT_DIGEST: "a".repeat(64),
+      PACKAGE_ARTIFACT_ID: "123",
+      PACKAGE_ARTIFACT_NAME: "package-under-test",
+      PACKAGE_ARTIFACT_RUN_ATTEMPT: "2",
+      PACKAGE_ARTIFACT_RUN_ID: "456",
+      PACKAGE_FILE_NAME: "openclaw-2026.8.1.tgz",
+      PACKAGE_SHA256: "b".repeat(64),
+      PACKAGE_SOURCE_SHA: "c".repeat(40),
+      PACKAGE_VERSION: "2026.8.1",
+    };
+    const registryTuple = {
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: "d".repeat(64),
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "docker-e2e-prepublish-plugin-registry-123-1",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: "1",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "123",
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "e".repeat(64),
+    };
+
+    expect(runNpmTelegramInputValidation(packageTuple).status).toBe(0);
+    expect(runNpmTelegramInputValidation({ ...packageTuple, ...registryTuple }).status).toBe(0);
+    expect(
+      runNpmTelegramInputValidation({
+        ...packageTuple,
+        ...registryTuple,
+        PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME:
+          "package-acceptance-telegram-plugin-registry-123-1",
+      }).status,
+    ).toBe(0);
+
+    const partial = runNpmTelegramInputValidation({
+      ...packageTuple,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+    });
+    expect(partial.status).toBe(1);
+    expect(partial.stderr).toContain(
+      "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple.",
+    );
+
+    const wrongName = runNpmTelegramInputValidation({
+      ...packageTuple,
+      ...registryTuple,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "wrong-name",
+    });
+    expect(wrongName.status).toBe(1);
+    expect(wrongName.stderr).toContain(
+      "Prerelease plugin registry artifact name does not match its producer run.",
+    );
+  });
+
+  it("rejects prerelease plugin registry inputs without a package artifact", () => {
+    const result = runNpmTelegramInputValidation({
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Prerelease plugin registry inputs require an artifact-backed OpenClaw package.",
     );
   });
 
@@ -6665,21 +6878,22 @@ describe("package artifact reuse", () => {
     const summaryJob = parsedWorkflow.jobs?.summary;
     const manifestStep = workflowStep(summaryJob ?? {}, "Write release validation manifest");
 
-    expect(workflow).toContain("### Slowest jobs: ${label}");
-    expect(workflow).toContain("### Longest start delays: ${label}");
     expect(workflow).toContain("Write release validation manifest");
     expect(workflow).toContain("PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}");
     expect(workflow).toContain("Upload release validation manifest");
-    expect(workflow).toContain("Failed child detail: ${label}");
-    expect(workflow).toContain("actions/runs/${run_id}/artifacts?per_page=100");
+    expect(workflow).toContain("Download diagnostic drain attempts");
     expect(workflow).toContain("full-release-validation-${{ github.run_id }}");
-    expect(workflow).toContain("| Job | Result | Start delay minutes | Run minutes |");
-    expect(workflow).toContain(
-      'gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
-    );
-    expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
+    expect(workflow).toContain("full-release-diagnostic-manifest.json");
     expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
-    expect(manifestStep.env?.PERFORMANCE_RUN_ID).toBe("${{ needs.performance.outputs.run_id }}");
+    expect(manifestStep.env?.RELEASE_EXECUTION_PLAN_PATH).toContain(
+      "full-release-execution-plan.json",
+    );
+    expect(manifestStep.env?.DIAGNOSTIC_DRAIN_PATH).toContain(
+      "full-release-diagnostic-manifest.json",
+    );
+    expect(manifestStep.run).toContain(
+      `PERFORMANCE_RUN_ID="$(jq -r '.children[] | select(.key == "productPerformance") | .runId' "$RELEASE_EXECUTION_PLAN_PATH")"`,
+    );
     expect(manifestStep.run).toContain('--arg performanceRunId "$PERFORMANCE_RUN_ID"');
   });
 
@@ -6751,6 +6965,7 @@ describe("package artifact reuse", () => {
       "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
     );
     expect(trustedTooling.env?.WORKFLOW_SHA).toBe("${{ github.sha }}");
+    expect(trustedTooling.run).toContain("scripts/full-release-validation-policy.mjs");
     expect(validateManifest.env).toMatchObject({
       RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
       TRUSTED_WORKFLOW_FULL_REF: "${{ github.ref }}",
@@ -6767,7 +6982,9 @@ describe("package artifact reuse", () => {
     expect(publishOrchestration.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
-    expect(publishOrchestration.run).toContain('"${validation_target_sha}" != "${TARGET_SHA}"');
+    // actionlint passes embedded scripts to ShellCheck through a 64 KiB pipe.
+    expect(Buffer.byteLength(publishOrchestration.run ?? "", "utf8")).toBeLessThan(64 * 1024);
+    expect(publishOrchestration.run).toContain('"${target_sha}" != "${TARGET_SHA}"');
     expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
@@ -6779,7 +6996,7 @@ describe("package artifact reuse", () => {
       "node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest",
     );
     expect(npmCheckout.with?.["fetch-depth"]).toBe(
-      "${{ inputs.preflight_run_id != '' && 1 || 0 }}",
+      "${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}",
     );
 
     const publishSteps = publishJob.steps ?? [];
@@ -6811,6 +7028,28 @@ describe("package artifact reuse", () => {
     expect(finalizeJob.needs).toEqual(["publish", "publish_docker"]);
     expect(finalizeJob.if).toContain("needs.publish_docker.result == 'success'");
     expect(finalizeRelease.run).toContain('gh release edit "${RELEASE_TAG}"');
+  });
+
+  it("loads the strict release validator from the isolated trusted tooling bundle", () => {
+    const root = tempDirs.make("release-validation-tooling-");
+    mkdirSync(join(root, "lib"));
+    for (const source of [
+      "scripts/release-ci-summary.mjs",
+      "scripts/full-release-validation-policy.mjs",
+      "scripts/lib/plain-gh.mjs",
+    ]) {
+      copyFileSync(source, join(root, source.replace(/^scripts\//u, "")));
+    }
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `await import(${JSON.stringify(pathToFileURL(join(root, "release-ci-summary.mjs")).href)})`,
+      ],
+      { encoding: "utf8", timeout: 20_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("accepts tag-matched frozen release branches in OpenClaw npm preflight", () => {
@@ -6966,7 +7205,7 @@ describe("package artifact reuse", () => {
     expect(androidWorkflow).toContain('--artifact", "third-party');
     expect(androidWorkflow).toContain("OpenClaw-Android.apk");
     expect(androidWorkflow).toContain("OpenClaw-Android-SHA256SUMS.txt");
-    expect(androidWorkflow).toContain("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6");
+    expect(androidWorkflow).toContain("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6");
     expect(androidWorkflow).toContain("--signer-workflow");
     expect(androidWorkflow).toContain('--source-ref "refs/tags/${RELEASE_TAG}"');
     expect(androidWorkflow).toContain("--deny-self-hosted-runners");
@@ -7170,9 +7409,10 @@ describe("package artifact reuse", () => {
     const postpublishEvidence = workflowStep(releasePublishJob, "Upload postpublish evidence");
 
     expect(packageJson.scripts).toMatchObject({
-      "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
-      "release:candidate": "node --import tsx scripts/release-candidate-checklist.mts",
-      "release:beta": "node --import tsx scripts/release-candidate-checklist.mts",
+      "release:verify-beta": "node --import ./scripts/tsx.mjs scripts/release-verify-beta.ts",
+      "release:candidate":
+        "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
+      "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
       "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     });
     expect(workflowStep(releasePublishJob, "Setup Node environment").with).toMatchObject({
@@ -7193,7 +7433,7 @@ describe("package artifact reuse", () => {
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@87ca030c30f3cfb78ab15c8e66b5ff1469c8f9c8",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",
@@ -7437,7 +7677,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 
     for (const workflowPath of releaseWorkflowPaths) {
       const workflow = readWorkflow(workflowPath);
-      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.16.0");
+      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.19.0");
       expect(workflow.env?.PNPM_VERSION, workflowPath).toBeUndefined();
     }
 
@@ -7454,7 +7694,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(installSmoke.jobs?.root_dockerfile_image_ready?.["timeout-minutes"]).toBe(5);
     expect(installSmoke.jobs?.qr_package_install_smoke?.["timeout-minutes"]).toBe(30);
     expect(installSmoke.jobs?.root_dockerfile_smokes?.["timeout-minutes"]).toBe(90);
-    expect(installSmoke.jobs?.installer_smoke?.["timeout-minutes"]).toBe(150);
+    expect(installSmoke.jobs?.installer_smoke_update_image?.["timeout-minutes"]).toBe(45);
+    expect(installSmoke.jobs?.installer_smoke_nonroot_image?.["timeout-minutes"]).toBe(45);
+    expect(installSmoke.jobs?.installer_smoke_update?.["timeout-minutes"]).toBe(120);
+    expect(installSmoke.jobs?.installer_smoke_nonroot?.["timeout-minutes"]).toBe(60);
+    expect(installSmoke.jobs?.installer_smoke?.["timeout-minutes"]).toBe(5);
     expect(installSmoke.jobs?.bun_global_install_smoke?.["timeout-minutes"]).toBe(60);
     expect(installSmoke.jobs?.["docker-e2e-fast"]?.["timeout-minutes"]).toBe(12);
     expect(crossOs.jobs?.prepare?.["timeout-minutes"]).toBe(90);
@@ -7470,7 +7714,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });
 
-  it("keeps known bounded dominant child paths below parent monitors", () => {
+  it("keeps known bounded dominant child paths below the centralized drain owner", () => {
     const fullRelease = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
     const pluginPrerelease = readWorkflow(PLUGIN_PRERELEASE_WORKFLOW);
     const liveE2e = readWorkflow(LIVE_E2E_WORKFLOW);
@@ -7480,6 +7724,25 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const packageAcceptance = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW);
     const qaLive = readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW);
     const profiles = ["beta", "stable", "full"] as const;
+    const releaseDecisionTimeout = timeoutForProfile(
+      fullRelease.jobs?.release_decision?.["timeout-minutes"],
+      "beta",
+    );
+    const diagnosticDrainTimeout = timeoutForProfile(
+      fullRelease.jobs?.diagnostic_drain?.["timeout-minutes"],
+      "beta",
+    );
+    expect(releaseDecisionTimeout).toBe(720);
+    expect(diagnosticDrainTimeout).toBe(720);
+    for (const dispatchJob of [
+      "normal_ci",
+      "plugin_prerelease",
+      "release_checks",
+      "npm_telegram",
+      "performance",
+    ]) {
+      expect(fullRelease.jobs?.[dispatchJob]?.["timeout-minutes"], dispatchJob).toBe(15);
+    }
 
     const ciPreflight = workflowJob(CI_WORKFLOW, "preflight");
     const ciIos = workflowJob(CI_WORKFLOW, "ios-build");
@@ -7494,29 +7757,20 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(ciPath).toEqual([20, 150, 5]);
     const ciChildTimeout = ciPath.reduce((total, timeout) => total + timeout, 0);
     expect(ciChildTimeout).toBe(175);
-    const ciParentTimeout = timeoutForProfile(
-      fullRelease.jobs?.normal_ci?.["timeout-minutes"],
-      "beta",
-    );
-    expect(ciChildTimeout).toBeLessThanOrEqual(ciParentTimeout);
-    expect(ciParentTimeout - ciChildTimeout).toBeGreaterThanOrEqual(60);
+    expect(ciChildTimeout).toBeLessThanOrEqual(diagnosticDrainTimeout);
+    expect(diagnosticDrainTimeout - ciChildTimeout).toBeGreaterThanOrEqual(60);
 
     expect(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
-    const pluginMonitorTimeout = fullRelease.jobs?.plugin_prerelease?.["timeout-minutes"];
     const pluginChildTimeouts = Object.fromEntries(
       profiles.map((profile) => [
         profile,
         pluginPrereleaseTimeoutFloor(pluginPrerelease, liveE2e, profile),
       ]),
     ) as Record<(typeof profiles)[number], number>;
-    const pluginParentTimeouts = Object.fromEntries(
-      profiles.map((profile) => [profile, timeoutForProfile(pluginMonitorTimeout, profile)]),
-    ) as Record<(typeof profiles)[number], number>;
     expect(pluginChildTimeouts).toEqual({ beta: 175, stable: 175, full: 205 });
-    expect(pluginParentTimeouts).toEqual({ beta: 240, stable: 240, full: 300 });
     for (const profile of profiles) {
       expect(
-        pluginParentTimeouts[profile] - pluginChildTimeouts[profile],
+        diagnosticDrainTimeout - pluginChildTimeouts[profile],
         `plugin-prerelease:${profile}`,
       ).toBeGreaterThanOrEqual(60);
     }
@@ -7594,7 +7848,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     });
     const releaseChecksParent = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks");
     expect(releaseChecksParent["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
-    expect(releaseChecksParent["timeout-minutes"]).toBe(420);
+    expect(releaseChecksParent["timeout-minutes"]).toBe(15);
     const releasePackageTimeouts = {
       beta: releasePackagePaths.beta.reduce((total, timeout) => total + timeout, 0),
       stable: releasePackagePaths.stable.reduce((total, timeout) => total + timeout, 0),
@@ -7602,8 +7856,13 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     };
     expect(releasePackageTimeouts).toEqual({ beta: 310, stable: 310, full: 340 });
     for (const [profile, childTimeout] of Object.entries(releasePackageTimeouts)) {
-      expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(420);
-      expect(420 - childTimeout, `release-package:${profile}`).toBeGreaterThanOrEqual(60);
+      expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(
+        diagnosticDrainTimeout,
+      );
+      expect(
+        diagnosticDrainTimeout - childTimeout,
+        `release-package:${profile}`,
+      ).toBeGreaterThanOrEqual(60);
     }
 
     const releaseSummary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
@@ -7631,24 +7890,68 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(
       jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "root_dockerfile_image_ready")),
     ).toEqual(["preflight", "root_dockerfile_image"]);
+    expect(
+      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_candidate_payload")),
+    ).toEqual(["preflight"]);
+    expect(
+      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_update_image")),
+    ).toEqual(["preflight"]);
+    expect(
+      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_nonroot_image")),
+    ).toEqual(["preflight"]);
+    expect(
+      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_update")),
+    ).toEqual(["preflight", "installer_smoke_candidate_payload", "installer_smoke_update_image"]);
+    expect(
+      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_nonroot")),
+    ).toEqual(["preflight", "installer_smoke_candidate_payload", "installer_smoke_nonroot_image"]);
     expect(jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke"))).toEqual([
       "preflight",
       "root_dockerfile_image",
       "root_dockerfile_image_ready",
+      "installer_smoke_candidate_payload",
+      "installer_smoke_update_image",
+      "installer_smoke_update",
+      "installer_smoke_nonroot_image",
+      "installer_smoke_nonroot",
     ]);
     expect(jobNeeds(releaseSummary)).toContain("install_smoke_release_checks");
     const releaseInstallPath = [
       timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
       timeoutForProfile(installSmoke.jobs?.preflight?.["timeout-minutes"], "stable"),
-      timeoutForProfile(installSmoke.jobs?.root_dockerfile_image?.["timeout-minutes"], "stable"),
-      timeoutForProfile(
-        installSmoke.jobs?.root_dockerfile_image_ready?.["timeout-minutes"],
-        "stable",
+      Math.max(
+        timeoutForProfile(
+          installSmoke.jobs?.installer_smoke_candidate_payload?.["timeout-minutes"],
+          "stable",
+        ),
+        timeoutForProfile(
+          installSmoke.jobs?.installer_smoke_update_image?.["timeout-minutes"],
+          "stable",
+        ),
       ),
+      timeoutForProfile(installSmoke.jobs?.installer_smoke_update?.["timeout-minutes"], "stable"),
       timeoutForProfile(installSmoke.jobs?.installer_smoke?.["timeout-minutes"], "stable"),
       timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
     ];
-    expect(releaseInstallPath).toEqual([30, 15, 60, 5, 150, 5]);
+    expect(releaseInstallPath).toEqual([30, 15, 75, 120, 5, 5]);
+    const releaseInstallNonrootPath = [
+      timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
+      timeoutForProfile(installSmoke.jobs?.preflight?.["timeout-minutes"], "stable"),
+      Math.max(
+        timeoutForProfile(
+          installSmoke.jobs?.installer_smoke_candidate_payload?.["timeout-minutes"],
+          "stable",
+        ),
+        timeoutForProfile(
+          installSmoke.jobs?.installer_smoke_nonroot_image?.["timeout-minutes"],
+          "stable",
+        ),
+      ),
+      timeoutForProfile(installSmoke.jobs?.installer_smoke_nonroot?.["timeout-minutes"], "stable"),
+      timeoutForProfile(installSmoke.jobs?.installer_smoke?.["timeout-minutes"], "stable"),
+      timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
+    ];
+    expect(releaseInstallNonrootPath).toEqual([30, 15, 75, 60, 5, 5]);
 
     const releaseQaLive = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_release_checks");
     expect(jobNeeds(releaseQaLive)).toEqual(["resolve_target"]);
@@ -7675,11 +7978,17 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ["qa-live", releaseQaLivePath],
     ] as const) {
       const childTimeout = path.reduce((total, timeout) => total + timeout, 0);
-      expect(childTimeout, `release-checks:${pathName}`).toBeLessThanOrEqual(420);
-      expect(420 - childTimeout, `release-checks:${pathName}`).toBeGreaterThanOrEqual(60);
+      expect(childTimeout, `release-checks:${pathName}`).toBeLessThanOrEqual(
+        diagnosticDrainTimeout,
+      );
+      expect(
+        diagnosticDrainTimeout - childTimeout,
+        `release-checks:${pathName}`,
+      ).toBeGreaterThanOrEqual(60);
     }
     expect(releaseCrossOsPath.reduce((total, timeout) => total + timeout, 0)).toBe(200);
-    expect(releaseInstallPath.reduce((total, timeout) => total + timeout, 0)).toBe(265);
+    expect(releaseInstallPath.reduce((total, timeout) => total + timeout, 0)).toBe(250);
+    expect(releaseInstallNonrootPath.reduce((total, timeout) => total + timeout, 0)).toBe(190);
     expect(releaseQaLivePath.reduce((total, timeout) => total + timeout, 0)).toBe(165);
 
     expect(
@@ -7702,24 +8011,14 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       0,
     );
     expect(releaseTelegramTimeout).toBe(245);
-    expect(420 - releaseTelegramTimeout).toBeGreaterThanOrEqual(60);
+    expect(diagnosticDrainTimeout - releaseTelegramTimeout).toBeGreaterThanOrEqual(60);
 
     const npmTelegramChildTimeout = timeoutForProfile(
       workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e")["timeout-minutes"],
       "beta",
     );
     expect(npmTelegramChildTimeout).toBe(60);
-    for (const profile of profiles) {
-      const parentTimeout = timeoutForProfile(
-        fullRelease.jobs?.npm_telegram?.["timeout-minutes"],
-        profile,
-      );
-      expect(parentTimeout).toBe(profile === "full" ? 360 : 120);
-      expect(
-        parentTimeout - npmTelegramChildTimeout,
-        `npm-telegram:${profile}`,
-      ).toBeGreaterThanOrEqual(60);
-    }
+    expect(diagnosticDrainTimeout - npmTelegramChildTimeout).toBeGreaterThanOrEqual(60);
 
     const performanceResolve = workflowJob(PERFORMANCE_WORKFLOW, "resolve_target");
     const performanceKova = workflowJob(PERFORMANCE_WORKFLOW, "kova");
@@ -7750,17 +8049,20 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(performanceArtifactPath.reduce((total, timeout) => total + timeout, 0)).toBe(255);
     expect(performancePublishPath.reduce((total, timeout) => total + timeout, 0)).toBe(280);
     const performanceParent = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
-    expect(performanceParent["timeout-minutes"]).toBe(360);
-    expect(
-      workflowStep(performanceParent, "Dispatch and monitor OpenClaw Performance").run,
-    ).toContain("-f publish_reports=false");
+    expect(performanceParent["timeout-minutes"]).toBe(15);
+    expect(workflowStep(performanceParent, "Dispatch OpenClaw Performance").run).toContain(
+      "-f publish_reports=false",
+    );
     for (const [pathName, path] of [
       ["artifact-only", performanceArtifactPath],
       ["publish", performancePublishPath],
     ] as const) {
       const childTimeout = path.reduce((total, timeout) => total + timeout, 0);
-      expect(childTimeout, `performance:${pathName}`).toBeLessThanOrEqual(360);
-      expect(360 - childTimeout, `performance:${pathName}`).toBeGreaterThanOrEqual(60);
+      expect(childTimeout, `performance:${pathName}`).toBeLessThanOrEqual(diagnosticDrainTimeout);
+      expect(
+        diagnosticDrainTimeout - childTimeout,
+        `performance:${pathName}`,
+      ).toBeGreaterThanOrEqual(60);
     }
 
     const prepareReleaseCandidate = workflowJob(
@@ -7787,12 +8089,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       timeoutForProfile(liveE2e.jobs?.prepare_docker_e2e_image?.["timeout-minutes"], "full"),
       timeoutForProfile(liveE2e.jobs?.docker_e2e_image_ready?.["timeout-minutes"], "full"),
       timeoutForProfile(releaseChecksParent["timeout-minutes"], "full"),
-      timeoutForProfile(fullRelease.jobs?.summary?.["timeout-minutes"], "full"),
     ];
-    expect(fullParentPath).toEqual([10, 10, 30, 90, 5, 420, 5]);
+    expect(fullParentPath).toEqual([10, 10, 30, 90, 5, 15]);
     const fullParentTimeoutFloor = fullParentPath.reduce((total, timeout) => total + timeout, 0);
-    expect(fullParentTimeoutFloor).toBe(570);
-    expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES - fullParentTimeoutFloor).toBeGreaterThanOrEqual(60);
+    expect(fullParentTimeoutFloor).toBe(160);
+    expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(diagnosticDrainTimeout);
   });
 
   it("bounds every direct job in nested release workflows", () => {

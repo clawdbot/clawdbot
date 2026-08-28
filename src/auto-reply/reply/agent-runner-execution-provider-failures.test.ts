@@ -15,6 +15,7 @@ import {
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   createMinimalRunAgentTurnParams,
   NON_DIRECT_FAILURE_SURFACE_CASES,
@@ -75,6 +76,17 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  it("reports the terminal provider failure to the dispatch owner", async () => {
+    const onAgentRunTerminalOutcome = vi.fn();
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("provider returned HTTP 500"));
+
+    const result = await executeTestTurn({ opts: { onAgentRunTerminalOutcome } });
+
+    expect(result.kind).toBe("final");
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledOnce();
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
+  });
+
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "keeps raw runner failure boilerplate out of $label chats",
     async (testCase) => {
@@ -547,7 +559,11 @@ describe("executeAgentTurn: provider failures", () => {
     });
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-8"),
+      result: await params.run(
+        "claude-cli",
+        "claude-opus-4-8",
+        initialFallbackAttemptOptions(params),
+      ),
       provider: "claude-cli",
       model: "claude-opus-4-8",
       attempts: [],
@@ -702,10 +718,11 @@ describe("executeAgentTurn: provider failures", () => {
     const abortController = new AbortController();
     const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
     const onBlockReply = vi.fn();
+    const onAgentRunTerminalOutcome = vi.fn();
 
     const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({
-        opts: { onBlockReply },
+        opts: { onAgentRunTerminalOutcome, onBlockReply },
         replyOperation,
       }),
     );
@@ -716,6 +733,7 @@ describe("executeAgentTurn: provider failures", () => {
       payload: { text: SILENT_REPLY_TOKEN },
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(onBlockReply).not.toHaveBeenCalled();
     const agentEvents = await import("../../infra/agent-events.js");

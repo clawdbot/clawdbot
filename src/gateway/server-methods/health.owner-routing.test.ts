@@ -40,6 +40,15 @@ describe("Gateway status owner routing", () => {
 
       expect(respond).toHaveBeenCalledTimes(1);
       expect(respond.mock.calls[0]?.[0]).toBe(true);
+      expect(respond.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          processMemory: {
+            rssBytes: expect.any(Number),
+            heapUsedBytes: expect.any(Number),
+            heapTotalBytes: expect.any(Number),
+          },
+        }),
+      );
       expect(respond.mock.calls[0]?.[2]).toBeUndefined();
       expect(resolveRequestedSessionAgentId(config, "main")).toMatchObject({ ok: false });
       expect(resolveRequestedSessionAgentId(config, "agent:molty:main")).toEqual({

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { LOOPBACK_PORT_PROBE_HOSTS, probePortUsage } from "../infra/ports-probe.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import {
@@ -162,6 +163,114 @@ describeLaunchdIntegration("launchd integration", () => {
   let env: GatewayServiceEnv | undefined;
   let homeDir = "";
   const stdout = new PassThrough();
+
+  it("real launchctl: node-host LaunchAgent stop/restart survives a co-located busy Gateway port (#124296)", async () => {
+    // Real-world proof for https://github.com/openclaw/openclaw/issues/124296:
+    // this drives actual `launchctl` LaunchAgents (no mocked port-inspection
+    // or launchctl calls) to reproduce the reported false-positive
+    // "gateway port is still busy" failure and confirm the fix resolves it.
+    const testId = randomUUID().slice(0, 8);
+    const gatewayPort = 19_500 + (Number.parseInt(testId.slice(0, 4), 16) % 400);
+
+    // Real "gateway" LaunchAgent that genuinely binds the scratch port, so
+    // the port really is busy for the whole test — no port mocking at all.
+    const gatewayHomeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), `openclaw-launchd-int-gw-${testId}-`),
+    );
+    const gatewayEnv: GatewayServiceEnv = {
+      HOME: gatewayHomeDir,
+      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-gw-${testId}`,
+      OPENCLAW_LOG_PREFIX: `gateway-launchd-int-gw-${testId}`,
+      OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+    };
+
+    // Real "node-host" LaunchAgent, co-located on the same machine, tagged
+    // with the node service kind. It never binds the gateway port itself.
+    const nodeHomeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), `openclaw-launchd-int-node-${testId}-`),
+    );
+    const nodeEnv: GatewayServiceEnv = {
+      HOME: nodeHomeDir,
+      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-node-${testId}`,
+      OPENCLAW_LOG_PREFIX: `gateway-launchd-int-node-${testId}`,
+      OPENCLAW_SERVICE_KIND: "node",
+      OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+    };
+
+    try {
+      await installLaunchAgent({
+        env: gatewayEnv,
+        stdout,
+        programArguments: [
+          process.execPath,
+          "-e",
+          `require("node:http").createServer((_req,res)=>res.end("ok")).listen(${gatewayPort}, "127.0.0.1", () => {}); setInterval(() => {}, 1000);`,
+        ],
+      });
+      await waitForRunningRuntime({ env: gatewayEnv });
+
+      // Prove the gateway port is genuinely bound right now via a real TCP
+      // probe (no launchd-status inference) before exercising the node-host
+      // lifecycle against it. This closes the gap where a LaunchAgent could
+      // report "running" before its listener has actually bound the port.
+      await expect
+        .poll(() => probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS), {
+          timeout: 10_000,
+          interval: 100,
+        })
+        .toBe("busy");
+
+      await installLaunchAgent({
+        env: nodeEnv,
+        stdout,
+        programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
+      });
+      const nodeBefore = await waitForRunningRuntime({ env: nodeEnv });
+
+      // Re-confirm the port is still genuinely busy immediately before the
+      // stop call, so the assertion below is tied to a real, current probe.
+      await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
+
+      // The gateway port is genuinely still bound by the co-located gateway
+      // LaunchAgent right now. Stopping the node-host LaunchAgent must not
+      // fail with the false-positive "gateway port is still busy" error.
+      await expect(stopLaunchAgent({ env: nodeEnv, stdout })).resolves.not.toThrow();
+      await waitForNotRunningRuntime({ env: nodeEnv });
+
+      // Confirm the co-located gateway is genuinely untouched throughout.
+      const gatewayStillRunning = await readLaunchAgentRuntime(gatewayEnv);
+      expect(gatewayStillRunning.status).toBe("running");
+
+      // Re-install (stop leaves it uninstalled-from-runtime-state in some
+      // paths depending on service semantics) and exercise restart too.
+      await installLaunchAgent({
+        env: nodeEnv,
+        stdout,
+        programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
+      });
+      await waitForRunningRuntime({ env: nodeEnv, pidNot: nodeBefore.pid });
+      const nodeRunningBeforeRestart = await readLaunchAgentRuntime(nodeEnv);
+
+      // Re-probe immediately before restart too: the port must still be
+      // genuinely busy (real TCP probe, not inferred from launchd status)
+      // for this to be a valid proof of the restart-guard fix.
+      await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
+
+      await expect(restartLaunchAgent({ env: nodeEnv, stdout })).resolves.not.toThrow();
+      await expectRuntimePidReplaced({
+        env: nodeEnv,
+        previousPid: nodeRunningBeforeRestart.pid ?? nodeBefore.pid,
+      });
+
+      const gatewayStillRunningAfterRestart = await readLaunchAgentRuntime(gatewayEnv);
+      expect(gatewayStillRunningAfterRestart.status).toBe("running");
+    } finally {
+      await uninstallLaunchAgent({ env: nodeEnv, stdout }).catch(() => {});
+      await uninstallLaunchAgent({ env: gatewayEnv, stdout }).catch(() => {});
+      await fs.rm(nodeHomeDir, { recursive: true, force: true });
+      await fs.rm(gatewayHomeDir, { recursive: true, force: true });
+    }
+  }, 90_000);
 
   beforeAll(async () => {
     const testId = randomUUID().slice(0, 8);

@@ -22,12 +22,17 @@ import {
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
+import {
+  resolveVitestPretestBuildMode,
+  type VitestPretestBuildMode,
+} from "./vitest-build-prerequisites.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
   includePatterns?: string[];
   planConcurrency?: number;
+  pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
   shardName: string;
@@ -45,20 +50,23 @@ const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
-const DOCKER_SEED_LANE_ORDER = [
+const MCP_DOCKER_SEED_LANES = [
   "mcp-channels",
   "cron-mcp-cleanup",
   "mcp-code-mode-gateway",
 ] as const;
+const DOCKER_SEED_LANE_ORDER = [...MCP_DOCKER_SEED_LANES, "update-channel-switch"] as const;
 type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
 const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
-  ".github/workflows/ci.yml": DOCKER_SEED_LANE_ORDER,
+  ".github/workflows/ci.yml": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
-  "scripts/e2e/docker-openai-seed.ts": DOCKER_SEED_LANE_ORDER,
+  "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/update-channel-switch/assertions.mjs": ["update-channel-switch"],
   "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
   "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
-  "scripts/lib/ci-changed-node-test-plan.mts": DOCKER_SEED_LANE_ORDER,
+  "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
+  "scripts/lib/ci-changed-node-test-plan.mts": MCP_DOCKER_SEED_LANES,
 };
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
@@ -319,6 +327,10 @@ function createChangedTargetShards(
       shardName: `${names.shardName}${suffix}`,
       targets: chunk,
     };
+    const pretestBuildMode = resolveVitestPretestBuildMode([{ includePatterns: chunk }]);
+    if (pretestBuildMode) {
+      shard.pretestBuildMode = pretestBuildMode;
+    }
     if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
       shard.planConcurrency = 1;
     }
@@ -363,6 +375,12 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
     };
+    const pretestBuildMode = resolveVitestPretestBuildMode([
+      { configs: [config], includePatterns },
+    ]);
+    if (pretestBuildMode) {
+      shard.pretestBuildMode = pretestBuildMode;
+    }
     if (includePatterns) {
       shard.includePatterns = includePatterns;
     }

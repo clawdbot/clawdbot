@@ -1,6 +1,10 @@
 // Skill filter tests cover active skill selection for isolated cron runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import {
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -13,11 +17,14 @@ import {
   logWarnMock,
   makeCronSession,
   makeCronSessionEntry,
+  patchSessionEntryMock,
   resolveAgentConfigMock,
   resolveAgentSkillsFilterMock,
   resolveAllowedModelRefMock,
   resolveCronSessionMock,
+  resolveEffectiveAgentRuntimeMock,
   runCliAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -68,8 +75,12 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
   function mockCliFallbackInvocation() {
     runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
-        const result = await params.run("claude-cli", "claude-opus-4-6");
+      async (params: TestModelFallbackRunnerParams) => {
+        const result = await runInitialModelFallbackAttempt(
+          params,
+          "claude-cli",
+          "claude-opus-4-6",
+        );
         return { result, provider: "claude-cli", model: "claude-opus-4-6", attempts: [] };
       },
     );
@@ -155,6 +166,44 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     await runSkillFilterCase();
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
     expect(getFirstMockArg(resolveCronSessionMock, "cron session").forceNew).toBe(true);
+  });
+
+  it("persists the selected harness on base and run rows before turn startup fails", async () => {
+    const persistedAtStartup = new Map<string, Record<string, unknown>>();
+    resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: TestModelFallbackRunnerParams) => ({
+        result: await runInitialModelFallbackAttempt(params),
+        provider: params.provider,
+        model: params.model,
+      }),
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      for (const [index, result] of patchSessionEntryMock.mock.results.entries()) {
+        const scope = requireRecord(
+          getMockCallArg(patchSessionEntryMock, index, 0, "session patch"),
+          "patch scope",
+        );
+        const entry = requireRecord(await result.value, "persisted session entry");
+        persistedAtStartup.set(String(scope.sessionKey), entry);
+      }
+      throw new Error("turn/start rejected before result metadata");
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({ agentId: "main" }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("turn/start rejected before result metadata");
+    expect(persistedAtStartup.get("agent:main:cron:test")).toMatchObject({
+      sessionId: "test-session-id",
+      agentHarnessId: "codex",
+    });
+    expect(persistedAtStartup.get("agent:main:cron:test:run:test-session-id")).toMatchObject({
+      sessionId: "test-session-id",
+      agentHarnessId: "codex",
+    });
   });
 
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {

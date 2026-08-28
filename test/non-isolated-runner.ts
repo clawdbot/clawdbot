@@ -1,7 +1,12 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import path from "node:path";
+import type {
+  EvaluatedModuleNode as ViteEvaluatedModuleNode,
+  EvaluatedModules as ViteEvaluatedModules,
+} from "vite/module-runner";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
+import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
 import {
   type CustomElementTracking,
@@ -9,15 +14,13 @@ import {
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
 
-type EvaluatedModuleNode = {
-  promise?: unknown;
-  exports?: unknown;
-  evaluated?: boolean;
-  importers: Set<string>;
+type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
+  mockedExports?: unknown;
 };
 
 type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
+  invalidateModule: ViteEvaluatedModules["invalidateModule"];
 };
 
 type SerializableMocker = {
@@ -40,6 +43,17 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
 const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
+const nativeConsoleMethods = {
+  log: console.log,
+  info: console.info,
+  warn: console.warn,
+  error: console.error,
+  debug: console.debug,
+  trace: console.trace,
+};
+// loggingState is keyed off globalThis precisely so it survives module reloads,
+// so vi.resetModules() below cannot undo what a file latched into it.
+const baselineLoggingState = { ...loggingState };
 const nativeTimerGlobals = {
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
@@ -57,21 +71,23 @@ function getSharedTestHome(): string | undefined {
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
 }
 
-function resetEvaluatedModules(modules: EvaluatedModules, resetMocks: boolean) {
-  const skipPaths = [
-    /\/vitest\/dist\//,
-    /vitest-virtual-\w+\/dist/u,
-    /@vitest\/dist/u,
-    ...(resetMocks ? [] : [/^mock:/u]),
-  ];
+function resetEvaluatedModules(modules: EvaluatedModules) {
+  const skipPaths = [/\/vitest\/dist\//, /vitest-virtual-\w+\/dist/u, /@vitest\/dist/u];
 
   modules.idToModuleMap.forEach((node, modulePath) => {
     if (skipPaths.some((pattern) => pattern.test(modulePath))) {
       return;
     }
-    node.promise = undefined;
-    node.exports = undefined;
-    node.evaluated = false;
+    // Mock metadata owns factories and cached exports after the registry resets.
+    // Retire those nodes while preserving ordinary transformed-code metadata.
+    if (modulePath.startsWith("mock:") || (node.meta && "mockedModule" in node.meta)) {
+      modules.invalidateModule(node);
+      node.mockedExports = undefined;
+    } else {
+      node.promise = undefined;
+      node.exports = undefined;
+      node.evaluated = false;
+    }
     node.importers.clear();
   });
 }
@@ -144,6 +160,19 @@ function restoreRealTimers(): void {
 
 function restoreNativeTimerGlobals(): void {
   Object.assign(globalThis, nativeTimerGlobals);
+}
+
+// enableConsoleCapture() swaps every console method for a forwarder and latches
+// routing that production only unwinds at process exit (stdio MCP servers, `--json`
+// one-shot commands), so a shared worker carries both into the next file. That
+// forwarder writes to process.stderr once forceConsoleToStderr is latched, and the
+// next file's console spy then records nothing.
+function restoreConsoleRoutingState(): void {
+  Object.assign(console, nativeConsoleMethods);
+  // The EPIPE handlers really are attached to the worker's stdout/stderr; resetting
+  // this flag would let the next enableConsoleCapture() stack a second pair.
+  const { streamErrorHandlersInstalled } = loggingState;
+  Object.assign(loggingState, baselineLoggingState, { streamErrorHandlersInstalled });
 }
 
 function restoreMocksThenRealTimers(): void {
@@ -349,15 +378,20 @@ export function serializeMockerResolveMocks(mocker: SerializableMocker): void {
   const original = mocker.resolveMocks.bind(mocker);
   const statics = mocker.constructor as { pendingIds?: unknown[] };
   const runPass = async (): Promise<void> => {
-    const queue = statics.pendingIds;
-    const processedCount = queue?.length ?? 0;
-    await original();
-    // Upstream snapshots the queue contents at pass start and reassigns the
-    // pendingIds static to [] at the end, so ids queued during the pass's RPC
-    // window land in the abandoned array. Requeue them so the next chained
-    // pass registers them instead of silently dropping the registration.
-    if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
-      statics.pendingIds?.push(...queue.slice(processedCount));
+    while (true) {
+      const queue = statics.pendingIds;
+      const processedCount = queue?.length ?? 0;
+      await original();
+      // Upstream snapshots the queue contents at pass start and reassigns the
+      // pendingIds static to [] at the end, so ids queued during the pass's RPC
+      // window land in the abandoned array. Requeue and drain them before this
+      // caller proceeds so a later module fetch cannot invalidate mocks mid-import.
+      if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
+        statics.pendingIds?.push(...queue.slice(processedCount));
+      }
+      if ((statics.pendingIds?.length ?? 0) === 0) {
+        return;
+      }
     }
   };
   mocker.resolveMocks = () => {
@@ -435,6 +469,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // not carry file-scoped timers, stubs, spies, or stale module state
     // forward into the next file.
     restoreMocksThenRealTimers();
+    restoreConsoleRoutingState();
     vi.unstubAllGlobals();
     const testHome = getSharedTestHome();
     vi.unstubAllEnvs();
@@ -451,6 +486,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     resetSharedDocumentBody();
     vi.resetModules();
     internals.moduleRunner?.mocker?.reset?.();
-    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules, true);
+    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules);
   }
 }

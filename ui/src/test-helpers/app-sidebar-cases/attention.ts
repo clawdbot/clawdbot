@@ -59,29 +59,6 @@ function agentAttentionRow(
 }
 
 describe("AppSidebar session attention", () => {
-  it("marks Ask OpenClaw when undismissed alerts exist", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessionsHarness("main", []).sessions);
-    const attention = sidebar.querySelector<
-      HTMLElement & {
-        onSummaryChange?: (summary: {
-          count: number;
-          severity: "error" | "warning" | null;
-        }) => void;
-      }
-    >("openclaw-sidebar-attention");
-    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__custodian");
-
-    attention?.onSummaryChange?.({ count: 1, severity: "error" });
-    await sidebar.updateComplete;
-    expect(button?.getAttribute("aria-label")).toBe("Ask OpenClaw, 1 undismissed alert");
-
-    attention?.onSummaryChange?.({ count: 2, severity: "error" });
-    await sidebar.updateComplete;
-    expect(button?.getAttribute("aria-label")).toBe("Ask OpenClaw, 2 undismissed alerts");
-    expect(button?.querySelector(".sidebar-footer-bar__custodian-badge--error")).not.toBeNull();
-  });
-
   it("projects canonical attention onto Home across row refresh ordering", async () => {
     const mainKey = "agent:main:main";
     const client = {
@@ -203,11 +180,13 @@ describe("AppSidebar session attention", () => {
       sessionsHarness.sessions,
     );
 
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    await sidebar.updateComplete;
     expect(sidebar.textContent).toContain("Deploying to staging");
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
   });
 
-  it("collapses hidden previews to one line without hiding attention", async () => {
+  it("defaults to one line without hiding attention", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [
       {
@@ -222,9 +201,6 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       sessionsHarness.sessions,
     );
-
-    sidebar.sessionOrganizer.setSessionsShowPreview(false);
-    await sidebar.updateComplete;
 
     const previewRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
     expect(previewRow?.textContent).not.toContain("Deploying to staging");
@@ -285,7 +261,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
-  it("uses canonical Home attention and shared agent approval tooltips", async () => {
+  it("uses canonical Home attention without duplicating an agent approval badge", async () => {
     const mainKey = "agent:main:main";
     const approval = {
       id: "approval-main",
@@ -311,14 +287,9 @@ describe("AppSidebar session attention", () => {
         ?.content,
     ).toBe("Waiting for approval");
 
-    const agentBadge = sidebar.querySelector(".sidebar-agent-card__approval-count");
-    const agentLabel = agentBadge?.getAttribute("aria-label");
-    expect(agentLabel).toBeTruthy();
-    expect(agentBadge?.hasAttribute("title")).toBe(false);
     expect(
-      (agentBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe(agentLabel);
+      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+    ).not.toContain("pending approval");
   });
 
   it("shows an error icon and reason for an unread failure", async () => {

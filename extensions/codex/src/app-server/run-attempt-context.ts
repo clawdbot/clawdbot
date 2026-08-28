@@ -4,6 +4,7 @@ import {
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
   getAgentHarnessHookRunner,
+  isHostScopedAgentToolActive,
   resolveContextEngineOwnerPluginId,
   runHarnessContextEngineMaintenance,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -21,6 +22,7 @@ import {
   resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
@@ -148,11 +150,14 @@ export async function prepareCodexAttemptContext(
     sessionKey: contextSessionKey,
     sessionAgentId,
     memoryToolNames,
+    ringZeroActive:
+      isHostScopedAgentToolActive("openclaw") &&
+      isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
     sandboxed: sandbox?.enabled === true,
   });
   // A thread keeps the bounded agent-workspace snapshot captured at creation.
   // Workspace edits take effect only in the next session.
-  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.inheritsAgentWorkspace
+  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions
     ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
       workspaceBootstrapContext.threadDeveloperInstructions)
     : undefined;

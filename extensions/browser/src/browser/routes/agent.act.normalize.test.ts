@@ -65,6 +65,40 @@ describe("canonicalizeActTargetIds", () => {
   });
 });
 
+describe("normalizeActRequest keyboard keys", () => {
+  it.each([
+    ["Esc", "Escape"],
+    ["ESC", "Escape"],
+    ["Return", "Enter"],
+    ["Del", "Delete"],
+    ["Ctrl+a", "Control+a"],
+    ["Cmd+A", "Meta+A"],
+    ["Ctrl+Shift+Esc", "Control+Shift+Escape"],
+    ["Ctrl++", "Control++"],
+  ])("normalizes the keyboard alias %s", (key, expected) => {
+    expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
+  });
+
+  it.each(["a", "A", "+", "Control++", "ControlOrMeta+a", "__proto__", "constructor"])(
+    "preserves the existing keyboard contract for %s",
+    (key) => {
+      expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key });
+    },
+  );
+
+  it("normalizes keyboard aliases inside nested batch actions", () => {
+    expect(
+      normalizeActRequest({
+        kind: "batch",
+        actions: [{ kind: "batch", actions: [{ kind: "press", key: "Ctrl+Esc" }] }],
+      }),
+    ).toMatchObject({
+      kind: "batch",
+      actions: [{ kind: "batch", actions: [{ kind: "press", key: "Control+Escape" }] }],
+    });
+  });
+});
+
 describe("normalizeActRequest numeric fields", () => {
   it("keeps structured numeric action options", () => {
     expect(

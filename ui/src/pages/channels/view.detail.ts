@@ -160,9 +160,16 @@ function renderChannelStatusBody(
       ${standardKey && status?.probe ? renderChannelProbeRow(status.probe) : nothing}
       ${renderChannelConfigSection({ channelId: key, props })}
       ${standardKey
-        ? renderChannelActionRow(html`<button class="btn" @click=${() => props.onRefresh(true)}>
-            ${t("common.probe")}
-          </button>`)
+        ? renderChannelActionRow(html`
+            <button
+              class="btn"
+              ?disabled=${props.loading}
+              aria-busy=${String(props.loading)}
+              @click=${() => props.onRefresh(true)}
+            >
+              ${t(props.loading ? "common.refreshing" : "common.probe")}
+            </button>
+          `)
         : nothing}
     `,
   );

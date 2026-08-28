@@ -17,6 +17,7 @@ import {
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
+import { ensureOutboundSessionEntry } from "./outbound-session.js";
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 const requireLabeledRecord = createRequireRecord("record", "expected-label");
@@ -70,7 +71,10 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
       vi.unstubAllEnvs();
     });
-    it("preserves buffer-only send bytes for gateway-side materialization", async () => {
+    it.each([
+      { name: "raw base64", buffer: "SGVsbG8=" },
+      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
+    ])("preserves $name bytes and MIME for gateway-side materialization", async ({ buffer }) => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
         label: "Gateway Chat",
@@ -101,9 +105,9 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "gatewaychat",
           target: "user-123",
-          buffer: Buffer.from("gateway bytes").toString("base64"),
+          buffer,
           filename: "gateway.txt",
-          contentType: "text/plain",
+          mimeType: "text/plain",
         },
         gateway: {
           clientName: "cli",
@@ -123,7 +127,7 @@ describe("runMessageAction plugin dispatch", () => {
           media: "buffer://message-send/attachment",
           mediaUrl: "buffer://message-send/attachment",
           mediaUrls: ["buffer://message-send/attachment"],
-          buffer: Buffer.from("gateway bytes").toString("base64"),
+          buffer,
           filename: "gateway.txt",
           contentType: "text/plain",
         },
@@ -132,7 +136,10 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
     });
 
-    it("preserves buffer-only send bytes for gateway delivery-mode channels", async () => {
+    it.each([
+      { name: "raw base64", buffer: "SGVsbG8=" },
+      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
+    ])("preserves $name bytes and MIME for gateway delivery-mode channels", async ({ buffer }) => {
       const gatewayDeliveryPlugin: ChannelPlugin = {
         id: "gatewaydeliver",
         meta: {
@@ -175,9 +182,9 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "gatewaydeliver",
           target: "user-123",
-          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          buffer,
           filename: "delivery.txt",
-          contentType: "text/plain",
+          mimeType: "text/plain",
         },
         gateway: {
           clientName: "cli",
@@ -191,7 +198,7 @@ describe("runMessageAction plugin dispatch", () => {
         {
           mediaUrl: "buffer://message-send/attachment",
           mediaUrls: ["buffer://message-send/attachment"],
-          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          buffer,
           filename: "delivery.txt",
           contentType: "text/plain",
         },
@@ -537,6 +544,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes local chart presentations through core delivery", async () => {
+      const sourceSessionKey = "agent:main:cardchat:direct:restricted-creator";
       const presentation = {
         blocks: [
           {
@@ -598,6 +606,7 @@ describe("runMessageAction plugin dispatch", () => {
           mode: "cli",
         },
         agentId: "main",
+        sessionKey: sourceSessionKey,
         suppressTranscriptMirror: true,
         dryRun: false,
       });
@@ -616,6 +625,58 @@ describe("runMessageAction plugin dispatch", () => {
         { text: "Deployment trend", presentation },
         "execute send payload",
       );
+      expect(ensureOutboundSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceSessionKey }),
+      );
+    });
+
+    it.each([
+      ["model-authored message-tool sends", "message-tool" as const, "caller"],
+      ["operator CLI and gateway sends", undefined, undefined],
+    ])("marks the delivery retry owner for %s", async (_label, actionOrigin, expected) => {
+      const presentation = {
+        blocks: [
+          {
+            type: "chart",
+            chartType: "line",
+            title: "Trend",
+            categories: ["Mon"],
+            series: [{ name: "Prod", values: [1] }],
+          },
+        ],
+      };
+      mocks.executeSendAction.mockResolvedValueOnce({ handledBy: "core", payload: { ok: true } });
+      setTestPlugin(
+        {
+          ...cardPlugin,
+          actions: { ...cardPlugin.actions, resolveExecutionMode: () => "local" },
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
+          },
+        },
+        "cardchat",
+      );
+
+      await runMessageAction({
+        cfg: { channels: { cardchat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        ...(actionOrigin ? { actionOrigin } : {}),
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: "Deployment trend",
+          presentation,
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+        agentId: "main",
+        suppressTranscriptMirror: true,
+        dryRun: false,
+      });
+
+      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      const executeContext = readRecordField(executeCall, "ctx", "execute send context");
+      expect(executeContext.deliveryRetryOwner).toBe(expected);
     });
 
     it("keeps non-presentation sends on plugin-owned handling", async () => {

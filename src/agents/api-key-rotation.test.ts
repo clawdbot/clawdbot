@@ -136,7 +136,7 @@ describe("executeWithApiKeyRotation", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry caller-aborted AbortError", async () => {
+  it("does not start an operation when retry policy is already cancelled", async () => {
     const controller = new AbortController();
     controller.abort(new Error("user cancelled"));
     const sleep = vi.fn(async () => undefined);
@@ -159,8 +159,26 @@ describe("executeWithApiKeyRotation", () => {
       }),
     ).rejects.toThrow("user cancelled");
 
-    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("preserves retry-policy cancellation raised during an operation", async () => {
+    const controller = new AbortController();
+    const execute = vi.fn(async () => {
+      controller.abort(new Error("retry policy cancelled provider read"));
+      throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    });
+
+    await expect(
+      executeWithApiKeyRotation({
+        provider: "openai",
+        apiKeys: ["key-1"],
+        transientRetry: { attempts: 2, signal: controller.signal },
+        execute,
+      }),
+    ).rejects.toThrow("retry policy cancelled provider read");
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("retries timeout-like AbortError when the caller signal is not aborted", async () => {
@@ -331,5 +349,46 @@ describe("executeWithApiKeyRotation", () => {
         attemptNumber: 1,
       }),
     );
+  });
+
+  it("reports retry count and key position across same-key retries and rotation", async () => {
+    const retryCallbacks: Array<{ attempt: number; apiKeyIndex: number }> = [];
+    const rotationCallbacks: Array<{ attempt: number; apiKeyIndex: number }> = [];
+    const executedKeys: string[] = [];
+    const sleep = vi.fn(async () => undefined);
+    const transientError = Object.assign(new Error("controlled transient"), {
+      code: "ECONNRESET",
+    });
+
+    await expect(
+      executeWithApiKeyRotation({
+        provider: "openai",
+        apiKeys: ["key-1", "key-2"],
+        transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
+        execute: async (apiKey) => {
+          executedKeys.push(apiKey);
+          if (executedKeys.length < 4) {
+            throw transientError;
+          }
+          return "ok";
+        },
+        shouldRetry: ({ attempt, apiKeyIndex }) => {
+          retryCallbacks.push({ attempt, apiKeyIndex });
+          return retryCallbacks.length === 2;
+        },
+        onRetry: ({ attempt, apiKeyIndex }) => {
+          rotationCallbacks.push({ attempt, apiKeyIndex });
+        },
+      }),
+    ).resolves.toBe("ok");
+
+    expect(executedKeys).toEqual(["key-1", "key-1", "key-2", "key-2"]);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(retryCallbacks).toEqual([
+      { attempt: 1, apiKeyIndex: 0 },
+      { attempt: 2, apiKeyIndex: 0 },
+      { attempt: 1, apiKeyIndex: 1 },
+    ]);
+    expect(rotationCallbacks).toEqual([{ attempt: 2, apiKeyIndex: 0 }]);
   });
 });

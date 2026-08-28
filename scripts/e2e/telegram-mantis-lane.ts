@@ -12,27 +12,80 @@ import { coerceErrorMessage } from "../lib/error-format.mts";
 import { sleep } from "../lib/sleep.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
 import {
+  RECORDER_AUTHORIZATION_FAILURE_FILENAME,
+  recorderAuthorizationFailureSchema,
+  recorderAuthorizationFailureFactSchema,
+  type RecorderAuthorizationFailure,
+} from "./telegram-desktop-recorder-contract.ts";
+import {
   destroyMantisSut,
+  execMantisSut,
   type MantisSutRecovery,
   preserveMantisSutRuntimeArtifacts,
+  restartMantisSut,
   startMantisSut,
   stopMantisSut,
+  waitForLogAfter,
 } from "./telegram-mantis-sut.ts";
 
 const execFileAsync = promisify(execFile);
-const MAX_SESSION_MS = 15 * 60_000;
+const MAX_MOCK_DELAY_MS = 15 * 60_000;
 const laneSchema = z.enum(["baseline", "candidate"]);
 const configSchema = z.object({
   configPatch: z.record(z.string(), z.unknown()).optional(),
   mockResponse: z.string().min(1).max(100_000),
-  mockResponseChunkDelayMs: z.number().int().positive().max(MAX_SESSION_MS).optional(),
+  mockResponseChunkDelayMs: z.number().int().positive().max(MAX_MOCK_DELAY_MS).optional(),
 });
-const mockResponseControlSchema = z.object({
-  chunkDelayMs: z.number().int().min(0).max(MAX_SESSION_MS).optional(),
+const mockFailureSchema = z
+  .object({
+    mode: z.literal("drop").optional(),
+    status: z.number().int().min(400).max(599).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.mode === "drop" && value.status !== undefined) {
+      context.addIssue({ code: "custom", message: "fail cannot combine status and drop" });
+    }
+  });
+const mockControlEntrySchema = z.object({
+  chunkDelayMs: z.number().int().min(0).max(MAX_MOCK_DELAY_MS).optional(),
   events: z.array(z.record(z.string(), z.unknown())).min(1).optional(),
-  hold: z.boolean().optional(),
+  fail: mockFailureSchema.optional(),
   text: z.string().min(1).max(100_000).optional(),
 });
+const mockResponseControlSchema = z.object({
+  chunkDelayMs: z.number().int().min(0).max(MAX_MOCK_DELAY_MS).optional(),
+  default: mockControlEntrySchema.optional(),
+  events: z.array(z.record(z.string(), z.unknown())).min(1).optional(),
+  hold: z.boolean().optional(),
+  responses: z.array(mockControlEntrySchema).min(1).optional(),
+  scriptVersion: z.string().min(1).optional(),
+  text: z.string().min(1).max(100_000).optional(),
+});
+const mockScriptEntrySchema = z
+  .object({
+    chunkDelayMs: z.number().int().min(0).max(MAX_MOCK_DELAY_MS).optional(),
+    eventsFile: z.string().min(1).max(4_096).optional(),
+    fail: mockFailureSchema.optional(),
+    text: z.string().min(1).max(100_000).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const variants = [value.eventsFile, value.fail, value.text].filter(
+      (entry) => entry !== undefined,
+    );
+    if (variants.length !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "each scripted response needs exactly one of text, eventsFile, or fail",
+      });
+    }
+  });
+const mockScriptSchema = z
+  .object({
+    default: mockScriptEntrySchema.optional(),
+    responses: z.array(mockScriptEntrySchema).min(1).max(100),
+  })
+  .strict();
 const credentialSchema = z.object({
   groupId: z.string().regex(/^-100\d+$/u),
   sutToken: z.string().min(1),
@@ -43,6 +96,8 @@ const sutRecoverySchema = z.object({
   gatewayLog: z.string(),
   mockLog: z.string(),
   mockResponseControl: z.string(),
+  proxyControl: z.string(),
+  proxyRequestLog: z.string(),
   requestLog: z.string(),
   tempRoot: z.string(),
 });
@@ -52,7 +107,7 @@ const sutRuntimeSchema = sutRecoverySchema
   })
   .passthrough();
 const startupSessionSchema = z.object({
-  attempt: z.number().int().positive().max(3),
+  attempt: z.number().int().positive(),
   lane: laneSchema,
   observerPidFile: z.string(),
   observerRequested: z.boolean(),
@@ -69,12 +124,22 @@ const invocationSchema = z.object({
   at: z.string(),
   command: z.string(),
   cursor: z.number().int().nonnegative().optional(),
+  exitCode: z.number().int().optional(),
+  stderrBytes: z.number().int().nonnegative().optional(),
+  stdoutBytes: z.number().int().nonnegative().optional(),
 });
 const recorderArtifactsSchema = z.object({
   artifacts: z.record(z.string(), z.string()),
 });
+const desktopRecorderFailureBudgetSchema = z.object({
+  attemptCount: z.number().int().positive(),
+  classification: recorderAuthorizationFailureSchema.shape.classification,
+  loginScreenshotPath: z.string().optional(),
+  schemaVersion: z.literal(1),
+  unavailable: z.boolean(),
+});
 const activeSessionSchema = z.object({
-  attempt: z.number().int().positive().max(3),
+  attempt: z.number().int().positive(),
   config: configSchema,
   invocations: z.array(invocationSchema),
   lane: laneSchema,
@@ -105,20 +170,41 @@ type ObserverResponse = {
   ok: boolean;
   truncated?: boolean;
 } & Record<string, unknown>;
+type DesktopRecorderFailureBudget = z.infer<typeof desktopRecorderFailureBudgetSchema>;
 
-const MAX_ATTEMPTS = 3;
-const MAX_SENDS = 12;
-const MAX_OBSERVE_SECONDS = MAX_SESSION_MS / 1000;
+// Shared-QA-bot flood-safety ceiling; this is not a scenario or feasibility bound.
+const MAX_SENDS = 40;
+const MAX_EXEC_COMMAND_BYTES = 64 * 1024;
 const MAX_RPC_BYTES = 4 * 1024 * 1024;
 const commandOptions: Record<string, readonly string[]> = {
   abort: ["--lane"],
   block: ["--lane", "--missing-primitive", "--reason"],
+  "botapi-clear": ["--lane"],
+  "botapi-fail": ["--lane", "--method", "--times", "--status", "--drop"],
+  "botapi-requests": ["--lane", "--method", "--limit"],
   delete: ["--lane", "--message-id"],
+  desktop: ["--lane", "--actions-file", "--timeout-seconds"],
+  exec: ["--lane", "--timeout-seconds", "--command", "--command-file"],
   finish: ["--lane", "--focus-message-id"],
-  mock: ["--lane", "--response-file", "--response-events-file", "--chunk-delay-ms"],
-  observe: ["--lane", "--seconds", "--since"],
+  mock: [
+    "--lane",
+    "--response-file",
+    "--response-events-file",
+    "--chunk-delay-ms",
+    "--script",
+    "--script-sha256",
+  ],
+  observe: [
+    "--lane",
+    "--seconds",
+    "--since",
+    "--until-events",
+    "--until-text",
+    "--until-provider-requests",
+  ],
   press: ["--lane", "--message-id", "--button"],
   requests: ["--lane"],
+  restart: ["--lane", "--ready-timeout-seconds"],
   screenshot: ["--lane"],
   send: ["--lane", "--text", "--text-file", "--media", "--reply-to"],
   start: ["--lane", "--repo-root", "--config"],
@@ -167,18 +253,42 @@ function recorderRelativePath(file: string): string {
 }
 
 function parseCli(argv: string[]): { command: string; values: Map<string, string> } {
-  const [command, ...args] = argv;
-  if (!command || command.startsWith("--") || args.length % 2 !== 0) {
+  const [command, ...rawArgs] = argv;
+  if (!command || command.startsWith("--")) {
     throw new Error(usageText());
   }
+  const args = [...rawArgs];
   const values = new Map<string, string>();
-  for (let index = 0; index < args.length; index += 2) {
+  if (command === "botapi-fail" && args[0] && !args[0].startsWith("--")) {
+    values.set("--method", args.shift() ?? "");
+  }
+  for (let index = 0; index < args.length;) {
     const name = args[index];
+    if (!name?.startsWith("--") || values.has(name)) {
+      throw new Error(usageText());
+    }
+    if (name === "--drop") {
+      values.set(name, "true");
+      index += 1;
+      continue;
+    }
+    if (command === "mock" && name === "--script") {
+      const file = args[index + 1];
+      const sha256 = args[index + 2];
+      if (!file || !sha256 || sha256.startsWith("--")) {
+        throw new Error("mock --script needs a file and sha256.");
+      }
+      values.set(name, file);
+      values.set("--script-sha256", sha256);
+      index += 3;
+      continue;
+    }
     const value = args[index + 1];
-    if (!name?.startsWith("--") || value === undefined || values.has(name)) {
+    if (value === undefined || value.startsWith("--")) {
       throw new Error(usageText());
     }
     values.set(name, value);
+    index += 2;
   }
   const allowed = commandOptions[command];
   if (!allowed) {
@@ -229,11 +339,113 @@ function writeJsonAtomic(file: string, value: unknown, mode = 0o600): void {
   fs.chmodSync(file, mode);
 }
 
+function desktopRecorderFailureBudgetFile(sessionRoot: string): string {
+  return path.join(sessionRoot, "desktop-recorder-failures.json");
+}
+
+function readDesktopRecorderFailureBudget(
+  sessionRoot: string,
+): DesktopRecorderFailureBudget | undefined {
+  const file = desktopRecorderFailureBudgetFile(sessionRoot);
+  return fs.existsSync(file) ? desktopRecorderFailureBudgetSchema.parse(readJson(file)) : undefined;
+}
+
+function desktopUnavailableMessage(fact: DesktopRecorderFailureBudget, factFile: string): string {
+  const screenshotDetail = fact.loginScreenshotPath
+    ? `, loginScreenshotPath=${fact.loginScreenshotPath}`
+    : "";
+  return (
+    `desktop-unavailable: stop retrying; this run's desktop is unavailable ` +
+    `(attemptCount=${fact.attemptCount}, classification=${fact.classification}${screenshotDetail}, ` +
+    `fact=${factFile})`
+  );
+}
+
+function assertDesktopRecorderAvailable(sessionRoot: string): void {
+  const fact = readDesktopRecorderFailureBudget(sessionRoot);
+  if (fact?.unavailable) {
+    throw new Error(desktopUnavailableMessage(fact, desktopRecorderFailureBudgetFile(sessionRoot)));
+  }
+}
+
+function recordDesktopRecorderFailures(
+  sessionRoot: string,
+  failures: RecorderAuthorizationFailure[],
+): DesktopRecorderFailureBudget | undefined {
+  if (failures.length === 0) {
+    return readDesktopRecorderFailureBudget(sessionRoot);
+  }
+  const prior = readDesktopRecorderFailureBudget(sessionRoot);
+  const latest = failures.at(-1);
+  if (!latest) {
+    return prior;
+  }
+  const attemptCount = (prior?.attemptCount ?? 0) + failures.length;
+  const fact = desktopRecorderFailureBudgetSchema.parse({
+    attemptCount,
+    classification: latest.classification,
+    loginScreenshotPath: latest.loginScreenshotPath,
+    schemaVersion: 1,
+    unavailable: attemptCount >= 2,
+  });
+  writeJsonAtomic(desktopRecorderFailureBudgetFile(sessionRoot), fact);
+  return fact;
+}
+
+export async function startDesktopRecorder(params: {
+  chat: string;
+  outputDir: string;
+  recorderCommand: string;
+  sessionPath: string;
+  sessionRoot: string;
+  userDriver: string;
+}): Promise<void> {
+  assertDesktopRecorderAvailable(params.sessionRoot);
+  try {
+    await runCommand(params.recorderCommand, [
+      "start",
+      "--provider",
+      "docker",
+      "--session",
+      recorderRelativePath(params.sessionPath),
+      "--output-dir",
+      recorderRelativePath(params.outputDir),
+      "--chat",
+      params.chat,
+      "--user-driver",
+      params.userDriver,
+    ]);
+  } catch (startError) {
+    const failureFile = path.join(params.outputDir, RECORDER_AUTHORIZATION_FAILURE_FILENAME);
+    const failures = fs.existsSync(failureFile)
+      ? recorderAuthorizationFailureFactSchema.parse(readJson(failureFile)).failures
+      : [];
+    const budget = recordDesktopRecorderFailures(params.sessionRoot, failures);
+    if (budget?.unavailable) {
+      throw new Error(
+        `${desktopUnavailableMessage(budget, desktopRecorderFailureBudgetFile(params.sessionRoot))}\n${coerceErrorMessage(startError)}`,
+        { cause: startError },
+      );
+    }
+    throw startError;
+  }
+}
+
 function publicRelativePath(root: string, file: string, label: string): string {
   const resolvedRoot = fs.realpathSync(root);
   const relative = path.relative(resolvedRoot, file);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error(`${label} must be inside the Mantis output directory.`);
+  }
+  // Node has no openat(2), so containment is re-proven component by component: a directory
+  // swapped for a symlink after the caller resolved the path would otherwise route an
+  // already-open descriptor outside the root, which O_NOFOLLOW only prevents for the leaf.
+  let cursor = resolvedRoot;
+  for (const segment of relative.split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    if (fs.lstatSync(cursor).isSymbolicLink()) {
+      throw new Error(`${label} must be inside the Mantis output directory.`);
+    }
   }
   return relative;
 }
@@ -243,18 +455,26 @@ function readPublicFile(
   input: string,
   label: string,
   maxBytes: number,
-): { relative: string; text: string } {
+): { relative: string; resolved: string; text: string } {
   const resolved = fs.realpathSync(input);
-  publicRelativePath(root, resolved, label);
+  const expected = fs.lstatSync(resolved);
   const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
-    const opened = fs.realpathSync(`/proc/self/fd/${descriptor}`);
-    const relative = publicRelativePath(root, opened, label);
     const stat = fs.fstatSync(descriptor);
+    // Bind the read to the path inspected before open so a concurrent swap cannot redirect it.
+    if (stat.dev !== expected.dev || stat.ino !== expected.ino) {
+      throw new Error(`${label} must be inside the Mantis output directory.`);
+    }
+    // Linux pins the opened path directly; other platforms reject pre-open inode swaps.
+    const opened =
+      process.platform === "linux"
+        ? fs.realpathSync(`/proc/self/fd/${descriptor}`)
+        : fs.realpathSync(resolved);
+    const relative = publicRelativePath(root, opened, label);
     if (!stat.isFile() || stat.size > maxBytes) {
       throw new Error(`${label} must be a regular file no larger than ${maxBytes} bytes.`);
     }
-    return { relative, text: fs.readFileSync(descriptor, "utf8") };
+    return { relative, resolved, text: fs.readFileSync(descriptor, "utf8") };
   } finally {
     fs.closeSync(descriptor);
   }
@@ -286,20 +506,26 @@ function readStartup(sessionRoot: string, lane: Lane): StartupSession {
   return startupSessionSchema.parse(readJson(startupFile(sessionRoot, lane)));
 }
 
-function readActive(sessionRoot: string, lane: Lane, allowExpired = false): ActiveSession {
+function readActive(sessionRoot: string, lane: Lane): ActiveSession {
   const file = activeFile(sessionRoot, lane);
   if (!fs.existsSync(file)) {
     throw new Error(`No active ${lane} lane. Run start first.`);
   }
-  const state = activeSessionSchema.parse(readJson(file));
-  if (!allowExpired && Date.now() - Date.parse(state.startedAt) > MAX_SESSION_MS) {
-    throw new Error(`${lane} exceeded its 15-minute session budget; run abort.`);
-  }
-  return state;
+  return activeSessionSchema.parse(readJson(file));
 }
 
 function saveActive(sessionRoot: string, state: ActiveSession): void {
   writeJsonAtomic(activeFile(sessionRoot, state.lane), state);
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the pid exists under another user; only ESRCH proves the lock owner is gone.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 function acquireHarnessLock(sessionRoot: string): () => void {
@@ -319,7 +545,7 @@ function acquireHarnessLock(sessionRoot: string): () => void {
         throw error;
       }
       const owner = Number(fs.readFileSync(lock, "utf8").trim());
-      if (Number.isInteger(owner) && owner > 0 && fs.existsSync(`/proc/${owner}`)) {
+      if (Number.isInteger(owner) && owner > 0 && processIsAlive(owner)) {
         throw new Error("The shared Telegram harness already has a command in progress.", {
           cause: error,
         });
@@ -335,12 +561,14 @@ function appendInvocation(
   command: string,
   args: Record<string, unknown>,
   cursor?: number,
+  result?: { exitCode: number; stderrBytes: number; stdoutBytes: number },
 ): void {
   state.invocations.push({
     args,
     at: new Date().toISOString(),
     command,
     ...(cursor === undefined ? {} : { cursor }),
+    ...result,
   });
   if (cursor !== undefined) {
     state.lastCursor = cursor;
@@ -474,20 +702,61 @@ function redact(value: unknown, secret: string): unknown {
   return value;
 }
 
+function redactSutValue(value: unknown, sutToken: string): unknown {
+  const botId = sutToken.split(":", 1)[0] ?? "";
+  const aliasToken = botId ? `${botId}:${"A".repeat(35)}` : "";
+  return redact(redact(value, sutToken), aliasToken);
+}
+
 function providerRequests(state: ActiveSession, secret: string): unknown[] {
-  if (!fs.existsSync(state.sut.requestLog)) {
+  // Tail window, like botApiRequests: a long session must surface its newest
+  // provider turns. Entries carry a producer-stamped `seq` ordinal, so the
+  // window keeps absolute order without rereading the whole file.
+  return boundedNdjson(state.sut.requestLog, 128).map(
+    (entry) => redact(entry, secret) as Record<string, unknown>,
+  );
+}
+
+function boundedNdjson(file: string, limit: number): unknown[] {
+  if (!fs.existsSync(file)) {
     return [];
   }
-  return fs
-    .readFileSync(state.sut.requestLog, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .slice(0, 100)
-    .map((line, index) =>
-      Object.assign(
-        { index: index + 1 },
-        redact(JSON.parse(line), secret) as Record<string, unknown>,
-      ),
+  const stat = fs.statSync(file);
+  const readBytes = Math.min(stat.size, MAX_RPC_BYTES);
+  const descriptor = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(readBytes);
+    fs.readSync(descriptor, buffer, 0, readBytes, stat.size - readBytes);
+    let text = buffer.toString("utf8");
+    if (readBytes < stat.size) {
+      text = text.slice(text.indexOf("\n") + 1);
+    }
+    return text
+      .split("\n")
+      .filter(Boolean)
+      .slice(-limit)
+      .map((line) => JSON.parse(line));
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function botApiRequests(
+  state: ActiveSession,
+  secret: string,
+  options: { limit?: number; method?: string } = {},
+): unknown[] {
+  const method = options.method;
+  const limit = options.limit ?? 100;
+  const requests = boundedNdjson(state.sut.proxyRequestLog, 128).filter(
+    (entry) =>
+      !method ||
+      (entry !== null && typeof entry === "object" && "method" in entry && entry.method === method),
+  );
+  return requests
+    .slice(-limit)
+    .map((entry, index) =>
+      Object.assign({ index: index + 1 }, redact(entry, secret) as Record<string, unknown>),
     );
 }
 
@@ -545,6 +814,7 @@ export function publishStartupFailure(params: {
     {
       artifacts: {},
       attempt: params.startup.attempt,
+      botApiRequests: [],
       cleanupErrors: params.cleanupErrors,
       completedAt: new Date().toISOString(),
       error: coerceErrorMessage(params.error),
@@ -655,20 +925,17 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
   ) {
     throw new Error(`Finish or abort the active ${otherLane} session first.`);
   }
+  assertDesktopRecorderAvailable(roots.sessionRoot);
   const attemptsRoot = path.join(roots.sessionRoot, "attempts", lane);
   fs.mkdirSync(attemptsRoot, { recursive: true });
   const attempt = fs.readdirSync(attemptsRoot).filter((entry) => /^\d+$/u.test(entry)).length + 1;
-  if (attempt > MAX_ATTEMPTS) {
-    throw new Error(`${lane} already used its ${MAX_ATTEMPTS} allowed attempts.`);
-  }
   const privateDir = path.join(attemptsRoot, String(attempt));
   fs.mkdirSync(privateDir, { mode: 0o770 });
-  const recorderSession = path.join(privateDir, "recorder.json");
+  const recorderSession = path.join(roots.sessionRoot, "desktop-recorder.json");
   const observerSocket = path.join(privateDir, "observer.sock");
   const observerJournal = path.join(privateDir, "telegram-events.ndjson");
   const observerLog = path.join(privateDir, "observer.log");
   const observerPidFile = path.join(privateDir, "observer.pid.json");
-  const recorderOutputDir = recorderRelativePath(privateDir);
   const startup: StartupSession = {
     attempt,
     lane,
@@ -696,6 +963,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
       telegramBotApi(credential.sutToken, "getMe"),
       startMantisSut({
         configPatch: config.configPatch,
+        fixturePluginsDir: path.join(roots.sessionRoot, "fixture-plugins", lane),
         gatewayPort: ports.gateway,
         groupId: credential.groupId,
         mockPort: ports.mock,
@@ -715,17 +983,14 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
           saveStartup(roots.sessionRoot, startup);
         },
       }),
-      runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
-        "start",
-        "--provider",
-        "docker",
-        "--output-dir",
-        recorderOutputDir,
-        "--chat",
-        credential.groupId,
-        "--user-driver",
-        requiredEnv("OPENCLAW_TELEGRAM_USER_DRIVER_CMD"),
-      ]),
+      startDesktopRecorder({
+        chat: credential.groupId,
+        outputDir: privateDir,
+        recorderCommand: requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"),
+        sessionPath: recorderSession,
+        sessionRoot: roots.sessionRoot,
+        userDriver: requiredEnv("OPENCLAW_TELEGRAM_USER_DRIVER_CMD"),
+      }),
     ]);
     if (sutResult.status === "fulfilled") {
       sut = sutResult.value;
@@ -806,9 +1071,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
       lane,
       status: "ready",
       budgets: {
-        maxObserveSeconds: MAX_OBSERVE_SECONDS,
         maxSends: MAX_SENDS,
-        sessionSeconds: MAX_SESSION_MS / 1000,
       },
       commands: commandNames.filter((command) => command !== "start"),
     });
@@ -920,6 +1183,7 @@ async function revealSentMessage(
     "--message-id",
     sent.messageId,
   ]);
+  state.lastViewedMessageId = sent.messageId;
   appendInvocation(state, "reveal", { messageId: sent.messageId }, response.cursor);
   return sent.messageId;
 }
@@ -948,16 +1212,96 @@ async function observe(
   secret: string,
 ): Promise<ObserverResponse> {
   const seconds = numberOption(values, "--seconds", 60);
-  if (state.observeSeconds + seconds > MAX_OBSERVE_SECONDS) {
-    throw new Error(`The ${MAX_OBSERVE_SECONDS}-second observation budget is exhausted.`);
-  }
   const since = values.has("--since")
     ? numberOption(values, "--since", Number.MAX_SAFE_INTEGER)
     : state.lastCursor;
-  const response = await observerCall(state.observerSocket, { command: "events", seconds, since });
-  state.observeSeconds += seconds;
-  appendInvocation(state, "observe", { seconds, since }, response.cursor);
+  const untilEvents = values.has("--until-events")
+    ? numberOption(values, "--until-events", 500)
+    : undefined;
+  const untilProviderRequests = values.has("--until-provider-requests")
+    ? numberOption(values, "--until-provider-requests", 100)
+    : undefined;
+  const untilText = values.get("--until-text");
+  if (untilText !== undefined && (untilText.length < 1 || untilText.length > 1_000)) {
+    throw new Error("--until-text must contain 1 to 1000 characters.");
+  }
+  const conditions =
+    untilEvents !== undefined || untilProviderRequests !== undefined || untilText !== undefined;
+  if (!conditions) {
+    const response = await observerCall(state.observerSocket, {
+      command: "events",
+      seconds,
+      since,
+    });
+    state.observeSeconds += seconds;
+    appendInvocation(state, "observe", { seconds, since }, response.cursor);
+    return redact(response, secret) as ObserverResponse;
+  }
+
+  const startedAt = Date.now();
+  const deadline = startedAt + seconds * 1_000;
+  let timeline: ObserverResponse;
+  while (true) {
+    timeline = await observerCall(state.observerSocket, {
+      command: "events",
+      seconds: 0,
+      since: 0,
+    });
+    const events = Array.isArray(timeline.events) ? timeline.events : [];
+    // Event predicates scope to post-`since` events so stale timeline history
+    // (a reused marker, prior turns) cannot satisfy an early return before the
+    // observed action produces evidence. Provider counts stay cumulative: the
+    // provider log has no per-observe cursor and requests can land before the
+    // observe starts, so a relative baseline would miss them.
+    const newEvents = events.slice(since);
+    const textMatched =
+      untilText === undefined || newEvents.some((event) => valueContainsText(event, untilText));
+    const eventCountMatched = untilEvents === undefined || newEvents.length >= untilEvents;
+    const providerCountMatched =
+      untilProviderRequests === undefined ||
+      providerRequests(state, secret).length >= untilProviderRequests;
+    if (textMatched && eventCountMatched && providerCountMatched) {
+      break;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await observerCall(state.observerSocket, {
+      command: "events",
+      seconds: Math.min(1.5, remainingMs / 1_000),
+      since: 0,
+    });
+  }
+  const cursor = timeline.cursor ?? 0;
+  if (since > cursor) {
+    throw new Error("Observation cursor is outside this session's timeline.");
+  }
+  const response = {
+    ...timeline,
+    events: Array.isArray(timeline.events) ? timeline.events.slice(since) : [],
+  };
+  state.observeSeconds += (Date.now() - startedAt) / 1_000;
+  appendInvocation(
+    state,
+    "observe",
+    { seconds, since, untilEvents, untilProviderRequests, untilText },
+    response.cursor,
+  );
   return redact(response, secret) as ObserverResponse;
+}
+
+function valueContainsText(value: unknown, text: string): boolean {
+  if (typeof value === "string") {
+    return value.includes(text);
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => valueContainsText(entry, text));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((entry) => valueContainsText(entry, text));
+  }
+  return false;
 }
 
 function updateMockResponse(
@@ -965,7 +1309,83 @@ function updateMockResponse(
   values: Map<string, string>,
   outputRoot: string,
 ): Record<string, unknown> {
+  if (values.has("--script")) {
+    if (
+      values.has("--response-file") ||
+      values.has("--response-events-file") ||
+      values.has("--chunk-delay-ms")
+    ) {
+      throw new Error("mock --script cannot be combined with single-response options.");
+    }
+    const scriptFile = readPublicFile(
+      outputRoot,
+      required(values, "--script"),
+      "--script",
+      512 * 1024,
+    );
+    const expectedSha256 = required(values, "--script-sha256").toLowerCase();
+    if (!/^[0-9a-f]{64}$/u.test(expectedSha256)) {
+      throw new Error("mock --script sha256 must be 64 lowercase hexadecimal characters.");
+    }
+    const scriptSha256 = createHash("sha256").update(scriptFile.text).digest("hex");
+    if (scriptSha256 !== expectedSha256) {
+      throw new Error("mock --script sha256 mismatch.");
+    }
+    const script = mockScriptSchema.parse(JSON.parse(scriptFile.text));
+    const eventFiles: Array<{ bytes: number; file: string; sha256: string }> = [];
+    let eventFileBytes = 0;
+    const materialize = (entry: z.infer<typeof mockScriptEntrySchema>) => {
+      if (!entry.eventsFile) {
+        return {
+          ...(entry.chunkDelayMs === undefined ? {} : { chunkDelayMs: entry.chunkDelayMs }),
+          ...(entry.fail === undefined ? {} : { fail: entry.fail }),
+          ...(entry.text === undefined ? {} : { text: entry.text }),
+        };
+      }
+      const eventsPath = path.resolve(path.dirname(scriptFile.resolved), entry.eventsFile);
+      const eventsFile = readPublicFile(outputRoot, eventsPath, "script eventsFile", MAX_RPC_BYTES);
+      eventFileBytes += Buffer.byteLength(eventsFile.text);
+      if (eventFileBytes > MAX_RPC_BYTES) {
+        throw new Error("mock --script event files exceed 4 MiB in total.");
+      }
+      const events = z
+        .array(z.record(z.string(), z.unknown()))
+        .min(1)
+        .parse(JSON.parse(eventsFile.text));
+      eventFiles.push({
+        bytes: Buffer.byteLength(eventsFile.text),
+        file: eventsFile.relative,
+        sha256: createHash("sha256").update(eventsFile.text).digest("hex"),
+      });
+      return {
+        ...(entry.chunkDelayMs === undefined ? {} : { chunkDelayMs: entry.chunkDelayMs }),
+        events,
+      };
+    };
+    const current = readMockResponseControl(state);
+    writeJsonAtomic(state.sut.mockResponseControl, {
+      ...(script.default === undefined ? {} : { default: materialize(script.default) }),
+      hold: current.hold,
+      responses: script.responses.map(materialize),
+      scriptVersion: `${scriptSha256}:${state.invocations.length + 1}`,
+    });
+    appendInvocation(state, "mock", {
+      bytes: Buffer.byteLength(scriptFile.text),
+      eventFiles,
+      responses: script.responses.length,
+      scriptFile: scriptFile.relative,
+      scriptSha256,
+    });
+    return {
+      eventFiles: eventFiles.length,
+      responses: script.responses.length,
+      scriptSha256,
+    };
+  }
   if (values.has("--response-events-file")) {
+    if (values.has("--response-file") || values.has("--chunk-delay-ms")) {
+      throw new Error("Use one mock response form at a time.");
+    }
     const eventsFile = readPublicFile(
       outputRoot,
       required(values, "--response-events-file"),
@@ -997,7 +1417,7 @@ function updateMockResponse(
     throw new Error("--response-file must contain 1 to 100000 characters.");
   }
   const chunkDelayMs = values.has("--chunk-delay-ms")
-    ? numberOption(values, "--chunk-delay-ms", MAX_SESSION_MS)
+    ? numberOption(values, "--chunk-delay-ms", MAX_MOCK_DELAY_MS)
     : 0;
   const current = readMockResponseControl(state);
   writeJsonAtomic(state.sut.mockResponseControl, { chunkDelayMs, hold: current.hold, text });
@@ -1009,6 +1429,48 @@ function updateMockResponse(
     textSha256,
   });
   return { bytes: Buffer.byteLength(text), chunkDelayMs, textSha256 };
+}
+
+function requireBotApiMethod(value: string): string {
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(value)) {
+    throw new Error("Bot API method is invalid.");
+  }
+  return value;
+}
+
+function validateProxyControlFile(state: ActiveSession): void {
+  const control = fs.lstatSync(state.sut.proxyControl);
+  if (!control.isFile() || control.nlink !== 1) {
+    throw new Error("The private Telegram proxy control is no longer a regular file.");
+  }
+}
+
+function updateBotApiFault(
+  state: ActiveSession,
+  values: Map<string, string>,
+): Record<string, unknown> {
+  validateProxyControlFile(state);
+  const method = requireBotApiMethod(required(values, "--method"));
+  if (values.has("--drop") && values.has("--status")) {
+    throw new Error("Use only one of --status or --drop.");
+  }
+  const times = values.has("--times") ? numberOption(values, "--times", 100, 1) : undefined;
+  const status = values.has("--status") ? numberOption(values, "--status", 599, 400) : undefined;
+  const rule = {
+    method,
+    ...(times === undefined ? {} : { times }),
+    ...(values.has("--drop") ? { mode: "drop" } : { status: status ?? 500 }),
+  };
+  writeJsonAtomic(state.sut.proxyControl, { rules: [rule] });
+  appendInvocation(state, "botapi-fail", rule);
+  return rule;
+}
+
+function clearBotApiFaults(state: ActiveSession): Record<string, unknown> {
+  validateProxyControlFile(state);
+  writeJsonAtomic(state.sut.proxyControl, { rules: [] });
+  appendInvocation(state, "botapi-clear", {});
+  return { rules: 0 };
 }
 
 function readMockResponseControl(state: ActiveSession): z.infer<typeof mockResponseControlSchema> {
@@ -1046,6 +1508,135 @@ async function observerAction(
   return response;
 }
 
+async function runDesktopActions(
+  state: ActiveSession,
+  values: Map<string, string>,
+  roots: Roots,
+): Promise<Record<string, unknown>> {
+  const actions = readPublicFile(
+    roots.outputRoot,
+    required(values, "--actions-file"),
+    "--actions-file",
+    64 * 1024,
+  );
+  if (!actions.text.trim()) {
+    throw new Error("--actions-file must not be empty.");
+  }
+  const timeoutSeconds = values.has("--timeout-seconds")
+    ? numberOption(values, "--timeout-seconds", 300, 1)
+    : 60;
+  const privateActions = path.join(
+    state.privateDir,
+    `desktop-actions-${state.invocations.length + 1}.json`,
+  );
+  fs.mkdirSync(state.privateDir, { recursive: true });
+  fs.writeFileSync(privateActions, actions.text, { mode: 0o640 });
+  const actionsSha256 = createHash("sha256").update(actions.text).digest("hex");
+  appendInvocation(state, "desktop", {
+    actionsFile: actions.relative,
+    actionsSha256,
+    timeoutSeconds,
+  });
+  saveActive(roots.sessionRoot, state);
+  const result = z
+    .object({
+      results: z.array(z.object({ command: z.string(), stderr: z.string(), stdout: z.string() })),
+    })
+    .parse(
+      JSON.parse(
+        await runCommandOutput(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
+          "actions",
+          "--session",
+          recorderRelativePath(state.recorderSession),
+          "--actions-file",
+          recorderRelativePath(privateActions),
+          "--timeout-seconds",
+          String(timeoutSeconds),
+        ]),
+      ),
+    );
+  return { ...result, actionsSha256 };
+}
+
+function readExecCommand(values: Map<string, string>, outputRoot: string): string {
+  const direct = values.get("--command");
+  const commandFile = values.get("--command-file");
+  if ((direct === undefined) === (commandFile === undefined)) {
+    throw new Error("exec needs exactly one of --command or --command-file.");
+  }
+  const command =
+    commandFile !== undefined
+      ? readPublicFile(outputRoot, commandFile, "--command-file", MAX_EXEC_COMMAND_BYTES).text
+      : (direct ?? "");
+  const bytes = Buffer.byteLength(command);
+  if (bytes < 1 || bytes > MAX_EXEC_COMMAND_BYTES) {
+    throw new Error(`exec command must contain 1 to ${MAX_EXEC_COMMAND_BYTES} bytes.`);
+  }
+  return command;
+}
+
+async function runSutExec(
+  state: ActiveSession,
+  values: Map<string, string>,
+  roots: Roots,
+  sutToken: string,
+): Promise<Record<string, unknown>> {
+  const command = readExecCommand(values, roots.outputRoot);
+  const timeoutSeconds = values.has("--timeout-seconds")
+    ? numberOption(values, "--timeout-seconds", 1_800, 1)
+    : 120;
+  const result = await execMantisSut(state.sut, command, timeoutSeconds);
+  const redactedCommand = redactSutValue(command, sutToken) as string;
+  appendInvocation(state, "exec", { command: redactedCommand, timeoutSeconds }, undefined, {
+    exitCode: result.exitCode,
+    stderrBytes: result.stderrBytes,
+    stdoutBytes: result.stdoutBytes,
+  });
+  return redactSutValue(
+    {
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+      stdout: result.stdout,
+      truncated: result.truncated,
+    },
+    sutToken,
+  ) as Record<string, unknown>;
+}
+
+async function restartSutGateway(
+  state: ActiveSession,
+  values: Map<string, string>,
+  roots: Roots,
+): Promise<Record<string, unknown>> {
+  const readyTimeoutSeconds = values.has("--ready-timeout-seconds")
+    ? numberOption(values, "--ready-timeout-seconds", 300, 1)
+    : 60;
+  const logOffset = fs.statSync(state.sut.gatewayLog).size;
+  const restartedAt = new Date().toISOString();
+  const startedAt = Date.now();
+  try {
+    restartMantisSut(state.sut);
+    await waitForLogAfter(
+      state.sut.gatewayLog,
+      logOffset,
+      /\[gateway\] ready/u,
+      "restarted gateway",
+      readyTimeoutSeconds * 1_000,
+    );
+  } catch (error) {
+    appendInvocation(state, "restart", {
+      readyAfterMs: Date.now() - startedAt,
+      readyTimeoutSeconds,
+      status: "failed",
+    });
+    saveActive(roots.sessionRoot, state);
+    throw error;
+  }
+  const readyAfterMs = Date.now() - startedAt;
+  appendInvocation(state, "restart", { readyAfterMs, readyTimeoutSeconds });
+  return { readyAfterMs, restartedAt, status: "ready" };
+}
+
 async function focusMessage(state: ActiveSession, messageId: string): Promise<void> {
   if (!/^\d+$/u.test(messageId) || BigInt(messageId) < 1n) {
     throw new Error("--message-id must be a positive Telegram server message id.");
@@ -1063,11 +1654,11 @@ async function focusMessage(state: ActiveSession, messageId: string): Promise<vo
           "messageId" in event &&
           event.messageId === messageId &&
           "actor" in event &&
-          event.actor === "bot",
+          (event.actor === "user" || event.actor === "bot"),
       )
     : false;
   if (!observed) {
-    throw new Error(`Message ${messageId} was not emitted by the SUT bot in this proof session.`);
+    throw new Error(`Message ${messageId} was not observed in this proof session.`);
   }
   await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
     "view",
@@ -1149,6 +1740,7 @@ async function stopActiveLane(
   secret: string,
   crop: boolean,
 ): Promise<{
+  botApiRequests: unknown[];
   cleanupErrors: string[];
   cursor?: number;
   events: unknown[];
@@ -1159,6 +1751,7 @@ async function stopActiveLane(
   const cleanupErrors: string[] = [];
   const evidenceErrors: unknown[] = [];
   let cursor: number | undefined;
+  let recordedBotApiRequests: unknown[] = [];
   let events: unknown[] = [];
   let requests: unknown[] = [];
   let truncated = false;
@@ -1192,13 +1785,20 @@ async function stopActiveLane(
   } catch (error) {
     evidenceErrors.push(error);
   }
+  try {
+    recordedBotApiRequests = botApiRequests(state, secret);
+  } catch (error) {
+    evidenceErrors.push(error);
+  }
   // Recorder export and SUT teardown are independent; start export before the
   // synchronous container calls so both cleanup paths make progress together.
+  const finalSendAt = state.invocations.findLast((invocation) => invocation.command === "send")?.at;
   const recorderStop = runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
     "stop",
     "--session",
     recorderRelativePath(state.recorderSession),
     ...(crop ? ["--crop", "telegram-window"] : []),
+    ...(crop && finalSendAt ? ["--since", finalSendAt] : []),
   ]);
   cleanupErrors.push(...teardownSut(state.sut, state.privateDir));
   try {
@@ -1206,14 +1806,22 @@ async function stopActiveLane(
   } catch (error) {
     cleanupErrors.push(coerceErrorMessage(error));
   }
-  return { cleanupErrors, cursor, events, evidenceErrors, requests, truncated };
+  return {
+    botApiRequests: recordedBotApiRequests,
+    cleanupErrors,
+    cursor,
+    events,
+    evidenceErrors,
+    requests,
+    truncated,
+  };
 }
 
 async function finalize(
   state: ActiveSession,
   roots: Roots,
   options: {
-    blocked?: { name: string; reason: string };
+    blocked?: { name?: string; reason: string };
     focusMessageId?: string;
   },
 ): Promise<void> {
@@ -1225,14 +1833,10 @@ async function finalize(
     primaryError ??= error;
   }
   const cleanupErrors: string[] = [];
-  if (!options.focusMessageId && !options.blocked) {
-    throw new Error(
-      "finish requires --focus-message-id so the final frame shows the evaluated message.",
-    );
-  }
+  const focusMessageId = options.focusMessageId ?? state.lastViewedMessageId;
   try {
-    if (options.focusMessageId) {
-      await focusMessage(state, options.focusMessageId);
+    if (focusMessageId) {
+      await focusMessage(state, focusMessageId);
     }
   } catch (error) {
     primaryError ??= error;
@@ -1240,7 +1844,7 @@ async function finalize(
   const stopped = await stopActiveLane(state, secret, true);
   primaryError ??= stopped.evidenceErrors[0];
   cleanupErrors.push(...stopped.cleanupErrors);
-  appendInvocation(state, "finish", { focusMessageId: options.focusMessageId }, stopped.cursor);
+  appendInvocation(state, "finish", { focusMessageId }, stopped.cursor);
 
   let recorderArtifacts: Record<string, string> = {};
   try {
@@ -1301,6 +1905,7 @@ async function finalize(
   const factsRaw = {
     artifacts: artifactRecords,
     attempt: state.attempt,
+    botApiRequests: stopped.botApiRequests,
     blocked: options.blocked,
     cleanupErrors: cleanupErrors.map((entry) => redact(entry, secret)),
     completedAt: new Date().toISOString(),
@@ -1394,6 +1999,7 @@ async function abort(state: ActiveSession, roots: Roots): Promise<void> {
     {
       artifacts: artifactRecords,
       attempt: state.attempt,
+      botApiRequests: stopped.botApiRequests,
       cleanupErrors: errors,
       completedAt: new Date().toISOString(),
       invocations: state.invocations,
@@ -1458,14 +2064,28 @@ async function main(): Promise<void> {
       await abortStartup(readStartup(roots.sessionRoot, lane), roots);
       return;
     }
-    const state = readActive(
-      roots.sessionRoot,
-      lane,
-      ["abort", "block", "finish"].includes(cli.command),
-    );
+    const state = readActive(roots.sessionRoot, lane);
     const credential = credentialSchema.parse(readJson(roots.credentialFile));
     if (cli.command === "mock") {
       outputJson(updateMockResponse(state, cli.values, roots.outputRoot));
+    } else if (cli.command === "botapi-fail") {
+      outputJson(updateBotApiFault(state, cli.values));
+    } else if (cli.command === "botapi-clear") {
+      outputJson(clearBotApiFaults(state));
+    } else if (cli.command === "botapi-requests") {
+      const method = cli.values.has("--method")
+        ? requireBotApiMethod(required(cli.values, "--method"))
+        : undefined;
+      const limit = cli.values.has("--limit") ? numberOption(cli.values, "--limit", 100, 1) : 100;
+      const requests = botApiRequests(state, credential.sutToken, { limit, method });
+      appendInvocation(state, "botapi-requests", { count: requests.length, limit, method });
+      outputJson({ count: requests.length, requests });
+    } else if (cli.command === "desktop") {
+      outputJson(await runDesktopActions(state, cli.values, roots));
+    } else if (cli.command === "exec") {
+      outputJson(await runSutExec(state, cli.values, roots, credential.sutToken));
+    } else if (cli.command === "restart") {
+      outputJson(await restartSutGateway(state, cli.values, roots));
     } else if (cli.command === "send") {
       const sent = await sendVisibleMessage(state, cli.values, roots, credential.sutToken);
       outputJson({ ...sent.response, revealedMessageId: sent.revealedMessageId });
@@ -1491,13 +2111,13 @@ async function main(): Promise<void> {
       outputJson(await observerAction(state, cli.command as "delete" | "press", cli.values));
     } else if (cli.command === "finish") {
       await finalize(state, roots, {
-        focusMessageId: required(cli.values, "--focus-message-id"),
+        focusMessageId: cli.values.get("--focus-message-id"),
       });
       return;
     } else if (cli.command === "block") {
       await finalize(state, roots, {
         blocked: {
-          name: required(cli.values, "--missing-primitive"),
+          name: cli.values.get("--missing-primitive"),
           reason: required(cli.values, "--reason"),
         },
       });

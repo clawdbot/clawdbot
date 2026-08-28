@@ -4,7 +4,7 @@ import {
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { PollInput } from "../runtime-api.js";
+import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { CoreConfig } from "../types.js";
 import {
   createMatrixPlannedEvents,
@@ -227,11 +227,13 @@ export async function sendMessageMatrix(
         : null;
       let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
       if (!plannedEvents) {
-        const { chunks, tableMode } = chunkMatrixText(messageText, {
+        const preparedText = chunkMatrixText(messageText, {
           cfg,
           accountId: opts.accountId,
           preserveWhitespace: true,
         });
+        const { chunks, convertedText, preparedBody, fitsInSingleEvent, tableMode } = preparedText;
+        const singleEventBody = fitsInSingleEvent ? preparedBody : undefined;
         const relation = threadId
           ? buildThreadRelation(threadId, opts.replyToId)
           : buildReplyRelation(opts.replyToId);
@@ -301,6 +303,7 @@ export async function sendMessageMatrix(
             client,
             content,
             markdown: captionMarkdown,
+            preparedBody: captionMarkdown === convertedText ? singleEventBody : undefined,
             tableMode,
           });
           prepareContent(content, receiptKind);
@@ -315,6 +318,7 @@ export async function sendMessageMatrix(
               client,
               content: followup,
               markdown: chunk,
+              preparedBody: chunk === convertedText ? singleEventBody : undefined,
               tableMode,
             });
             prepareContent(followup, "text");
@@ -329,6 +333,7 @@ export async function sendMessageMatrix(
               client,
               content,
               markdown: chunk,
+              preparedBody: chunk === convertedText ? singleEventBody : undefined,
               tableMode,
             });
             prepareContent(content, "text");
@@ -522,6 +527,7 @@ export async function sendSingleTextMessageMatrix(
   const {
     trimmedText,
     convertedText,
+    preparedBody,
     singleEventLimit,
     eventTextLength,
     fitsInSingleEvent,
@@ -561,6 +567,7 @@ export async function sendSingleTextMessageMatrix(
         client,
         content,
         markdown: convertedText,
+        preparedBody,
         includeMentions: opts.includeMentions,
         tableMode,
       });
@@ -631,7 +638,7 @@ export async function editMessageMatrix(
     async (client) => {
       const resolvedRoom = await resolveMatrixRoomId(client, roomId);
       const cfg = requireRuntimeConfig(opts.cfg, "Matrix message edit") as CoreConfig;
-      const { convertedText, tableMode } = prepareMatrixSingleText(newText, {
+      const { convertedText, preparedBody, tableMode } = prepareMatrixSingleText(newText, {
         cfg,
         accountId: opts.accountId,
         preserveWhitespace: true,
@@ -646,6 +653,7 @@ export async function editMessageMatrix(
         client,
         content: newContent,
         markdown: convertedText,
+        preparedBody,
         includeMentions: opts.includeMentions,
         tableMode,
       });

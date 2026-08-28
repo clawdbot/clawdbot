@@ -73,20 +73,12 @@ function emitSessionRecoveryCompleted(params: {
   });
 }
 
-function recoveryRequestKey(request: StuckSessionRecoveryRequest): string | undefined {
-  return resolveStuckSessionRecoveryRef(request);
-}
-
 function isRecoveryPromiseLike(
   value: void | StuckSessionRecoveryOutcome | Promise<void | StuckSessionRecoveryOutcome>,
 ): value is Promise<void | StuckSessionRecoveryOutcome> {
   return (
     typeof (value as Promise<void | StuckSessionRecoveryOutcome> | undefined)?.then === "function"
   );
-}
-
-function recoveryOutcomeHasQueuedLaneWork(outcome: StuckSessionRecoveryOutcome): boolean {
-  return outcome.status === "aborted" && (outcome.queuedCount ?? 0) > 0;
 }
 
 function applyRecoveryOutcomeToDiagnosticState(params: {
@@ -152,7 +144,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
   const preserveQueuedIdleWork =
-    params.request.expectedState === "idle" && recoveryOutcomeHasQueuedLaneWork(params.outcome);
+    params.request.expectedState === "idle" && (params.outcome.queuedCount ?? 0) > 0;
   state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)
     ? 0
     : preserveQueuedIdleWork
@@ -174,7 +166,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
 function requestStuckSessionRecoveryOutcome(
   params: RequestStuckSessionRecoveryParams,
 ): Promise<StuckSessionRecoveryOutcome | undefined> {
-  const inFlightKey = recoveryRequestKey(params.request);
+  const inFlightKey = resolveStuckSessionRecoveryRef(params.request);
   if (inFlightKey && recoveryRequestsInFlight.has(inFlightKey)) {
     const outcome: StuckSessionRecoveryOutcome = {
       status: "skipped",

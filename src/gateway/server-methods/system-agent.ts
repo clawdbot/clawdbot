@@ -239,7 +239,13 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const manager = context.systemAgentApprovalManager;
     respond(
       true,
-      manager ? listVisiblePendingApprovalRequests({ manager, client }) : [],
+      manager
+        ? listVisiblePendingApprovalRequests({
+            manager,
+            client,
+            ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+          })
+        : [],
       undefined,
     );
   },
@@ -598,6 +604,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             );
           }
           const welcomeHistoryStart = engine.historyLength();
+          let persistWelcome = !welcomeOnly;
           let welcome: string;
           let welcomeQuestion: SystemAgentChatQuestion | undefined;
           try {
@@ -611,6 +618,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const overview = await engine.loadOverview();
               const facts = loadSystemAgentGreetingFacts();
               greetingAuditSequence = facts.auditSequence;
+              persistWelcome ||= facts.recentExternalEdit;
               welcome = (
                 await resolveSystemAgentGreeting({
                   overview,
@@ -630,7 +638,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
           }
-          persistEngineHistory(engine, welcomeHistoryStart);
+          // Passive welcomes are ephemeral; an external-edit alert must survive
+          // before delivery acknowledges the audit cursor that would hide it.
+          if (persistWelcome) {
+            persistEngineHistory(engine, welcomeHistoryStart);
+          }
           await evictOldestSession(sessions, context);
           session = {
             engine,

@@ -63,6 +63,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -74,7 +75,8 @@ const repositoryScriptEntries = [
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
-  "scripts/memory-index-manager.sync-repro.ts!",
+  // Mantis invokes the trusted proof collector through its workflow shell step.
+  "scripts/mantis/telegram-visible-proof.mjs!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
@@ -93,9 +95,10 @@ const repositoryScriptEntries = [
   // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
   "scripts/run-stylelint.mts!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
-  "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // Native shell UI tests connect to this manually launched loopback Gateway fixture.
+  "scripts/test-ios-shell-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
@@ -144,6 +147,8 @@ const rootEntries = [
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  "scripts/release-plan-producer-core.mts!",
+  "scripts/release-plan-producer.mts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
   // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
@@ -155,12 +160,14 @@ const rootEntries = [
   // Loaded by URL from the SQLite lifecycle archive owner.
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
+  // Spawned by path from sqlite-readonly-location.ts to isolate raw-fd snapshot preparation.
+  "src/infra/sqlite-readonly-location.worker.ts!",
   // Loaded by URL from tailscale.ts to outlive abrupt Gateway process exit.
   "src/infra/tailscale-route-owner.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   "src/agents/prepared-model-catalog.worker.ts!",
   // Spawned through computed sibling URLs by the service-child host and relay.
-  "src/process/supervisor/{service-child-relay,service-child-group-anchor}.ts!",
+  "src/process/supervisor/{service-child-relay,service-child-group-anchor,service-child-windows-job-anchor}.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
@@ -222,6 +229,7 @@ const bundledPluginEntries = [
   "*-api.ts!",
   "cli-metadata.ts!",
   "channel-entry.ts!",
+  "configured-state.ts!",
   // Manifest and SDK loaders resolve these public artifacts by basename.
   "auth-presence.ts!",
   "thread-bindings-runtime.ts!",
@@ -299,6 +307,8 @@ const rootToolingAndWorkspaceDependencies = [
   "marked",
   "oxlint",
   "oxlint-tsgolint",
+  // The scripts typecheck compiles UI Vite config against the root Vite dependency.
+  "postcss",
   "signal-utils",
   // Root declaration builds compile terminal-core source and resolve this package from root.
   "string-width",
@@ -400,14 +410,9 @@ const config = {
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
-    // Transitional public failover predicates stay available until their remaining callers
-    // migrate in later consolidation PRs; focused tests audit the retained behavior.
-    "src/agents/failover/classify.ts": ["exports"],
-    "src/agents/failover/provider-patterns.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
-    "src/plugins/compaction-provider.ts": ["exports"],
     "src/plugins/interactive-registry.ts": ["exports"],
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
@@ -459,8 +464,8 @@ const config = {
         ...rootToolingAndWorkspaceDependencies,
         ...rootBundledPluginRuntimeDependencies,
       ],
-      // Platform tools and shell builtins used by package scripts and process-boundary tests.
-      ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
+      // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
+      ignoreBinaries: ["mint", "ngrok", "open", "openclaw", "sleep", "xcrun"],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
@@ -743,13 +748,14 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/matrix`]: bundledPluginWorkspace([
-      // Native import wrapper shipped alongside the Matrix runtime bundle.
-      "src/plugin-entry.runtime.js!",
       // The monitor lazy-loads outbound behavior on inbound-only processes.
       "src/matrix/send.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace([
+      // The subprocess boundary tests spawn this fixture by computed URL.
+      "src/memory/fixtures/manager-search-knn-child.fixture.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
       ...bundledPluginWorkspace(),
       // LanceDB declares Arrow as a peer; the plugin provides it for runtime table values.
@@ -842,7 +848,7 @@ const config = {
       // crypto dependencies. The protocol barrel is the vendored library's
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
-      entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
+      entry: [...bundledPluginEntries, "protocol/index.ts!"],
       project: ["**/*.{js,mjs,ts}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },

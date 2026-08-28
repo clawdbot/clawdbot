@@ -441,6 +441,26 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.contextKey).toContain("imessage:reaction:added");
   });
 
+  it.each([
+    { text: "Loved “Dune” and the soundtrack was incredible" },
+    { text: 'Liked "your plan" but Wednesday works better' },
+    { text: "Removed a heart from “the old post” yesterday", mode: "off" as const },
+    { text: 'Removed a like from "that post" yesterday', mode: "all" as const },
+    { text: 'Loved “Dune"', mode: "own" as const },
+  ])(
+    "dispatches ordinary quoted prose instead of dropping it as a tapback: $text",
+    async ({ text, mode }) => {
+      const decision = await resolveDecision({
+        message: { text },
+        messageText: text,
+        bodyText: text,
+        ...(mode ? { reactionNotifications: mode } : {}),
+      });
+
+      expect(decision.kind).toBe("dispatch");
+    },
+  );
+
   it("uses the iMessage reply cache to recognize tool-sent messages as bot-authored reaction targets", async () => {
     const decision = await resolveDecision({
       message: {
@@ -691,6 +711,40 @@ describe("resolveIMessageReactionContext", () => {
     expect(resolveIMessageReactionContext({}, "Loved the movie")).toBeNull();
   });
 
+  it.each([
+    ["Loved", "added", "❤️"],
+    ["Liked", "added", "👍"],
+    ["Disliked", "added", "👎"],
+    ["Laughed at", "added", "😂"],
+    ["Emphasized", "added", "‼️"],
+    ["Questioned", "added", "❓"],
+    ["Removed a heart from", "removed", "❤️"],
+    ["Removed a like from", "removed", "👍"],
+    ["Removed a dislike from", "removed", "👎"],
+    ["Removed a laugh from", "removed", "😂"],
+    ["Removed an emphasis from", "removed", "‼️"],
+    ["Removed a question from", "removed", "❓"],
+  ])("preserves complete legacy %s tapback wrappers", (prefix, action, emoji) => {
+    for (const [open, close] of [
+      ['"', '"'],
+      ["“", "”"],
+    ]) {
+      expect(resolveIMessageReactionContext({}, `${prefix} ${open}Hello${close}`)).toStrictEqual({
+        action,
+        emoji,
+        targetText: "Hello",
+      });
+    }
+  });
+
+  it("preserves complete multiline and nested legacy tapback wrappers", () => {
+    expect(resolveIMessageReactionContext({}, "Loved “  she said “hello”\nand left  ”")).toEqual({
+      action: "added",
+      emoji: "❤️",
+      targetText: "she said “hello”\nand left",
+    });
+  });
+
   it("detects imsg tapback flags and associated message types", async () => {
     expect(
       resolveIMessageReactionContext(
@@ -732,7 +786,7 @@ describe("resolveIMessageReactionContext", () => {
 });
 
 describe("buildIMessageInboundContext", () => {
-  it("keeps numeric row id and provider GUID separately for action tooling", async () => {
+  it("keeps provider IDs separate and projects from-me identity", async () => {
     const message = {
       id: 12345,
       guid: "p:0/GUID-current",
@@ -747,17 +801,23 @@ describe("buildIMessageInboundContext", () => {
       return;
     }
 
-    const { ctxPayload } = await buildIMessageInboundContext({
+    const contextParams = {
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision,
-      message,
       historyLimit: 0,
       groupHistories: new Map(),
-    });
+    } satisfies Omit<Parameters<typeof buildIMessageInboundContext>[0], "message">;
+    const { ctxPayload } = await buildIMessageInboundContext({ ...contextParams, message });
 
     expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
     expect(ctxPayload.MessageSid).not.toBe("12345");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
+    const selfContext = await buildIMessageInboundContext({
+      ...contextParams,
+      message: { ...message, is_from_me: true },
+    });
+    expect(selfContext.ctxPayload.SenderIsSelf).toBe(true);
   });
 
   it("keeps generated media notices out of command input", async () => {
@@ -777,6 +837,7 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision: {
         ...decision,
         agentBodyText: "/reset\n\n[imessage attachment unavailable]",
@@ -809,6 +870,7 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload, inboundHistory } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision,
       message,
       historyLimit: 0,
@@ -823,6 +885,41 @@ describe("buildIMessageInboundContext", () => {
     expect(ctxPayload.Body).toContain("current");
     expect(ctxPayload.InboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
     expect(inboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
+  });
+
+  it("uses the monitor's prepared account service without re-reading channel config", async () => {
+    const message = {
+      id: 12348,
+      sender: "+15555550123",
+      text: "current",
+      is_from_me: false,
+      is_group: false,
+    };
+    const decision = await resolveDecision({ message });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    let channelConfigReads = 0;
+    const projectionCfg = Object.defineProperty({}, "channels", {
+      enumerable: true,
+      get: () => {
+        channelConfigReads += 1;
+        return { imessage: { service: "imessage" } };
+      },
+    }) as OpenClawConfig;
+    const { imessageTo } = await buildIMessageInboundContext({
+      cfg: projectionCfg,
+      accountService: "sms",
+      decision,
+      message,
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(imessageTo).toBe("sms:+15555550123");
+    expect(channelConfigReads).toBe(0);
   });
 });
 
@@ -886,6 +983,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
+      accountService: undefined,
       decision,
       message: {
         id: 102,
@@ -900,6 +998,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
     });
 
     expect(ctxPayload.CommandAuthorized).toBe(true);
+    expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
     expect(ctxPayload.CommandSource).toBe("text");
     expect(ctxPayload.CommandTurn).toMatchObject({
       kind: "text-slash",
@@ -926,6 +1025,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
+      accountService: undefined,
       decision,
       message: {
         id: 103,
@@ -970,6 +1070,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     };
     return {
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision: decision as unknown as Parameters<
         typeof buildIMessageInboundContext
       >[0]["decision"],

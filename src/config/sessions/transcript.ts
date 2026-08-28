@@ -390,7 +390,9 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   text?: string;
   mediaUrls?: string[];
   content?: SessionTranscriptAssistantMessage["content"];
+  eventId?: string;
   idempotencyKey?: string;
+  runId?: string;
   deliveryMirror?: InternalSessionTranscriptDeliveryMirror;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
@@ -428,7 +430,9 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
       : {}),
     storePath: params.storePath,
-    idempotencyKey: params.idempotencyKey,
+    ...(params.eventId ? { eventId: params.eventId } : {}),
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
@@ -468,7 +472,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   message: SessionTranscriptAssistantMessage;
+  eventId?: string;
   idempotencyKey?: string;
+  runId?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
@@ -589,11 +595,13 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
           ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
           : {}),
         ...(params.config ? { config: params.config } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
         updateMode: params.updateMode ?? "inline",
         touchSessionEntry: true,
         messages: [
           {
             message: preparedUnkeyedMessage,
+            ...(params.eventId ? { eventId: params.eventId } : {}),
             ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
             ...(explicitIdempotencyKey && params.beforeMessageWrite
               ? {

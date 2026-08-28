@@ -558,6 +558,21 @@ describe("Windows command execution", () => {
     });
   });
 
+  it("decodes UTF-16 stdout and stderr from runExec", async () => {
+    execaMock.mockImplementationOnce(() =>
+      createMockSubprocess({
+        stdout: Buffer.from([0xff, 0xfe, 0x6f, 0x00, 0x6b, 0x00]),
+        stderr: Buffer.from([0xfe, 0xff, 0x00, 0x6e, 0x00, 0x6f]),
+      }),
+    );
+    await withMockedWindowsPlatform(async () => {
+      await expect(runExec("node", ["utf16-output.js"], 1_000)).resolves.toEqual({
+        stdout: "ok",
+        stderr: "no",
+      });
+    });
+  });
+
   it("prefers valid UTF-8 output from runExec", async () => {
     execaMock.mockImplementationOnce(() =>
       createMockSubprocess({ stdout: Buffer.from("测试", "utf8") }),

@@ -456,7 +456,11 @@ export async function prepareEmbeddedAttemptHistory(input: {
       policy: input.transcriptPolicy,
     });
 
-    if (attempt.sessionKey && !isSettledTurnFinalization) {
+    if (
+      attempt.sessionKey &&
+      attempt.sessionPersistence !== "detached" &&
+      !isSettledTurnFinalization
+    ) {
       const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: input.sessionAgentId,
       });

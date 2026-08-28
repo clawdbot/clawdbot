@@ -616,6 +616,43 @@ describe("agentCommand", () => {
     });
   });
 
+  it("does not scaffold an implicit ACP workspace when the command supplies cwd", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const repository = path.join(home, "repository");
+      const configuredWorkspace = path.join(repository, ".openclaw", "workspace");
+      fs.mkdirSync(repository, { recursive: true });
+      execFileSync("git", ["-C", repository, "init", "-b", "main"]);
+      fs.writeFileSync(path.join(repository, "README.md"), "base\n");
+      execFileSync("git", ["-C", repository, "add", "README.md"]);
+      mockConfig(home, store, { workspace: configuredWorkspace }, undefined, [
+        { id: "codex", runtime: { type: "acp", acp: { agent: "codex" } } },
+      ]);
+      const actualWorkspace =
+        await vi.importActual<typeof import("../agents/workspace.js")>("../agents/workspace.js");
+      vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) =>
+        actualWorkspace.ensureAgentWorkspace(params),
+      );
+
+      const prepared = await prepareAgentCommandExecution(
+        {
+          message: "inspect this repo",
+          agentId: "codex",
+          sessionId: "explicit-cwd-acp",
+          cwd: repository,
+        },
+        runtime,
+      );
+      expect(prepared.workspaceDir).toBe(configuredWorkspace);
+      const implicitWorkspace = configuredWorkspace;
+
+      expect(fs.existsSync(implicitWorkspace)).toBe(true);
+      expect(fs.existsSync(path.join(implicitWorkspace, "AGENTS.md"))).toBe(false);
+      expect(fs.existsSync(path.join(implicitWorkspace, ".git"))).toBe(false);
+      expect(() => execFileSync("git", ["-C", repository, "add", "-A"])).not.toThrow();
+    });
+  });
+
   it("uses the recorded canonical workspace for a managed-worktree skill snapshot", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -862,6 +899,7 @@ describe("agentCommand", () => {
             agentId: "main",
             runId: "public-ingress-run",
             allowModelOverride: false,
+            senderIsOwner: true,
             mainRestartRecoveryAdmitted: true,
             mainRestartRecoveryAttempt: 1,
             mainRestartRecoveryOwnerLease: {
@@ -890,6 +928,9 @@ describe("agentCommand", () => {
         expect(prepare).toHaveBeenCalledWith(
           expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
         );
+        expect(
+          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].opts,
+        ).toMatchObject({ senderIsOwner: false });
       } finally {
         prepare.mockRestore();
         if (priorDescriptor) {

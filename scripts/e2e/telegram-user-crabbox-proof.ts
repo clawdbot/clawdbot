@@ -951,7 +951,7 @@ export async function startLocalSut(
   let mock: ReturnType<typeof spawnLogged> | undefined;
   try {
     const drained = await drainUpdates(params.sutToken);
-    const config = writeConfig(params);
+    const config = writeConfig({ ...params, mockHost: "127.0.0.1" });
     const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
     mock = spawnLoggedCommand(
       params.nodeBin ?? process.execPath,
@@ -1154,7 +1154,7 @@ async function startLocalSutDaemon(params: {
     };
   }
   const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig(params);
+  const config = writeSutConfig({ ...params, mockHost: "127.0.0.1" });
   const gatewayPassword = params.mcpAppFixture ? randomUUID() : undefined;
   const runtimeLogRoot = params.sutContainer ? config.tempRoot : params.outputDir;
   const requestLog = path.join(runtimeLogRoot, "mock-openai-requests.ndjson");
@@ -1300,6 +1300,7 @@ async function createCroppedMotionPreview(params: {
   videoPath: string;
 }) {
   return await createSharedCroppedMotionPreview({
+    crabboxBin: params.opts.crabboxBin,
     crop: params.crop,
     croppedGifPath: params.croppedGifPath,
     croppedVideoPath: params.croppedVideoPath,
@@ -1478,8 +1479,8 @@ download_file() {
 }
 mkdir -p "$root"
 tar -xzf "$root/state.tgz" -C "$root"
-run_setup_step "apt-get update" "$apt_timeout" sudo apt-get update -y
-run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl git cmake g++ make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-telegram-apt.log
+run_setup_step "apt-get update" "$apt_timeout" sudo apt-get -o DPkg::Lock::Timeout=900 update -y
+run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 install -y curl git cmake g++ make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-telegram-apt.log
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required" >&2
   exit 127
@@ -2309,6 +2310,31 @@ function inspectIdentityContext(result: JsonObject): JsonObject | undefined {
     : undefined;
 }
 
+export function hasBoundaryVerifiedChannelAdmissionAssurance(context: unknown): boolean {
+  if (!context || typeof context !== "object" || Array.isArray(context)) {
+    return false;
+  }
+  const ingress = (context as JsonObject).ingress;
+  const assurance = (context as JsonObject).assurance;
+  return (
+    ingress !== null &&
+    typeof ingress === "object" &&
+    !Array.isArray(ingress) &&
+    (ingress as JsonObject).kind === "channel" &&
+    Array.isArray(assurance) &&
+    assurance.some((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return false;
+      }
+      return (
+        (item as JsonObject).kind === "channel-admission" &&
+        (item as JsonObject).strength === "boundary-verified" &&
+        typeof (item as JsonObject).evidenceRef === "string"
+      );
+    })
+  );
+}
+
 async function inspectSessionIdentity(root: string, opts: Options, outputDir: string) {
   const { session } = readSession(root, opts, outputDir);
   const listed = parseCommandJson(
@@ -2394,20 +2420,7 @@ async function inspectSessionIdentity(root: string, opts: Options, outputDir: st
       principal && typeof principal === "object" && !Array.isArray(principal)
         ? (principal as JsonObject).principalRef
         : undefined;
-    const decisions = Array.isArray(inspection.json.decisions) ? inspection.json.decisions : [];
-    const hasChannelDecision = decisions.some((decision) => {
-      if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
-        return false;
-      }
-      const action = (decision as JsonObject).action;
-      return (
-        action &&
-        typeof action === "object" &&
-        !Array.isArray(action) &&
-        (action as JsonObject).family === "channel" &&
-        (action as JsonObject).operation === "admission"
-      );
-    });
+    const hasChannelAdmission = hasBoundaryVerifiedChannelAdmissionAssurance(context);
     if (
       !invoker ||
       typeof invoker !== "object" ||
@@ -2418,8 +2431,9 @@ async function inspectSessionIdentity(root: string, opts: Options, outputDir: st
       Array.isArray(principal) ||
       (principal as JsonObject).kind !== "person" ||
       typeof principalRef !== "string" ||
-      !hasChannelDecision ||
+      !hasChannelAdmission ||
       !inspection.human.includes("Invoker [present]") ||
+      !inspection.human.includes("channel-admission") ||
       !inspection.human.includes("Decisions")
     ) {
       throw new Error(`Telegram run ${inspection.runId} omitted participant CLI evidence.`);

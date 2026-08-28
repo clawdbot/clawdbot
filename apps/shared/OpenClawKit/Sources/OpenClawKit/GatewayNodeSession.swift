@@ -520,9 +520,9 @@ public actor GatewayNodeSession {
         return self.executingLifecycleCallbackIDs.contains(id)
     }
 
-    public func currentIssuedDeviceAuthRoles() async -> Set<String> {
-        guard let channel else { return [] }
-        return await channel.currentIssuedDeviceAuthRoles()
+    public func currentDeviceAuthRoles() async -> (received: Set<String>, persisted: Set<String>) {
+        guard let channel else { return ([], []) }
+        return await channel.currentDeviceAuthRoles()
     }
 
     public func currentCanvasHostUrl() -> String? {

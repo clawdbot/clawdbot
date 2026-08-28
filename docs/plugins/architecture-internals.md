@@ -114,54 +114,48 @@ metadata-only while the setup module contributes other setup hooks.
 
 ### Plugin cache boundary
 
-OpenClaw does not cache plugin discovery results or direct manifest registry
-data behind wall-clock windows. Installs, manifest edits, and load-path changes
-must become visible on the next explicit metadata read or snapshot rebuild.
-The manifest file parser keeps a bounded file-signature cache keyed by the
-opened manifest path plus device/inode, size, and mtime/ctime; that cache only
-avoids re-parsing unchanged bytes and must not cache discovery, registry,
-owner, or policy answers.
+One `PluginCache` owns plugin facts from first access until Gateway shutdown.
+CLI preflight and startup progressively fill the same cache; later access fills
+only facts not yet acquired. Its immutable metadata snapshot combines the installed index, manifests, owner maps, and available
+discovery facts from every configured agent workspace. Disabled plugins remain
+in the inventory so later enablement does not require discovery. Conflicting
+plugin IDs from different workspace sources remain rejected.
 
-The safe metadata fast path is explicit object ownership, not a hidden cache.
-Gateway startup hot paths should pass the current `PluginMetadataSnapshot`, the
-derived `PluginLookUpTable`, or an explicit manifest registry through the call
-chain. Config validation, startup auto-enable, plugin bootstrap, and provider
-selection can reuse those objects while they represent the current config and
-plugin inventory. Setup lookup still reconstructs manifest metadata on demand
-unless the specific setup path receives an explicit manifest registry; keep
-that as a cold-path fallback rather than adding hidden lookup caches. When the
-input changes, rebuild and replace the snapshot instead of mutating it or
-keeping historical copies. Views over the active plugin registry and bundled
-channel bootstrap helpers should be recomputed from the current
-registry/root. Short-lived maps are fine inside one call to dedupe work or
-guard reentry; they must not become process metadata caches.
+Runtime readers use this `PluginMetadataSnapshot`, a derived `PluginLookUpTable`,
+or an explicit manifest registry. Plugin scopes are in-memory projections;
+config changes, account changes, and run workspace changes must not trigger
+filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
+hashing. Activation and runtime service generations can change while their
+package metadata stays fixed. Account health and authentication state are not
+part of the immutable package inventory.
 
-For plugin loading, the persistent cache layer is runtime loading. It may reuse
-loader state when code or installed artifacts are actually loaded, such as:
+Explicit install, update, registry refresh, and doctor operations use isolated
+generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
+installed index, but cannot clear or replace the running Gateway's inventory.
+The new inventory takes effect after restart. The `plugins.refresh` RPC reports
+`restartRequired: true`; with reload disabled, it leaves the running inventory
+in place until a manual restart.
 
-- `PluginLoaderCacheState` and compatible active runtime registries
-- jiti/module caches and public-surface loader caches used to avoid importing
-  the same runtime surface repeatedly
-- filesystem caches for installed plugin artifacts
-- short-lived per-call maps for path normalization or duplicate resolution
+The shared cache owns checked file contents, parsed package and manifest data,
+bundle MCP/LSP/settings files, plugin skill paths, discovery paths, installed-index
+projections, compiled model policies, SDK aliases, artifact locations, and lazy
+module exports. Missing files and artifacts are facts too: they remain
+missing until a new generation. Discovery, registry assembly, and index hashing
+reuse the same checked bytes rather than reopening a file at each stage.
 
-Those caches are data-plane implementation details. They must not answer
-control-plane questions such as "which plugin owns this provider?" unless the
-caller deliberately asked for runtime loading.
+Actual code imports retain their boundary and file-identity checks before first
+execution. Consent checks use a fresh inspection after an awaited approval so
+changed artifacts cannot inherit approval for older capabilities. Failed module
+evaluation remains retryable; a successful import is shared across consumers.
 
-Do not add persistent or wall-clock caches for:
-
-- discovery results
-- direct manifest registries
-- manifest registries reconstructed from the installed plugin index
-- provider owner lookup, model suppression, provider policy, or public-artifact
-  metadata
-- any other manifest-derived answer where a changed manifest, installed index,
-  or load path should be visible on the next metadata read
-
-Callers that rebuild manifest metadata from the persisted installed plugin
-index reconstruct that registry on demand. The installed index is durable
-source-plane state; it is not a hidden in-process metadata cache.
+Registered services, hooks, tools, session MCP overlays, generated skill-link
+publication, and activation state remain runtime-owned.
+An active registry pins its chosen artifact binding so source and built modules
+cannot split its registrations. Native ESM module lifetime still follows Node's
+module loader. Manifest-derived questions such as "which plugin owns this
+provider?" use the metadata snapshot without executing plugin code. The persisted
+installed index belongs to management and startup; it is not a freshness signal
+for runtime readers.
 
 ## Registry model
 
@@ -272,7 +266,7 @@ listed here.
 | `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens; declare `contracts.externalAuthProviders` in the manifest |
 | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                                 |
 | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                                 |
-| `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
+| `prepareDynamicModel`             | Return an asynchronously prepared model, or warm reusable metadata before retrying `resolveDynamicModel`       | Provider needs network metadata before resolving unknown ids                                                                                  |
 | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
 | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
 | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
@@ -736,6 +730,11 @@ instead of provider-native button, component, block, or card fields.
 See [Message Presentation](/plugins/message-presentation) for the contract,
 fallback rules, provider mapping, and plugin author checklist.
 
+Provider-native schema extensions require explicit maintainer approval,
+channel-owned parsing, documented cross-channel behavior, and capabilities that
+`MessagePresentation` cannot express. Discord `components` is the approved
+built-in exception for its advanced Components V2 layouts.
+
 Send-capable plugins declare what they can render through message capabilities:
 
 - `presentation` for semantic presentation blocks (`text`, `context`,
@@ -743,9 +742,9 @@ Send-capable plugins declare what they can render through message capabilities:
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.
-Do not expose provider-native UI escape hatches from the generic message tool.
-Deprecated SDK helpers for legacy native schemas remain exported for existing
-third-party plugins, but new plugins should not use them.
+Do not expose unapproved provider-native UI escape hatches from the generic
+message tool. Deprecated SDK helpers for legacy native schemas remain exported
+for existing third-party plugins, but new plugins should not use them.
 
 ## Channel target resolution
 
@@ -1017,10 +1016,11 @@ plugin index entry with `source: "path"` and a workspace-relative
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. The persisted `installed_plugin_index` SQLite table is the install
-source of truth and can be refreshed without loading plugin runtime modules.
-Its `installRecords` map is durable even when a plugin manifest is missing or
-invalid; its `plugins` payload is a rebuildable manifest view.
+surface. The persisted `config_machine_state` value under
+`plugins.installedIndex` is the install source of truth and can be refreshed
+without loading plugin runtime modules. Its `installRecords` map is durable
+even when a plugin manifest is missing or invalid; its `plugins` payload is a
+rebuildable manifest view.
 
 ## Context engine plugins
 

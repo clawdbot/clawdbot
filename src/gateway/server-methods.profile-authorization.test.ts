@@ -36,9 +36,10 @@ async function dispatchPendingProfileMethod(params: {
     respond,
     client: params.client,
     isWebchatConnect: () => false,
-    context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
-      typeof handleGatewayRequest
-    >[0]["context"],
+    context: {
+      logGateway: { warn: vi.fn() },
+      getRuntimeConfig: () => ({}),
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
     ...(params.methodRegistry
       ? { methodRegistry: params.methodRegistry }
       : { extraHandlers: { [params.method]: params.handler } }),
@@ -53,7 +54,14 @@ describe("Gateway pending-profile authorization", () => {
     client.authenticatedGitHubIdentitySync = vi.fn(async () => await deferred.promise);
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
 
-    const request = dispatchPendingProfileMethod({ client, handler, method: "chat.send" });
+    const request = dispatchPendingProfileMethod({
+      client,
+      handler,
+      method: "chat.send",
+      // chat.send requires a session target at the protocol level; the mutation
+      // pipeline rejects targetless frames before profile-dependent dispatch.
+      requestParams: { sessionKey: "agent:main:main" },
+    });
     await Promise.resolve();
     expect(handler).not.toHaveBeenCalled();
 

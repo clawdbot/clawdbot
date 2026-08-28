@@ -203,7 +203,7 @@ describe("test-projects args", () => {
     },
     {
       title: "routes unit-fast acp targets to the cache-friendly unit-fast config",
-      target: "src/acp/control-plane/runtime-cache.test.ts",
+      target: "src/acp/runtime/registry.test.ts",
       config: "test/vitest/vitest.unit-fast.config.ts",
     },
     {

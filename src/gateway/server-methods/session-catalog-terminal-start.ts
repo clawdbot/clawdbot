@@ -9,6 +9,7 @@ import {
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -89,6 +90,15 @@ export function catalogStartHandler(
           "session catalog cannot start terminal sessions; choose a catalog that advertises createSession.startTerminal",
         ),
       );
+      return;
+    }
+    const creationError = authorizeGatewaySessionCreation({
+      cfg: config,
+      client: opts.client,
+      agentId: request.agentId,
+    });
+    if (creationError) {
+      respond(false, undefined, creationError);
       return;
     }
     const createTarget = resolveCreateTarget(request.catalogId, request.agentId, config);

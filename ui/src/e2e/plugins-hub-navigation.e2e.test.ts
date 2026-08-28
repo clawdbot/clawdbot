@@ -220,6 +220,27 @@ suite.define(() => {
         const installed = await hubGeometry(page);
         expect(installed.title).toBe("Plugins");
         expect(installed.titleVisible).toBe(true);
+        const layout = await page.evaluate(() => {
+          const title = document.querySelector<HTMLElement>(".hub-page-header__title");
+          const tabs = document.querySelector<HTMLElement>(".plugins-hub-tabs");
+          const content = document.querySelector<HTMLElement>("#plugins-global-search");
+          if (!title || !tabs || !content) {
+            throw new Error("Plugins hub layout did not render");
+          }
+          return {
+            aboveTabs: tabs.getBoundingClientRect().top - title.getBoundingClientRect().bottom,
+            belowTabs: content.getBoundingClientRect().top - tabs.getBoundingClientRect().bottom,
+            contentLeft: content.getBoundingClientRect().left,
+            tabsLeft: tabs.getBoundingClientRect().left,
+            titleLeft: title.getBoundingClientRect().left,
+          };
+        });
+        expect(Math.abs(layout.tabsLeft - layout.titleLeft)).toBeLessThanOrEqual(1);
+        expect(layout.aboveTabs).toBeGreaterThan(0);
+        expect(Math.abs(layout.belowTabs - layout.aboveTabs)).toBeLessThanOrEqual(1);
+        if (label === "desktop") {
+          expect(Math.abs(layout.tabsLeft - layout.contentLeft)).toBeLessThanOrEqual(1);
+        }
         await captureScreenshot(page, `${label}-01-installed.png`);
 
         await selectHubTab(page, "Discover", {

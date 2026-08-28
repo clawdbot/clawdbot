@@ -45,7 +45,10 @@ export function replaceCompactionReplayOwnerContent(
     return next;
   }
   const replayIndex = replay.replayIndex ?? 0;
-  if (content.length === 0 || replayIndex > message.content.length) {
+  if (
+    (content.length === 0 && message.content.length > 0) ||
+    replayIndex > message.content.length
+  ) {
     return stripCompactionReplayCheckpoint(next);
   }
   let sourceIndex = 0;

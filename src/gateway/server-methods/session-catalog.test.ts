@@ -58,6 +58,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
 vi.mock("../../state/user-profiles.js", () => ({
+  getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
 const { resolveRegisteredCatalogCreateTarget, sessionCatalogHandlers } =
@@ -476,7 +477,11 @@ describe("session catalog Gateway methods", () => {
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
-        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+        nodes: {
+          list: dispatchNodeList,
+          invoke: vi.fn(async () => undefined),
+          openDuplex: vi.fn(),
+        },
       }),
     );
     const catalogUsingNodes = (id: string) =>
@@ -503,7 +508,11 @@ describe("session catalog Gateway methods", () => {
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
-        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+        nodes: {
+          list: dispatchNodeList,
+          invoke: vi.fn(async () => undefined),
+          openDuplex: vi.fn(),
+        },
       }),
     );
     const selectedList = vi.fn(async () => []);

@@ -9,10 +9,10 @@ import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
   readBooleanToolParam,
+  resolveGenerateAction,
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
-  resolveModelFromRegistry,
 } from "./media-tool-shared.js";
 
 // Keep media-tool-shared tests focused on root separation; channel-inbound
@@ -44,27 +44,30 @@ function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
 }
 
-function createModelRegistryStub(resolve: (provider: string, modelId: string) => unknown): {
-  calls: Array<[string, string]>;
-  registry: { find: (provider: string, modelId: string) => unknown };
-} {
-  const calls: Array<[string, string]> = [];
-  return {
-    calls,
-    registry: {
-      find(provider, modelId) {
-        calls.push([provider, modelId]);
-        return resolve(provider, modelId);
-      },
-    },
-  };
-}
-
 describe("readBooleanToolParam", () => {
   it("parses booleans and true/false string tokens", () => {
     expect(readBooleanToolParam({ audio: true }, "audio")).toBe(true);
     expect(readBooleanToolParam({ audio: " FALSE " }, "audio")).toBe(false);
     expect(readBooleanToolParam({ audio: "yes" }, "audio")).toBeUndefined();
+  });
+});
+
+describe("resolveGenerateAction", () => {
+  it.each([
+    { name: "absent action", args: {}, expected: "generate" },
+    { name: "blank action", args: { action: "   " }, expected: "generate" },
+    { name: "non-string action", args: { action: 1 }, expected: "generate" },
+    { name: "generate action", args: { action: "generate" }, expected: "generate" },
+    { name: "normalized status action", args: { action: " STATUS " }, expected: "status" },
+    { name: "list action", args: { action: "list" }, expected: "list" },
+  ])("$name", ({ args, expected }) => {
+    expect(resolveGenerateAction(args)).toBe(expected);
+  });
+
+  it("rejects invalid actions with the ordered contract message", () => {
+    expect(() => resolveGenerateAction({ action: "invalid" })).toThrowError(
+      /^action must be "generate", "status", or "list"$/,
+    );
   });
 });
 
@@ -192,55 +195,6 @@ describe("resolveMediaToolReferenceAccess", () => {
       }),
     ).rejects.toThrow(expected);
   });
-});
-
-describe("resolveModelFromRegistry", () => {
-  it("normalizes provider and model refs before registry lookup", () => {
-    const foundModel = { provider: "ollama", id: "qwen3.5:397b-cloud" };
-    const { calls, registry } = createModelRegistryStub(() => foundModel);
-
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: " OLLAMA ",
-      modelId: " qwen3.5:397b-cloud ",
-    });
-
-    expect(calls).toEqual([["ollama", "qwen3.5:397b-cloud"]]);
-    expect(result).toBe(foundModel);
-  });
-
-  it("reports the normalized ref when the registry lookup misses", () => {
-    const { registry } = createModelRegistryStub(() => null);
-
-    expect(() =>
-      resolveModelFromRegistry({
-        modelRegistry: registry,
-        provider: " OLLAMA ",
-        modelId: " qwen3.5:397b-cloud ",
-      }),
-    ).toThrow("Unknown model: ollama/qwen3.5:397b-cloud");
-  });
-
-  it("falls back to provider-prefixed custom model IDs", () => {
-    // Custom providers can store ids with provider prefixes; try both forms so
-    // callers can pass the short local model id.
-    const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
-    const { calls, registry } = createModelRegistryStub((_, modelId) =>
-      modelId === "kimchi/claude-opus-4-6" ? foundModel : null,
-    );
-
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: "kimchi",
-      modelId: "claude-opus-4-6",
-    });
-
-    expect(calls).toEqual([
-      ["kimchi", "claude-opus-4-6"],
-      ["kimchi", "kimchi/claude-opus-4-6"],
-    ]);
-    expect(result).toBe(foundModel);
-  }, 180_000);
 });
 
 describe("hasGenerationToolAvailability", () => {

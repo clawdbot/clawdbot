@@ -1,6 +1,7 @@
 // Slack plugin module implements slash behavior.
 import type {
   AllMiddlewareArgs,
+  BlockAction,
   SlackActionMiddlewareArgs,
   SlackCommandMiddlewareArgs,
   SlackOptionsMiddlewareArgs,
@@ -91,7 +92,7 @@ const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG
 
 type SlackCommandHandlerArgs = SlackCommandMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
-type SlackArgActionHandlerArgs = SlackActionMiddlewareArgs &
+type SlackArgActionHandlerArgs = SlackActionMiddlewareArgs<BlockAction> &
   Pick<AllMiddlewareArgs, "context" | "client">;
 type SlackArgOptionsHandlerArgs = SlackOptionsMiddlewareArgs<"block_suggestion"> &
   Pick<AllMiddlewareArgs, "context" | "client">;
@@ -731,6 +732,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         resolveChunkMode,
         resolveConversationLabel,
         resolveMarkdownTableMode,
+        sanitizeSlackMonitorReplyPayload,
       } = await loadSlashDispatchRuntime();
 
       const route =
@@ -853,14 +855,8 @@ export async function registerSlackMonitorSlashCommands(params: {
           sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
         },
         ctxPayload,
-        replyPipeline: {
-          transformReplyPayload: (payload) => {
-            if (payload.isReasoning === true) {
-              return null;
-            }
-            return payload;
-          },
-        },
+        dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
+        replyPipeline: { transformReplyPayload: sanitizeSlackMonitorReplyPayload },
         dispatcherOptions: {
           // /login must expose its device code before the auth flow can finish. Other block
           // streams stay batched so the response_url planner can honor Slack's five-call cap.
@@ -1177,11 +1173,13 @@ export async function registerSlackMonitorSlashCommands(params: {
                   blocks?: (Block | KnownBlock)[];
                   mrkdwn?: boolean;
                 });
+          const threadTs = body.container?.thread_ts ?? body.message?.thread_ts;
           await args.client.chat.postEphemeral({
             token: ctx.botToken,
             channel: body.channel.id,
             user: body.user.id,
             text: payload.text ?? "",
+            ...(threadTs ? { thread_ts: threadTs } : {}),
             ...(payload.blocks ? { blocks: payload.blocks } : {}),
             ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
           });

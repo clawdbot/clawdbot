@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,7 +28,7 @@ import {
   buildSetupMigrationPlanSourceSnapshot,
   buildSetupMigrationTargetSnapshot,
   inspectSetupMigrationFreshness,
-  preserveSetupMigrationSecurityAcknowledgement,
+  preserveSetupMigrationOnboardingConsents,
   prepareSetupMigrationAttemptBoundary,
   SetupMigrationTargetChangedError,
   withSetupMigrationTargetLock,
@@ -217,44 +218,57 @@ async function selectSetupMigrationProvider(params: {
     detections: params.detections,
   });
   const requestedProviderId = params.opts.importFrom?.trim();
-  if (requestedProviderId && !options.some((option) => option.providerId === requestedProviderId)) {
-    throw new Error(
-      `Migration provider "${requestedProviderId}" is not installed or bundled. Install it before starting the transactional import.`,
-    );
+  if (requestedProviderId) {
+    return assertListedMigrationProvider(requestedProviderId, options);
   }
   if (options.length === 0) {
     throw new Error("No migration providers found.");
   }
-  let providerId = requestedProviderId;
-  if (!providerId) {
-    const prompt = {
-      message: t("wizard.migration.source"),
-      options: options.map((option) => ({
-        value: option.providerId,
-        label: option.label,
-        ...(option.hint ? { hint: option.hint } : {}),
-      })),
-      initialValue: params.detections[0]?.providerId ?? options[0]?.providerId,
-    };
-    if (!params.allowBack) {
-      params.prompter.disableBackNavigation?.();
-      return await params.prompter.select(prompt);
-    }
-    const selection = await runWizardWithPromptNavigationScope(
-      params.prompter,
-      async (prompter) => await prompter.select(prompt),
-    );
-    if (selection.status === "back") {
-      return undefined;
-    }
-    providerId = selection.value;
+  const prompt = {
+    message: t("wizard.migration.source"),
+    options: options.map((option) => ({
+      value: option.providerId,
+      label: option.label,
+      ...(option.hint ? { hint: option.hint } : {}),
+    })),
+    initialValue: params.detections[0]?.providerId ?? options[0]?.providerId,
+  };
+  if (!params.allowBack) {
+    params.prompter.disableBackNavigation?.();
+    return assertListedMigrationProvider(await params.prompter.select(prompt), options);
   }
-  if (!options.some((option) => option.providerId === providerId)) {
-    throw new Error(
-      `Migration provider "${providerId}" is not installed or bundled. Install it before starting the transactional import.`,
-    );
+  const selection = await runWizardWithPromptNavigationScope(
+    params.prompter,
+    async (prompter) => await prompter.select(prompt),
+  );
+  if (selection.status === "back") {
+    return undefined;
   }
-  return providerId;
+  return assertListedMigrationProvider(selection.value, options);
+}
+
+/**
+ * Rejects a provider id that is absent from the listed options, naming the ids that are present.
+ * `openclaw migrate` already answers an unknown provider this way; onboarding has to match, because
+ * a typed id is far likelier to be a typo here than a genuinely missing plugin. An undefined id
+ * means the operator dismissed the prompt, which is a cancellation rather than a bad choice.
+ */
+function assertListedMigrationProvider(
+  providerId: string | undefined,
+  options: readonly SetupMigrationOption[],
+): string | undefined {
+  if (providerId === undefined || options.some((option) => option.providerId === providerId)) {
+    return providerId;
+  }
+  const available = options.map((option) => option.providerId);
+  const suffix =
+    available.length > 0
+      ? ` Available providers: ${available.join(", ")}.`
+      : " No migration providers are installed.";
+  const listCommand = formatCliCommand("openclaw migrate list");
+  throw new Error(
+    `Unknown migration provider "${providerId}".${suffix} Run ${listCommand} to see the current list.`,
+  );
 }
 
 async function resolveSetupMigrationProvider(params: {
@@ -382,7 +396,7 @@ export async function runSetupMigrationImport(params: {
         formatMigrationResult,
       });
     }
-    const lockedBaseConfig = preserveSetupMigrationSecurityAcknowledgement(
+    const lockedBaseConfig = preserveSetupMigrationOnboardingConsents(
       await params.readConfigFile(),
       params.baseConfig,
     );

@@ -78,7 +78,10 @@ export function createLineBot(opts: LineBotOptions): LineBot {
           ? { turnAdoptionLifecycle: control.turnAdoptionLifecycle }
           : {}),
         groupHistories,
-        historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        historyLimit:
+          account.config.historyLimit ??
+          cfg.messages?.groupChat?.historyLimit ??
+          DEFAULT_GROUP_HISTORY_LIMIT,
       }),
   });
   spool.start();

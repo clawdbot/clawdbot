@@ -1,4 +1,5 @@
 // Gateway readiness checker for channel health and startup sidecar state.
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -116,7 +117,11 @@ export function createReadinessChecker(
     if (deps.shouldSkipChannelReadiness?.()) {
       return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
     }
-    if (cachedState && now - cachedAt < cacheTtlMs) {
+    if (
+      cachedState &&
+      !isFutureDateTimestampMs(cachedAt, { nowMs: now }) &&
+      now - cachedAt < cacheTtlMs
+    ) {
       return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
     }
 

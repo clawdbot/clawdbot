@@ -93,6 +93,7 @@ describe("device pair setup completion", () => {
   it("keeps the completion recoverable when a slow subscriber drops the frame", async () => {
     const baseDir = await tempDirs.make("openclaw-setup-completion-slow-");
     const slowSocket = {
+      readyState: 1,
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
       send: vi.fn(),
       close: vi.fn(),

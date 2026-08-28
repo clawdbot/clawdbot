@@ -129,8 +129,11 @@ export async function runEmbeddedAttemptSettledPhase(
     agentSession: {
       activeSession,
       clientToolCallSlots,
+      coreReadAuthorized,
+      getCodeModeReconciliationCandidate,
       hasDeliveredSourceReply,
       hookRunner,
+      setCodeModeReconciliationReadAuthorized,
       setActiveSessionSystemPrompt,
       settingsManager,
     },
@@ -279,6 +282,7 @@ export async function runEmbeddedAttemptSettledPhase(
         uncompactedEffectiveTools,
         tools,
         codeModeControlsEnabled: toolBase.codeModeControlsEnabledForRun,
+        coreReadAuthorized,
         toolSearchCatalogRef: toolBase.toolSearchCatalogRef,
         forceToolNames: [
           ...(toolBase.forceDirectMessageTool ? ["message"] : []),
@@ -326,6 +330,7 @@ export async function runEmbeddedAttemptSettledPhase(
         setPromptCacheChangesForTurn: (changes) => {
           promptCacheChangesForTurn = changes;
         },
+        setCodeModeReconciliationReadAuthorized,
         setFinalPromptText: (prompt) => {
           finalPromptText = prompt;
         },
@@ -620,6 +625,7 @@ export async function runEmbeddedAttemptSettledPhase(
       lastAssistant,
       currentAttemptAssistant,
       currentAttemptCompletedAssistant,
+      codeModeReconciliationCandidate: getCodeModeReconciliationCandidate(),
       successfulNestedToolNames,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,

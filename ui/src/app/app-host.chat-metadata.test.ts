@@ -16,7 +16,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("invalidates chat metadata on config changes and same-client reconnects", () => {
+it("invalidates chat metadata on config changes and same-client disconnects", () => {
   vi.useFakeTimers();
   const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
   const connected = {
@@ -42,6 +42,5 @@ it("invalidates chat metadata on config changes and same-client reconnects", () 
 
   rememberChatMetadata(client, "main", { commands: [], models: [] });
   shell.synchronizeGateway({ ...connected, phase: "reconnecting" });
-  shell.synchronizeGateway(connected);
   expect(peekChatMetadata(client, "main")).toBeUndefined();
 });

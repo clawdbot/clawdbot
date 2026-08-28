@@ -27,7 +27,10 @@ describe("groupCatalogSessionsByProject", () => {
       session("b-2", "/work/bravo"),
     ]);
 
-    expect(result.groups.map((group) => group.key)).toEqual(["/work/bravo", "/work/alpha"]);
+    expect(result.groups.map((group) => group.key)).toEqual([
+      "project:/work/bravo",
+      "project:/work/alpha",
+    ]);
     expect(result.groups.map((group) => group.label)).toEqual(["bravo", "alpha"]);
     expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["b-1", "b-2"]);
   });
@@ -39,8 +42,18 @@ describe("groupCatalogSessionsByProject", () => {
     ]);
 
     expect(result.groups).toMatchObject([
-      { key: "custom:Release", label: "Release", sessions: [{ threadId: "grouped" }] },
-      { key: "/work/openclaw", label: "openclaw", sessions: [{ threadId: "project" }] },
+      {
+        key: "custom:Release",
+        legacySectionKey: "custom:Release",
+        label: "Release",
+        sessions: [{ threadId: "grouped" }],
+      },
+      {
+        key: "project:/work/openclaw",
+        legacySectionKey: "/work/openclaw",
+        label: "openclaw",
+        sessions: [{ threadId: "project" }],
+      },
     ]);
   });
 
@@ -50,7 +63,26 @@ describe("groupCatalogSessionsByProject", () => {
       { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
     ]);
 
-    expect(result.groups.map((group) => group.key)).toEqual(["custom:Release", "/work/openclaw"]);
+    expect(result.groups.map((group) => group.key)).toEqual([
+      "custom:Release",
+      "project:/work/openclaw",
+    ]);
+  });
+
+  it("keeps custom groups separate from project paths with the same key text", () => {
+    const result = groupCatalogSessionsByProject([
+      { ...session("grouped"), customGroup: "repo" },
+      session("project", "custom:repo"),
+    ]);
+
+    expect(result.groups).toMatchObject([
+      { key: "custom:repo", sessions: [{ threadId: "grouped" }] },
+      {
+        key: "project:custom:repo",
+        legacySectionKey: "custom:repo",
+        sessions: [{ threadId: "project" }],
+      },
+    ]);
   });
 
   it.each([
@@ -64,7 +96,7 @@ describe("groupCatalogSessionsByProject", () => {
     ]);
 
     expect(result.groups).toHaveLength(1);
-    expect(result.groups[0]?.key).toBe(expectedProject);
+    expect(result.groups[0]?.key).toBe(`project:${expectedProject}`);
     expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["direct", "worktree"]);
   });
 
@@ -81,13 +113,14 @@ describe("groupCatalogSessionsByProject", () => {
   it.each([
     [" /Users/dev/openclaw/// ", "/Users/dev/openclaw", "openclaw"],
     ["C:\\Users\\dev\\openclaw\\", "C:\\Users\\dev\\openclaw", "openclaw"],
-  ])("normalizes %s to key %s with label %s", (cwd, expectedKey, expectedLabel) => {
+  ])("normalizes %s to project %s with label %s", (cwd, expectedPath, expectedLabel) => {
     const result = groupCatalogSessionsByProject([session("one", cwd)]);
 
     expect(result.groups[0]).toMatchObject({
-      key: expectedKey,
+      key: `project:${expectedPath}`,
+      legacySectionKey: expectedPath,
       label: expectedLabel,
-      title: expectedKey,
+      title: expectedPath,
     });
   });
 });
@@ -114,7 +147,11 @@ describe("groupCatalogSessionsByPerson", () => {
       { ...session("one"), createdActor: { type: "human", id: "profile-ada", label: "  " } },
     ]);
 
-    expect(result.groups[0]).toMatchObject({ key: "person:profile-ada", label: "profile-ada" });
+    expect(result.groups[0]).toMatchObject({
+      key: "person:profile-ada",
+      legacySectionKey: "person:profile-ada",
+      label: "profile-ada",
+    });
   });
 
   it("leaves unattributed sessions in the flat ungrouped tail", () => {

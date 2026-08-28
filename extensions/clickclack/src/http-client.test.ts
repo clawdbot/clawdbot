@@ -641,6 +641,14 @@ describe("ClickClack HTTP client", () => {
   });
 
   it("uploads multipart bytes with filename and MIME, then attaches by id", async () => {
+    const NativeBlob = Blob;
+    let uploadBlobPart: BlobPart | undefined;
+    class CapturingBlob extends NativeBlob {
+      constructor(parts?: BlobPart[], options?: BlobPropertyBag) {
+        uploadBlobPart = parts?.[0];
+        super(parts, options);
+      }
+    }
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -669,15 +677,24 @@ describe("ClickClack HTTP client", () => {
       fetch: fetchMock as unknown as typeof fetch,
     });
 
-    const upload = await client.createUpload({
-      workspaceId: "wsp_1",
-      buffer: Buffer.from("const proof = true;"),
-      filename: "viewer-proof.ts",
-      contentType: "text/typescript",
-      nonce: "upload-queue-1",
-    });
+    const uploadBuffer = Buffer.from("const proof = true;");
+    vi.stubGlobal("Blob", CapturingBlob);
+    const upload = await client
+      .createUpload({
+        workspaceId: "wsp_1",
+        buffer: uploadBuffer,
+        filename: "viewer-proof.ts",
+        contentType: "text/typescript",
+        nonce: "upload-queue-1",
+      })
+      .finally(() => vi.unstubAllGlobals());
     await client.attachUpload("msg_1", upload.id);
 
+    expect(uploadBlobPart).toBeInstanceOf(Uint8Array);
+    const uploadBytes = uploadBlobPart as Uint8Array;
+    expect(uploadBytes.buffer).toBe(uploadBuffer.buffer);
+    expect(uploadBytes.byteOffset).toBe(uploadBuffer.byteOffset);
+    expect(uploadBytes.byteLength).toBe(uploadBuffer.byteLength);
     const uploadRequest = fetchMock.mock.calls[0];
     expect(uploadRequest?.[0]).toBe(
       "https://clickclack.example/api/uploads?workspace_id=wsp_1&nonce=upload-queue-1",

@@ -116,6 +116,7 @@ sync the current checkout on every run, and stop it before handoff.
   proportional to the touched contract. Untrusted repository tooling never runs
   locally. Remote proof requires a remote-environment or isolation reason.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
+- Standing up a local container Gateway for UI proof goes through `scripts/docker/setup.sh` (see `docs/install/docker.md`). It seeds `gateway.controlUi.allowedOrigins` for the published host port; a hand-rolled `docker run` skips that and the dashboard dead-ends on "Browser origin not allowed" with the Gateway logging `code=4008 reason=connect failed`. Never reuse the Compose defaults for a proof: they bind-mount the operator's real `~/.openclaw` and claim port 18789.
 - Use standard Git commands when committing; stage only your files.
 - If dependencies are missing on the selected host, run `pnpm install`, retry
   once, then report the first actionable error.
@@ -340,16 +341,35 @@ lanes are intentionally reserved for the separate `Plugin Prerelease` child so
 PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
-Use one operator, one transition-only watcher, and at most one investigator for
-the current failed surface. Parent timeout or cancellation leaves adopted exact
-children running; cancel an exact child only by explicit operator action or the
-workflow's identity-mismatch/fail-fast path.
+Use one operator, one foreground owner, and at most one investigator for the
+current failed surface. Do not start `release-ci-summary --watch` while the
+SHA-pinned helper is already watching the same parent. Parent timeout or
+cancellation leaves adopted exact children running; cancel an exact child only
+by explicit operator action or by `fail_fast=true` after Release Decision binds
+the failure to that exact active run.
 
-The child-dispatch jobs record child run ids, and `Verify full validation`
-re-queries them during that parent attempt. A later narrow green run is useful
-recovery evidence but is not publish authorization by itself and there is no
-standalone finalizer. The release owner must reassess the recorded evidence and
-current publish gate.
+The child-dispatch jobs record run ID, run attempt, and URL, then finish. The
+parent seals those tuples, original dispatch titles, gate coverage, reuse
+policy, and original parent attempt in one immutable
+`full-release-execution-plan-<run-id>` artifact and exact run-ID cache entry.
+Collector retries restore the cached bytes, validate them, and re-upload the
+artifact for their attempt before adopting its children; they never reconstruct
+the plan or redispatch tests.
+`Release Decision` polls those exact identities and can report
+`blocked_diagnostics_running` before unrelated children finish.
+For reused evidence, it also repeats the canonical target, policy, changed-path,
+selected-run, root-run, and exact-child validation before it can pass.
+`Diagnostic Drain` continues every selected child to terminal with
+`fail_fast=false` unless the collector itself is cancelled or loses API
+access. `orchestration_error` permits collector recovery against the same
+exact children, never test redispatch. Diagnose `blocked_diagnostics_running`
+immediately, but wait for a terminal drain before retrying the failed surface.
+The final `Verify full validation` job consumes and validates the immutable
+execution plan plus the exact Decision and Drain artifacts instead of
+reclassifying child results. A
+later narrow green run is useful recovery evidence but is not publish
+authorization by itself and there is no standalone finalizer. The release owner
+must reassess the recorded evidence and current publish gate.
 
 Once the Code SHA is green, generate and commit only `CHANGELOG.md`. The new
 **Release SHA** is eligible for product-evidence reuse only when GitHub proves

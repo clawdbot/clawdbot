@@ -91,6 +91,8 @@ data class Question(
   val multiSelect: Boolean? = null,
   val isOther: Boolean? = null,
   val isSecret: Boolean? = null,
+  val secretStore: QuestionSecretStore? = null,
+  val secretStoreExisting: QuestionSecretStoreExisting? = null,
 )
 
 @Serializable
@@ -326,6 +328,13 @@ data class SessionGitHubPublicationFailed(
 sealed interface SessionGitHubPublicationResult
 
 @Serializable
+data class TalkSessionCancelOutputResult(
+  val ok: Boolean,
+  val status: String? = null,
+  val turnId: String? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -335,6 +344,20 @@ data class GatewayEventFrameStateVersion(
 data class GatewayNodeInvokeResultParamsError(
   val code: String? = null,
   val message: String? = null,
+)
+
+@Serializable
+data class QuestionSecretStore(
+  val name: String,
+  val kind: String,
+  val allowedHosts: List<String>? = null,
+  val reason: String? = null,
+)
+
+@Serializable
+data class QuestionSecretStoreExisting(
+  val updatedAtMs: Long,
+  val updatedBy: String? = null,
 )
 
 @Serializable
@@ -410,6 +433,8 @@ enum class GatewayMethod(
   ExecApprovalRequest("exec.approval.request"),
   ExecApprovalWaitDecision("exec.approval.waitDecision"),
   ExecApprovalResolve("exec.approval.resolve"),
+  ExecApprovalGrantsList("exec.approval.grants.list"),
+  ExecApprovalGrantsRevoke("exec.approval.grants.revoke"),
   QuestionRequest("question.request"),
   QuestionWaitAnswer("question.waitAnswer"),
   QuestionResolve("question.resolve"),
@@ -476,6 +501,7 @@ enum class GatewayMethod(
   UsersLinkEmail("users.linkEmail"),
   UsersSetDisplayName("users.setDisplayName"),
   UsersSetAvatar("users.setAvatar"),
+  UsersSetRole("users.setRole"),
   TasksList("tasks.list"),
   TasksGet("tasks.get"),
   TasksCancel("tasks.cancel"),
@@ -558,6 +584,8 @@ enum class GatewayMethod(
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
   SessionsPatch("sessions.patch"),
+  SessionsGoalUpdate("sessions.goal.update"),
+  SessionsGoalClear("sessions.goal.clear"),
   SessionsPluginPatch("sessions.pluginPatch"),
   SessionsCleanup("sessions.cleanup"),
   SessionsReset("sessions.reset"),
@@ -754,6 +782,8 @@ enum class GatewayMethod(
   ToolsGithubAuthorizeCancel("tools.github.authorize.cancel"),
   SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
+  SessionMembersListEvidence("session.members.listEvidence"),
+  PluginsInspect("plugins.inspect"),
 }
 
 enum class GatewayEvent(
@@ -768,6 +798,7 @@ enum class GatewayEvent(
   SessionObserver("session.observer"),
   SessionOperation("session.operation"),
   SessionSharing("session.sharing"),
+  SessionSharingEvidence("session.sharing.evidence"),
   SessionSuggestion("session.suggestion"),
   SessionTyping("session.typing"),
   SessionTool("session.tool"),
@@ -795,6 +826,7 @@ enum class GatewayEvent(
   DevicePairResolved("device.pair.resolved"),
   DevicePairSetupCompleted("device.pair.setup.completed"),
   DevicePairSetupDeliveryUncertain("device.pair.setup.deliveryUncertain"),
+  UsersPrefsChanged("users.prefs.changed"),
   SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),

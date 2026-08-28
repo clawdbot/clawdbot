@@ -9,6 +9,7 @@ import "./cron-page.ts";
 
 type CronTestPage = HTMLElement & {
   context: ApplicationContext;
+  routeSearch: string;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
   render: () => typeof nothing;
@@ -178,6 +179,76 @@ afterEach(() => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("opens a linked job's history after its jobs load and highlights the linked run", async () => {
+    const job: CronJob = {
+      id: "linked-job",
+      name: "Linked automation",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "digest" },
+      state: {},
+    };
+    const jobs = createDeferred<CronJobsListResult>();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        return jobs.promise;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, triggersEnabled: true };
+      }
+      if (method === "cron.runs") {
+        const entries =
+          (params as { id?: string }).id === job.id
+            ? [
+                {
+                  ts: 2,
+                  jobId: job.id,
+                  action: "finished",
+                  runId: "cron:linked-job:2",
+                  summary: "Another run",
+                },
+                {
+                  ts: 1,
+                  jobId: job.id,
+                  action: "finished",
+                  runId: "cron:linked-job:1",
+                  summary: "Linked run",
+                },
+              ]
+            : [];
+        return { entries, total: entries.length, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    page.routeSearch = "?job=linked-job&run=cron%3Alinked-job%3A1";
+
+    await waitForCronPage(() => expect(page.cron.cronLoading).toBe(true));
+    expect(page.cron.cronEditingJobId).toBeNull();
+    jobs.resolve(cronListResponse([job]));
+
+    await waitForCronPage(() => {
+      expect(page.cron.cronEditingJobId).toBe(job.id);
+      expect(
+        page
+          .querySelector('[data-test-id="cron-detail-tab-history"]')
+          ?.getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(page.querySelector(".cron-run-entry--highlighted")?.textContent).toContain(
+        "Linked run",
+      );
+    });
+    expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
+  });
+
   it.each([
     { scenario: "an unsaved enable edit", active: false, edited: true, saved: false },
     { scenario: "an unsaved disable edit", active: true, edited: false, saved: false },

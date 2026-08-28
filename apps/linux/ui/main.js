@@ -7,8 +7,13 @@ const elements = {
   activityLabel: document.querySelector("#activity-label"),
   actionControls: document.querySelector("#action-controls"),
   channel: document.querySelector("#channel"),
+  connectionChoices: document.querySelector("#connection-choices"),
+  connectionLocal: document.querySelector("#connection-local"),
+  connectionRemote: document.querySelector("#connection-remote"),
   description: document.querySelector("#description"),
+  discovery: document.querySelector("#discovery"),
   eyebrow: document.querySelector("#eyebrow"),
+  footerMode: document.querySelector("#footer-mode"),
   gatewayList: document.querySelector("#gateway-list"),
   discoveryStatus: document.querySelector("#discovery-status"),
   installButton: document.querySelector("#install-button"),
@@ -17,6 +22,22 @@ const elements = {
   logStatus: document.querySelector("#log-status"),
   logWrap: document.querySelector("#log-wrap"),
   primaryAction: document.querySelector("#primary-action"),
+  remoteAuth: document.querySelector(".remote-auth"),
+  remoteConnect: document.querySelector("#remote-connect"),
+  remoteDetails: document.querySelector("#remote-details"),
+  remoteFeedback: document.querySelector("#remote-feedback"),
+  remotePassword: document.querySelector("#remote-password"),
+  remotePort: document.querySelector("#remote-port"),
+  remoteSshField: document.querySelector("#remote-ssh-field"),
+  remoteSshTarget: document.querySelector("#remote-ssh-target"),
+  remoteSubtitle: document.querySelector("#remote-subtitle"),
+  remoteToken: document.querySelector("#remote-token"),
+  remoteTransportDirect: document.querySelector("#remote-transport-direct"),
+  remoteTransportSsh: document.querySelector("#remote-transport-ssh"),
+  remoteUrl: document.querySelector("#remote-url"),
+  remoteUrlField: document.querySelector("#remote-url-field"),
+  setupBack: document.querySelector("#setup-back"),
+  setupContinue: document.querySelector("#setup-continue"),
   statusDot: document.querySelector("#status-dot"),
   title: document.querySelector("#title"),
   updateAction: document.querySelector("#update-action"),
@@ -25,12 +46,19 @@ const elements = {
   updateMessage: document.querySelector("#update-message"),
   updateProgress: document.querySelector("#update-progress"),
   updateTitle: document.querySelector("#update-title"),
+  welcomeContinue: document.querySelector("#welcome-continue"),
+  welcomeScreen: document.querySelector("#welcome-screen"),
 };
 
 let primaryAction = null;
 let updateAction = null;
 let discoveryPending = false;
 let discoverySignature = null;
+let firstRunBuild = null;
+let firstRunPhase = null;
+let selectedConnection = "local";
+let remoteTransport = "direct";
+let remoteConnectionPending = false;
 
 function show(element, visible) {
   element.classList.toggle("hidden", !visible);
@@ -54,6 +82,9 @@ function render({
   }
   show(elements.installControls, showInstall);
   show(elements.actionControls, false);
+  show(elements.welcomeScreen, false);
+  show(elements.connectionChoices, false);
+  show(elements.discovery, true);
 }
 
 function renderAction(options, action) {
@@ -63,8 +94,48 @@ function renderAction(options, action) {
   show(elements.actionControls, true);
 }
 
+function formatInstallLine(line) {
+  let event;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return line;
+  }
+  if (!event || typeof event !== "object" || !event.event) {
+    return line;
+  }
+  if (event.event === "done" && event.ok === true) {
+    return `✓ Installed${event.version ? ` ${event.version}` : ""}`;
+  }
+  if (event.event !== "step" || !event.name) {
+    return line;
+  }
+
+  const name =
+    {
+      node: "Node runtime",
+      git: "Git checkout",
+      openclaw: "OpenClaw CLI",
+      "gateway-service": "Gateway service",
+      "control-ui": "Control UI build",
+      "cli-build": "CLI build",
+    }[event.name] || event.name;
+  switch (event.status) {
+    case "start":
+      return `→ ${name}${event.version ? ` ${event.version}` : ""}…`;
+    case "ok":
+      return `✓ ${name}`;
+    case "skip":
+      return `– ${name} skipped${event.reason ? ` (${event.reason})` : ""}`;
+    case "warn":
+      return `! ${name}${event.reason ? `: ${event.reason}` : ""}`;
+    default:
+      return line;
+  }
+}
+
 function appendLog(line) {
-  elements.installLog.textContent += `${line}\n`;
+  elements.installLog.textContent += `${formatInstallLine(line)}\n`;
   elements.installLog.scrollTop = elements.installLog.scrollHeight;
 }
 
@@ -114,6 +185,9 @@ function canConnectDirect(gateway) {
 function renderGateways(gateways) {
   elements.gatewayList.replaceChildren();
   elements.discoveryStatus.textContent = gateways.length ? `${gateways.length} FOUND` : "SEARCHING";
+  elements.remoteSubtitle.textContent = gateways.length
+    ? `${gateways.length} nearby Gateway${gateways.length === 1 ? "" : "s"} found on your network.`
+    : "Connect to a Gateway running elsewhere.";
   if (!gateways.length) {
     const empty = document.createElement("p");
     empty.className = "discovery-empty";
@@ -146,6 +220,14 @@ function renderGateways(gateways) {
     badge.textContent = gateway.tls ? "TLS" : "HTTP";
     button.append(copy, badge);
     button.addEventListener("click", () => {
+      if (selectedConnection === "remote" && !elements.connectionChoices.classList.contains("hidden")) {
+        const host = gatewayHost(gateway);
+        const urlHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+        selectRemoteTransport("direct");
+        elements.remoteUrl.value = `${gateway.tls ? "https" : "http"}://${urlHost}:${gateway.port}`;
+        void connectRemoteGateway();
+        return;
+      }
       button.disabled = true;
       void invoke("connect_discovered_gateway", {
         host: gateway.host,
@@ -193,30 +275,164 @@ async function connect() {
   });
   try {
     const snapshot = await invoke("bootstrap");
-    if (snapshot.phase === "missingCli") {
-      const buildInfo = await invoke("build_info").catch(() => null);
-      if (buildInfo?.releaseBuild === false) {
+    if (snapshot.phase === "missingCli" || snapshot.phase === "unconfigured") {
+      firstRunPhase = snapshot.phase;
+      firstRunBuild = await invoke("build_info").catch(() => null);
+      if (firstRunBuild?.releaseBuild === false) {
         elements.channel.value = "dev";
-        render({
-          description:
-            "This companion is a development build, so its Gateway install should usually use the matching release channel.",
-          eyebrow: "FIRST-RUN SETUP",
-          showInstall: true,
-          title: "Choose a release channel",
-        });
-        return;
       }
-      render({
-        activity: "Starting the bundled installer…",
-        description: "OpenClaw is installing its managed CLI and Node runtime.",
-        eyebrow: "FIRST-RUN SETUP",
-        title: "Preparing OpenClaw",
-      });
-      await install();
+      renderWelcome();
     }
   } catch (error) {
     renderRetry(friendlyError(error));
   }
+}
+
+function renderWelcome() {
+  render({
+    description:
+      "Your personal AI assistant, living wherever you choose. It answers questions, works with your files and apps, and can chat with you wherever you are.",
+    dot: "idle",
+    eyebrow: "WELCOME",
+    title: "Welcome to OpenClaw",
+  });
+  show(elements.discovery, false);
+  show(elements.welcomeScreen, true);
+}
+
+function renderConnectionChoices() {
+  render({
+    description:
+      "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
+    dot: "idle",
+    eyebrow: "CHOOSE YOUR GATEWAY",
+    title: "Where should your assistant live?",
+  });
+  show(elements.connectionChoices, true);
+  selectConnection(selectedConnection);
+}
+
+function selectConnection(connection) {
+  selectedConnection = connection;
+  const isRemote = connection === "remote";
+  elements.connectionLocal.classList.toggle("selected", !isRemote);
+  elements.connectionRemote.classList.toggle("selected", isRemote);
+  elements.connectionLocal.setAttribute("aria-pressed", String(!isRemote));
+  elements.connectionRemote.setAttribute("aria-pressed", String(isRemote));
+  elements.footerMode.textContent = isRemote ? "REMOTE GATEWAY" : "LOCAL GATEWAY";
+  show(elements.remoteDetails, isRemote);
+  show(elements.discovery, isRemote);
+  if (isRemote) {
+    void refreshGateways();
+  }
+}
+
+function selectRemoteTransport(transport) {
+  remoteTransport = transport;
+  const direct = transport === "direct";
+  elements.remoteTransportDirect.classList.toggle("selected", direct);
+  elements.remoteTransportSsh.classList.toggle("selected", !direct);
+  elements.remoteTransportDirect.setAttribute("aria-pressed", String(direct));
+  elements.remoteTransportSsh.setAttribute("aria-pressed", String(!direct));
+  show(elements.remoteUrlField, direct);
+  show(elements.remoteSshField, !direct);
+  show(elements.remoteFeedback, false);
+}
+
+async function continueLocalSetup() {
+  if (firstRunPhase === "unconfigured") {
+    render({
+      activity: "Starting your local Gateway…",
+      description: "OpenClaw is preparing your assistant on this computer.",
+      eyebrow: "FIRST-RUN SETUP",
+      title: "Preparing your companion",
+    });
+    try {
+      await invoke("bootstrap", { explicitLocal: true });
+    } catch (error) {
+      renderRetry(friendlyError(error));
+    }
+    return;
+  }
+  if (firstRunBuild?.releaseBuild === false) {
+    render({
+      description:
+        "This development build works best with a matching OpenClaw release channel.",
+      eyebrow: "FIRST-RUN SETUP",
+      showInstall: true,
+      title: "Choose a release channel",
+    });
+    return;
+  }
+  await install();
+}
+
+async function connectRemoteGateway() {
+  if (remoteConnectionPending) {
+    return;
+  }
+
+  const isDirect = remoteTransport === "direct";
+  if (elements.remoteToken.value && elements.remotePassword.value) {
+    elements.remoteAuth.open = true;
+    elements.remotePassword.setAttribute("aria-invalid", "true");
+    elements.remotePassword.focus();
+    showRemoteFeedback("Use either a Gateway token or a password, not both.", true);
+    return;
+  }
+
+  const endpoint = isDirect ? elements.remoteUrl : elements.remoteSshTarget;
+  const endpointValue = endpoint.value.trim();
+  if (!endpointValue) {
+    endpoint.setAttribute("aria-invalid", "true");
+    endpoint.focus();
+    showRemoteFeedback(isDirect ? "Enter a Gateway URL to continue." : "Enter an SSH target to continue.", true);
+    return;
+  }
+
+  const portValue = elements.remotePort.value.trim();
+  const remotePort = portValue ? Number(portValue) : null;
+  if (!isDirect && (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535)) {
+    elements.remotePort.setAttribute("aria-invalid", "true");
+    elements.remotePort.focus();
+    showRemoteFeedback("Enter a Gateway port between 1 and 65535.", true);
+    return;
+  }
+
+  endpoint.removeAttribute("aria-invalid");
+  elements.remotePort.removeAttribute("aria-invalid");
+  remoteConnectionPending = true;
+  elements.remoteConnect.disabled = true;
+  elements.setupContinue.disabled = true;
+  showRemoteFeedback("Checking your Gateway connection…", false);
+
+  try {
+    await invoke("connect_remote_gateway", {
+      transport: remoteTransport,
+      url: isDirect ? endpointValue : null,
+      sshTarget: isDirect ? null : endpointValue,
+      token: elements.remoteToken.value || null,
+      password: elements.remotePassword.value || null,
+      remotePort: isDirect ? null : remotePort,
+    });
+    showRemoteFeedback("Gateway connected. Opening OpenClaw…", false);
+  } catch (error) {
+    const message = friendlyError(error);
+    if (/auth|token|password|unauthori[sz]ed|forbidden|401|403/i.test(message)) {
+      elements.remoteAuth.open = true;
+    }
+    showRemoteFeedback(message, true);
+  } finally {
+    remoteConnectionPending = false;
+    elements.remoteConnect.disabled = false;
+    elements.setupContinue.disabled = false;
+  }
+}
+
+function showRemoteFeedback(message, isError) {
+  elements.remoteFeedback.textContent = message;
+  elements.remoteFeedback.classList.toggle("error", isError);
+  show(elements.remoteFeedback, true);
 }
 
 async function install() {
@@ -235,13 +451,13 @@ async function install() {
     await invoke("install_cli", { channel: elements.channel.value });
     elements.logStatus.textContent = "COMPLETE";
   } catch (error) {
+    const message = friendlyError(error);
     elements.logStatus.textContent = "FAILED";
-    appendLog(friendlyError(error));
+    appendLog(message);
     render({
-      description:
-        "Installation did not finish. Review the final log lines, choose a release channel, then retry.",
+      description: message,
       dot: "error",
-      eyebrow: "INSTALLATION ISSUE",
+      eyebrow: "SETUP ISSUE",
       showInstall: true,
       title: "OpenClaw needs attention",
     });
@@ -273,6 +489,9 @@ function renderRetry(message) {
       description: message,
       dot: "error",
       eyebrow: "CONNECTION ISSUE",
+      // A broken managed CLI can only be replaced by reinstalling; retry alone
+      // must never be the sole exit from a connection failure.
+      showInstall: true,
       title: "OpenClaw needs attention",
     },
     connect,
@@ -282,6 +501,30 @@ function renderRetry(message) {
 elements.installButton.addEventListener("click", () => {
   void install();
 });
+elements.welcomeContinue.addEventListener("click", renderConnectionChoices);
+elements.connectionLocal.addEventListener("click", () => selectConnection("local"));
+elements.connectionRemote.addEventListener("click", () => selectConnection("remote"));
+elements.setupBack.addEventListener("click", renderWelcome);
+elements.setupContinue.addEventListener("click", () => {
+  void (selectedConnection === "remote" ? connectRemoteGateway() : continueLocalSetup());
+});
+elements.remoteConnect.addEventListener("click", () => {
+  void connectRemoteGateway();
+});
+elements.remoteTransportDirect.addEventListener("click", () => selectRemoteTransport("direct"));
+elements.remoteTransportSsh.addEventListener("click", () => selectRemoteTransport("ssh"));
+for (const input of [
+  elements.remoteUrl,
+  elements.remoteSshTarget,
+  elements.remotePort,
+  elements.remoteToken,
+  elements.remotePassword,
+]) {
+  input.addEventListener("input", () => {
+    input.removeAttribute("aria-invalid");
+    show(elements.remoteFeedback, false);
+  });
+}
 elements.primaryAction.addEventListener("click", () => {
   void primaryAction?.();
 });

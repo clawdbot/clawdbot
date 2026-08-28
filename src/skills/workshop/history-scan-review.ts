@@ -94,7 +94,6 @@ export async function runSkillHistoryScanReview(params: {
       timeoutMs: HISTORY_SCAN_TIMEOUT_MS,
       runId,
       toolsAllow: ["skill_workshop"],
-      disableMessageTool: true,
       disableTrajectory: true,
       skillWorkshopProposalOnly: true,
       skillWorkshopProposalEnv: params.env,

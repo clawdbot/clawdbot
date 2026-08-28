@@ -1,3 +1,4 @@
+export const gatewayMethodsIsolatedTestFiles: string[];
 export const gatewayServerBackedHttpTestFiles: string[];
 export const gatewayServerExcludedTestFiles: string[];
 export const gatewayServerIsolatedTestFiles: string[];

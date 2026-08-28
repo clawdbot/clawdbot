@@ -188,6 +188,81 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await captureUiProof("04-matching-chat.png");
   });
 
+  it("clears transcript matches when switching from active to archived sessions", async () => {
+    const timestamp = Date.parse("2026-08-26T12:00:00.000Z");
+    context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+      ...(captureProof
+        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1440 } } }
+        : {}),
+    });
+    page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
+      sessionArchiveFiltering: true,
+      methodResponses: {
+        "sessions.list": {
+          count: 2,
+          defaults: { contextTokens: null, model: null, modelProvider: null },
+          path: "",
+          sessions: [
+            {
+              key: "agent:main:active",
+              label: "Active task",
+              kind: "direct",
+              updatedAt: timestamp,
+            },
+            {
+              key: "agent:main:archived",
+              label: "Archived task",
+              kind: "direct",
+              archived: true,
+              updatedAt: timestamp,
+            },
+          ],
+          ts: timestamp,
+        },
+        "sessions.search": {
+          results: [
+            {
+              messageId: "message-active",
+              role: "assistant",
+              score: 1,
+              sessionId: "session-active",
+              sessionKey: "agent:main:active",
+              snippet: "Release notes from the active task.",
+              timestamp,
+            },
+          ],
+        },
+      },
+    });
+    await page.goto(`${server?.baseUrl ?? ""}sessions`);
+    const search = page.getByRole("search", { name: "Search transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    await input.fill("Release notes");
+    await input.press("Enter");
+    await page.getByText("Release notes from the active task.", { exact: true }).waitFor();
+    expect((await gateway.getRequests("sessions.search"))[0]?.params).toMatchObject({
+      sessionKeys: ["agent:main:active"],
+    });
+
+    await page.locator('.sessions-view-segment wa-radio[value="archived"]').click();
+    await expect.poll(() => new URL(page!.url()).searchParams.get("status")).toBe("archived");
+    await page.locator(".session-data-row").getByText("Archived task", { exact: true }).waitFor();
+    await captureUiProof("filter-scope.png");
+    expect(await page.locator(".sessions-transcript-search__result").count()).toBe(0);
+    expect(await input.inputValue()).toBe("Release notes");
+    await gateway.setMethodResponse("sessions.search", { results: [] });
+    await input.press("Enter");
+    await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
+    expect((await gateway.getRequests("sessions.search"))[1]?.params).toMatchObject({
+      sessionKeys: ["agent:main:archived"],
+    });
+  });
+
   it("finds a transcript when updated session order moves across a paged roster", async () => {
     const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
     const first = { key: "agent:main:first", kind: "direct", updatedAt: timestamp };
@@ -249,7 +324,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
       agentId: "main",
       limit: 25,
       query: "launch code",
-      sessionKeys: [first.key, moved.key, missed.key],
+      sessionKeys: [first.key, missed.key, moved.key],
     });
   });
 
@@ -436,6 +511,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
     });
     page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
         "sessions.list": {
           count: 0,

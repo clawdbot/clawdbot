@@ -1,9 +1,11 @@
 // Application-owned approval parsing and queue state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  scope?: ApprovalScope | null;
   cwd?: string | null;
   host?: string | null;
   security?: string | null;
@@ -48,10 +50,8 @@ export type ExecApprovalPromptState = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalErrors: Map<string, string>;
-  execApprovalNowMs?: number;
   execApprovalRefreshes?: Set<{ removedIds: Set<string> }>;
   execApprovalExpiryTimers?: Map<string, ReturnType<typeof globalThis.setTimeout>>;
-  execApprovalCountdownTimer?: ReturnType<typeof globalThis.setTimeout>;
   execApprovalChanged?: () => void;
 };
 
@@ -106,6 +106,53 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
+function parseApprovalScope(value: unknown): ApprovalScope | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  switch (value.kind) {
+    case "standing-grant":
+      return typeof value.automation === "string" && typeof value.command === "string"
+        ? {
+            kind: "standing-grant",
+            automation: value.automation,
+            command: value.command,
+            ...(typeof value.expiresInDays === "number"
+              ? { expiresInDays: value.expiresInDays }
+              : {}),
+          }
+        : null;
+    case "message-send":
+      return typeof value.target === "string" && typeof value.recipientCount === "number"
+        ? {
+            kind: "message-send",
+            target: value.target,
+            recipientCount: value.recipientCount,
+            ...(Array.isArray(value.recipients) &&
+            value.recipients.every((recipient) => typeof recipient === "string")
+              ? { recipients: value.recipients }
+              : {}),
+            ...(value.audience === "internal" || value.audience === "external"
+              ? { audience: value.audience }
+              : {}),
+          }
+        : null;
+    case "payment":
+      return typeof value.amount === "string" &&
+        typeof value.currency === "string" &&
+        typeof value.target === "string"
+        ? { kind: "payment", amount: value.amount, currency: value.currency, target: value.target }
+        : null;
+    case "external-post":
+      return typeof value.target === "string" &&
+        (value.visibility === "public" || value.visibility === "restricted")
+        ? { kind: "external-post", target: value.target, visibility: value.visibility }
+        : null;
+    default:
+      return null;
+  }
+}
+
 function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -139,6 +186,7 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
       runId: typeof request.runId === "string" ? request.runId : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+      scope: parseApprovalScope(request.scope),
     },
     createdAtMs,
     expiresAtMs,
@@ -370,31 +418,6 @@ function mergeRefreshedApprovalQueue(
   return sortApprovalsOldestFirst([...currentRefreshed, ...arrivedDuringRefresh]);
 }
 
-function clearApprovalCountdownTimer(state: ExecApprovalPromptState): void {
-  if (state.execApprovalCountdownTimer === undefined) {
-    return;
-  }
-  globalThis.clearTimeout(state.execApprovalCountdownTimer);
-  state.execApprovalCountdownTimer = undefined;
-}
-
-function synchronizeApprovalCountdownTimer(state: ExecApprovalPromptState): void {
-  if (state.execApprovalQueue.length === 0) {
-    clearApprovalCountdownTimer(state);
-    return;
-  }
-  state.execApprovalNowMs = Date.now();
-  if (state.execApprovalCountdownTimer !== undefined) {
-    return;
-  }
-  state.execApprovalCountdownTimer = globalThis.setTimeout(() => {
-    state.execApprovalCountdownTimer = undefined;
-    state.execApprovalNowMs = Date.now();
-    state.execApprovalChanged?.();
-    synchronizeApprovalCountdownTimer(state);
-  }, 1_000);
-}
-
 function clearApprovalExpiryTimer(state: ExecApprovalPromptState, id: string): void {
   const timer = state.execApprovalExpiryTimers?.get(id);
   if (timer === undefined) {
@@ -431,7 +454,6 @@ function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string)
   clearApprovalExpiryTimer(state, id);
   state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
   state.execApprovalErrors.delete(id);
-  synchronizeApprovalCountdownTimer(state);
 }
 
 function pruneExecApprovalErrors(state: ExecApprovalPromptState): void {
@@ -448,7 +470,6 @@ export function clearExecApprovalTimers(state: ExecApprovalPromptState): void {
     globalThis.clearTimeout(timer);
   }
   state.execApprovalExpiryTimers?.clear();
-  clearApprovalCountdownTimer(state);
 }
 
 export function enqueueExecApprovalPrompt(
@@ -457,7 +478,6 @@ export function enqueueExecApprovalPrompt(
 ): void {
   state.execApprovalQueue = addExecApproval(state.execApprovalQueue, entry);
   scheduleApprovalExpiryPrune(state, entry);
-  synchronizeApprovalCountdownTimer(state);
 }
 
 export async function refreshPendingApprovalQueue(
@@ -515,7 +535,6 @@ export async function refreshPendingApprovalQueue(
     for (const entry of refreshed) {
       scheduleApprovalExpiryPrune(state, entry);
     }
-    synchronizeApprovalCountdownTimer(state);
     return true;
   } finally {
     refreshes.delete(refresh);

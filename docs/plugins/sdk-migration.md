@@ -97,14 +97,28 @@ including empty results without range metadata. Only an explicit
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
 
-### Channel state migration declarations
+### Plugin state migration declarations
 
-Channel plugins should declare `doctorContract.stateMigrations: true` in
+Plugins should declare `doctorContract.stateMigrations: true` in
 `openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
 artifact. Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
+
+For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
+sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
+errors and invalid JSON reach Doctor's detection or migration warnings; the
+source remains untouched so the operator can fix it and retry.
+
+Use `phase: "after-session-repair"` when a migration needs canonical session
+ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
+them after session repair under SQLite maintenance ownership. The context
+provides bounded `readPluginStateEntriesInKeyRange` and
+`readSessionIdentityEvidenceBatch` reads, plus
+`deletePluginStateEntriesIfUnchanged` only during a fenced repair. Preserve
+unknown or ambiguous ownership. Delete only the observed raw rows; callbacks
+retained after maintenance ends cannot authorize later writes.
 
 The setup-entry `legacyStateMigrations` option and feature flag,
 `setupFeatures.legacyStateMigrations`,
@@ -156,15 +170,17 @@ review date; removal still requires the reader condition in the final column.
 ### Published channel setup compatibility
 
 Slack, Discord, Signal, and Microsoft Teams packages published through
-`2026.7.1` imported channel-specific config schemas from
+`2026.7.1` import channel-specific config schemas from
 `openclaw/plugin-sdk/bundled-channel-config-schema`. The published Slack and
-Discord packages also imported `createLegacyCompatChannelDmPolicy` and
+Discord packages also import `createLegacyCompatChannelDmPolicy` and
 `promptLegacyChannelAllowFromForAccount` from
 `openclaw/plugin-sdk/setup-runtime`.
 
-Those compatibility exports were removed in August 2026. Channel plugins must
-own their config schemas and setup policy locally, using generic primitives
-from `channel-config-schema` and `setup-runtime`.
+Those exports remain available as deprecated runtime compatibility adapters.
+New and republished plugins should own their config schemas and setup policy
+locally, using generic primitives from `channel-config-schema` and
+`setup-runtime`. The compatibility exports can be removed only after the
+minimum supported published package versions no longer import them.
 
 ### Channel setup input field compatibility
 
@@ -981,7 +997,9 @@ await gateway.request("talk.session.create", {
   sessionKey: "main",
 });
 await gateway.request("talk.session.appendAudio", { sessionId, audioBase64 });
-await gateway.request("talk.session.cancelOutput", { sessionId, reason: "barge-in" });
+// Capture this before stopping playback from the active output `talk.event`.
+const turnId = activeOutputTalkEvent.talkEvent.turnId;
+await gateway.request("talk.session.cancelOutput", { sessionId, turnId, reason: "barge-in" });
 await gateway.request("talk.session.submitToolResult", {
   sessionId,
   callId,

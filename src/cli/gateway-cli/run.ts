@@ -1194,6 +1194,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
           bind,
+          ...(activeBootId ? { bootId: activeBootId } : {}),
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,

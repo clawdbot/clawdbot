@@ -221,6 +221,7 @@ class PublicWorkerHarness {
     attachGatewayWsConnectionHandler({
       wss: this.wss,
       clients: this.clients,
+      bootId: "worker-ingress-test-boot",
       preauthConnectionBudget: this.preauthBudget,
       port: 0,
       getResolvedAuth: () => RESOLVED_AUTH,

@@ -201,6 +201,8 @@ describe("production lint suppressions", () => {
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
+        // JSON parser causes can quote reflected credentials from authenticated provider responses.
+        "src/agents/provider-http-errors.ts|preserve-caught-error|1",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -210,6 +212,8 @@ describe("production lint suppressions", () => {
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/program/openclaw-command.ts|eslint/no-underscore-dangle|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
+        // Cleanup is retained in AggregateError.errors; extraction remains the primary cause.
+        "src/commands/backup-restore.ts|preserve-caught-error|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
@@ -228,13 +232,14 @@ describe("production lint suppressions", () => {
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/management-service.ts|preserve-caught-error|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
         // Raw PowerShell errors carry the -EncodedCommand argv; only the sanitized cause may escape.
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
-        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
         "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",

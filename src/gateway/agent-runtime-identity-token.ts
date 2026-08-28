@@ -25,7 +25,10 @@ import {
 } from "./agent-runtime-execution-lineage.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
-import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
+import {
+  resolveMessageActionTurnCapability,
+  type AgentRuntimeMessageActionContext,
+} from "./message-action-turn-capability.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
@@ -192,6 +195,7 @@ const messageActionToolContextSchema = z
   );
 const messageActionContextSchema = z.object({
   expiresAtMs: z.number().finite(),
+  turnCapability: normalizedRequiredStringSchema.optional(),
   sourceReplyFinal: z.boolean().optional(),
   sourceReplyToolCallId: normalizedRequiredStringSchema.optional(),
   sessionId: ignoredOptionalStringSchema,
@@ -290,6 +294,7 @@ function decodeMessageActionContext(
   }
   const context = {
     expiresAtMs: value.expiresAtMs,
+    turnCapability: value.turnCapability,
     sessionId: value.sessionId,
     sourceReplySessionKey: value.sourceReplySessionKey,
     requesterAccountId: value.requesterAccountId,
@@ -648,6 +653,25 @@ function validateAgentRuntimeDelegatedAuthority(
 export function createAgentRuntimeApprovalAuthorityValidator(
   placements?: WorkerTurnClaimValidator,
 ): AgentRuntimeApprovalAuthorityValidator {
-  return (identity) =>
-    validateAgentRuntimeDelegatedAuthority(identity.delegatedAuthority, placements);
+  return (identity) => {
+    if (!validateAgentRuntimeDelegatedAuthority(identity.delegatedAuthority, placements)) {
+      return false;
+    }
+    const messageActionContext = identity.messageActionContext;
+    if (!messageActionContext) {
+      return true;
+    }
+    if (!messageActionContext.turnCapability) {
+      return false;
+    }
+    return Boolean(
+      resolveMessageActionTurnCapability({
+        token: messageActionContext.turnCapability,
+        agentId: identity.agentId,
+        runId: identity.operationalRunInstance.runId,
+        sessionKey: identity.sessionKey,
+        sessionId: messageActionContext.sessionId,
+      }),
+    );
+  };
 }

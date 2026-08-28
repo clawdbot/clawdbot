@@ -11,6 +11,7 @@ import {
   type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -47,7 +48,7 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
-import { pushMessageLine, replyMessageLine } from "./send.js";
+import { getLineGroupSummary, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
@@ -104,6 +105,14 @@ function resolveLineGroupConfig(params: {
   return resolveLineGroupConfigEntry(params.config.groups, {
     groupId: params.groupId,
     roomId: params.roomId,
+  });
+}
+
+function resolveLineRuntimeGroupPolicy({ cfg, account }: LineHandlerContext) {
+  return resolveAllowlistProviderRuntimeGroupPolicy({
+    providerConfigPresent: cfg.channels?.line !== undefined,
+    groupPolicy: account.config.groupPolicy,
+    defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
   });
 }
 
@@ -183,11 +192,7 @@ async function shouldProcessLineEvent(
   const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
-    resolveAllowlistProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.line !== undefined,
-      groupPolicy: account.config.groupPolicy,
-      defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
-    });
+    resolveLineRuntimeGroupPolicy(context);
   const groupPolicy: GroupPolicy =
     runtimeGroupPolicy === "disabled"
       ? "disabled"
@@ -499,9 +504,51 @@ async function handleUnfollowEvent(
   logVerbose(`line: user ${userId ?? "unknown"} unfollowed`);
 }
 
-async function handleJoinEvent(event: JoinEvent, _context: LineHandlerContext): Promise<void> {
-  const { groupId, roomId } = getLineSourceInfo(event.source);
+async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): Promise<void> {
+  const { groupId, roomId, isGroup } = getLineSourceInfo(event.source);
+  const conversationId = groupId ?? roomId;
+  if (!isGroup || !conversationId) {
+    return;
+  }
   logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
+  const { cfg, account } = context;
+  const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
+  // LINE allowlists authorize human senders, not the bot's own join; only
+  // conversation policy and the room's enabled state apply here.
+  const roomAllowed =
+    resolveLineRuntimeGroupPolicy(context).groupPolicy !== "disabled" &&
+    groupConfig?.enabled !== false;
+  await reportChannelRoomJoin({
+    cfg,
+    channel: "line",
+    accountId: account.accountId,
+    conversationId,
+    deliverTo: conversationId,
+    route: resolveAgentRoute({
+      cfg,
+      channel: "line",
+      accountId: account.accountId,
+      peer: { kind: "group", id: conversationId },
+    }),
+    roomAllowed,
+    resolveRoomContext: async () => {
+      // LINE cannot retrieve prior messages, and multi-person rooms have no name API.
+      const roomContext = { historyUnavailable: true };
+      if (!groupId) {
+        return roomContext;
+      }
+      try {
+        const summary = await getLineGroupSummary(groupId, {
+          cfg,
+          accountId: account.accountId,
+          channelAccessToken: account.channelAccessToken,
+        });
+        return { ...roomContext, title: summary.groupName };
+      } catch {
+        return roomContext;
+      }
+    },
+  });
 }
 
 async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext): Promise<void> {

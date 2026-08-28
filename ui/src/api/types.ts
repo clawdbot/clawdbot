@@ -4,6 +4,7 @@ import type {
   CronListParams,
   CronRunLogEntry as ProtocolCronRunLogEntry,
   CronRunsParams,
+  SessionsFilesListResult as ProtocolSessionsFilesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
@@ -18,10 +19,17 @@ import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  GatewayContextWindowOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type {
+  AgentsFileEntry as AgentFileEntry,
+  AgentsFilesListResult,
+  AgentsFilesGetResult,
+  AgentsFilesSetResult,
+  SessionsFilesGetResult as SessionWorkspaceGetResult,
+  SessionsFilesSetResult as SessionWorkspaceSetResult,
   CronJob,
   CronRunLogEntry,
   UpdateAvailable,
@@ -41,8 +49,8 @@ export type ChannelsPairingRequest =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
 export type SessionVisibility =
   import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
-export type SessionMembersListResult =
-  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
+export type SessionMembersListEvidenceResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListEvidenceResult;
 export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 export type ChannelsStatusSnapshot = ChannelsStatusResult;
 export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
@@ -271,6 +279,9 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
@@ -283,6 +294,7 @@ export type GatewayThinkingLevelOption = {
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
+export type { GatewayContextWindowOption };
 
 export type AgentsListResult = ProtocolAgentsListResult;
 
@@ -297,70 +309,6 @@ export type AgentIdentityResult = {
   emoji?: string;
 };
 
-export type AgentFileEntry = {
-  name: string;
-  path: string;
-  missing: boolean;
-  // Absence is a normal workspace state (optional profile files, MEMORY.md before
-  // anything is written); the editor offers these for creation instead of flagging them.
-  expectedAbsent?: boolean;
-  size?: number;
-  updatedAtMs?: number;
-  content?: string;
-};
-
-export type AgentsFilesListResult = {
-  agentId: string;
-  workspace: string;
-  files: AgentFileEntry[];
-};
-
-export type AgentsFilesGetResult = {
-  agentId: string;
-  workspace: string;
-  file: AgentFileEntry;
-};
-
-export type AgentsFilesSetResult = {
-  ok: true;
-  agentId: string;
-  workspace: string;
-  file: AgentFileEntry;
-};
-
-type SessionWorkspaceFileEntry = {
-  path: string;
-  workspacePath?: string;
-  name: string;
-  kind: "modified" | "read";
-  missing: boolean;
-  size?: number;
-  updatedAtMs?: number;
-  content?: string;
-  /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
-  hash?: string;
-  mimeType?: string;
-  contentEncoding?: "utf8" | "base64";
-  previewKind?: "text" | "image" | "unsupported";
-};
-
-type SessionWorkspaceBrowserEntry = {
-  path: string;
-  name: string;
-  kind: "file" | "directory";
-  sessionKind?: "modified" | "read" | "mixed";
-  size?: number;
-  updatedAtMs?: number;
-};
-
-type SessionWorkspaceBrowserResult = {
-  path: string;
-  parentPath?: string;
-  search?: string;
-  entries: SessionWorkspaceBrowserEntry[];
-  truncated?: boolean;
-};
-
 type SessionWorkspaceArtifactEntry = {
   id: string;
   type: string;
@@ -373,25 +321,9 @@ type SessionWorkspaceArtifactEntry = {
   };
 };
 
-export type SessionWorkspaceListResult = {
-  sessionKey: string;
-  root?: string;
-  gitCheckout?: boolean;
-  files: SessionWorkspaceFileEntry[];
-  browser?: SessionWorkspaceBrowserResult;
+// The workspace view joins file results with separately fetched artifacts.
+export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: SessionWorkspaceArtifactEntry[];
-};
-
-export type SessionWorkspaceGetResult = {
-  sessionKey: string;
-  root?: string;
-  file: SessionWorkspaceFileEntry;
-};
-
-export type SessionWorkspaceSetResult = {
-  sessionKey: string;
-  root?: string;
-  file: SessionWorkspaceFileEntry;
 };
 
 export type ArtifactDownloadResult = {
@@ -455,6 +387,9 @@ export type GatewaySessionRow = SessionRow & {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -531,6 +466,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
   archivedAt?: number;
+  contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -541,6 +477,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    contextWindow?: string;
+    contextWindows?: GatewayContextWindowOption[];
     thinkingLevel?: string;
     thinkingLevels?: GatewayThinkingLevelOption[];
   };
@@ -707,7 +645,11 @@ export type ModelCatalogEntry = {
   alias?: string;
   tags?: string[];
   available?: boolean;
+  unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
+  unavailableUntil?: number;
   contextWindow?: number;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   reasoning?: boolean;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingDefault?: string;
@@ -719,6 +661,10 @@ export type ModelCatalogEntry = {
 
 export type ModelCatalogProviderOutcome =
   import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
+export type ModelCatalogResult = {
+  models: ModelCatalogEntry[];
+  providerOutcomes?: ModelCatalogProviderOutcome[];
+};
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;

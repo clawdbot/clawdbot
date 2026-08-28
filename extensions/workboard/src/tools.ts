@@ -10,7 +10,12 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
 import { WorkboardStore } from "./store.js";
-import { cardIdField, claimTokenField, createWorkboardMoveTool } from "./tools-card-mutations.js";
+import {
+  cardIdField,
+  claimTokenField,
+  createWorkboardMoveTool,
+  strictObject,
+} from "./tools-card-mutations.js";
 import { createWorkboardOrchestrationTools } from "./tools-orchestration.js";
 
 function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
@@ -161,13 +166,10 @@ function redactedProofResult(card: WorkboardCard) {
   });
 }
 
-const CardIdSchema = Type.Object(
-  {
-    id: cardIdField(),
-    token: claimTokenField(),
-  },
-  { additionalProperties: false },
-);
+const CardIdSchema = strictObject({
+  id: cardIdField(),
+  token: claimTokenField(),
+});
 
 export function createWorkboardTools(params: {
   api: OpenClawPluginApi;
@@ -206,24 +208,19 @@ export function createWorkboardTools(params: {
       label: "Workboard List",
       description:
         "List Workboard cards with compact claim and diagnostic state. Use before choosing or routing board work.",
-      parameters: Type.Object(
-        {
-          status: Type.Optional(Type.String({ description: "Optional card status filter." })),
-          agentId: Type.Optional(Type.String({ description: "Optional agent id filter." })),
-          tenant: Type.Optional(Type.String({ description: "Optional tenant filter." })),
-          boardId: Type.Optional(Type.String({ description: "Optional board id filter." })),
-          limit: Type.Optional(
-            Type.Number({ description: "Maximum cards to return. Default 50." }),
-          ),
-          refreshDiagnostics: Type.Optional(
-            Type.Boolean({ description: "Refresh stored diagnostics before listing." }),
-          ),
-          includeArchived: Type.Optional(
-            Type.Boolean({ description: "Include archived cards. Default false." }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        status: Type.Optional(Type.String({ description: "Optional card status filter." })),
+        agentId: Type.Optional(Type.String({ description: "Optional agent id filter." })),
+        tenant: Type.Optional(Type.String({ description: "Optional tenant filter." })),
+        boardId: Type.Optional(Type.String({ description: "Optional board id filter." })),
+        limit: Type.Optional(Type.Number({ description: "Maximum cards to return. Default 50." })),
+        refreshDiagnostics: Type.Optional(
+          Type.Boolean({ description: "Refresh stored diagnostics before listing." }),
+        ),
+        includeArchived: Type.Optional(
+          Type.Boolean({ description: "Include archived cards. Default false." }),
+        ),
+      }),
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         if (record.refreshDiagnostics === true) {
@@ -252,41 +249,33 @@ export function createWorkboardTools(params: {
       label: "Workboard Create",
       description:
         "Create a Workboard card, optionally with parent dependencies, tenant, skills, workspace, and idempotency key.",
-      parameters: Type.Object(
-        {
-          title: Type.String({ description: "Card title." }),
-          notes: Type.Optional(Type.String({ description: "Card notes or acceptance criteria." })),
-          status: Type.Optional(Type.String({ description: "Initial status." })),
-          priority: Type.Optional(Type.String({ description: "low, normal, high, or urgent." })),
-          labels: Type.Optional(Type.Array(Type.String(), { description: "Card labels." })),
-          agentId: Type.Optional(Type.String({ description: "Assigned agent id." })),
-          parents: Type.Optional(Type.Array(Type.String(), { description: "Parent card ids." })),
-          token: Type.Optional(
-            Type.String({ description: "Claim token for claimed parent cards." }),
-          ),
-          tenant: Type.Optional(Type.String({ description: "Soft tenant namespace." })),
-          boardId: Type.Optional(Type.String({ description: "Soft board namespace." })),
-          createdByCardId: Type.Optional(
-            Type.String({ description: "Parent card that created this card." }),
-          ),
-          idempotencyKey: Type.Optional(Type.String({ description: "Idempotent create key." })),
-          skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
-          workspace: Type.Optional(
-            Type.Object(
-              {
-                kind: Type.String({ description: "scratch, dir, or worktree." }),
-                path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-                branch: Type.Optional(Type.String({ description: "Suggested branch." })),
-              },
-              { additionalProperties: false },
-            ),
-          ),
-          maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Run timeout seconds." })),
-          maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
-          scheduledAt: Type.Optional(Type.Number({ description: "Unix epoch milliseconds." })),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        title: Type.String({ description: "Card title." }),
+        notes: Type.Optional(Type.String({ description: "Card notes or acceptance criteria." })),
+        status: Type.Optional(Type.String({ description: "Initial status." })),
+        priority: Type.Optional(Type.String({ description: "low, normal, high, or urgent." })),
+        labels: Type.Optional(Type.Array(Type.String(), { description: "Card labels." })),
+        agentId: Type.Optional(Type.String({ description: "Assigned agent id." })),
+        parents: Type.Optional(Type.Array(Type.String(), { description: "Parent card ids." })),
+        token: Type.Optional(Type.String({ description: "Claim token for claimed parent cards." })),
+        tenant: Type.Optional(Type.String({ description: "Soft tenant namespace." })),
+        boardId: Type.Optional(Type.String({ description: "Soft board namespace." })),
+        createdByCardId: Type.Optional(
+          Type.String({ description: "Parent card that created this card." }),
+        ),
+        idempotencyKey: Type.Optional(Type.String({ description: "Idempotent create key." })),
+        skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
+        workspace: Type.Optional(
+          strictObject({
+            kind: Type.String({ description: "scratch, dir, or worktree." }),
+            path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
+            branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+          }),
+        ),
+        maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Run timeout seconds." })),
+        maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
+        scheduledAt: Type.Optional(Type.Number({ description: "Unix epoch milliseconds." })),
+      }),
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         readParentIds(record.parents);
@@ -302,16 +291,13 @@ export function createWorkboardTools(params: {
       label: "Workboard Link",
       description:
         "Link a parent card to a child card so the child becomes ready only after parents are done.",
-      parameters: Type.Object(
-        {
-          parentId: Type.String({ description: "Parent card id." }),
-          childId: Type.String({ description: "Child card id." }),
-          token: Type.Optional(
-            Type.String({ description: "Claim token for claimed parent or child cards." }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        parentId: Type.String({ description: "Parent card id." }),
+        childId: Type.String({ description: "Child card id." }),
+        token: Type.Optional(
+          Type.String({ description: "Claim token for claimed parent or child cards." }),
+        ),
+      }),
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const parentId = readStringParam(record, "parentId", { required: true });
@@ -346,13 +332,10 @@ export function createWorkboardTools(params: {
       label: "Workboard Claim",
       description:
         "Claim a Workboard card for this agent and move backlog/todo cards into running. Returns a claim token for heartbeats and release.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          ttlSeconds: Type.Optional(Type.Number({ description: "Claim TTL in seconds." })),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: cardIdField(),
+        ttlSeconds: Type.Optional(Type.Number({ description: "Claim TTL in seconds." })),
+      }),
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
@@ -368,14 +351,11 @@ export function createWorkboardTools(params: {
       label: "Workboard Heartbeat",
       description:
         "Refresh this agent's Workboard claim heartbeat. Use during long-running card work so diagnostics do not mark it stale.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          token: claimTokenField(),
-          note: Type.Optional(Type.String({ description: "Optional compact progress note." })),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: cardIdField(),
+        token: claimTokenField(),
+        note: Type.Optional(Type.String({ description: "Optional compact progress note." })),
+      }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
         return redactedRawCardResult(
@@ -391,16 +371,13 @@ export function createWorkboardTools(params: {
       label: "Workboard Release",
       description:
         "Release this agent's Workboard claim after finishing, pausing, or handing off card work.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          token: claimTokenField(),
-          status: Type.Optional(
-            Type.String({ description: "Optional next card status after release." }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: cardIdField(),
+        token: claimTokenField(),
+        status: Type.Optional(
+          Type.String({ description: "Optional next card status after release." }),
+        ),
+      }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
         return redactedRawCardResult(
@@ -415,14 +392,11 @@ export function createWorkboardTools(params: {
       name: "workboard_comment",
       label: "Workboard Comment",
       description: "Append a compact comment to a Workboard card.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          body: Type.String({ description: "Comment body." }),
-          token: ScopedClaimTokenField,
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: cardIdField(),
+        body: Type.String({ description: "Comment body." }),
+        token: ScopedClaimTokenField,
+      }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
         return redactedRawCardResult(await store.addComment(id, { body: record.body }, scope));
@@ -433,23 +407,16 @@ export function createWorkboardTools(params: {
       label: "Workboard Proof",
       description:
         "Attach proof or artifact metadata to a Workboard card after running tests, checks, or producing screenshots/logs. Returns proofId; pass it to workboard_complete when that call reports the terminal status for this proof.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          status: Type.Optional(
-            Type.String({ description: "passed, failed, skipped, or unknown." }),
-          ),
-          label: Type.Optional(Type.String({ description: "Proof label." })),
-          command: Type.Optional(Type.String({ description: "Command or exact step run." })),
-          url: Type.Optional(Type.String({ description: "Proof or artifact URL." })),
-          note: Type.Optional(Type.String({ description: "Short proof note." })),
-          artifactPath: Type.Optional(
-            Type.String({ description: "Optional local artifact path." }),
-          ),
-          token: ScopedClaimTokenField,
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: cardIdField(),
+        status: Type.Optional(Type.String({ description: "passed, failed, skipped, or unknown." })),
+        label: Type.Optional(Type.String({ description: "Proof label." })),
+        command: Type.Optional(Type.String({ description: "Command or exact step run." })),
+        url: Type.Optional(Type.String({ description: "Proof or artifact URL." })),
+        note: Type.Optional(Type.String({ description: "Short proof note." })),
+        artifactPath: Type.Optional(Type.String({ description: "Optional local artifact path." })),
+        token: ScopedClaimTokenField,
+      }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
         const hasArtifact =
@@ -475,50 +442,40 @@ export function createWorkboardTools(params: {
       label: "Workboard Complete",
       description:
         "Complete a claimed Workboard card with a structured summary, proof, artifacts, and created-card manifest.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          token: claimTokenField(),
-          summary: Type.Optional(Type.String({ description: "Completion summary." })),
-          proofId: Type.Optional(
-            Type.String({
-              description:
-                "Proof id returned by workboard_proof when resolving that pending proof.",
+      parameters: strictObject({
+        id: cardIdField(),
+        token: claimTokenField(),
+        summary: Type.Optional(Type.String({ description: "Completion summary." })),
+        proofId: Type.Optional(
+          Type.String({
+            description: "Proof id returned by workboard_proof when resolving that pending proof.",
+          }),
+        ),
+        proof: Type.Optional(
+          strictObject({
+            status: Type.Optional(
+              Type.String({ description: "passed, failed, skipped, or unknown." }),
+            ),
+            label: Type.Optional(Type.String({ description: "Proof label." })),
+            command: Type.Optional(Type.String({ description: "Command or step run." })),
+            url: Type.Optional(Type.String({ description: "Proof URL." })),
+            note: Type.Optional(Type.String({ description: "Proof note." })),
+          }),
+        ),
+        artifacts: Type.Optional(
+          Type.Array(
+            strictObject({
+              label: Type.Optional(Type.String()),
+              url: Type.Optional(Type.String()),
+              path: Type.Optional(Type.String()),
+              mimeType: Type.Optional(Type.String()),
             }),
           ),
-          proof: Type.Optional(
-            Type.Object(
-              {
-                status: Type.Optional(
-                  Type.String({ description: "passed, failed, skipped, or unknown." }),
-                ),
-                label: Type.Optional(Type.String({ description: "Proof label." })),
-                command: Type.Optional(Type.String({ description: "Command or step run." })),
-                url: Type.Optional(Type.String({ description: "Proof URL." })),
-                note: Type.Optional(Type.String({ description: "Proof note." })),
-              },
-              { additionalProperties: false },
-            ),
-          ),
-          artifacts: Type.Optional(
-            Type.Array(
-              Type.Object(
-                {
-                  label: Type.Optional(Type.String()),
-                  url: Type.Optional(Type.String()),
-                  path: Type.Optional(Type.String()),
-                  mimeType: Type.Optional(Type.String()),
-                },
-                { additionalProperties: false },
-              ),
-            ),
-          ),
-          createdCardIds: Type.Optional(
-            Type.Array(Type.String(), { description: "Cards created during this run." }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
+        ),
+        createdCardIds: Type.Optional(
+          Type.Array(Type.String(), { description: "Cards created during this run." }),
+        ),
+      }),
       execute: async (_toolCallId, rawParams) => {
         return runClaimedCardMutation(rawParams, (id, record, scope) =>
           store.complete(id, record, scope),
@@ -530,17 +487,14 @@ export function createWorkboardTools(params: {
       label: "Workboard Attachment Add",
       description:
         "Store a small Workboard attachment in plugin SQLite KV and link it to the card.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          fileName: Type.String({ description: "Attachment file name." }),
-          contentBase64: Type.String({ description: "Base64 attachment content." }),
-          mimeType: Type.Optional(Type.String({ description: "Attachment MIME type." })),
-          note: Type.Optional(Type.String({ description: "Optional attachment note." })),
-          token: ScopedClaimTokenField,
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: cardIdField(),
+        fileName: Type.String({ description: "Attachment file name." }),
+        contentBase64: Type.String({ description: "Base64 attachment content." }),
+        mimeType: Type.Optional(Type.String({ description: "Attachment MIME type." })),
+        note: Type.Optional(Type.String({ description: "Optional attachment note." })),
+        token: ScopedClaimTokenField,
+      }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
         return redactedCardResult(await store.addAttachment(id, record, scope));
@@ -550,12 +504,9 @@ export function createWorkboardTools(params: {
       name: "workboard_attachment_read",
       label: "Workboard Attachment Read",
       description: "Read one Workboard attachment from plugin SQLite KV.",
-      parameters: Type.Object(
-        {
-          id: Type.String({ description: "Attachment id." }),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: Type.String({ description: "Attachment id." }),
+      }),
       execute: async (_toolCallId, rawParams) => {
         const id = readStringParam(rawParams as Record<string, unknown>, "id", {
           required: true,
@@ -571,14 +522,11 @@ export function createWorkboardTools(params: {
       name: "workboard_attachment_delete",
       label: "Workboard Attachment Delete",
       description: "Delete one Workboard attachment from plugin SQLite KV and the card index.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          attachmentId: Type.String({ description: "Attachment id." }),
-          token: ScopedClaimTokenField,
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: cardIdField(),
+        attachmentId: Type.String({ description: "Attachment id." }),
+        token: ScopedClaimTokenField,
+      }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
         const attachmentId = readStringParam(record, "attachmentId", { required: true });
@@ -589,14 +537,11 @@ export function createWorkboardTools(params: {
       name: "workboard_block",
       label: "Workboard Block",
       description: "Block a claimed Workboard card with a durable reason and release the claim.",
-      parameters: Type.Object(
-        {
-          id: cardIdField(),
-          token: claimTokenField(),
-          reason: Type.Optional(Type.String({ description: "Blocker summary." })),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: strictObject({
+        id: cardIdField(),
+        token: claimTokenField(),
+        reason: Type.Optional(Type.String({ description: "Blocker summary." })),
+      }),
       execute: async (_toolCallId, rawParams) => {
         return runClaimedCardMutation(rawParams, (id, record, scope) =>
           store.block(id, record, scope),

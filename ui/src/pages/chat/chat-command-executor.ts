@@ -21,11 +21,6 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import {
-  type ChatModelOverride,
-  createChatModelOverride,
-  resolvePreferredServerChatModelValue,
-} from "../../lib/chat/model-ref.ts";
-import {
   normalizeChatFastModeInput,
   resolveChatFastModeStatus,
 } from "../../lib/chat/model-select-state.ts";
@@ -52,10 +47,8 @@ type SlashCommandResult = {
   content: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
-  /** Optional session-level directive changes that the caller should mirror locally. */
-  sessionPatch?: {
-    modelOverride?: ChatModelOverride | null;
-  };
+  /** Model-dependent tools need refreshing after a confirmed selection. */
+  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
@@ -304,10 +297,6 @@ async function executeModel(
 
   try {
     const requestedModel = args.trim();
-    const resolvedModelCatalog = modelCatalog
-      ? Promise.resolve(modelCatalog)
-      : loadModelCatalog(client, agentId, { allowFailure: true });
-    let resolvedOverride: ChatModelOverride | null = null;
     await patchSession(
       context,
       sessionKey,
@@ -315,37 +304,13 @@ async function executeModel(
         model: requestedModel,
       },
       {
-        deferModelOverride: true,
         ownsModelOverride: context.ownsModelOverride,
-        reconcile: async (result) => {
-          const resolvedModel = result.resolved?.model ?? requestedModel;
-          let resolvedValue = resolvePreferredServerChatModelValue(
-            resolvedModel,
-            result.resolved?.modelProvider,
-            await resolvedModelCatalog,
-          );
-          const requestedOverride = createChatModelOverride(requestedModel);
-          const resolvedProvider = result.resolved?.modelProvider?.trim();
-          if (
-            requestedOverride?.kind === "qualified" &&
-            resolvedProvider &&
-            resolvedValue &&
-            !resolvedValue.toLowerCase().startsWith(`${resolvedProvider.toLowerCase()}/`) &&
-            requestedOverride.value.toLowerCase().endsWith(`/${resolvedModel.trim().toLowerCase()}`)
-          ) {
-            resolvedValue = requestedOverride.value;
-          }
-          resolvedOverride = createChatModelOverride(resolvedValue);
-          if (context.ownsModelOverride?.() !== false) {
-            context.sessions.setModelOverride(sessionKey, resolvedOverride?.value ?? null);
-          }
-        },
       },
     );
     return {
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
       action: "refresh",
-      sessionPatch: { modelOverride: resolvedOverride },
+      modelChanged: true,
     };
   } catch (err) {
     return {
@@ -375,7 +340,7 @@ async function executeThink(
           t("chat.commandResults.thinking.current", {
             level: resolveCurrentThinkingLevel(session, defaults, models),
           }),
-          formatThinkingCommandOptionsForSession(session, defaults),
+          formatThinkingCommandOptionsForSession(session, defaults, models),
         ),
       };
     } catch (err) {
@@ -405,20 +370,21 @@ async function executeThink(
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const level = resolveThinkingLevelInput(rawLevel, session, defaults);
+    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
     if (!level) {
       return {
         content: t("chat.commandResults.thinking.unrecognized", {
           level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults),
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
       };
     }
-    if (!isThinkingLevelOptionForSession(session, defaults, level)) {
+    if (!isThinkingLevelOptionForSession(session, defaults, level, modelCatalog)) {
       return {
         content: t("chat.commandResults.thinking.unsupported", {
           level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults),
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
       };
     }
@@ -791,23 +757,15 @@ async function loadThinkingCommandState(
 async function loadModelCatalog(
   client: GatewayBrowserClient,
   agentId: string | undefined,
-  opts?: { allowFailure?: boolean },
 ): Promise<ModelCatalogEntry[]> {
   if (!agentId) {
     return [];
   }
-  try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-      agentId,
-      view: "configured",
-    });
-    return result?.models ?? [];
-  } catch (err) {
-    if (opts?.allowFailure) {
-      return [];
-    }
-    throw err;
-  }
+  const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
+    agentId,
+    view: "configured",
+  });
+  return result?.models ?? [];
 }
 
 function resolveCommandMessage(

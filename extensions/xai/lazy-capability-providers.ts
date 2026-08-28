@@ -6,11 +6,13 @@ import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceProviderPlugin,
-  RealtimeVoiceToolResultOptions,
+import {
+  RealtimeVoiceSessionLifecycle,
+  type RealtimeVoiceBridge,
+  type RealtimeVoiceBridgeCreateRequest,
+  type RealtimeVoiceProviderPlugin,
+  type RealtimeVoiceSessionConnection,
+  type RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createRealtimeVoiceAudioQueue } from "openclaw/plugin-sdk/realtime-voice-audio-queue";
 import type {
@@ -133,17 +135,13 @@ function createLazyXaiRealtimeTranscriptionSession(
     session = await sessionPromise;
     return session;
   };
-  const beginConnectGeneration = () => {
-    if (closed) {
-      generation += 1;
-      closed = false;
-    }
-    return generation;
-  };
-
   return {
     connect: async () => {
-      const connectGeneration = beginConnectGeneration();
+      if (closed) {
+        generation += 1;
+        closed = false;
+      }
+      const connectGeneration = generation;
       if (activeConnect?.generation === connectGeneration) {
         await activeConnect.promise;
         return;
@@ -156,11 +154,14 @@ function createLazyXaiRealtimeTranscriptionSession(
           }
           return;
         }
+        // connect() synchronously reopens a closed provider session. Starting it
+        // first keeps explicit-reconnect audio from being silently discarded.
+        const providerConnect = loadedSession.connect();
         for (const audio of pendingAudio.drain()) {
           loadedSession.sendAudio(audio);
         }
         acceptsInput = true;
-        await loadedSession.connect();
+        await providerConnect;
         if (connectGeneration === generation && closed) {
           closeSession(connectGeneration, loadedSession);
         }
@@ -220,20 +221,12 @@ function createLazyXaiRealtimeVoiceBridge(
   let bridge: RealtimeVoiceBridge | undefined;
   let bridgeState:
     | {
-        generation: number;
+        connection: RealtimeVoiceSessionConnection;
         promise: Promise<RealtimeVoiceBridge>;
       }
     | undefined;
-  let activeConnect:
-    | {
-        generation: number;
-        promise: Promise<void>;
-      }
-    | undefined;
-  let generation = 0;
-  let terminalGeneration: number | undefined;
-  let closed = false;
   let acceptsInput = false;
+  const lifecycle = new RealtimeVoiceSessionLifecycle("xAI lazy");
   let pendingMediaTimestamp: PendingMediaTimestamp | undefined;
   let pendingGreeting: PendingVoiceGreeting | undefined;
   let pendingUserMessageCount = 0;
@@ -254,19 +247,17 @@ function createLazyXaiRealtimeVoiceBridge(
     pendingToolResultCount = 0;
     pendingToolResultBytes = 0;
   };
-  const isCurrentNonterminalGeneration = (candidate: number) =>
-    candidate === generation && terminalGeneration !== candidate;
   const emitTerminal = (
-    terminalForGeneration: number,
+    connection: RealtimeVoiceSessionConnection,
     outcome: Parameters<NonNullable<RealtimeVoiceBridgeCreateRequest["onClose"]>>[0],
   ) => {
-    if (!isCurrentNonterminalGeneration(terminalForGeneration)) {
+    const terminalOutcome = lifecycle.close(connection, outcome);
+    if (!terminalOutcome) {
       return;
     }
-    terminalGeneration = terminalForGeneration;
     acceptsInput = false;
     clearPendingInput();
-    req.onClose?.(outcome);
+    req.onClose?.(terminalOutcome);
   };
   const closeBridge = (loadedBridge: RealtimeVoiceBridge | undefined = bridge) => {
     if (!loadedBridge || closedBridges.has(loadedBridge)) {
@@ -276,11 +267,11 @@ function createLazyXaiRealtimeVoiceBridge(
     loadedBridge.close();
   };
   const throwTerminalBridgeError = (
-    terminalForGeneration: number,
+    connection: RealtimeVoiceSessionConnection,
     loadedBridge: RealtimeVoiceBridge,
     primaryError: unknown,
   ): never => {
-    if (isCurrentNonterminalGeneration(terminalForGeneration)) {
+    if (lifecycle.failure(connection)) {
       try {
         req.onError?.(
           primaryError instanceof Error ? primaryError : new Error(String(primaryError)),
@@ -289,7 +280,7 @@ function createLazyXaiRealtimeVoiceBridge(
         // Consumer callback failures cannot prevent terminal cleanup or replace the provider failure.
       }
       try {
-        emitTerminal(terminalForGeneration, "error");
+        emitTerminal(connection, "error");
       } catch {
         // Consumer callback failures cannot prevent cleanup or replace the provider failure.
       }
@@ -301,54 +292,46 @@ function createLazyXaiRealtimeVoiceBridge(
     }
     throw primaryError;
   };
-  const acceptsProviderCallback = (callbackGeneration: number) =>
-    !closed && isCurrentNonterminalGeneration(callbackGeneration);
+  const acceptsProviderCallback = (connection: RealtimeVoiceSessionConnection) =>
+    lifecycle.acceptsEvents(connection);
   const guardProviderCallback = <TArgs extends unknown[]>(
-    callbackGeneration: number,
+    connection: RealtimeVoiceSessionConnection,
     callback: (...args: TArgs) => void,
   ) => {
     return (...args: TArgs) => {
-      if (acceptsProviderCallback(callbackGeneration)) {
+      if (acceptsProviderCallback(connection)) {
         callback(...args);
       }
     };
   };
-  const loadBridge = async (loadGeneration: number) => {
+  const loadBridge = async (connection: RealtimeVoiceSessionConnection) => {
     const existingState = bridgeState;
     const state =
-      existingState?.generation === loadGeneration
+      existingState?.connection.id === connection.id
         ? existingState
         : {
-            generation: loadGeneration,
+            connection,
             promise: loadXaiRealtimeVoiceProvider().then((provider) =>
               provider.createBridge({
                 ...req,
                 // An explicit wrapper reconnect owns a new provider bridge. Guard every
                 // nonterminal callback so late events cannot reach its replacement.
-                onAudio: guardProviderCallback(loadGeneration, req.onAudio),
-                onClearAudio: guardProviderCallback(loadGeneration, req.onClearAudio),
-                ...(req.onMark
-                  ? { onMark: guardProviderCallback(loadGeneration, req.onMark) }
-                  : {}),
+                onAudio: guardProviderCallback(connection, req.onAudio),
+                onClearAudio: guardProviderCallback(connection, req.onClearAudio),
+                ...(req.onMark ? { onMark: guardProviderCallback(connection, req.onMark) } : {}),
                 ...(req.onTranscript
-                  ? { onTranscript: guardProviderCallback(loadGeneration, req.onTranscript) }
+                  ? { onTranscript: guardProviderCallback(connection, req.onTranscript) }
                   : {}),
-                ...(req.onEvent
-                  ? { onEvent: guardProviderCallback(loadGeneration, req.onEvent) }
-                  : {}),
+                ...(req.onEvent ? { onEvent: guardProviderCallback(connection, req.onEvent) } : {}),
                 ...(req.onResponseDone
-                  ? { onResponseDone: guardProviderCallback(loadGeneration, req.onResponseDone) }
+                  ? { onResponseDone: guardProviderCallback(connection, req.onResponseDone) }
                   : {}),
                 ...(req.onToolCall
-                  ? { onToolCall: guardProviderCallback(loadGeneration, req.onToolCall) }
+                  ? { onToolCall: guardProviderCallback(connection, req.onToolCall) }
                   : {}),
-                ...(req.onReady
-                  ? { onReady: guardProviderCallback(loadGeneration, req.onReady) }
-                  : {}),
-                ...(req.onError
-                  ? { onError: guardProviderCallback(loadGeneration, req.onError) }
-                  : {}),
-                onClose: (outcome) => emitTerminal(loadGeneration, outcome),
+                ...(req.onReady ? { onReady: guardProviderCallback(connection, req.onReady) } : {}),
+                ...(req.onError ? { onError: guardProviderCallback(connection, req.onError) } : {}),
+                onClose: (outcome) => emitTerminal(connection, outcome),
               }),
             ),
           };
@@ -356,7 +339,7 @@ function createLazyXaiRealtimeVoiceBridge(
       bridgeState = state;
     }
     const loadedBridge = await state.promise;
-    if (bridgeState === state && loadGeneration === generation) {
+    if (bridgeState === state && lifecycle.isCurrent(connection)) {
       bridge = loadedBridge;
     }
     return loadedBridge;
@@ -374,32 +357,23 @@ function createLazyXaiRealtimeVoiceBridge(
     pendingOperations.push(next);
     return next;
   };
-  const beginConnectGeneration = () => {
-    if (closed || terminalGeneration === generation) {
-      generation += 1;
-      closed = false;
-      acceptsInput = false;
-      bridge = undefined;
-    }
-    return generation;
-  };
-  const acceptsCurrentInput = () => !closed && terminalGeneration !== generation;
+  const acceptsCurrentInput = () => lifecycle.phase() !== "terminal";
   const flushPendingInput = async (
     loadedBridge: RealtimeVoiceBridge,
-    connectGeneration: number,
+    connection: RealtimeVoiceSessionConnection,
   ) => {
-    if (connectGeneration !== generation || !acceptsCurrentInput()) {
+    if (!lifecycle.acceptsEvents(connection)) {
       return;
     }
     while (true) {
-      if (connectGeneration !== generation || !acceptsCurrentInput()) {
+      if (!lifecycle.acceptsEvents(connection)) {
         return;
       }
       const operation = pendingOperations.shift();
       if (!operation) {
         // Queue exhaustion and direct admission must change in the same turn.
         // An await between them can strand input admitted by the next microtask.
-        acceptsInput = true;
+        acceptsInput = lifecycle.ready(connection);
         return;
       }
       switch (operation.type) {
@@ -434,7 +408,7 @@ function createLazyXaiRealtimeVoiceBridge(
           loadedBridge.triggerGreeting?.(operation.instructions);
           break;
       }
-      if (connectGeneration !== generation || !acceptsCurrentInput()) {
+      if (!lifecycle.acceptsEvents(connection)) {
         return;
       }
       if (operation.type === "user-message") {
@@ -451,46 +425,33 @@ function createLazyXaiRealtimeVoiceBridge(
     get supportsToolResultContinuation() {
       return bridge?.supportsToolResultContinuation ?? false;
     },
-    connect: async () => {
-      const connectGeneration = beginConnectGeneration();
-      if (activeConnect?.generation === connectGeneration) {
-        await activeConnect.promise;
-        return;
-      }
-      const promise = (async () => {
-        const loadedBridge = await loadBridge(connectGeneration);
-        if (connectGeneration !== generation || !acceptsCurrentInput()) {
+    connect: () =>
+      lifecycle.connect(async (connection) => {
+        acceptsInput = false;
+        bridge = undefined;
+        const loadedBridge = await loadBridge(connection);
+        if (!lifecycle.acceptsEvents(connection)) {
           closeBridge(loadedBridge);
           return;
         }
         try {
           await loadedBridge.connect();
         } catch (error) {
-          throwTerminalBridgeError(connectGeneration, loadedBridge, error);
+          throwTerminalBridgeError(connection, loadedBridge, error);
         }
-        if (connectGeneration !== generation || !acceptsCurrentInput()) {
+        if (!lifecycle.acceptsEvents(connection)) {
           closeBridge(loadedBridge);
           return;
         }
         try {
-          await flushPendingInput(loadedBridge, connectGeneration);
+          await flushPendingInput(loadedBridge, connection);
         } catch (error) {
-          throwTerminalBridgeError(connectGeneration, loadedBridge, error);
+          throwTerminalBridgeError(connection, loadedBridge, error);
         }
-        if (connectGeneration !== generation || !acceptsCurrentInput()) {
+        if (!lifecycle.acceptsEvents(connection)) {
           closeBridge(loadedBridge);
         }
-      })();
-      const connectTask = { generation: connectGeneration, promise };
-      activeConnect = connectTask;
-      try {
-        await promise;
-      } finally {
-        if (activeConnect === connectTask) {
-          activeConnect = undefined;
-        }
-      }
-    },
+      }),
     sendAudio: (audio) => {
       if (!acceptsCurrentInput()) {
         return;
@@ -604,17 +565,18 @@ function createLazyXaiRealtimeVoiceBridge(
       }
     },
     close: () => {
-      if (closed) {
+      const connection = lifecycle.currentConnection();
+      if (!lifecycle.cancel()) {
         return;
       }
-      const closeGeneration = generation;
-      closed = true;
       acceptsInput = false;
       clearPendingInput();
       closeBridge();
-      // A bridge closed before its first connect has no provider-owned
-      // connection to report the terminal outcome.
-      emitTerminal(closeGeneration, "completed");
+      if (connection) {
+        emitTerminal(connection, "completed");
+      } else {
+        req.onClose?.("completed");
+      }
     },
     isConnected: () => acceptsCurrentInput() && (bridge?.isConnected() ?? false),
   };

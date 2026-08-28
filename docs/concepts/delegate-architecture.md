@@ -238,14 +238,14 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
 
 ### 4. Add credentials to the delegate agent
 
-Copy or create auth profiles for the delegate's own `agentDir`:
+Agents read shared auth profiles without copying them. To give the delegate an
+independent provider account, sign in on the Gateway host for that agent:
 
 ```bash
-# Delegate reads from its own auth store
-~/.openclaw/agents/delegate/agent/auth-profiles.json
+openclaw models auth login --provider <providerId> --agent delegate
 ```
 
-Never share the main agent's `agentDir` with the delegate. See [Multi-Agent Routing](/concepts/multi-agent) for auth isolation details.
+The login writes the delegate's SQLite auth store at `~/.openclaw/agents/delegate/agent/openclaw-agent.sqlite`; its local profiles override the shared read-through base. Never share the main agent's `agentDir` with the delegate. See [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) and [Multi-Agent Routing](/concepts/multi-agent) for auth isolation details.
 
 ## Example: organizational assistant
 

@@ -20,6 +20,19 @@ export function createTelegramPollExtraToolSchemas() {
   };
 }
 
+/** Schema additions for Telegram reactions through the existing react action. */
+export function createTelegramReactionEmojiSchema() {
+  return {
+    emoji: Type.Optional(
+      Type.String({
+        description:
+          'Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:"emoji-list" directly as emoji. ' +
+          'Use action:"emoji-list" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.',
+      }),
+    ),
+  };
+}
+
 /** Schema additions for Telegram-native rich sends through the existing send action. */
 export function createTelegramRichSendExtraToolSchemas() {
   return {

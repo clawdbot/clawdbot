@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
+import { wrapExternalContent } from "../security/external-content.js";
 
 // Recognize a provider-docked send tool by name (only "telegram" here) so the
 // volatility strip applies to it without pulling in the channel-plugin registry; the
@@ -20,6 +21,8 @@ import {
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
+import { protectNetworkToolExecutionError } from "./tool-result-error.js";
+import { jsonResult } from "./tools/common.js";
 
 const TOOL_CALL_HISTORY_SIZE = 30;
 const WARNING_THRESHOLD = 10;
@@ -445,6 +448,202 @@ describe("tool-loop-detection", () => {
         expect(loopResult.message).toContain("identical outcomes");
       }
     });
+
+    it.each(["thrown", "returned", 0, 1, 2, 3, 4] as const)(
+      "blocks repeated external outcomes with fresh nonces (%s)",
+      (shape) => {
+        const state = createState();
+        const params = { action: "act", request: { kind: "press", key: "NotAKey" } };
+        const delivered = new Set<string>();
+        for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+          const payload = 'keyboard.press: Unknown key: "NotAKey"';
+          if (shape === "thrown") {
+            const error = protectNetworkToolExecutionError(new Error(payload), "Failed");
+            delivered.add((error as Error).message);
+            recordFailedCall(state, "browser", params, error, index);
+          } else {
+            let text = wrapExternalContent(payload, { source: "browser" });
+            delivered.add(text);
+            if (typeof shape === "number") {
+              for (let depth = 0; depth < shape; depth += 1) {
+                text = JSON.stringify({ text });
+              }
+            }
+            const result =
+              shape === "returned"
+                ? { content: [{ type: "text", text }], details: { ok: false } }
+                : jsonResult({ text, fetchedAt: "2026-08-26T00:00:00Z", tookMs: 10 });
+            recordSuccessfulCall(state, "browser", params, result, index);
+          }
+        }
+        expect(delivered.size).toBe(CRITICAL_THRESHOLD);
+        expect(
+          detectToolCallLoop(state, "browser", params, enabledLoopDetectionConfig),
+        ).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: "generic_repeat",
+        });
+        const [first, second] = [...delivered];
+        expect(recordArgsHash("browser", { text: first })).not.toBe(
+          recordArgsHash("browser", { text: second }),
+        );
+      },
+    );
+
+    it.each([
+      ["payload", (index: number) => ({ text: `page ${index}` })],
+      ["status", (index: number) => ({ status: index === 0 ? "loading" : "ready" })],
+      ["timestamp", (index: number) => ({ fetchedAt: `2026-08-26T00:00:0${index}Z` })],
+      ["duration", (index: number) => ({ tookMs: index })],
+      ["ordinary id", (index: number) => ({ id: `${index}`.repeat(16) })],
+      [
+        "malformed marker",
+        (index: number) => ({ text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index}">>>` }),
+      ],
+      [
+        "uppercase nonce",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index}ABCDEF012345678">>>`,
+        }),
+      ],
+      ["unrelated id text", (index: number) => ({ text: `id="${index.toString().repeat(16)}"` })],
+      [
+        "unpaired start marker",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "unpaired end marker",
+        (index: number) => ({
+          text: `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "mismatched marker pair",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>payload<<<END_EXTERNAL_UNTRUSTED_CONTENT id="abcdef0123456789">>>`,
+        }),
+      ],
+      [
+        "intervening marker",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>before<<<EXTERNAL_UNTRUSTED_CONTENT>>>after<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "markers split across fields",
+        (index: number) => ({
+          start: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+          end: `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+    ] as const)("retains changing %s in outcome hashes", (_label, details) => {
+      const hashes = [0, 1].map((index) => {
+        const state = createState();
+        return recordToolCallOutcome(state, {
+          toolName: "web_fetch",
+          toolParams: { url: "https://example.test" },
+          result: jsonResult({
+            content: wrapExternalContent("same page", { source: "web_fetch" }),
+            ...details(index),
+          }),
+        })?.resultHash;
+      });
+      expect(hashes[0]).not.toBe(hashes[1]);
+    });
+
+    it.each([0, 1, 2, 3, 4])(
+      "preserves marker pairs split across encoded JSON fields (depth %s)",
+      (depth) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          let text = JSON.stringify({
+            start: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>\nSource: Browser\n---\npayload`,
+            end: `\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`,
+          });
+          for (let level = 0; level < depth; level += 1) {
+            text = JSON.stringify({ text });
+          }
+          return recordToolCallOutcome(createState(), {
+            toolName: "browser",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
+
+    it("preserves long backslash payloads while normalizing paired wrapper nonces", () => {
+      const hashes = ["same", "same", "changed"].map((suffix) => {
+        const text = wrapExternalContent(`${"\\".repeat(20_000)}"${suffix}"`, {
+          source: "browser",
+        });
+        return recordToolCallOutcome(createState(), {
+          toolName: "browser",
+          toolParams: {},
+          result: jsonResult({ text: JSON.stringify({ text }) }),
+        })?.resultHash;
+      });
+      expect(hashes[0]).toBe(hashes[1]);
+      expect(hashes[0]).not.toBe(hashes[2]);
+    });
+
+    it.each([0, 1, 2, 3, 4])("distinguishes malformed empty-ID envelopes (depth %s)", (depth) => {
+      const valid = wrapExternalContent("same page", { source: "browser" });
+      const malformed = valid.replace(/id="[a-f0-9]{16}"/g, 'id=""');
+      const zero = valid.replace(/id="[a-f0-9]{16}"/g, 'id="0000000000000000"');
+      const hashes = [valid, malformed, zero].map((sourceText) => {
+        let text = sourceText;
+        for (let level = 0; level < depth; level += 1) {
+          text = JSON.stringify({ text });
+        }
+        return recordToolCallOutcome(createState(), {
+          toolName: "read",
+          toolParams: {},
+          result: jsonResult({ text }),
+        })?.resultHash;
+      });
+      expect(hashes[0]).not.toBe(hashes[1]);
+      expect(hashes[0]).toBe(hashes[2]);
+    });
+
+    it.each([2, 4, 5, 6, 8, 14])(
+      "preserves malformed marker quote escaping (%s slashes)",
+      (count) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          const quote = "\\".repeat(count) + '"';
+          const text = `<<<EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>payload<<<END_EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>`;
+          return recordToolCallOutcome(createState(), {
+            toolName: "read",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
+
+    it.each([1, 3, 7])(
+      "preserves shallower quotes after encoded backslashes (%s marker slashes)",
+      (escapeCount) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          const quote = "\\".repeat(escapeCount) + '"';
+          const boundary = "\\".repeat(escapeCount + 1) + '"';
+          const text = `<<<EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>before${boundary}after<<<END_EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>`;
+          return recordToolCallOutcome(createState(), {
+            toolName: "read",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
 
     it("warns for known polling no-progress loops", () => {
       const { params, result } = createNoProgressPollFixture("sess-1");

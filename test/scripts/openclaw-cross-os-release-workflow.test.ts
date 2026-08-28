@@ -63,6 +63,23 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).not.toContain("TSX_VERSION");
   });
 
+  it("pins only Windows packaged-fresh checks to the known-good Node release", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const prepare = job(workflow, "prepare");
+    const consumer = job(workflow, "cross_os_release_checks");
+    const windowsPackagedFreshNodeVersion =
+      "${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}";
+
+    expect(step(prepare, "Setup Node.js").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(step(prepare, "Setup pnpm").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(step(consumer, "Setup Node.js").with?.["node-version"]).toBe(
+      windowsPackagedFreshNodeVersion,
+    );
+    expect(step(consumer, "Setup pnpm").with?.["node-version"]).toBe(
+      windowsPackagedFreshNodeVersion,
+    );
+  });
+
   it("retries only an interrupted Windows dashboard probe", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const consumer = job(workflow, "cross_os_release_checks");
@@ -93,6 +110,34 @@ describe("cross-OS release checks workflow", () => {
     expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
   });
 
+  it("installs trusted workflow dependencies for artifact resolution and upgrade metadata", () => {
+    const prepare = job(readWorkflow(WORKFLOW_PATH), "prepare");
+    const install = step(prepare, "Install workflow validation dependencies");
+
+    expect(install).toMatchObject({
+      if: "inputs.candidate_artifact_name != '' || inputs.mode != 'fresh'",
+      "working-directory": "workflow",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    });
+    expect(step(prepare, "Build candidate artifact once").if).toBe(
+      "inputs.candidate_artifact_name == ''",
+    );
+    expect(step(prepare, "Capture baseline metadata").if).toBe("${{ inputs.mode != 'fresh' }}");
+
+    const installIndex =
+      prepare.steps?.findIndex(
+        (candidate) => candidate.name === "Install workflow validation dependencies",
+      ) ?? -1;
+    for (const dependentStep of [
+      "Resolve provided candidate package",
+      "Capture baseline metadata",
+    ]) {
+      expect(installIndex, dependentStep).toBeLessThan(
+        prepare.steps?.findIndex((candidate) => candidate.name === dependentStep) ?? -1,
+      );
+    }
+  });
+
   it("keeps release artifact tarball filenames local before upload paths use them", () => {
     const workflow = readFileSync(WORKFLOW_PATH, "utf8");
 
@@ -110,24 +155,24 @@ describe("cross-OS release checks workflow", () => {
     const producer = job(release, "prepare_release_package");
     expect(producer.outputs).toMatchObject({
       artifact_digest:
-        "${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactDigest }}",
+        "${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactDigest }}",
       artifact_id:
-        "${{ steps.release_package_upload.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId }}",
+        "${{ steps.release_package_upload.outputs.artifact-id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactId }}",
       artifact_name:
-        "${{ steps.artifact.outputs.name || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName }}",
+        "${{ steps.artifact.outputs.name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactName }}",
       artifact_run_attempt:
-        "${{ steps.artifact.outputs.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}",
+        "${{ steps.artifact.outputs.run_attempt || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}",
       artifact_run_id:
-        "${{ steps.artifact.outputs.run_id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunId }}",
+        "${{ steps.artifact.outputs.run_id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunId }}",
       package_file_name:
-        "${{ steps.artifact.outputs.file_name || fromJSON(inputs.candidate_artifact_json || '{}').packageFileName }}",
+        "${{ steps.artifact.outputs.file_name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageFileName }}",
       package_sha256:
-        "${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}",
+        "${{ steps.package.outputs.sha256 || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSha256 }}",
       package_version:
-        "${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}",
+        "${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}",
       prepublish_plugin_registry_json: "${{ steps.registry_identity.outputs.json }}",
       source_sha:
-        "${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}",
+        "${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}",
     });
     expect(step(producer, "Checkout trusted workflow ref").with).toMatchObject({
       ref: "${{ github.sha }}",
@@ -245,7 +290,7 @@ describe("cross-OS release checks workflow", () => {
     const resolvePackage = step(producer, "Resolve release package artifact");
     expect(resolvePackage.run).toContain('if [[ "$CROSS_OS_SCHEDULED" == "true" ]]');
     expect(resolvePackage.run).toContain(
-      'if [[ "$DOCKER_REQUIRED" == "true" && -z "${RELEASE_PACKAGE_SPEC// }" ]]',
+      'if [[ "$DOCKER_REQUIRED" == "true" && "$PACKAGE_MODE" == "source" ]]',
     );
     expect(resolvePackage.run).toContain("registry_args=()");
     expect(resolvePackage.run).toContain("if [[ \"$required_packages\" != '[]' ]]");
@@ -360,10 +405,6 @@ describe("cross-OS release checks workflow", () => {
     );
 
     const resolve = step(prepare, "Resolve provided candidate package");
-    expect(step(prepare, "Install workflow validation dependencies")).toMatchObject({
-      if: "inputs.candidate_artifact_name != ''",
-      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
-    });
     expect(resolve.run).toContain("resolve-openclaw-package-candidate.mts");
     expect(resolve.run).toContain("--source artifact");
     expect(resolve.run).toContain('--package-sha256 "$INPUT_CANDIDATE_SHA256"');

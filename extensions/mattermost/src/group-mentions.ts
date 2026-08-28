@@ -3,8 +3,8 @@ import {
   buildChannelGroupsScopeTree,
   resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { ChannelGroupContext } from "../runtime-api.js";
 import { resolveMattermostAccount } from "./mattermost/accounts.js";
-import type { ChannelGroupContext } from "./runtime-api.js";
 
 export function resolveMattermostGroupRequireMention(
   params: ChannelGroupContext & { requireMentionOverride?: boolean },

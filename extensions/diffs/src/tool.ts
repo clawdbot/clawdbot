@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
 import {
   asNonArrayRecord,
@@ -10,7 +11,7 @@ import {
 import { Type } from "typebox";
 import type { Static } from "typebox";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
-import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
+import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { DiffRenderInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
@@ -39,6 +40,7 @@ const MAX_TITLE_BYTES = 1_024;
 const MAX_PATH_BYTES = 2_048;
 const MAX_LANG_BYTES = 128;
 const MAX_DIFF_ARTIFACT_TTL_SECONDS = 21_600;
+const loadDiffsBrowserRuntime = createLazyRuntimeModule(() => import("./browser.runtime.js"));
 
 const DiffsToolSchema = Type.Object(
   {
@@ -125,6 +127,12 @@ export function createDiffsTool(params: {
   screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
+  const loadScreenshotter = async () =>
+    params.screenshotter ??
+    new (await loadDiffsBrowserRuntime()).PlaywrightDiffScreenshotter({
+      config: params.api.config,
+    });
+
   return {
     name: "diffs",
     label: "Diffs",
@@ -188,10 +196,8 @@ export function createDiffsTool(params: {
         throw error;
       });
 
-      const screenshotter =
-        params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
-
       if (isArtifactOnlyMode(mode)) {
+        const screenshotter = await loadScreenshotter();
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,
@@ -271,6 +277,7 @@ export function createDiffsTool(params: {
       }
 
       try {
+        const screenshotter = await loadScreenshotter();
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,

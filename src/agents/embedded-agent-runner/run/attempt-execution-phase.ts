@@ -9,6 +9,7 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -34,12 +35,12 @@ export async function runEmbeddedAttemptExecutionPhase(
       builtinToolNames,
       coreBuiltinToolNames,
       clientToolCallSlots,
-      clientToolLoopDetection,
       hasDeliveredSourceReply,
       hookRunner,
       markSourceReplyDelivered,
       replaySafeToolNames,
       replaySafeTools,
+      codeModeExecToolNames,
       sideEffectToolOwners,
       setActiveSessionSystemPrompt,
       settingsManager,
@@ -58,6 +59,9 @@ export async function runEmbeddedAttemptExecutionPhase(
     toolCatalog.toolSearchRunPlan;
   const { runtimeChannel } = systemPrompt;
   const { toolSearchTargetTranscriptProjections } = toolBase;
+  activeSession[agentSessionSetContextReplacementHook](() =>
+    toolBase.skillInstructionDeliveryCache.clear(),
+  );
   const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
@@ -82,8 +86,8 @@ export async function runEmbeddedAttemptExecutionPhase(
     isOpenAIResponsesApi,
     replayAllowedToolNames,
     liveAllowedToolNames,
-    clientToolLoopDetection,
     anthropicPayloadLogger,
+    codeModeExecToolNames,
     effectiveAgentTransport,
     providerTextTransforms,
     runTrace: input.diagnostics.runTrace,
@@ -211,6 +215,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     builtinToolNames,
     coreBuiltinToolNames,
     replaySafeToolNames,
+    codeModeExecToolNames,
     sideEffectToolOwners,
     diagnosticOwner,
   });

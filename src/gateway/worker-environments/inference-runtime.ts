@@ -73,6 +73,7 @@ import {
 } from "./inference-terminal-message.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
@@ -496,6 +497,7 @@ async function resolveApprovedModel(params: {
         ...(selectedProfileId ? { preferredProfile: selectedProfileId } : {}),
         ...(selectedProfileId ? { bindAuthOwner: true } : {}),
         allowMissingApiKeyModes: ["aws-sdk"],
+        allowBundledStaticCatalogFallback: true,
         modelResolver: dependencies.resolveModel,
         preparedModelRuntime: runtimeSnapshot,
         workspaceDir,
@@ -558,7 +560,11 @@ export function createWorkerInferenceExecutor(
     return await withPluginRuntimeGenerationScope(approved.runtimeSnapshot, async () => {
       try {
         if ("error" in approved.prepared) {
-          return inferenceError("provider-error");
+          return inferenceError(
+            "provider-error",
+            undefined,
+            boundedWorkerError(approved.prepared.error, 256),
+          );
         }
         // Keep logical identity separate from transport endpoint encoding.
         const modelIdentity: WorkerInferenceModelIdentity = {

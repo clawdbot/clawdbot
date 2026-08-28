@@ -26,6 +26,7 @@ import {
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
+import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -52,6 +53,7 @@ import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
+  collectDescribedImageAttachmentIndexes,
   loadAgentTurnMediaRuntime,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
@@ -98,9 +100,6 @@ function resolveMergedAcpAttachments(entries: OrderedAcpAttachment[]): AcpTurnAt
     .toSorted((left, right) => {
       if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
         return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
-      }
-      if (left.sourceIndex !== undefined || right.sourceIndex !== undefined) {
-        return left.sequence - right.sequence;
       }
       return left.sequence - right.sequence;
     })
@@ -592,6 +591,7 @@ export async function tryDispatchAcpReplyCore(params: {
     shouldSendToolSummariesNow: params.shouldSendToolSummariesNow,
     shouldSendFullToolDetails: params.shouldSendFullToolDetails,
     deliver: delivery.deliver,
+    getConversationContext: () => params.ctx.agentText,
     onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: effectiveDispatchAccountId,
@@ -701,6 +701,32 @@ export async function tryDispatchAcpReplyCore(params: {
     }
   };
   let admittedRunContext: AdmittedRunContext | undefined;
+  let nativeActionEvidenceRecorded = false;
+  const recordUnsupportedNativeActionEvidence = () => {
+    if (nativeActionEvidenceRecorded) {
+      return;
+    }
+    nativeActionEvidenceRecorded = true;
+    recordRuntimeActionDecision({
+      token: admittedRunContext?.executionIdentityToken,
+      family: "native-runtime",
+      operation: "action-evidence",
+      outcome: "not-applicable",
+      coverageState: "unsupported",
+      reasonCode: "native_action_callback_unsupported",
+      owner: "acp-runtime",
+      decisionBoundary: "acp-runtime.prompt-submitted",
+      summary:
+        "ACP runtime action evidence is unsupported because the adapter exposes no authoritative native-action callback.",
+      missingEvidence: ["native.action_callback"],
+      remediation: [
+        {
+          code: "instrument_native_action_callback",
+          text: "Instrument an authoritative native-action callback in the ACP adapter before claiming action evidence.",
+        },
+      ],
+    });
+  };
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
@@ -737,8 +763,7 @@ export async function tryDispatchAcpReplyCore(params: {
       auditTerminalOutcome = "blocked";
       throw agentPolicyError;
     }
-    // Resolve turn attachments before media understanding so marker rendering
-    // suppresses exactly the image indexes ACP will deliver with the turn.
+    // Resolve bytes once before understanding so marker accounting shares the same snapshot.
     const resolvedTurnAttachments = await resolveAgentTurnAttachments({
       ctx: params.ctx,
       cfg: params.cfg,
@@ -767,18 +792,31 @@ export async function tryDispatchAcpReplyCore(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const mediaAttachments = resolvedTurnAttachments.attachments;
+    const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
+    const recentHistoryStart =
+      resolvedTurnAttachments.attachments.length -
+      resolvedTurnAttachments.recentHistoryImages.length;
+    const mediaAttachmentEntries = resolvedTurnAttachments.attachments.flatMap(
+      (attachment, index) => {
+        const sourceIndex = resolvedTurnAttachments.attachmentIndexes?.[index];
+        return sourceIndex !== undefined &&
+          !describedImageIndexes.has(sourceIndex) &&
+          (describedImageIndexes.size === 0 || index < recentHistoryStart)
+          ? [{ attachment, sourceIndex }]
+          : [];
+      },
+    );
+    const mediaAttachments = mediaAttachmentEntries.map((entry) => entry.attachment);
+    const recentHistoryImages =
+      describedImageIndexes.size === 0 ? resolvedTurnAttachments.recentHistoryImages : [];
     const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
     const extractedAttachments = resolveInlineAgentImageAttachments(
       extractedFileImages.map(stripExtractedFileImageMetadata),
     );
-    const mediaAttachmentsAreOnlyRecentHistory =
-      mediaAttachments.length > 0 &&
-      mediaAttachments.length === resolvedTurnAttachments.recentHistoryImages.length;
     const useMediaAttachments =
       mediaAttachments.length > 0 &&
       !(
-        mediaAttachmentsAreOnlyRecentHistory &&
+        mediaAttachments.length === recentHistoryImages.length &&
         (inlineAttachments.length > 0 || extractedAttachments.length > 0)
       );
     const attachmentEntries: OrderedAcpAttachment[] = [];
@@ -786,7 +824,7 @@ export async function tryDispatchAcpReplyCore(params: {
       appendOrderedAcpAttachments({
         entries: attachmentEntries,
         attachments: mediaAttachments,
-        sourceIndexes: resolvedTurnAttachments.attachmentIndexes,
+        sourceIndexes: mediaAttachmentEntries.map((entry) => entry.sourceIndex),
       });
     } else {
       appendOrderedAcpAttachments({
@@ -803,7 +841,7 @@ export async function tryDispatchAcpReplyCore(params: {
     const turnPromptText = useMediaAttachments
       ? appendRecentHistoryImageContext({
           promptText,
-          images: resolvedTurnAttachments.recentHistoryImages,
+          images: recentHistoryImages,
         })
       : promptText;
     transcriptPromptText = turnPromptText;
@@ -872,6 +910,7 @@ export async function tryDispatchAcpReplyCore(params: {
       requestId,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onElicitation,
+      onLifecycle: recordUnsupportedNativeActionEvidence,
       onEvent: async (event) => {
         auditRuntime.emitAcpRuntimeEvent({
           runId: auditRunId,

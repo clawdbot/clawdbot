@@ -16,6 +16,7 @@ import {
 } from "./manager.backend-failover.js";
 import {
   appendBackgroundTaskProgressSummary,
+  bindBackgroundTaskExecution,
   createBackgroundTaskRecord,
   markBackgroundTaskRunning,
   markBackgroundTaskTerminal,
@@ -45,7 +46,7 @@ import type {
 import { normalizeActorKey, requireReadySessionMeta } from "./manager.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
-
+const ACP_COMPLETION_EVIDENCE_MAX_BYTES = 100 * 1024;
 type ApplyRuntimeControls = (params: {
   sessionKey: string;
   runtime: AcpRuntime;
@@ -87,9 +88,14 @@ export async function runManagerTurn(params: {
           text: input.text,
         })
       : null;
-  if (taskContext) {
-    createBackgroundTaskRecord(taskContext, turnStartedAt);
-  }
+  const taskRecord = taskContext
+    ? createBackgroundTaskRecord(
+        taskContext,
+        turnStartedAt,
+        input.admittedRunContext.operationalRunInstance.instanceId,
+      )
+    : undefined;
+  let taskExecutionBound = false;
   let taskProgressSummary = "";
   const initialResolution = params.resolveSession({
     cfg: input.cfg,
@@ -206,6 +212,9 @@ export async function runManagerTurn(params: {
         let sawTurnOutput = false;
         let retryFreshHandle = false;
         let skipPostTurnCleanup = false;
+        let completionEvidenceText = "";
+        let completionEvidenceBytes = 0;
+        let completionEvidenceOverflowed = false;
         try {
           const ensured = await params.ensureRuntimeHandle({
             cfg: input.cfg,
@@ -241,13 +250,14 @@ export async function runManagerTurn(params: {
           }
 
           activeTurn = {
+            requestId: input.requestId,
+            instanceId: input.admittedRunContext.operationalRunInstance.instanceId,
             runtime,
             handle,
             abortController: internalAbortController,
           };
           params.activeTurnBySession.set(actorKey, activeTurn);
           activeTurnStarted = true;
-
           const combinedSignal = input.signal
             ? AbortSignal.any([input.signal, internalAbortController.signal])
             : internalAbortController.signal;
@@ -267,6 +277,10 @@ export async function runManagerTurn(params: {
             onBeforePrompt: input.onBeforePrompt,
             onPromptStarted: async ({ authoritative }) => {
               promptStarted = authoritative;
+              if (authoritative && taskRecord && !taskExecutionBound) {
+                taskExecutionBound = true;
+                bindBackgroundTaskExecution(taskRecord, input.admittedRunContext);
+              }
               try {
                 await input.onLifecycle?.({
                   type: "prompt_submitted",
@@ -285,6 +299,15 @@ export async function runManagerTurn(params: {
                   taskProgressSummary,
                   event.text,
                 );
+                // Keep semantic evidence attempt-local; only the bounded display summary is persisted.
+                if (taskContext && !completionEvidenceOverflowed) {
+                  completionEvidenceText += event.text;
+                  completionEvidenceBytes = Buffer.byteLength(completionEvidenceText, "utf8");
+                  if (completionEvidenceBytes > ACP_COMPLETION_EVIDENCE_MAX_BYTES) {
+                    completionEvidenceOverflowed = true;
+                    completionEvidenceText = "";
+                  }
+                }
               }
               if (taskContext) {
                 markBackgroundTaskRunning(taskContext.runId, {
@@ -335,7 +358,16 @@ export async function runManagerTurn(params: {
             startedAt: turnStartedAt,
           });
           if (taskContext) {
-            const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
+            const terminalResult =
+              turnOutcome.terminalStatus === "cancelled"
+                ? {}
+                : completionEvidenceOverflowed
+                  ? {
+                      terminalOutcome: "blocked" as const,
+                      terminalSummary:
+                        "Required completion output exceeded the 100 KB verification limit; inspect the child session for the final deliverable.",
+                    }
+                  : resolveBackgroundTaskTerminalResult(completionEvidenceText);
             markBackgroundTaskTerminal(taskContext.runId, {
               sessionKey,
               status: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "succeeded",

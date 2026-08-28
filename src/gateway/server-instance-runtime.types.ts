@@ -15,6 +15,7 @@ export type GatewayInstanceAgentDispatchOptions = {
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   scopes?: string[];
   signal?: AbortSignal;
@@ -27,6 +28,10 @@ export type GatewayApprovalEventPublisher = {
 };
 
 export type GatewayRecoveryRuntime = {
+  abortAgent: (
+    params: { agentId: string; runId: string; sessionKey: string },
+    timeoutMs?: number,
+  ) => Promise<{ aborted?: boolean; runIds?: string[] }>;
   dispatchAgent: <T = unknown>(
     params: AgentRunRequest,
     timeoutMs?: number,

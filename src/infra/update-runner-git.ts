@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  resolveControlUiDistIndexHealth,
+  resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
@@ -9,6 +10,7 @@ import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import {
   managerInstallArgs,
+  managerInstallIgnoreScriptsArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
@@ -19,11 +21,9 @@ import {
 } from "./update-runner-doctor.js";
 import {
   findBlockingGitFailure,
-  mapManagerResolutionFailure,
   resolveBuildEnv,
   resolveInstallEnv,
-  resolveRetryInstallArgs,
-  shouldRetryWindowsInstallIgnoringScripts,
+  shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
 import { runGitDevPreflight } from "./update-runner-git-preflight.js";
 import { rebuildRolledBackGitRuntime } from "./update-runner-git-recovery.js";
@@ -39,6 +39,17 @@ import type {
   UpdateRunnerOptions,
   UpdateStepResult,
 } from "./update-runner-types.js";
+
+async function readBuiltGatewayBuildId(gitRoot: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(path.join(gitRoot, "dist", "build-info.json"), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const buildId = isRecord(parsed) ? parsed.buildId : undefined;
+    return typeof buildId === "string" && buildId.trim() ? buildId.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;
@@ -399,7 +410,7 @@ export async function updateGitCheckout(params: {
     "require-preferred",
   );
   if (manager.kind === "missing-required") {
-    return await rollbackError(mapManagerResolutionFailure(manager.reason));
+    return await rollbackError(manager.reason);
   }
   try {
     const installEnv = resolveInstallEnv(manager.manager, manager.env);
@@ -413,8 +424,8 @@ export async function updateGitCheckout(params: {
         installEnv,
       ),
     );
-    if (installStep.exitCode !== 0 && shouldRetryWindowsInstallIgnoringScripts(manager.manager)) {
-      const retryArgv = resolveRetryInstallArgs(manager.manager);
+    if (installStep.exitCode !== 0 && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
+      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
       if (retryArgv) {
         installStep = await runStep(
           step("deps install (ignore scripts)", retryArgv, gitRoot, installEnv),
@@ -431,7 +442,7 @@ export async function updateGitCheckout(params: {
         managerScriptArgs(manager.manager, "build"),
         gitRoot,
         resolveBuildEnv(
-          manager.env,
+          manager.env ?? defaultCommandEnv,
           channel === "dev" ? path.join(gitRoot, ".artifacts", "build-all-cache") : undefined,
         ),
       ),
@@ -452,8 +463,8 @@ export async function updateGitCheckout(params: {
     if (buildCleanCheck.stdoutTail?.trim()) {
       return await rollbackError("build-dirty");
     }
-    const builtUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
-    if (!builtUiIndexHealth.exists) {
+    const builtUiHealth = await resolveControlUiAssetHealth({ root: gitRoot });
+    if (builtUiHealth.kind !== "ready") {
       const uiBuildStep = await runStep(
         step(
           "ui:build (build fallback)",
@@ -512,13 +523,12 @@ export async function updateGitCheckout(params: {
       return await rollbackError("doctor-failed");
     }
 
-    const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
-    if (!uiIndexHealth.exists) {
-      const repairArgv = managerScriptArgs(manager.manager, "ui:build");
+    const uiHealth = await resolveControlUiAssetHealth({ root: gitRoot });
+    if (uiHealth.kind !== "ready") {
       const repairStep = await runStep({
         runCommand,
         name: "ui:build (post-doctor repair)",
-        argv: repairArgv,
+        argv: managerScriptArgs(manager.manager, "ui:build"),
         cwd: gitRoot,
         timeoutMs,
         env: manager.env,
@@ -529,8 +539,8 @@ export async function updateGitCheckout(params: {
       if (repairStep.exitCode !== 0) {
         return await rollbackError("ui-build-failed");
       }
-      const repairedHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
-      if (!repairedHealth.exists) {
+      const repairedHealth = await resolveControlUiAssetHealth({ root: gitRoot });
+      if (repairedHealth.kind !== "ready") {
         const uiIndexPath =
           repairedHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
         steps.push({
@@ -539,16 +549,23 @@ export async function updateGitCheckout(params: {
           cwd: gitRoot,
           durationMs: 0,
           exitCode: 1,
-          stderrTail: `missing ${uiIndexPath}`,
+          stderrTail:
+            repairedHealth.kind === "incomplete"
+              ? `missing startup asset ${repairedHealth.missingAsset} referenced by ${uiIndexPath}`
+              : `missing ${uiIndexPath}`,
         });
         return await rollbackError("ui-assets-missing");
       }
     }
 
     const failedStep = findBlockingGitFailure(steps);
+    const afterBuildId = channel === "dev" ? await readBuiltGatewayBuildId(gitRoot) : null;
     const afterShaStep = await runStep(
       step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
+    if (afterShaStep.exitCode !== 0) {
+      return await rollbackError("head-verification-failed");
+    }
     if (
       devTarget?.mode === "tracked" &&
       devPreflight?.status === "ok" &&
@@ -565,6 +582,7 @@ export async function updateGitCheckout(params: {
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),
+        ...(afterBuildId ? { buildId: afterBuildId } : {}),
         ...(!failedStep && devTarget?.mode === "tracked"
           ? { upstreamRef: devTarget.upstreamRef }
           : {}),

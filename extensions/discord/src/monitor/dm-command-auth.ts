@@ -3,9 +3,8 @@ import {
   type AccessGroupMembershipFact,
   type ChannelIngressEventInput,
   type ChannelIngressContextBinding,
-  type ChannelIngressIdentifierKind,
+  type IdentifierAuthentication,
   createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
   type ChannelIngressIdentitySubjectInput,
   type ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -13,75 +12,17 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RequestClient } from "../internal/discord.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
-import { normalizeDiscordAllowList } from "./allow-list.js";
+import { discordIngressIdentity } from "./ingress-identity.js";
 
-const DISCORD_ALLOW_LIST_PREFIXES = ["discord:", "user:", "pk:"];
 const DISCORD_CHANNEL_ID = "discord";
-const DISCORD_USER_ID_KIND = "stable-id" satisfies ChannelIngressIdentifierKind;
-const DISCORD_USER_NAME_KIND = "username" satisfies ChannelIngressIdentifierKind;
 
 export type DiscordDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
-
-function normalizeDiscordIdEntry(entry: string): string | null {
-  const text = entry.trim();
-  if (!text) {
-    return null;
-  }
-  const maybeId = text.replace(/^<@!?/, "").replace(/>$/, "");
-  if (/^\d+$/.test(maybeId)) {
-    return maybeId;
-  }
-  const prefix = DISCORD_ALLOW_LIST_PREFIXES.find((entryPrefix) => text.startsWith(entryPrefix));
-  if (prefix) {
-    const candidate = text.slice(prefix.length).trim();
-    return candidate || null;
-  }
-  return null;
-}
-
-function normalizeDiscordNameEntry(entry: string): string | null {
-  const text = entry.trim();
-  if (!text || text === "*" || normalizeDiscordIdEntry(text)) {
-    return null;
-  }
-  const nameSlug = normalizeDiscordAllowList([text], DISCORD_ALLOW_LIST_PREFIXES)
-    ?.names.values()
-    .next().value;
-  return typeof nameSlug === "string" && nameSlug ? nameSlug : null;
-}
-
-function normalizeDiscordNameSubject(value: string): string | null {
-  const nameSlug = normalizeDiscordAllowList([value], DISCORD_ALLOW_LIST_PREFIXES)
-    ?.names.values()
-    .next().value;
-  return typeof nameSlug === "string" && nameSlug ? nameSlug : null;
-}
-
-const discordIngressIdentity = defineStableChannelIngressIdentity({
-  key: "discordUserId",
-  kind: DISCORD_USER_ID_KIND,
-  normalizeEntry: normalizeDiscordIdEntry,
-  normalizeSubject: (value) => value.trim() || null,
-  sensitivity: "pii",
-  aliases: (
-    [
-      ["discordUserName", normalizeDiscordNameEntry],
-      ["discordUserTag", () => null],
-    ] as const
-  ).map(([key, normalizeEntry]) => ({
-    key,
-    kind: DISCORD_USER_NAME_KIND,
-    normalizeEntry,
-    normalizeSubject: normalizeDiscordNameSubject,
-    dangerous: true,
-    sensitivity: "pii",
-  })),
-});
 
 function createDiscordDmIngressSubject(sender: {
   id: string;
   name?: string;
   tag?: string;
+  isPluralKit?: boolean;
 }): ChannelIngressIdentitySubjectInput {
   return {
     stableId: sender.id,
@@ -89,6 +30,9 @@ function createDiscordDmIngressSubject(sender: {
       discordUserName: sender.name,
       discordUserTag: sender.tag,
     },
+    // PluralKit replaces Discord's Gateway author id with a member id returned by
+    // its API. The lookup is trusted input, but Discord did not bind that exact id.
+    ...(sender.isPluralKit ? { authentication: { discordUserId: "asserted" as const } } : {}),
   };
 }
 
@@ -174,7 +118,7 @@ export async function resolveDiscordDmCommandAccess(params: {
   accountId: string;
   dmPolicy: DiscordDmPolicy;
   configuredAllowFrom: string[];
-  sender: { id: string; name?: string; tag?: string };
+  sender: { id: string; name?: string; tag?: string; isPluralKit?: boolean };
   allowNameMatching: boolean;
   cfg?: OpenClawConfig;
   token?: string;
@@ -185,6 +129,7 @@ export async function resolveDiscordDmCommandAccess(params: {
   conversationParentId?: string;
   conversationThreadId?: string;
   contextBinding?: ChannelIngressContextBinding;
+  minIdentifierAuthentication?: IdentifierAuthentication;
 }) {
   return await createDiscordIngressResolver({
     accountId: params.accountId,
@@ -211,6 +156,9 @@ export async function resolveDiscordDmCommandAccess(params: {
     groupPolicy: "disabled",
     policy: {
       mutableIdentifierMatching: params.allowNameMatching ? "enabled" : "disabled",
+      ...(params.minIdentifierAuthentication
+        ? { minIdentifierAuthentication: params.minIdentifierAuthentication }
+        : {}),
     },
     allowFrom: params.configuredAllowFrom,
     command: {
@@ -222,7 +170,7 @@ export async function resolveDiscordDmCommandAccess(params: {
 
 export async function resolveDiscordTextCommandAccess(params: {
   accountId: string;
-  sender: { id: string; name?: string; tag?: string };
+  sender: { id: string; name?: string; tag?: string; isPluralKit?: boolean };
   ownerAllowFrom?: string[];
   memberAccessConfigured: boolean;
   memberAllowed: boolean;
@@ -236,6 +184,7 @@ export async function resolveDiscordTextCommandAccess(params: {
   conversationParentId?: string;
   conversationThreadId?: string;
   contextBinding?: ChannelIngressContextBinding;
+  minIdentifierAuthentication?: IdentifierAuthentication;
 }) {
   const ownerAllowFrom = (params.ownerAllowFrom ?? []).filter((entry) => entry.trim() !== "*");
   const memberAccessGroup = "discord-member-access";
@@ -262,6 +211,9 @@ export async function resolveDiscordTextCommandAccess(params: {
     groupPolicy: "allowlist",
     policy: {
       mutableIdentifierMatching: params.allowNameMatching ? "enabled" : "disabled",
+      ...(params.minIdentifierAuthentication
+        ? { minIdentifierAuthentication: params.minIdentifierAuthentication }
+        : {}),
     },
     allowFrom: ownerAllowFrom,
     groupAllowFrom: commandGroup,

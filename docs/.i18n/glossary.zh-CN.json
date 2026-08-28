@@ -668,6 +668,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Triage",
+    "target": "Triage"
+  },
+  {
     "source": "Config",
     "target": "配置"
   },
@@ -1814,5 +1818,37 @@
   {
     "source": "macOS widget panel",
     "target": "macOS 小组件面板"
+  },
+  {
+    "source": "Geolocation plugin",
+    "target": "地理位置插件"
+  },
+  {
+    "source": "Trusted proxy auth",
+    "target": "受信任代理认证"
+  },
+  {
+    "source": "geolocation",
+    "target": "geolocation"
+  },
+  {
+    "source": "Memory provenance and deletion",
+    "target": "记忆溯源与删除"
+  },
+  {
+    "source": "Provenance & deletion",
+    "target": "溯源与删除"
+  },
+  {
+    "source": "Memory admission policy configuration",
+    "target": "记忆准入策略配置"
+  },
+  {
+    "source": "Memory architecture",
+    "target": "记忆架构"
+  },
+  {
+    "source": "Built-in memory",
+    "target": "内置记忆"
   }
 ]

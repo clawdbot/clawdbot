@@ -27,6 +27,9 @@ type MemoryRuntime = NonNullable<
 type MemorySearchAuthorization = Parameters<
   NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>
 >[0];
+type WorkspaceMemoryPathClassification = Parameters<
+  NonNullable<MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]>
+>[0];
 type MemoryRuntimeOwner = { runtime: MemoryRuntime; registry?: PluginRegistry };
 let standaloneMemoryRegistrySlot:
   | { key: string; registry: PluginRegistry; retiredRuntimes: Map<MemoryRuntime, PluginRegistry> }
@@ -207,6 +210,31 @@ export async function authorizeActiveMemorySearchHits(
     }
     return await runtime.authorizeSearchHits(params);
   });
+}
+
+/** Classifies workspace memory paths through the selected memory plugin's provenance owner. */
+export async function classifyActiveMemoryWorkspacePaths(
+  params: WorkspaceMemoryPathClassification,
+): Promise<
+  | { status: "unavailable" }
+  | { status: "unsupported" }
+  | {
+      status: "classified";
+      classifications: Array<{ relativePath: string; originClass: string }>;
+    }
+> {
+  const owner = ensureMemoryRuntime(params);
+  if (!owner) {
+    return { status: "unavailable" };
+  }
+  if (!owner.runtime.classifyWorkspaceMemoryPaths) {
+    return { status: "unsupported" };
+  }
+  const classifications = await withMemoryRuntimeOwner(
+    owner,
+    async (runtime) => await runtime.classifyWorkspaceMemoryPaths!(params),
+  );
+  return { status: "classified", classifications };
 }
 
 /** Resolves current memory backend config without constructing a manager. */

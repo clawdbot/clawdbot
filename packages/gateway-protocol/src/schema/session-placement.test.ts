@@ -46,7 +46,7 @@ const workerOwnedFields = {
 };
 
 describe("session dispatch protocol schemas", () => {
-  it("accepts an explicit target or configured-default lookup", () => {
+  it("accepts an explicit target, automatic device selection, or configured-default lookup", () => {
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
@@ -61,6 +61,9 @@ describe("session dispatch protocol schemas", () => {
         deviceId: "device-1",
       }),
     ).toBe(true);
+    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch", autoDevice: true })).toBe(
+      true,
+    );
     expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(true);
     expect(
       validateSessionsDispatchParams({ key: "agent:main:dispatch", machineClass: "beast" }),
@@ -79,6 +82,19 @@ describe("session dispatch protocol schemas", () => {
         machineClass: "beast",
       }),
     ).toBe(false);
+    for (const invalidAutomaticTarget of [
+      { autoDevice: false },
+      { autoDevice: true, profileId: "development" },
+      { autoDevice: true, deviceId: "device-1" },
+      { autoDevice: true, machineClass: "beast" },
+    ]) {
+      expect(
+        validateSessionsDispatchParams({
+          key: "agent:main:dispatch",
+          ...invalidAutomaticTarget,
+        }),
+      ).toBe(false);
+    }
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
@@ -311,11 +327,21 @@ describe("session dispatch protocol schemas", () => {
           runner: { kind: "device", status },
         }),
       ).toBe(true);
+      expect(
+        Value.Check(SessionPlacementSchema, {
+          state: "active",
+          ...basePlacement,
+          ...workerOwnedFields,
+          runner: { kind: "device", status, deviceId: "device-1" },
+        }),
+      ).toBe(true);
     }
     for (const runner of [
       { kind: "cloud", status: "offline" },
       { kind: "device", status: "unknown" },
       { kind: "device", status: "offline", extra: true },
+      { kind: "device", status: "available", deviceId: "" },
+      { kind: "device", status: "available", deviceId: "x".repeat(257) },
     ]) {
       expect(
         Value.Check(SessionPlacementSchema, {

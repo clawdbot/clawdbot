@@ -1,4 +1,5 @@
 // Google shared provider tests cover response conversion and finish reasons.
+import { createServer } from "node:http";
 import {
   ApiError,
   BlockedReason,
@@ -8,6 +9,7 @@ import {
   type Part,
 } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
+import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -145,6 +147,7 @@ type GoogleResponseFixture = {
   finishReason?: FinishReason;
   finishMessage?: string;
   responseId?: string;
+  modelVersion?: string;
   usageMetadata?: GenerateContentResponse["usageMetadata"];
   promptFeedback?: GenerateContentResponse["promptFeedback"];
 };
@@ -319,6 +322,85 @@ describe("consumeGoogleGenerateContentStream", () => {
     });
     expect(output.usage.cost.total).toBeGreaterThan(0);
   });
+
+  it.each([
+    {
+      api: "google-generative-ai",
+      requested: "gemini-test",
+      returned: ["gemini-test-002"],
+      expected: "gemini-test-002",
+    },
+    {
+      api: "google-vertex",
+      requested: "gemini-test",
+      returned: ["gemini-test-002"],
+      expected: "gemini-test-002",
+    },
+    { api: "google-generative-ai", requested: "gemini-test", returned: ["gemini-test"] },
+    { api: "google-generative-ai", requested: "google/gemini-test", returned: ["gemini-test"] },
+    { api: "google-generative-ai", requested: "models/gemini-test", returned: ["gemini-test"] },
+    { api: "google-generative-ai", requested: "gemini-test", returned: ["models/gemini-test"] },
+    {
+      api: "google-vertex",
+      requested: "publishers/google/models/gemini-test",
+      returned: ["gemini-test"],
+    },
+    {
+      api: "google-vertex",
+      requested: "projects/fixture-project/locations/global/publishers/google/models/gemini-test",
+      returned: ["gemini-test"],
+    },
+    {
+      api: "google-vertex",
+      requested: "gemini-test",
+      returned: ["publishers/google/models/gemini-test"],
+    },
+    {
+      api: "google-vertex",
+      requested: "publishers/meta/models/gemini-test",
+      returned: ["gemini-test"],
+      expected: "gemini-test",
+    },
+    {
+      api: "google-generative-ai",
+      requested: "tunedModels/fixture-gemini",
+      returned: ["tunedModels/fixture-gemini"],
+    },
+    {
+      api: "google-generative-ai",
+      requested: "gemini-test",
+      returned: ["", "gemini-test-002", "gemini-test-003"],
+      expected: "gemini-test-002",
+    },
+  ] as const)(
+    "retains an actually different $api SDK response model for $requested",
+    async ({ api, requested, returned, expected }) => {
+      const targetModel = {
+        ...model,
+        id: requested,
+        api,
+        provider: api === "google-vertex" ? "google-vertex" : "google",
+      } satisfies Model<"google-generative-ai" | "google-vertex">;
+      const { result } = await runGoogleFixture(
+        returned.map((modelVersion, index) =>
+          googleResponse({
+            modelVersion,
+            ...(index === returned.length - 1
+              ? { parts: [{ text: "actual response" }], finishReason: FinishReason.STOP }
+              : {}),
+          }),
+        ),
+        { targetModel },
+      );
+
+      expect(result.stopReason).toBe("stop");
+      if (expected) {
+        expect(result.responseModel).toBe(expected);
+      } else {
+        expect(result).not.toHaveProperty("responseModel");
+      }
+    },
+  );
 
   it.each([
     {
@@ -590,6 +672,98 @@ describe("consumeGoogleGenerateContentStream", () => {
 });
 
 describe("runGoogleGenerateContentLifecycle", () => {
+  it("retains the actual SDK response model across localhost HTTP SSE", async () => {
+    const observedRequests: Array<{ method?: string; url?: string }> = [];
+    const server = createServer((request, response) => {
+      observedRequests.push({ method: request.method, url: request.url });
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          responseId: "sdk-google-response",
+          modelVersion: "gemini-test-002",
+          candidates: [{ content: { parts: [{ text: "actual response" }] }, finishReason: "STOP" }],
+        })}\n\n`,
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing Google SDK loopback server address");
+      }
+      const { result } = await runGoogleFixture([], {
+        createClient: () =>
+          new GoogleGenAI({
+            apiKey: "fixture-google-api-key",
+            httpOptions: { baseUrl: `http://127.0.0.1:${address.port}` },
+          }),
+        buildParams: () => ({
+          model: model.id,
+          contents: [{ role: "user", parts: [{ text: "hello" }] }],
+        }),
+      });
+
+      expect(observedRequests).toEqual([
+        { method: "POST", url: expect.stringContaining(":streamGenerateContent?alt=sse") },
+      ]);
+      expect(result).toMatchObject({
+        responseId: "sdk-google-response",
+        responseModel: "gemini-test-002",
+        stopReason: "stop",
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("reports SDK stream acceptance without fabricated HTTP metadata", async () => {
+    const acceptanceObserver = vi.fn();
+    const options = withProviderAcceptanceObserver({}, acceptanceObserver);
+
+    const { result } = await runGoogleFixture(
+      [googleResponse({ parts: [{ text: "ok" }], finishReason: FinishReason.STOP })],
+      { options },
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+  });
+
+  it("closes an unread SDK stream without waiting when acceptance fails", async () => {
+    const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
+    const googleStream = {
+      next: vi.fn(),
+      return: close,
+      throw: vi.fn(),
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    } as unknown as AsyncGenerator<GenerateContentResponse>;
+
+    const options = withProviderAcceptanceObserver({}, () => {
+      throw new Error("acceptance observer failed");
+    });
+    const { result } = await runGoogleFixture([], {
+      options,
+      generateContentStream: async () => googleStream,
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance observer failed",
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it.each(["google-generative-ai", "google-vertex"] as const)(
     "rejects an unfinished %s stream instead of silently completing partial output",
     async (api) => {
@@ -630,6 +804,17 @@ describe("runGoogleGenerateContentLifecycle", () => {
       });
     },
   );
+
+  it("keeps an unspecified Google finish reason nonterminal", async () => {
+    const { result } = await runGoogleFixture([
+      googleResponse({
+        parts: [{ text: "partial output" }],
+        finishReason: FinishReason.FINISH_REASON_UNSPECIFIED,
+      }),
+    ]);
+
+    expect(result).toMatchObject({ stopReason: "error", errorCode: "STREAM_INCOMPLETE" });
+  });
 
   it("closes partial text before reporting a failed candidate", async () => {
     const { events, result } = await runGoogleFixture(

@@ -63,6 +63,7 @@ export function isTerminalPluginInstallFailure(code?: string): boolean {
   return (
     code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
     code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED ||
+    code === PLUGIN_INSTALL_ERROR_CODE.RELEASE_COHORT_UNAVAILABLE ||
     code === PLUGIN_INSTALL_ERROR_CODE.UNSUPPORTED_PLAIN_FILE_PLUGIN
   );
 }
@@ -208,6 +209,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   spec: string;
   pin?: boolean;
   safetyOverrides: InstallSafetyOverrides;
+  capabilityConsent?: import("./plugin-capability-consent.js").PluginCapabilityConsentCliOptions;
   allowBundledFallback: boolean;
   expectedPluginId?: string;
   expectedIntegrity?: string;
@@ -284,6 +286,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
             : {}),
         },
     snapshot: params.snapshot,
+    ...params.capabilityConsent,
     safetyOverrides: params.safetyOverrides,
     logger: createPluginInstallLogger(params.runtime),
     invalidateRuntimeCache: params.invalidateRuntimeCache,

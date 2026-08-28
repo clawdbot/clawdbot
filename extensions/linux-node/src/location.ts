@@ -74,9 +74,10 @@ function parseLocationOutput(
     const timestamp = epochSeconds
       ? new Date(Number(epochSeconds) * 1000).toISOString()
       : now().toISOString();
+    const ageMs = now().getTime() - Date.parse(timestamp);
     if (
       maxAgeMs !== undefined &&
-      now().getTime() - Date.parse(timestamp) >= maxAgeMs + GEOCLUE_TIMESTAMP_RESOLUTION_MS
+      (ageMs < 0 || ageMs >= maxAgeMs + GEOCLUE_TIMESTAMP_RESOLUTION_MS)
     ) {
       continue;
     }

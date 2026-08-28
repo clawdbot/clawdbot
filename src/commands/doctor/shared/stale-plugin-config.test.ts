@@ -106,29 +106,32 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
-  it("removes retired thread-ownership config while retaining valid plugin ids", () => {
-    const result = maybeRepairStalePluginConfig({
-      plugins: {
-        allow: ["discord", "thread-ownership"],
-        deny: ["thread-ownership", "openai"],
-        entries: {
-          discord: { enabled: true },
-          "thread-ownership": { enabled: true },
+  it.each(["thread-ownership", "open-prose"])(
+    "removes retired %s config while retaining valid plugin ids",
+    (retiredPluginId) => {
+      const result = maybeRepairStalePluginConfig({
+        plugins: {
+          allow: ["discord", retiredPluginId],
+          deny: [retiredPluginId, "openai"],
+          entries: {
+            discord: { enabled: true },
+            [retiredPluginId]: { enabled: true },
+          },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig);
 
-    expect(result.config.plugins).toEqual({
-      allow: ["discord"],
-      deny: ["openai"],
-      entries: { discord: { enabled: true } },
-    });
-    expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (thread-ownership)",
-      "- plugins.deny: removed 1 stale plugin id (thread-ownership)",
-      "- plugins.entries: removed 1 stale plugin entry (thread-ownership)",
-    ]);
-  });
+      expect(result.config.plugins).toEqual({
+        allow: ["discord"],
+        deny: ["openai"],
+        entries: { discord: { enabled: true } },
+      });
+      expect(result.changes).toEqual([
+        `- plugins.allow: removed 1 stale plugin id (${retiredPluginId})`,
+        `- plugins.deny: removed 1 stale plugin id (${retiredPluginId})`,
+        `- plugins.entries: removed 1 stale plugin entry (${retiredPluginId})`,
+      ]);
+    },
+  );
 
   it("resets stale plugin slots without changing valid slot sentinels", () => {
     const cfg = {

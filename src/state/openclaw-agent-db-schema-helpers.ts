@@ -27,9 +27,10 @@ import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
+  ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
-  ensureSessionProjectColumn,
 } from "./openclaw-agent-db-session-migrations.js";
+import { SESSION_GOAL_OPERATIONS_TABLE } from "./openclaw-agent-goal-operations-schema.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
@@ -59,10 +60,13 @@ type ExistingAgentSchemaMeta = {
 const AGENT_SCHEMA_COMPATIBILITY = {
   allowCompatibleAdditiveColumns: true,
   allowedMissingTables: [
+    "memory_entry_origins",
+    "memory_session_tombstones",
     MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
     MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
     CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
     MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
+    SESSION_GOAL_OPERATIONS_TABLE,
     SESSION_PARTICIPANTS_TABLE,
     SESSION_PROGRESS_CARDS_TABLE,
     SESSION_TRANSCRIPT_ARCHIVES_TABLE,
@@ -71,7 +75,9 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    "session_conversations.route_context_json",
     "session_participants.actor_source",
+    "session_participants.contribution_count",
     "standing_intents.creator_sender",
     ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
       ({ columnName, tableName }) => `${tableName}.${columnName}`,
@@ -189,7 +195,7 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     );
   }
 
-  ensureSessionProjectColumn(database);
+  ensureSessionAdditiveColumns(database);
   ensureSessionEntryValidityProjection(database);
   ensureSessionKeyContractSchemaInTransaction(database);
 

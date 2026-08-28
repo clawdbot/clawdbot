@@ -7,22 +7,24 @@ title: "Onboarding overview"
 sidebarTitle: "Onboarding Overview"
 ---
 
-OpenClaw has terminal and macOS app onboarding. Both establish inference first:
-they detect existing AI access, require a live completion, and only then start
-OpenClaw to configure the remaining setup. A reachable, configured Gateway
-whose default agent already has a configured model skips onboarding and opens
-the normal agent UI. The terminal flow also offers the full classic wizard for
-detailed setup.
+OpenClaw supports onboarding from the terminal, the macOS app, and the Linux
+desktop companion. Every path establishes inference first: it detects existing
+AI access, requires a live completion, and only then starts OpenClaw to
+configure the remaining setup. A reachable, configured Gateway whose default
+agent already has a configured model skips onboarding and opens the normal
+agent UI. The terminal flow also offers the full classic wizard for detailed
+setup.
 
 ## Which path should I use?
 
-|                | CLI onboarding                         | macOS app onboarding                                          |
-| -------------- | -------------------------------------- | ------------------------------------------------------------- |
-| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                                                    |
-| **Interface**  | Inference setup, then OpenClaw         | Inference setup, then OpenClaw                                |
-| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                                     |
-| **Automation** | `--non-interactive` for scripts        | Manual only                                                   |
-| **Command**    | `openclaw onboard`                     | [Download the app](/platforms/macos#download), then launch it |
+|                | CLI onboarding                         | macOS app onboarding                                | Linux app onboarding                      |
+| -------------- | -------------------------------------- | --------------------------------------------------- | ----------------------------------------- |
+| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS                                               | Linux                                     |
+| **Interface**  | Terminal or guided setup               | Native desktop setup                                | Native desktop setup                      |
+| **Gateway**    | Local or remote                        | Local, direct remote, or SSH                        | Local, direct remote, or SSH              |
+| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                           | Linux desktop, visual setup               |
+| **Automation** | `--non-interactive` for scripts        | Manual only                                         | Manual only                               |
+| **Start**      | `openclaw onboard`                     | [Download the macOS app](/platforms/macos#download) | [Install the Linux app](/platforms/linux) |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
 you the most control.
@@ -99,6 +101,24 @@ Use Google AI Studio API-key or Vertex AI for guided setup. The optional Gemini
 CLI runtime specifically requires an AI Studio API-key profile.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
+
+## Linux app onboarding
+
+[Install the Linux desktop companion](/platforms/linux), then open it. The
+welcome screen lets you choose a Gateway on **this computer** or **another
+computer**. Local setup installs any missing CLI and managed Node runtime, then
+starts the systemd user service. Remote setup connects to a discovered Gateway,
+a manually entered Gateway URL, or a Gateway reached through an SSH tunnel;
+token and password authentication are supported.
+
+Model Setup checks existing provider access and offers sign-in or API-key entry
+when needed. The selected Gateway verifies a real model response before guided
+onboarding begins. An already configured Gateway opens the normal agent UI
+instead. Active onboarding survives Gateway restarts, and model activation
+resumes safely after closing and reopening the app.
+
+Platform and remote-access details: [Linux app](/platforms/linux) and
+[Remote access](/gateway/remote).
 
 ## Custom or unlisted providers
 

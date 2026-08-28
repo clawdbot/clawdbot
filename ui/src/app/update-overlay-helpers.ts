@@ -622,6 +622,21 @@ export function formatUpdateTargetLabel(
   return version ? t("updates.target.version", { version }) : null;
 }
 
+export function isUpdateActionable(
+  updateAvailable: UpdateAvailable | null | undefined,
+  updateSchedule: UpdateScheduleState | null | undefined,
+  updateBusy: boolean,
+): boolean {
+  const target = updateSchedule?.target;
+  return Boolean(
+    updateBusy ||
+    updateSchedule?.campaign ||
+    (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
+    (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||
+    (target?.kind === "git" && target.commitsBehind > 0),
+  );
+}
+
 export function resolveUpdateStatusBanner(params: {
   status?: string;
   reason?: string;

@@ -7,6 +7,7 @@
  * thin forwarder — the old assets/chrome-extension put this logic in an
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
+import { once } from "node:events";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import {
@@ -110,6 +111,7 @@ export class ExtensionRelayBridge {
   private pingTimer: NodeJS.Timeout | null = null;
   private missedPongs = 0;
   private readonly onStateChange?: () => void;
+  private readonly connectionEvents = new EventTarget();
 
   constructor(
     opts: {
@@ -124,6 +126,29 @@ export class ExtensionRelayBridge {
     return this.extension !== null;
   }
 
+  /** Wait for an authenticated extension hello without polling its CDP endpoint. */
+  async waitForExtensionConnection(signal: AbortSignal, timeoutMs: number): Promise<boolean> {
+    if (this.extensionConnected) {
+      return true;
+    }
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    try {
+      await once(this.connectionEvents, "ready", {
+        signal: AbortSignal.any([signal, timeout.signal]),
+      });
+      return this.extensionConnected;
+    } catch (error) {
+      signal.throwIfAborted();
+      if (timeout.signal.aborted) {
+        return false;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Identity of the paired browser, when connected. */
   get identity(): ExtensionIdentity | null {
     return this.extension?.identity ?? null;
@@ -132,6 +157,21 @@ export class ExtensionRelayBridge {
   /** Tabs currently reported as accessible by the extension. */
   accessibleTabs(): RelayTabInfo[] {
     return [...this.tabs.values()].map((tab) => tab.info);
+  }
+
+  /** Capture the exact extension connection and tab instance for one browser operation. */
+  captureOperationTarget(targetId: string): (() => string | undefined) | undefined {
+    const extension = this.extension;
+    const target = this.tabByTargetId(targetId);
+    if (!extension || !target) {
+      return undefined;
+    }
+    // Chrome tab ids survive renderer swaps but can be reused by another browser;
+    // pin both the authenticated extension owner and the exact granted tab instance.
+    return () =>
+      this.extension === extension && this.tabs.get(target.tabId) === target.tab
+        ? target.tab.attached?.targetId
+        : undefined;
   }
 
   /**
@@ -212,6 +252,7 @@ export class ExtensionRelayBridge {
         };
         this.syncTabs(msg.tabs);
         this.startPing();
+        this.connectionEvents.dispatchEvent(new Event("ready"));
         this.onStateChange?.();
         return;
       }
@@ -1000,6 +1041,7 @@ export class ExtensionRelayBridge {
     this.extensionCandidates.clear();
     this.extension?.socket.close(1001, "relay stopped");
     this.extension = null;
+    this.connectionEvents.dispatchEvent(new Event("ready"));
     for (const client of this.clients) {
       client.socket.close(1001, "relay stopped");
     }

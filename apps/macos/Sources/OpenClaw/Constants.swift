@@ -31,6 +31,7 @@ let voiceWakeAdditionalLocalesKey = "openclaw.voiceWakeAdditionalLocaleIDs"
 let voicePushToTalkEnabledKey = "openclaw.voicePushToTalkEnabled"
 let voiceWakeTriggersTalkModeKey = "openclaw.voiceWakeTriggersTalkMode"
 let talkEnabledKey = "openclaw.talkEnabled"
+let talkRealtimeRelayEnabledKey = "openclaw.talkRealtimeRelayEnabled"
 let talkPhaseSoundsEnabledKey = "openclaw.talkPhaseSoundsEnabled"
 let talkShiftToStopEnabledKey = "openclaw.talkShiftToStopEnabled"
 let iconOverrideKey = "openclaw.iconOverride"
@@ -47,6 +48,10 @@ let computerControlProviderKey = "openclaw.computerControlProvider"
 let cookieSyncEnabledKey = "openclaw.cookieSyncEnabled"
 let cookieSyncIntoProfileKey = "openclaw.cookieSyncIntoProfile"
 let cookieSyncDomainsKey = "openclaw.cookieSyncDomains"
+
+func isTalkRealtimeRelayEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
+    defaults.object(forKey: talkRealtimeRelayEnabledKey) as? Bool ?? false
+}
 
 func isComputerControlEnabled(
     defaults: UserDefaults = AppDefaults.standard,

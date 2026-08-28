@@ -17,6 +17,7 @@ export {
 } from "@openclaw/ai/internal/shared";
 export {
   coerceTransportToolCallArguments,
+  copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
@@ -24,7 +25,12 @@ export {
   finalizeTransportStream,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   mergeTransportHeaders,
+  notifyProviderHttpMetadata,
+  notifyProviderHttpResponse,
+  notifyProviderStreamOpened,
   parseTerminalToolCallArguments,
   sanitizeTransportPayloadText,
+  withProviderAcceptanceObserver,
+  type ProviderAcceptance,
   type WritableTransportStream,
 } from "@openclaw/ai/transports";

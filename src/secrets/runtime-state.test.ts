@@ -8,6 +8,7 @@ import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotCore,
   noteRuntimeAuthProfileStorePersistedMutation,
+  prepareRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runtime-snapshots.test-support.js";
@@ -15,8 +16,13 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
@@ -74,8 +80,8 @@ describe("secret store references", () => {
 
 type PreparedSnapshotOverrides = Omit<
   Partial<PreparedSecretsRuntimeSnapshot>,
-  "authStoreCredentialsRevision" | "webTools"
->;
+  "authStoreCredentialsRevision" | "webTools" | "authStores"
+> & { authStores?: Array<{ agentDir: string; store: RuntimeAuthProfileStore }> };
 
 function preparedSnapshot(
   overrides: PreparedSnapshotOverrides = {},
@@ -83,7 +89,6 @@ function preparedSnapshot(
   return {
     sourceConfig: {},
     config: {},
-    authStores: [],
     authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
     warnings: [],
     webTools: {
@@ -92,6 +97,7 @@ function preparedSnapshot(
       diagnostics: [],
     },
     ...overrides,
+    authStores: prepareRuntimeAuthProfileStoreSnapshots(overrides.authStores ?? []),
   };
 }
 
@@ -324,8 +330,14 @@ describe("secrets runtime state", () => {
   it("restores source-only ownership through a scoped descendant", () => {
     const initialSource = { logging: { level: "info" as const } };
     const nextSource = { logging: { level: "debug" as const } };
-    setConfigResolutionFacts(initialSource, new Set(["gateway.auth.token"]));
-    setConfigResolutionFacts(nextSource, new Set());
+    setConfigResolutionFacts(
+      initialSource,
+      createConfigResolutionFacts(
+        [{ configPath: "gateway.auth.token", varName: "GATEWAY_TOKEN" }],
+        new Map([["gateway.auth.token", "GATEWAY_TOKEN"]]),
+      ),
+    );
+    setConfigResolutionFacts(nextSource, createConfigResolutionFacts([]));
     const runtimeConfig = {
       models: {
         providers: {
@@ -379,6 +391,12 @@ describe("secrets runtime state", () => {
         "gateway.auth.token",
       ),
     ).toBe(true);
+    expect(
+      getAuthoredConfigSecretRef(
+        getActiveSecretsRuntimeConfigSnapshot()?.config,
+        "gateway.auth.token",
+      )?.id,
+    ).toBe("GATEWAY_TOKEN");
     expect(getActiveSecretsRuntimeSnapshotState()?.sourceConfig).toEqual(initialSource);
     expect(getActiveSecretsRuntimeSnapshotState()?.config.models?.providers?.openai?.baseUrl).toBe(
       "https://refreshed.example.invalid/v1",

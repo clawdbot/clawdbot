@@ -25,7 +25,7 @@ import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
-import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
@@ -99,6 +99,12 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /**
+   * Run-owned start timestamp captured by the embedded-run orchestrator before
+   * admission. Flows onto the queue handle so recovery can project the active
+   * run's authoritative start time instead of the session's subagent first-run.
+   */
+  startedAtMs?: number;
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
@@ -215,6 +221,8 @@ export type EmbeddedRunAttemptResult = {
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /** Current physical model attempt; replaced from the prepared runtime plan at the boundary. */
+  modelAttempt?: AgentRuntimeModelAttempt;
   /** Exact credential material fingerprint reported by a harness-owned auth boundary. */
   authBindingFingerprint?: string;
   /** Exact local implementation used by a plugin-owned harness attempt. */
@@ -287,6 +295,8 @@ export type EmbeddedRunAttemptResult = {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    /** Producer-recorded: this exec result parked a Code Mode run (status "waiting"). */
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   /** This attempt accepted work whose future output has a runtime-owned delivery path. */
@@ -346,6 +356,8 @@ export type EmbeddedRunAttemptResult = {
    * how config-enabled code mode stays visible as a no-op on harness routes.
    */
   codeModeEngaged?: boolean;
+  /** Host-authenticated request for one bounded post-mutation inspection attempt. */
+  codeModeReconciliationCandidate?: boolean;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

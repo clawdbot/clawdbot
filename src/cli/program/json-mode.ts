@@ -5,7 +5,7 @@ import {
   isMachineOutputStdoutTTY,
   type MachineOutputResolverParams,
 } from "../machine-output-argv.js";
-import { hasCommanderOptionValue } from "./commander-parse-facts.js";
+import { hasCommanderOptionToken } from "./commander-parse-facts.js";
 
 const jsonModeSymbol = Symbol("openclaw.cli.jsonMode");
 const JSON_FLAG = new Set(["--json"]);
@@ -33,7 +33,8 @@ function getCommandJsonMode(
   command: Command,
   argv: string[] = process.argv,
 ): CommandJsonMode | null {
-  const rawJsonFlag = hasFlag(argv, "--json") && !hasCommanderOptionValue(command, argv, JSON_FLAG);
+  const rawJsonFlag =
+    hasFlag(argv, "--json") && !hasCommanderOptionToken(command, argv, JSON_FLAG, "value");
   const literalJsonMode =
     command.optsWithGlobals<{ json?: unknown }>().json === true || rawJsonFlag;
   for (let current: Command | null = command; current; current = current.parent ?? null) {

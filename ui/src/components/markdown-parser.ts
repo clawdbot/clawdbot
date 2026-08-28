@@ -1,6 +1,6 @@
-import MarkdownIt from "markdown-it";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
-import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
 import { decodeGitHubPathSegment, parseGitHubItemPath } from "./github-link-target.ts";
@@ -61,7 +61,7 @@ const PROGRESS_HTML_RE = /^(?:<progress(?:\s[^<>]*)?>\s*(?:<\/progress>)?|<\/pro
 function renderRawMarkdownHtml(
   tokens: readonly Token[],
   index: number,
-  env: Partial<MarkdownRenderEnv> | undefined,
+  progressBars: boolean,
   block: boolean,
 ): string {
   const token = tokens[index];
@@ -69,7 +69,7 @@ function renderRawMarkdownHtml(
     return "";
   }
   const content = token.content;
-  if (env?.progressBars) {
+  if (progressBars) {
     return PROGRESS_HTML_RE.test(content.trim()) ? content : "";
   }
   return escapeMarkdownHtml(content) + (block ? "\n" : "");
@@ -138,7 +138,7 @@ function isFileLinkBoundaryAfter(value: string, index: number): boolean {
   return char === undefined || /\s/.test(char) || ".,;:!?)]}>\"'".includes(char);
 }
 
-export function createMarkdownParser(): MarkdownIt {
+export function createMarkdownParser(): MarkdownItParser {
   const markdownParser = new MarkdownIt({
     html: true, // Enable HTML recognition so html_block/html_inline overrides can escape it
     breaks: true,
@@ -278,7 +278,7 @@ export function createMarkdownParser(): MarkdownIt {
       for (const token of children) {
         if (
           token.type === "link_open" &&
-          DISALLOWED_LINK_SCHEME_RE.test(token.attrGet("href") ?? "")
+          DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""))
         ) {
           token.hidden = true;
           hideClose = true;
@@ -332,7 +332,7 @@ export function createMarkdownParser(): MarkdownIt {
         const cjkTail = displayText.slice(cjkIndex);
         // Rebuild href by preserving the scheme prefix that linkify added but
         // display text omits (e.g. "mailto:" for emails, "http://" for www links).
-        const href = token.attrGet("href") ?? "";
+        const href = String(token.attrGet("href") ?? "");
         const prefixLength = href.indexOf(displayText);
         const hrefPrefix = prefixLength > 0 ? href.slice(0, prefixLength) : "";
         token.attrSet("href", hrefPrefix + trimmedDisplay);
@@ -368,7 +368,7 @@ export function createMarkdownParser(): MarkdownIt {
           continue;
         }
         if (token.type === "link_open") {
-          const href = token.attrGet("href");
+          const href = String(token.attrGet("href") ?? "");
           if (href) {
             let decodedHref = href;
             try {
@@ -528,7 +528,7 @@ export function createMarkdownParser(): MarkdownIt {
         if (open?.type !== "link_open") {
           continue;
         }
-        const href = open.attrGet("href");
+        const href = String(open.attrGet("href") ?? "");
         const url = href ? parseWebLinkHref(href) : null;
         if (!url) {
           continue;
@@ -599,12 +599,12 @@ export function createMarkdownParser(): MarkdownIt {
   // Renderer rules degrade to empty output on impossible token misses instead of
   // throwing mid-render; markdown input is untrusted and the chat view must not crash.
   markdownParser.renderer.rules.html_block = (tokens, index, _options, env) =>
-    renderRawMarkdownHtml(tokens, index, env, true);
+    renderRawMarkdownHtml(tokens, index, env?.progressBars === true, true);
   markdownParser.renderer.rules.html_inline = (tokens, index, _options, env) => {
     const token = tokens[index];
     return token?.meta?.taskListPlugin === true
       ? token.content
-      : renderRawMarkdownHtml(tokens, index, env, false);
+      : renderRawMarkdownHtml(tokens, index, env?.progressBars === true, false);
   };
   markdownParser.renderer.rules.link_favicon = (tokens, index) => {
     const hostname: unknown = tokens[index]?.meta?.hostname;
@@ -622,7 +622,7 @@ export function createMarkdownParser(): MarkdownIt {
         target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
       return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
     }
-    const sessionKey: unknown = tokens[index]?.meta?.sessionLink?.sessionKey;
+    const sessionKey: unknown = asOptionalRecord(tokens[index]?.meta?.sessionLink)?.sessionKey;
     return typeof sessionKey === "string"
       ? `<a class="markdown-session-link" role="link" tabindex="0" data-session-key="${escapeMarkdownHtml(sessionKey)}">${rendered}</a>`
       : rendered;
@@ -664,8 +664,13 @@ export function createMarkdownParser(): MarkdownIt {
     // token.info contains the full fence info string (e.g., "json title=foo");
     // extract only the first whitespace-separated token as the language.
     const language = token.info.trim().split(/\s+/)[0] || "";
+    // An unfinished fence consumes the remaining input; only container closers can
+    // follow it. Invalid fence-looking prose must not de-highlight an earlier block.
+    const streamingOpenFence = env?.streamingOpenFence === true;
     return renderMarkdownCodeBlock(token.content, language, env, {
       copyText: markdownCodeBlockCopyText(token.content),
+      highlight:
+        !streamingOpenFence || tokens.findLastIndex(({ nesting }) => nesting !== -1) !== index,
     });
   };
   // Override indented code blocks (code_block) with the same treatment as fence

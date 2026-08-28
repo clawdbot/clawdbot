@@ -4,12 +4,16 @@ import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
-import type { DiffScreenshotter } from "./browser.js";
+import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffsPluginDefaults } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffStoreHarness } from "./test-helpers.js";
 import { createDiffsTool } from "./tool.js";
 import type { DiffRenderOptions } from "./types.js";
+
+vi.mock("./browser.runtime.js", () => {
+  throw new Error("viewer-only rendering must not load the Playwright renderer");
+});
 
 const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 
@@ -340,6 +344,26 @@ describe("diffs tool", () => {
     expect(readTextContent(result, 0)).toContain("File rendering failed");
     expect((result.details as Record<string, unknown>).fileError).toBe("browser missing");
     await expect(fs.readdir(rootDir)).resolves.toEqual([]);
+  });
+
+  it("falls back to view output when the default image renderer cannot load", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    const result = await tool.execute?.("tool-3b", {
+      before: "one\n",
+      after: "two\n",
+      mode: "both",
+    });
+
+    expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
+    expect((result.details as Record<string, unknown>).viewerUrl).toEqual(expect.any(String));
+    expect((result.details as Record<string, unknown>).fileError).toContain(
+      "viewer-only rendering must not load the Playwright renderer",
+    );
   });
 
   it("rejects invalid base URLs as tool input errors", async () => {

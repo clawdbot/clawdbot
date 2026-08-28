@@ -1,24 +1,57 @@
-// Control UI E2E tests cover session ownership dormancy and owner filtering.
 import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
+import {
+  avatarLabelCenterDelta,
+  captureSessionOwnerPageProof,
+  captureSessionOwnerProof,
+  captureUiProof,
+  captureUiProofEnabled,
+  openSidebarSortMenu,
+  routeAvatarFixtures,
+  sessionOwnerProofArtifactDir,
+  uiProofArtifactDir,
+} from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session ownership",
 });
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
-
 let page: Page | undefined;
-function sessionsList(owners: [string, string]) {
+
+async function selectMenuValue(menu: Locator, value: string) {
+  await menu.evaluate((element, selectedValue) => {
+    element.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: selectedValue } },
+      }),
+    );
+  }, value);
+}
+
+function sessionsList(owners: [string, string], withAvatars = false) {
   const ownerFacet = [
-    { type: "human" as const, id: owners[0], label: "Ada" },
-    ...(owners[1] === owners[0] ? [] : [{ type: "human" as const, id: owners[1], label: "Bob" }]),
+    {
+      type: "human" as const,
+      id: owners[0],
+      label: "Ada",
+      ...(withAvatars ? { avatarUrl: `/api/users/${owners[0]}/avatar?v=1` } : {}),
+    },
+    ...(owners[1] === owners[0]
+      ? []
+      : [
+          {
+            type: "human" as const,
+            id: owners[1],
+            label: "Bob",
+            ...(withAvatars ? { avatarUrl: `/api/users/${owners[1]}/avatar?v=1` } : {}),
+          },
+        ]),
   ];
   return {
     count: 2,
@@ -67,37 +100,57 @@ function draftSessionsList() {
   return result;
 }
 
-async function captureUiProof(targetPage: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await targetPage.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
-  });
-}
-
-async function openSidebarSortMenu(targetPage: Page) {
-  const filterAndSort = targetPage.getByRole("button", { name: "Filter & sort" });
-  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
-  await filterAndSort.click();
-  const menu = targetPage.locator(".sidebar-session-sort-menu");
-  await menu.waitFor();
-  return menu;
-}
-
-async function replaceGatewayClient(targetPage: Page) {
-  await targetPage.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { connect: () => void } } };
-    };
-    if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
-    }
-    app.runtime.context.gateway.connect();
-  });
+function collaborativeSessionsList() {
+  const ada = {
+    type: "human" as const,
+    id: "profile-ada",
+    label: "Ada",
+    avatarUrl: "/api/users/profile-ada/avatar?v=1",
+  };
+  const bob = {
+    type: "human" as const,
+    id: "profile-bob",
+    label: "Bob",
+    avatarUrl: "/api/users/profile-bob/avatar?v=1",
+  };
+  const carol = { type: "human" as const, id: "profile-carol", label: "Carol" };
+  return {
+    count: 3,
+    owners: [ada, bob, carol],
+    defaults: { contextTokens: null, model: null, modelProvider: null },
+    path: "",
+    sessions: [
+      {
+        key: "agent:main:collaboration",
+        kind: "direct",
+        label: "Fix issue #127689",
+        createdActor: ada,
+        owner: { actor: ada },
+        participants: [bob],
+        participantCount: 1,
+        updatedAt: 3,
+      },
+      {
+        key: "agent:main:release-planning",
+        kind: "direct",
+        label: "Release planning",
+        createdActor: bob,
+        owner: { actor: bob },
+        participants: [ada, { type: "agent" as const, id: "research", label: "Research" }],
+        participantCount: 2,
+        updatedAt: 2,
+      },
+      {
+        key: "agent:main:single-owner",
+        kind: "direct",
+        label: "Single-owner baseline",
+        createdActor: carol,
+        owner: { actor: carol },
+        updatedAt: 1,
+      },
+    ],
+    ts: 1,
+  };
 }
 
 suite.define(() => {
@@ -109,24 +162,152 @@ suite.define(() => {
     page = undefined;
   });
 
-  it("shows permanent owner chips and filters existing custom groups", async () => {
+  it("keeps collaborative owner stacks legible without shifting session rows", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
-    const gateway = await installMockGateway(currentPage, {
+    await routeAvatarFixtures(context, currentPage, [
+      { id: "profile-ada", background: "#3f6f76", label: "A" },
+      { id: "profile-bob", background: "#985b42", label: "B" },
+    ]);
+    await installMockGateway(currentPage, {
       hasMultipleSessionSharingIdentities: true,
+      sessionKey: "agent:main:collaboration",
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": collaborativeSessionsList() },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    const collaborativeRow = currentPage.locator('[data-session-key="agent:main:collaboration"]');
+    const overflowRow = currentPage.locator('[data-session-key="agent:main:release-planning"]');
+    const singleOwnerRow = currentPage.locator('[data-session-key="agent:main:single-owner"]');
+    await collaborativeRow.waitFor();
+    await overflowRow.waitFor();
+    await singleOwnerRow.waitFor();
+    await expect.poll(() => collaborativeRow.locator(".session-owner-stack img").count()).toBe(2);
+    await expect
+      .poll(() =>
+        collaborativeRow
+          .locator(".session-owner-stack img")
+          .evaluateAll((images) =>
+            images.every(
+              (image) =>
+                image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
+            ),
+          ),
+      )
+      .toBe(true);
+
+    const geometry = await collaborativeRow.evaluate((row) => {
+      const stack = row.querySelector<HTMLElement>(".session-owner-stack");
+      const back = row.querySelector<HTMLElement>(".session-owner-stack__back .viewer-avatar");
+      const front = row.querySelector<HTMLElement>(".session-owner-stack__front");
+      const slot = row.querySelector<HTMLElement>(".sidebar-session-indicator");
+      const text = row.querySelector<HTMLElement>(".sidebar-recent-session__text");
+      if (!stack || !back || !front || !slot || !text) {
+        throw new Error("expected complete collaborative session row");
+      }
+      const stackBounds = stack.getBoundingClientRect();
+      const backBounds = back.getBoundingClientRect();
+      const frontBounds = front.getBoundingClientRect();
+      const slotBounds = slot.getBoundingClientRect();
+      const textBounds = text.getBoundingClientRect();
+      return {
+        backSize: [backBounds.width, backBounds.height],
+        centerDelta:
+          stackBounds.left + stackBounds.width / 2 - (slotBounds.left + slotBounds.width / 2),
+        frontSize: [frontBounds.width, frontBounds.height],
+        overlap: backBounds.right - frontBounds.left,
+        reveal: frontBounds.left - backBounds.left,
+        slotWidth: slotBounds.width,
+        stackSize: [stackBounds.width, stackBounds.height],
+        textGap: textBounds.left - stackBounds.right,
+      };
+    });
+    expect(geometry).toEqual({
+      backSize: [18, 18],
+      centerDelta: 0,
+      frontSize: [18, 18],
+      overlap: 8,
+      reveal: 10,
+      slotWidth: 20,
+      stackSize: [28, 20],
+      textGap: 4,
+    });
+    await expectBrowser(overflowRow.locator(".session-owner-stack__overflow")).toHaveText("+2");
+    const rowHeights = await Promise.all([
+      collaborativeRow.evaluate((row) => row.getBoundingClientRect().height),
+      singleOwnerRow.evaluate((row) => row.getBoundingClientRect().height),
+    ]);
+    expect(rowHeights[0]).toBeCloseTo(rowHeights[1] ?? 0, 5);
+    const titleLefts = await Promise.all(
+      [collaborativeRow, singleOwnerRow].map((row) =>
+        row
+          .locator(".sidebar-recent-session__text")
+          .evaluate((text) => text.getBoundingClientRect().left),
+      ),
+    );
+    expect(titleLefts[0]).toBeCloseTo(titleLefts[1] ?? 0, 5);
+
+    if (captureUiProofEnabled) {
+      const legacyStyles = await currentPage.addStyleTag({
+        content: `
+          .session-owner-stack { width: 24px; }
+          .session-owner-stack__back { width: 14px; height: 14px; }
+          .session-owner-stack__back .viewer-avatar,
+          .session-owner-stack__overflow { width: 14px; height: 14px; font-size: 7px; }
+          .session-owner-stack__front { width: 20px; height: 20px; }
+        `,
+      });
+      await captureSessionOwnerProof(currentPage, "00-before-light.png");
+      await currentPage.evaluate(() =>
+        document.documentElement.setAttribute("data-theme-mode", "dark"),
+      );
+      await captureSessionOwnerProof(currentPage, "01-before-dark.png");
+      await legacyStyles.evaluate((style) => style.parentNode?.removeChild(style));
+      await captureSessionOwnerProof(currentPage, "02-after-dark.png");
+      await currentPage.evaluate(() =>
+        document.documentElement.setAttribute("data-theme-mode", "light"),
+      );
+      await captureSessionOwnerProof(currentPage, "03-after-light.png");
+    }
+  });
+
+  it("derives People controls and owner filtering from current session owners", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: sessionOwnerProofArtifactDir,
+              size: { height: 800, width: 1200 },
+            },
+          }
+        : {}),
+    });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await routeAvatarFixtures(context, currentPage, [
+      { id: "profile-patrick", background: "#27496d", label: "P" },
+      { id: "profile-ada", background: "#3f6f76", label: "A" },
+      { id: "profile-bob", background: "#985b42", label: "B" },
+    ]);
+    const gateway = await installMockGateway(currentPage, {
+      hasMultipleSessionSharingIdentities: false,
       sessionKey: "agent:main:ada",
       presenceUsers: [
         {
           self: true,
           id: "profile-patrick",
           name: "Patrick",
-          avatarUrl:
-            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+          avatarUrl: "/api/users/profile-patrick/avatar?v=1",
         },
       ],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
+      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"], true) },
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
@@ -137,52 +318,164 @@ suite.define(() => {
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
-    await ownerMenu.locator('[value="sort:people"]').waitFor();
+    await captureUiProof(currentPage, "00-people-controls-from-session-owners.png");
+    await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
+    await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
     const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
     await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
-    await expectBrowser(ownerRows.first().locator("openclaw-session-owner-chip")).toHaveText("P");
+    await expectBrowser(ownerRows.locator("openclaw-session-owner-chip img")).toHaveCount(3);
+    const firstOwnerCenterDelta = await avatarLabelCenterDelta(ownerRows.first());
     await captureUiProof(currentPage, "00-people-sort-available.png");
-    await ownerMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "sort:people" } },
-        }),
-      ),
+    expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
+    await selectMenuValue(ownerMenu, "grouping:person");
+    await expectBrowser(
+      currentPage.locator('[data-session-section="person:profile-ada"]'),
+    ).toContainText("Ada research");
+    await expectBrowser(
+      currentPage.locator('[data-session-section="person:profile-bob"]'),
+    ).toContainText("Bob operations");
+
+    const groupedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(groupedMenu.locator('[value="grouping:person"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
     );
+    await selectMenuValue(groupedMenu, "grouping:category");
+
+    const sortableMenu = await openSidebarSortMenu(currentPage);
+    await selectMenuValue(sortableMenu, "sort:people");
     const peopleMenu = await openSidebarSortMenu(currentPage);
     await expectBrowser(peopleMenu.locator('[value="sort:people"]')).toHaveAttribute(
       "aria-checked",
       "true",
     );
     await captureUiProof(currentPage, "01-people-sort-selected.png");
+    const expectOwnerFilter = async (after: number) => {
+      // The chat title survives a sidebar refresh; wait for the filtered row itself.
+      await expectBrowser(
+        currentPage.locator('[data-session-section="category:Research"]'),
+      ).toContainText("Ada research");
+      await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
+      await expectBrowser(currentPage.locator('[data-session-key="agent:main:bob"]')).toHaveCount(
+        0,
+      );
+      await expectBrowser(
+        currentPage.locator('[data-session-section="category:Operations"]'),
+      ).toHaveCount(0);
+      // The shared roster may also refresh, so the filtered request need not be last.
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).slice(after))
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              params: expect.objectContaining({ ownerId: "profile-ada" }),
+            }),
+          ]),
+        );
+    };
+    const beforeSelection = (await gateway.getRequests("sessions.list")).length;
     await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
-    await peopleMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "owner:profile-ada" } },
-        }),
-      ),
+    await selectMenuValue(peopleMenu, "owner:profile-ada");
+    await expectOwnerFilter(beforeSelection);
+    await captureSessionOwnerProof(currentPage, "04-owner-filter-selected.png");
+
+    const initialConnections = (await gateway.getRequests("connect")).length;
+    const beforeReconnect = (await gateway.getRequests("sessions.list")).length;
+    await gateway.closeLatest(1012, "owner filter reconnect proof");
+    await expect
+      .poll(async () => (await gateway.getRequests("connect")).length)
+      .toBeGreaterThan(initialConnections);
+    await expectOwnerFilter(beforeReconnect);
+    const reconnectedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(reconnectedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
     );
-    await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
+
+    await currentPage.reload();
+    // Reload starts a new in-page request log, so no earlier traffic can satisfy this.
+    await expectOwnerFilter(0);
+    const reloadedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(reloadedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await captureSessionOwnerPageProof(currentPage, "05-owner-filter-restored-after-reload.png");
+  });
+
+  it("keeps unrelated active sessions out of the involving-me filter", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: sessionOwnerProofArtifactDir,
+              size: { height: 800, width: 1200 },
+            },
+          }
+        : {}),
+    });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const allSessions = sessionsList(["profile-ada", "profile-bob"]);
+    const gateway = await installMockGateway(currentPage, {
+      hasMultipleSessionSharingIdentities: true,
+      sessionKey: "agent:main:ada",
+      presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": allSessions },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
+    await gateway.setMethodResponse("sessions.list", {
+      ...allSessions,
+      count: 1,
+      sessions: allSessions.sessions.filter((session) => session.key === "agent:main:ada"),
+    });
+    const menu = await openSidebarSortMenu(currentPage);
+    await selectMenuValue(menu, "involving-me");
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
-    expect(await currentPage.locator('[data-session-section="category:Research"]').count()).toBe(1);
-    expect(await currentPage.locator('[data-session-section="category:Operations"]').count()).toBe(
-      0,
-    );
     await expect
       .poll(async () =>
         (await gateway.getRequests("sessions.list")).some(
           (request) =>
-            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
+            (request.params as { involvingMe?: unknown } | undefined)?.involvingMe === true,
         ),
       )
       .toBe(true);
+    await captureSessionOwnerProof(currentPage, "02-involving-me-before-active-event.png");
+
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey: "agent:main:bob",
+      key: "agent:main:bob",
+      kind: "direct",
+      updatedAt: 3,
+      archived: false,
+      hasActiveRun: true,
+      status: "running",
+      owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
+      participants: [],
+      participantCount: 0,
+    });
+
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
+    const filteredMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(filteredMenu.locator('[value="involving-me"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await captureSessionOwnerProof(currentPage, "03-involving-me-after-active-event.png");
   });
 
   it("renders zero ownership chrome for a single owner", async () => {
@@ -241,7 +534,7 @@ suite.define(() => {
 
     const newThread = currentPage
       .locator(".sidebar-session-toolbar")
-      .getByRole("button", { name: "New session" });
+      .getByRole("link", { name: "New session" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");
     await expect.poll(() => new URL(currentPage.url()).pathname).toBe("/new");
@@ -309,9 +602,11 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
     const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
     await draftToggle.waitFor();
     await captureUiProof(currentPage, "02-create-draft-available.png");
     await draftToggle.check();
+    await expectBrowser(draftToggle).toBeChecked();
     await currentPage.locator(".new-session-page__message").fill("work privately first");
     await captureUiProof(currentPage, "03-create-draft-selected.png");
     await currentPage.getByRole("button", { name: "Start session" }).click();
@@ -348,7 +643,7 @@ suite.define(() => {
         "chat.metadata",
         "chat.startup",
         "session.visibility.set",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
       ],
@@ -356,7 +651,7 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [],
@@ -416,18 +711,18 @@ suite.define(() => {
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
     await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
-    expect(await gateway.getRequests("session.members.list")).toHaveLength(0);
+    expect(await gateway.getRequests("session.members.listEvidence")).toHaveLength(0);
 
     const message = "visibility change rejected";
     await gateway.rejectDeferred("session.visibility.set", {
       code: "INVALID_REQUEST",
       message,
     });
-    const alert = currentPage.getByRole("alert").filter({ hasText: message });
+    const alert = currentPage.locator(".chat-error[role=alert]").filter({ hasText: message });
     await expectBrowser(alert).toBeVisible();
 
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-status--error")).toBeVisible();
+    await expectBrowser(dropdown.getByRole("alert").filter({ hasText: message })).toBeVisible();
   });
 
   it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {
@@ -446,7 +741,7 @@ suite.define(() => {
         "chat.metadata",
         "chat.startup",
         "session.visibility.set",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
       ],
@@ -454,7 +749,7 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [{ type: "human", id: "profile-bob", label: "Bob" }],
@@ -467,7 +762,7 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
-    await gateway.waitForRequest("session.members.list");
+    await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     const publish = dropdown.locator('wa-dropdown-item[value="visibility:shared"]');
     await publish.waitFor();
@@ -525,7 +820,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
         "session.visibility.set",
@@ -563,7 +858,7 @@ suite.define(() => {
       ],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
           identities: [...humanIdentities, ...nonHumanIdentities],
@@ -576,7 +871,7 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.locator(".chat-pane__sharing-trigger").click();
-    await gateway.waitForRequest("session.members.list");
+    await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     await dropdown.locator('wa-dropdown-item[value="member:profile-member-0"]').waitFor();
     await dropdown.evaluate(async (element) => {
@@ -702,12 +997,12 @@ suite.define(() => {
     // Agent and system identities render the non-human icon from identity.type,
     // not from an ID-string heuristic; owner-chip presentation is human-only.
     await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
-    expect(
-      await longNameItem.locator(".chat-pane__sharing-member-label").getAttribute("title"),
-    ).toBe(longMemberLabel);
-    expect(await longIdItem.locator(".chat-pane__sharing-member-label").getAttribute("title")).toBe(
-      longMemberId,
-    );
+    await expect
+      .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
+      .toBe(longMemberLabel);
+    await expect
+      .poll(() => tooltipTitleText(longIdItem.locator(".chat-pane__sharing-member-label")))
+      .toBe(longMemberId);
     await expectBrowser(selectedIndicator).toHaveCount(1);
     expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
   });
@@ -724,19 +1019,23 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
     await draftToggle.check();
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared"],
       hasMultipleSessionSharingIdentities: false,
     });
     await replaceGatewayClient(currentPage);
-    await expect.poll(() => draftToggle.count()).toBe(0);
+    await expect
+      .poll(() => currentPage.getByRole("button", { name: "Draft", exact: true }).count())
+      .toBe(0);
 
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared", "draft"],
       hasMultipleSessionSharingIdentities: true,
     });
     await replaceGatewayClient(currentPage);
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
     await draftToggle.waitFor();
     expect(await draftToggle.isChecked()).toBe(false);
   });
@@ -752,7 +1051,7 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    await currentPage.locator(".new-session-page__message").waitFor();
-    expect(await currentPage.getByRole("switch", { name: "Draft", exact: true }).count()).toBe(0);
+    const menu = await openNewSessionPlusMenu(currentPage);
+    expect(await menu.getByRole("menuitem", { name: "Draft" }).count()).toBe(0);
   });
 });

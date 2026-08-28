@@ -367,6 +367,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     prepareProviderRuntimeAuth: options.prepareProviderRuntimeAuth ?? vi.fn(async () => undefined),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),
     resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),

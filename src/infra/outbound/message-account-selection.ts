@@ -7,6 +7,7 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { isConfiguredChannel } from "./channel-selection.js";
@@ -113,6 +114,7 @@ export function validateExplicitMessageAccountSelection(params: {
     );
   }
   if (params.checkResolvedAccount !== false) {
+    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
     const account = plugin.config.resolveAccount(params.cfg, accountId);
     if (!resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg })) {
       throw new MessageActionDeniedError(

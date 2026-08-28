@@ -40,7 +40,5 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           false,
         ),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("send", opts);
-    });
+    .action((opts) => helpers.runMessageAction("send", opts));
 }

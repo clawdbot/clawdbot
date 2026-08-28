@@ -10,6 +10,7 @@ function createNodesRuntime(
   return {
     list: vi.fn(async () => ({ nodes })),
     invoke: vi.fn(async () => ({ ok: true })),
+    openDuplex: vi.fn(),
   };
 }
 

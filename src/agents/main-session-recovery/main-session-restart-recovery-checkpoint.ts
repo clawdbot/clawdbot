@@ -23,6 +23,7 @@ import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resu
 import {
   buildRestartRecoveryExpectedState,
   mainSessionRecoveryLog,
+  resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
 export function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
@@ -70,6 +71,7 @@ export async function reconcileInterruptedCompletionReport(params: {
         ...buildMainSessionRecoveryClearPatch(entry),
         status: "killed",
         lifecycleRunId: undefined,
+        lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
         abortedLastRun: false,
         endedAt,
         lastRunError: undefined,
@@ -323,6 +325,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     }),
     abortedLastRun: false,
     lifecycleRunId: undefined,
+    lastRunId: resolveRestartRecoveryTerminalClientRunId(params.entry),
     endedAt,
     pendingFinalDelivery: undefined,
     restartRecoveryForceSafeTools: undefined,

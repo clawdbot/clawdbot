@@ -12,7 +12,6 @@ import { createSessionCapability, type SessionCapability } from "../../lib/sessi
 import {
   createResolvedModelPatch,
   createModelCatalog,
-  DEEPSEEK_CHAT_MODEL,
   OPENAI_GPT5_MINI_MODEL,
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -122,6 +121,41 @@ function expectNoRequestCall(request: ReturnType<typeof vi.fn>, method: string) 
 }
 
 describe("executeSlashCommand directives", () => {
+  it("lets the canonical row retire a slash-command selection equal to the default", async () => {
+    const key = "agent:main:main";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return createResolvedModelPatch("gpt-5-mini", "openai");
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([
+          row(key, {
+            model: "gpt-5-mini",
+            modelProvider: "openai",
+            modelOverrideSource: null,
+          }),
+        ]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = createTestGatewayClient(request);
+    const snapshot = { client, phase: "connected" as const, hello: sessionMutationGatewayHello() };
+    const sessions = createSessionCapability({
+      snapshot,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+    const result = await executeSlashCommandImpl(client, key, "model", "openai/gpt-5-mini", {
+      sessions,
+      sessionAccessSnapshot: snapshot,
+      chatModelCatalog: createModelCatalog(OPENAI_GPT5_MINI_MODEL),
+    });
+    expect(result.failed).not.toBe(true);
+    expect(sessions.state.result?.sessions[0]?.modelOverrideSource).toBeNull();
+    expect(sessions.state.modelOverrides).toEqual({});
+    sessions.dispose();
+  });
+
   it("does not compact a session without operator.admin", async () => {
     const request = vi.fn();
     const client = createTestGatewayClient(request);
@@ -157,19 +191,17 @@ describe("executeSlashCommand directives", () => {
     }
   });
 
-  it("defers slash-command model cache publication to the captured chat owner", async () => {
+  it("passes the captured chat owner to canonical model patching", async () => {
     const client = createTestGatewayClient(vi.fn());
     const patch = vi
       .fn()
       .mockResolvedValue(
         createResolvedModelPatch(OPENAI_GPT5_MINI_MODEL.id, OPENAI_GPT5_MINI_MODEL.provider),
       );
-    const setModelOverride = vi.fn();
     const ownsModelOverride = vi.fn(() => true);
     const sessions = {
       ...createTestSessionCapability(client),
       patch,
-      setModelOverride,
     } as SessionCapability;
 
     const result = await executeSlashCommandImpl(client, "global", "model", "gpt-5-mini", {
@@ -190,40 +222,9 @@ describe("executeSlashCommand directives", () => {
       { model: "gpt-5-mini" },
       expect.objectContaining({
         agentId: "work",
-        deferModelOverride: true,
         ownsModelOverride,
       }),
     );
-    expect(setModelOverride).toHaveBeenCalledWith("global", "openai/gpt-5-mini");
-  });
-
-  it("does not publish a slash-command model cache value after its owner retires", async () => {
-    const client = createTestGatewayClient(vi.fn());
-    const setModelOverride = vi.fn();
-    const sessions = {
-      ...createTestSessionCapability(client),
-      patch: vi
-        .fn()
-        .mockResolvedValue(
-          createResolvedModelPatch(OPENAI_GPT5_MINI_MODEL.id, OPENAI_GPT5_MINI_MODEL.provider),
-        ),
-      setModelOverride,
-    } as SessionCapability;
-
-    const result = await executeSlashCommandImpl(client, "global", "model", "gpt-5-mini", {
-      sessions,
-      sessionAccessSnapshot: {
-        client,
-        hello: sessionMutationGatewayHello(),
-        phase: "connected",
-      },
-      agentId: "work",
-      ownsModelOverride: () => false,
-      chatModelCatalog: createModelCatalog(OPENAI_GPT5_MINI_MODEL),
-    });
-
-    expect(result.failed).not.toBe(true);
-    expect(setModelOverride).not.toHaveBeenCalled();
   });
 
   it("does not patch through a replacement connection after loading session state", async () => {
@@ -540,39 +541,31 @@ describe("executeSlashCommand directives", () => {
     );
   });
 
-  it("mirrors resolved provider-qualified model refs after /model changes", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return createResolvedModelPatch("gpt-5-mini", "openai");
-      }
-      if (method === "models.list") {
-        return { models: createModelCatalog(OPENAI_GPT5_MINI_MODEL) };
-      }
-      if (method === "models.list") {
-        return { models: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }] };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+  it.each(["gpt-5-mini", "openai/gpt-5-mini", "nvidia/moonshotai/kimi-k2.5"])(
+    "patches %s without rebuilding a second model cache",
+    async (model) => {
+      const request = vi.fn(async (method: string, _payload?: unknown) => {
+        if (method === "sessions.patch") {
+          return createResolvedModelPatch("gpt-5-mini", "openai");
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
 
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "main",
-      "model",
-      "gpt-5-mini",
-      {
-        chatModelCatalog: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
-      },
-    );
+      const result = await executeSlashCommand(
+        createTestGatewayClient(request),
+        "main",
+        "model",
+        model,
+      );
 
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "main",
-      model: "gpt-5-mini",
-    });
-    expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "qualified",
-      value: "openai/gpt-5-mini",
-    });
-  });
+      expect(request).toHaveBeenCalledWith("sessions.patch", {
+        key: "main",
+        model,
+      });
+      expect(result.modelChanged).toBe(true);
+      expectNoRequestCall(request, "models.list");
+    },
+  );
 
   it("passes selected-agent scope for global model changes", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
@@ -639,162 +632,6 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("uses the local model catalog to qualify raw /model overrides when the patch response omits provider", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return {
-          ok: true,
-          key: "main",
-          resolved: {
-            model: "gpt-5-mini",
-          },
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "main",
-      "model",
-      "gpt-5-mini",
-      {
-        chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
-      },
-    );
-
-    expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "qualified",
-      value: "openai/gpt-5-mini",
-    });
-  });
-
-  it("corrects stale patched providers with the catalog after /model", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return createResolvedModelPatch("deepseek-chat", "zai");
-      }
-      if (method === "models.list") {
-        return { models: createModelCatalog(DEEPSEEK_CHAT_MODEL) };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "main",
-      "model",
-      "deepseek-chat",
-    );
-
-    expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "qualified",
-      value: "deepseek/deepseek-chat",
-    });
-  });
-
-  it("keeps openrouter-prefixed refs when patched model ids include slashes", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return createResolvedModelPatch("google/gemma-4-26b-a4b-it", "openrouter");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "main",
-      "model",
-      "google/gemma-4-26b-a4b-it",
-      {
-        chatModelCatalog: [
-          {
-            id: "google/gemma-4-26b-a4b-it",
-            name: "Gemma 4 26B",
-            provider: "openrouter",
-          },
-        ],
-      },
-    );
-
-    expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "qualified",
-      value: "openrouter/google/gemma-4-26b-a4b-it",
-    });
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to the patched server provider when catalog lookup fails", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return createResolvedModelPatch("gpt-5-mini", "openai");
-      }
-      if (method === "models.list") {
-        throw new Error("models unavailable");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "main",
-      "model",
-      "gpt-5-mini",
-    );
-
-    expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "qualified",
-      value: "openai/gpt-5-mini",
-    });
-  });
-
-  it("keeps provider-qualified nested ids when the patched catalog lookup fails", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return createResolvedModelPatch("moonshotai/kimi-k2.5", "nvidia");
-      }
-      if (method === "models.list") {
-        throw new Error("models unavailable");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "main",
-      "model",
-      "nvidia/moonshotai/kimi-k2.5",
-    );
-
-    expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "qualified",
-      value: "nvidia/moonshotai/kimi-k2.5",
-    });
-  });
-
-  it("reuses a provided model catalog for /model updates without refetching", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return createResolvedModelPatch("gpt-5-mini", "openai");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "main",
-      "model",
-      "gpt-5-mini",
-      { modelCatalog: createModelCatalog(OPENAI_GPT5_MINI_MODEL) },
-    );
-
-    expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "qualified",
-      value: "openai/gpt-5-mini",
-    });
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).not.toHaveBeenCalledWith("models.list", {});
-  });
   it("resolves the legacy main alias for /usage", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
@@ -1097,6 +934,50 @@ describe("executeSlashCommand directives", () => {
       key: "agent:main:main",
       thinkingLevel: "xhigh",
     });
+  });
+
+  it("accepts a thinking level advertised only by the active model catalog", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-5.6-sol",
+              modelProvider: "openai",
+            }),
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      createTestGatewayClient(request),
+      "agent:main:main",
+      "think",
+      "ultra",
+      {
+        chatModelCatalog: [
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            provider: "openai",
+            reasoning: true,
+            thinkingLevels: [{ id: "ultra", label: "ultra" }],
+          },
+        ],
+      },
+    );
+
+    expect(result.content).toBe(t("chat.commandResults.thinking.set", { level: "**ultra**" }));
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: "ultra",
+    });
+    expectNoRequestCall(request, "models.list");
   });
 
   it("clears thinking override for /think default", async () => {

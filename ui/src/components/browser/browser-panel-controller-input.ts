@@ -65,6 +65,7 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
 export class BrowserPanelInputController {
   private drawingStroke: AnnotationStroke | null = null;
   private suppressStageClick = false;
+  private inspectionError: string | null = null;
 
   constructor(private readonly host: BrowserPanelInputHost) {}
 
@@ -214,21 +215,33 @@ export class BrowserPanelInputController {
         this.host.view?.targetId === targetId &&
         this.host.mode === "inspect",
     );
+    this.host.setState("inspected", null);
     this.host.setState("inspectPointer", stagePoint);
+    this.paintOverlay();
     this.host.pendingInput.queueInspection(INSPECT_THROTTLE_MS, current, () => {
       void inspectBrowserElementAt(client, { targetId, x: point.x, y: point.y })
         .then((node) => {
           if (current()) {
+            if (this.inspectionError !== null && this.host.errorText === this.inspectionError) {
+              this.host.setState("errorText", null);
+            }
+            this.inspectionError = null;
             this.host.setState("inspected", node);
             this.paintOverlay();
           }
         })
         .catch((error: unknown) => {
-          if (current() && isBrowserEvaluateDisabledError(error)) {
+          if (!current()) {
+            return;
+          }
+          if (isBrowserEvaluateDisabledError(error)) {
             this.host.setState("evaluateUnavailable", true);
             this.host.setState("errorText", t("browser.inspectUnavailable"));
             this.host.setState("mode", "interact");
+            return;
           }
+          this.host.reportError(error);
+          this.inspectionError = this.host.errorText;
         });
     });
   }

@@ -223,6 +223,25 @@ describe("agent roster resolution", () => {
     expect(resolveAgentConfig({ agents: { defaults, list: [] } }, "main")).toBeUndefined();
   });
 
+  it("does not project unrelated keyed entries while resolving one agent", () => {
+    let unrelatedEntryReads = 0;
+    const entries = new Proxy(
+      { main: { name: "Primary" }, worker: { name: "Worker" } },
+      {
+        get(target, property, receiver) {
+          if (property === "worker") {
+            unrelatedEntryReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const config = { agents: { ownership: "explicit" as const, entries } };
+
+    expect(resolveAgentConfig(config, "main")?.name).toBe("Primary");
+    expect(unrelatedEntryReads).toBe(0);
+  });
+
   it("keeps the retained legacy owner on the inherited workspace before config write", () => {
     const cfg = migratePersistedImplicitMainRoster({
       agents: {

@@ -471,11 +471,13 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "plugin-sdk-shipped-channel-setup-exports",
-    status: "removed",
+    status: "deprecated",
     owner: "channel",
     introduced: "2026-07-23",
+    deprecated: "2026-07-23",
+    warningStarts: "2026-07-23",
     replacement:
-      "plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
+      "retain until supported published packages migrate to plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
     docsPath: "/plugins/sdk-migration#published-channel-setup-compatibility",
     surfaces: [
       "openclaw/plugin-sdk/bundled-channel-config-schema SlackConfigSchema",
@@ -485,10 +487,12 @@ export const PLUGIN_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/setup-runtime createLegacyCompatChannelDmPolicy",
       "openclaw/plugin-sdk/setup-runtime promptLegacyChannelAllowFromForAccount",
     ],
-    diagnostics: ["plugin compatibility registry and migration guide"],
-    tests: ["src/plugins/compat/registry.test.ts"],
+    diagnostics: [
+      "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
+    ],
+    tests: ["src/plugin-sdk/shipped-channel-compat.test.ts", "src/plugins/compat/registry.test.ts"],
     releaseNote:
-      "The shipped channel setup compatibility schemas and helpers were removed; channel plugins must own their config schemas and setup policy.",
+      "Published OpenClaw channel packages through 2026.7.1 remain loadable while they migrate to plugin-owned config and setup helpers.",
   },
   {
     code: "generated-bundled-channel-config-fallback",

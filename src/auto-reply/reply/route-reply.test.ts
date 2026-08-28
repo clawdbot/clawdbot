@@ -316,6 +316,7 @@ describe("routeReply", () => {
       requesterSenderId: "sender-1",
       replyKind: "block",
       runId: "run-1",
+      deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:item-1",
     });
 
     expect(res.ok).toBe(true);
@@ -335,6 +336,16 @@ describe("routeReply", () => {
       },
     });
     expect(lastDelivery()).not.toHaveProperty("skipMessageSendingHooks");
+    expectLastDeliveryFields({
+      queuePolicy: "required",
+      deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:item-1",
+      reusePendingDeliveryIntent: true,
+      completionRetention: {
+        idPrefix: "block-reply:v1:",
+        maxAgeMs: 24 * 60 * 60_000,
+        maxEntries: 2_000,
+      },
+    });
   });
 
   it("uses payload reply policy when resolving the final Slack transport", async () => {

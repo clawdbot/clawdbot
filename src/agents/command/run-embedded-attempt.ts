@@ -16,7 +16,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
-import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import type { prepareAgentCommandExecutionIdentity } from "../agent-command-execution-identity.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -66,7 +66,7 @@ const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
 export async function runEmbeddedAgentAttempt(params: {
-  preparedRunAdmission: PreparedAgentRunAdmission;
+  preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity>;
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
@@ -160,7 +160,10 @@ export async function runEmbeddedAgentAttempt(params: {
     lifecycleFinishing: false,
     lifecycleEnded: false,
   };
-  const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
+  const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(
+    attemptLifecycleState,
+    params.preparedRunAdmission.onRuntimeTurnStarted,
+  );
   const transcriptMedia = params.opts.transcriptMedia ?? [];
   const hasTranscriptMedia = transcriptMedia.length > 0;
   const suppressUserTurnPersistence =
@@ -214,6 +217,9 @@ export async function runEmbeddedAgentAttempt(params: {
   );
 
   let result: AgentAttemptResult;
+  let maintenanceAuthProfile:
+    | { authProfileId?: string; authProfileIdSource?: "auto" | "user" }
+    | undefined;
   let fallbackProvider = provider;
   let fallbackModel = model;
   let fallbackExhausted = false;
@@ -334,6 +340,7 @@ export async function runEmbeddedAgentAttempt(params: {
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
+          maintenanceAuthProfile = undefined;
           attemptMediaTaskIds = sessionKey
             ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
             : new Set<string>();
@@ -467,6 +474,7 @@ export async function runEmbeddedAgentAttempt(params: {
             body,
             transcriptBody,
             isFallbackRetry: runOptions.isFallbackRetry,
+            modelRoutingProvenance: runOptions.modelRoutingProvenance,
             resolvedThinkLevel: candidateThinkLevel,
             fastMode,
             fastModeStartedAtMs,
@@ -506,6 +514,10 @@ export async function runEmbeddedAgentAttempt(params: {
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
             onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
+            onSuccessfulAuthProfile: (selection) => {
+              // Absence is a valid ambient-auth result; only an uncalled observer is unknown.
+              maintenanceAuthProfile = selection;
+            },
             onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
               lifecycleGeneration = nextLifecycleGeneration;
               params.onLifecycleGenerationChanged(nextLifecycleGeneration);
@@ -572,9 +584,8 @@ export async function runEmbeddedAgentAttempt(params: {
         }
         liveSwitchRetries += 1;
         if (liveSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
-          log.error(
-            `Live session model switch in subagent run ${runId}: exceeded maximum retries (${MAX_LIVE_SWITCH_RETRIES})`,
-          );
+          const retryLimitMessage = `Exceeded maximum live model switch retries (${MAX_LIVE_SWITCH_RETRIES})`;
+          log.error(`Live session model switch in subagent run ${runId}: ${retryLimitMessage}`);
           if (!attemptLifecycleState.lifecycleEnded) {
             emitAgentEvent({
               runId,
@@ -589,12 +600,7 @@ export async function runEmbeddedAgentAttempt(params: {
             });
           }
           await fallbackTrajectoryRecorder?.flush();
-          throw new Error(
-            `Exceeded maximum live model switch retries (${MAX_LIVE_SWITCH_RETRIES})`,
-            {
-              cause: err,
-            },
-          );
+          throw new Error(retryLimitMessage, { cause: err });
         }
         const switchRef = normalizeAgentCommandModelRef(
           cfg,
@@ -696,6 +702,7 @@ export async function runEmbeddedAgentAttempt(params: {
     sessionEntry,
     lifecycleGeneration,
     effectiveTurnThinkLevel,
+    maintenanceAuthProfile,
     internalSessionTarget,
     attemptExecutionRuntime,
     messageChannel,

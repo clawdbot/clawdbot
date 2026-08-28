@@ -24,6 +24,7 @@ describe("codex package manifest", () => {
 
     expect(packageJson.devDependencies).toHaveProperty("@openclaw/plugin-sdk");
     expect(packageJson.dependencies?.["@openai/codex"]).toBe(CODEX_APP_SERVER_VERSION);
+    expect(packageJson.dependencies?.semver).toBe("7.8.5");
     expect(packageJson.openclaw?.release?.requireLatestDependencies).toEqual(["@openai/codex"]);
     expect(packageJson.openclaw?.install?.requiredPlatformPackages).toEqual([
       "@openai/codex-linux-x64",
@@ -43,10 +44,10 @@ describe("codex package manifest", () => {
     const lockfile = fs.readFileSync(new URL("../../../pnpm-lock.yaml", import.meta.url), "utf8");
 
     expect(workspace).toContain(
-      `"@agentclientprotocol/codex-acp@1.1.7>@openai/codex": ${CODEX_APP_SERVER_VERSION}`,
+      `"@agentclientprotocol/codex-acp@1.6.0>@openai/codex": ${CODEX_APP_SERVER_VERSION}`,
     );
     expect(lockfile).toContain(
-      `'@agentclientprotocol/codex-acp@1.1.7>@openai/codex': ${CODEX_APP_SERVER_VERSION}`,
+      `'@agentclientprotocol/codex-acp@1.6.0>@openai/codex': ${CODEX_APP_SERVER_VERSION}`,
     );
     const lockedCodexVersions = new Set(
       [...lockfile.matchAll(/@openai\/codex@(\d+\.\d+\.\d+)/g)].map((match) => match[1]),

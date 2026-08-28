@@ -62,7 +62,6 @@ function createAudioPreflightHarness(
     getMemberDisplayName: async () => "Frank",
     startupMs: Date.now() - 120_000,
     startupGraceMs: 60_000,
-    textLimit: 4000,
     mediaMaxBytes: 5 * 1024 * 1024,
     replyToMode: "first",
     ...overrides,
@@ -166,6 +165,51 @@ describe("createMatrixRoomMessageHandler audio preflight", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(expectLatestInboundContext(recordInboundSession)).toMatchObject({
       BodyForAgent: expect.stringContaining("bot can you check this"),
+      WasMentioned: true,
+    });
+  });
+
+  it("transcribes encrypted room audio when a blank top-level URL masks its file URL", async () => {
+    downloadMatrixMediaMock.mockResolvedValue({
+      path: "/tmp/inbound/encrypted-voice.ogg",
+      contentType: "audio/ogg",
+      placeholder: "[matrix audio attachment]",
+    });
+    transcribeFirstAudioMock.mockResolvedValue("bot can you hear this encrypted voice note");
+    const { handler, recordInboundSession } = createAudioPreflightHarness({
+      isDirectMessage: false,
+      historyLimit: 5,
+      mentionRegexes: [/\bbot\b/i],
+      roomsConfig: {
+        "!room:example.org": { requireMention: true } as never,
+      },
+    });
+    const file = {
+      url: "mxc://example/encrypted-voice",
+      key: { kty: "oct", key_ops: ["encrypt"], alg: "A256CTR", k: "secret", ext: true },
+      iv: "iv",
+      hashes: { sha256: "hash" },
+      v: "v2",
+    };
+
+    await handler(
+      "!room:example.org",
+      createAudioEvent({
+        msgtype: "m.audio",
+        body: " \t ",
+        url: " ",
+        file,
+        info: { mimetype: "audio/ogg", size: 12345 },
+      }),
+    );
+
+    expect(downloadMatrixMediaMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ mxcUrl: "mxc://example/encrypted-voice", file }),
+    );
+    expect(transcribeFirstAudioMock).toHaveBeenCalledOnce();
+    expect(expectLatestInboundContext(recordInboundSession)).toMatchObject({
+      BodyForAgent: expect.stringContaining("bot can you hear this encrypted voice note"),
+      MediaPath: "/tmp/inbound/encrypted-voice.ogg",
       WasMentioned: true,
     });
   });

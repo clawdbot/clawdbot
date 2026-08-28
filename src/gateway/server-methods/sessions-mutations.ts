@@ -147,7 +147,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     const authorizeView = (candidate: NonNullable<typeof target>) =>
       authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
-      (createSessionListEntryFilter({ client })?.(candidate.storeKey, candidate.entry) === false
+      (createSessionListEntryFilter({ client, cfg })?.(candidate.storeKey, candidate.entry) ===
+      false
         ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
         : null);
     const visibilityError = authorizeView(target);
@@ -337,6 +338,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason,
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: true,
       workerPlacementContext: context,

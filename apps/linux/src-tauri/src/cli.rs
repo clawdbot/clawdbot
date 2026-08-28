@@ -16,6 +16,7 @@ pub enum CliError {
     Missing,
     Environment(String),
     Spawn(String),
+    CommandFailed(String),
     InvalidJson(String),
 }
 
@@ -23,9 +24,10 @@ impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Missing => write!(formatter, "OpenClaw CLI not found"),
-            Self::Environment(message) | Self::Spawn(message) | Self::InvalidJson(message) => {
-                formatter.write_str(message)
-            }
+            Self::Environment(message)
+            | Self::Spawn(message)
+            | Self::CommandFailed(message)
+            | Self::InvalidJson(message) => formatter.write_str(message),
         }
     }
 }
@@ -102,6 +104,14 @@ impl OpenClawCli {
         S: AsRef<std::ffi::OsStr>,
     {
         let output = self.output(args)?;
+        // Failed commands own their stderr; parsing first would mislabel real
+        // failures as missing CLI dashboard support.
+        if !output.status.success() {
+            let message = output_tail(&output.stderr)
+                .or_else(|| output_tail(&output.stdout))
+                .unwrap_or_else(|| format!("OpenClaw CLI exited with {}", output.status));
+            return Err(CliError::CommandFailed(message));
+        }
         let value = serde_json::from_slice(&output.stdout).map_err(|error| {
             CliError::InvalidJson(format!("OpenClaw CLI returned invalid JSON: {error}"))
         })?;
@@ -121,6 +131,21 @@ impl OpenClawCli {
     }
 }
 
+pub(crate) fn output_tail(output: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(output);
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        // The CLI repeats identical progress lines while waiting; one occurrence
+        // carries the same information in a user-facing failure message.
+        if lines.last() != Some(&line) {
+            lines.push(line);
+        }
+    }
+    let start = lines.len().saturating_sub(12);
+    let tail = &lines[start..];
+    (!tail.is_empty()).then(|| tail.join("\n"))
+}
+
 pub fn openclaw_home() -> Result<PathBuf, CliError> {
     #[cfg(target_os = "windows")]
     let home = env::var_os("HOME")
@@ -130,4 +155,24 @@ pub fn openclaw_home() -> Result<PathBuf, CliError> {
     let home = env::var_os("HOME").filter(|value| !value.is_empty());
     let home = home.ok_or_else(|| CliError::Environment("HOME is not set".to_string()))?;
     Ok(PathBuf::from(home).join(".openclaw"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::output_tail;
+
+    #[test]
+    fn output_tail_keeps_the_last_twelve_nonempty_lines() {
+        let output = (1..=15)
+            .map(|line| format!("message {line}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let expected = (4..=15)
+            .map(|line| format!("message {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(output_tail(output.as_bytes()), Some(expected));
+        assert_eq!(output_tail(b"\n  \n"), None);
+    }
 }

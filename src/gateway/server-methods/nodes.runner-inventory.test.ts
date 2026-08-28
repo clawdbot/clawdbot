@@ -6,8 +6,7 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import {
-  collectNodeWorkerBundleStatusByNodeId,
-  collectNodeWorkerCapacityByNodeId,
+  collectNodeCatalogRuntimeState,
   createNodeRegistryRuntime,
   setNodeRunnerStateChangedListener,
 } from "../node-registry-private.js";
@@ -124,9 +123,8 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       }),
     ]);
     expect(
-      collectNodeWorkerCapacityByNodeId(runtime.nodeRegistry, [
-        { nodeId: "node-1", connId: "conn-1" },
-      ]),
+      collectNodeCatalogRuntimeState(runtime.nodeRegistry, [{ nodeId: "node-1", connId: "conn-1" }])
+        .workerSlotsByNodeId,
     ).toEqual(new Map([["node-1", AVAILABLE_CAPACITY]]));
     runtime.nodeRegistry.unregister("conn-1");
   });
@@ -160,11 +158,18 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       bundleHash: "a".repeat(64),
       status: { status: "installed", version: "2026.8.9" },
     });
-    expect(
-      collectNodeWorkerBundleStatusByNodeId(runtime.nodeRegistry, [
-        { nodeId: "node-1", connId: "conn-1" },
-      ]),
-    ).toEqual(new Map([["node-1", { status: "installed", version: "2026.8.9" }]]));
+    const catalog = collectNodeCatalogRuntimeState(runtime.nodeRegistry, [
+      { nodeId: "node-1", connId: "conn-1" },
+    ]);
+    expect(catalog.workerBundleByNodeId).toEqual(
+      new Map([["node-1", { status: "installed", version: "2026.8.9" }]]),
+    );
+    const bundle = expectDefined(catalog.workerBundleByNodeId.get("node-1"), "projected bundle");
+    bundle.status = "missing";
+    expect(runtime.nodeWorkerSupervisorTransport.getBundleStatus?.("node-1")?.status).toEqual({
+      status: "installed",
+      version: "2026.8.9",
+    });
 
     expect(
       runtime.nodeRegistry.updateSurface(
@@ -185,9 +190,8 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       }),
     ).toBe(false);
     expect(
-      collectNodeWorkerBundleStatusByNodeId(runtime.nodeRegistry, [
-        { nodeId: "node-1", connId: "conn-1" },
-      ]),
+      collectNodeCatalogRuntimeState(runtime.nodeRegistry, [{ nodeId: "node-1", connId: "conn-1" }])
+        .workerBundleByNodeId,
     ).toEqual(new Map());
 
     await runnerInventoryHandler(
@@ -221,16 +225,14 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       }),
     ).toBe(false);
     expect(
-      collectNodeWorkerBundleStatusByNodeId(runtime.nodeRegistry, [
-        { nodeId: "node-1", connId: "conn-1" },
-      ]),
+      collectNodeCatalogRuntimeState(runtime.nodeRegistry, [{ nodeId: "node-1", connId: "conn-1" }])
+        .workerBundleByNodeId,
     ).toEqual(new Map());
 
     runtime.nodeRegistry.unregister("conn-1");
     expect(
-      collectNodeWorkerBundleStatusByNodeId(runtime.nodeRegistry, [
-        { nodeId: "node-1", connId: "conn-1" },
-      ]),
+      collectNodeCatalogRuntimeState(runtime.nodeRegistry, [{ nodeId: "node-1", connId: "conn-1" }])
+        .workerBundleByNodeId,
     ).toEqual(new Map());
   });
 
@@ -291,6 +293,48 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     expect(inventoryChanged).toHaveBeenCalledTimes(1);
     runtime.nodeRegistry.unregister("conn-1");
   });
+
+  it.each([
+    ["portalStream", "worker.portal.stream.v1"],
+    ["environmentSession", "worker.environment.stop.v1"],
+  ] as const)(
+    "publishes and retires negotiated %s without exposing %s",
+    async (capability, command) => {
+      const inventoryChanged = vi.fn();
+      const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+      setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
+      const client = createWorkerSupervisorNodeClient();
+      runtime.nodeRegistry.register(client, {
+        pairingIdentity: "identity-1",
+        pairingGeneration: "generation-1",
+      });
+      const publish = async (supported: boolean) => {
+        await runnerInventoryHandler(
+          runnerInventoryOptions({
+            nodeRegistry: runtime.nodeRegistry,
+            client,
+            declaration: {
+              ...availableHost,
+              workerHost: {
+                ...availableHost.workerHost,
+                ...(supported ? { [capability]: 1 } : {}),
+              },
+            },
+          }),
+        );
+        const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+        return proof;
+      };
+
+      expect((await publish(false))?.workerHost[capability]).toBeUndefined();
+      const supported = await publish(true);
+      expect(supported?.workerHost[capability]).toBe(1);
+      expect(supported?.commands).not.toContain(command);
+      expect((await publish(false))?.workerHost[capability]).toBeUndefined();
+      expect(inventoryChanged).toHaveBeenCalledTimes(3);
+      runtime.nodeRegistry.unregister("conn-1");
+    },
+  );
 
   it("requires a fresh current-generation publication after same-connection promotion", async () => {
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
@@ -681,6 +725,13 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundleStatus: 2 },
+      },
+    },
+    {
+      name: "unsupported portal stream version",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, portalStream: 2 },
       },
     },
     {

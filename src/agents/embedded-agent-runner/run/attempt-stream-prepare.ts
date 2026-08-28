@@ -19,6 +19,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
@@ -30,6 +31,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import {
@@ -96,6 +98,7 @@ export function prepareEmbeddedAttemptStream(input: {
   builtinToolNames: ReadonlySet<string>;
   coreBuiltinToolNames?: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
+  codeModeExecToolNames?: ReadonlySet<string>;
   sideEffectToolOwners?: ReadonlyMap<string, string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
 }) {
@@ -318,6 +321,7 @@ export function prepareEmbeddedAttemptStream(input: {
     sessionKey: attempt.sessionKey,
     currentChannelId: attempt.currentChannelId,
     currentMessagingTarget: attempt.currentMessagingTarget,
+    currentAccountId: attempt.agentAccountId,
     currentThreadId: attempt.currentThreadTs,
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,
@@ -327,12 +331,16 @@ export function prepareEmbeddedAttemptStream(input: {
     builtinToolNames: input.builtinToolNames,
     coreBuiltinToolNames: input.coreBuiltinToolNames,
     replaySafeToolNames: input.replaySafeToolNames,
+    ...(input.codeModeExecToolNames ? { codeModeExecToolNames: input.codeModeExecToolNames } : {}),
     ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
     internalEvents: attempt.internalEvents,
   });
   toolMetasForTerminal = subscription.toolMetas;
 
   const toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor = async (toolParams) => {
+    const runSignal = input.runAbortController.signal;
+    const signal = AbortSignal.any([toolParams.signal ?? runSignal, runSignal]);
+    const yieldRunSignal = toolParams.toolName === "sessions_yield" ? runSignal : undefined;
     try {
       if (toolParams.source === "openclaw" && toolParams.sourceName === "core") {
         recordStructuredReplayTrustForToolCall(
@@ -341,7 +349,7 @@ export function prepareEmbeddedAttemptStream(input: {
           attempt.runId,
         );
       }
-      const result = await subscription.runToolLifecycle({
+      const lifecycle = subscription.runToolLifecycle({
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         args: toolParams.input,
@@ -349,15 +357,44 @@ export function prepareEmbeddedAttemptStream(input: {
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
-        execute: async () =>
-          await toolParams.tool.execute(
-            toolParams.toolCallId,
-            toolParams.input,
-            toolParams.signal ?? input.runAbortController.signal,
-            toolParams.onUpdate,
-            undefined as never,
+        execute: (onImplementationStart) =>
+          raceWithAbortSignal(
+            (async () => {
+              signal.throwIfAborted();
+              const preparer = getInternalToolExecutionPreparer(toolParams.tool);
+              if (!preparer) {
+                onImplementationStart();
+                return await toolParams.tool.execute(
+                  toolParams.toolCallId,
+                  toolParams.input,
+                  signal,
+                  toolParams.onUpdate,
+                  undefined as never,
+                );
+              }
+              const prepared = await preparer({
+                toolCallId: toolParams.toolCallId,
+                args: toolParams.input,
+                signal,
+                onUpdate: toolParams.onUpdate,
+              });
+              try {
+                if (prepared.kind === "immediate") {
+                  if (prepared.outcome.kind === "error") {
+                    throw prepared.outcome.error;
+                  }
+                  return prepared.outcome.result;
+                }
+                return await prepared.execute(onImplementationStart);
+              } finally {
+                prepared.dispose();
+              }
+            })(),
+            signal,
+            yieldRunSignal,
           ),
       });
+      const result = await raceWithAbortSignal(lifecycle, signal, yieldRunSignal);
       // Settlement persists every queued projection. Validate the final result
       // first so a rejected hidden-tool value never enters session history.
       const acceptedResult = await toolParams.acceptResultBeforeProjection(result);
@@ -443,6 +480,7 @@ export function prepareEmbeddedAttemptStream(input: {
     runId: attempt.runId,
     diagnosticOwner: input.diagnosticOwner,
     closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
+    startedAtMs: attempt.startedAtMs,
     ...(attempt.toolAuthorityFingerprint
       ? { toolAuthorityFingerprint: attempt.toolAuthorityFingerprint }
       : {}),

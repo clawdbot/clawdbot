@@ -21,6 +21,7 @@ async function buildAdmittedContext(
   participantId: string,
   allowFrom = [participantId],
   resolveGatewayContext?: GatewayContextResolver,
+  authentication?: "verified" | "asserted" | "unverified" | "mutable",
 ) {
   const record = {};
   const epoch = {};
@@ -35,7 +36,11 @@ async function buildAdmittedContext(
   const channelIngress = await resolveStableChannelMessageIngress({
     channelId: "test",
     accountId: "acct:primary",
-    subject: { stableId: participantId },
+    identity: authentication ? { authentication: "verified" } : undefined,
+    subject: {
+      stableId: participantId,
+      ...(authentication ? { authentication: { stableId: authentication } } : {}),
+    },
     conversation: { kind: "direct", id: "dm-1" },
     contextBinding: {
       agentId: "main",
@@ -45,6 +50,7 @@ async function buildAdmittedContext(
     },
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
+    ...(authentication ? { policy: { minIdentifierAuthentication: "unverified" } } : {}),
     allowFrom,
   });
   try {
@@ -106,6 +112,7 @@ describe("channel admission evidence", () => {
         },
         assuranceRef: "channel-admission",
         decisionCoverage: "enforced",
+        identifierAuthentication: "evaluated",
       });
       expect(Object.isFrozen(consumed)).toBe(true);
       expect(Object.isFrozen(consumed.invoker)).toBe(true);
@@ -113,6 +120,26 @@ describe("channel admission evidence", () => {
         ingressState: "unknown",
         invoker: { state: "unknown" },
         decisionCoverage: "unknown",
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("carries only the redacted identifier-policy explanation through host-owned evidence", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const context = await buildAdmittedContext(
+        "private-person",
+        ["private-person"],
+        undefined,
+        "unverified",
+      );
+      const consumed = inspectChannelContext(context);
+
+      expect(consumed).toMatchObject({
+        ingressState: "present",
+        identifierAuthentication: "evaluated",
       });
     } finally {
       cleanup();
@@ -229,6 +256,7 @@ describe("channel admission evidence", () => {
         },
         assuranceRef: "channel-admission",
         decisionCoverage: "enforced",
+        identifierAuthentication: "evaluated",
       });
       expect(
         consumeChannelAdmissionEvidence(

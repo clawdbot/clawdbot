@@ -187,6 +187,25 @@ describe("session-updates lifecycle hooks", () => {
 
   it("recreates a complete persisted row when compaction updates a missing store row", async () => {
     const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+    entry.contextBudgetStatus = {
+      schemaVersion: 1,
+      source: "pre-prompt-estimate",
+      updatedAt: 1,
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      route: "compact_only",
+      shouldCompact: true,
+      estimatedPromptTokens: 97_000,
+      contextTokenBudget: 96_000,
+      promptBudgetBeforeReserve: 76_000,
+      reserveTokens: 20_000,
+      effectiveReserveTokens: 20_000,
+      remainingPromptBudgetTokens: 0,
+      overflowTokens: 21_000,
+      toolResultReducibleChars: 0,
+      messageCount: 4,
+      unwindowedMessageCount: 4,
+    };
     await applySessionEntryLifecycleMutation({
       storePath,
       removals: [{ sessionKey }],
@@ -217,6 +236,8 @@ describe("session-updates lifecycle hooks", () => {
     expect(persisted?.usageFamilySessionIds).toEqual(["s1", "s2"]);
     expect(persisted?.compactionCount).toBe(1);
     expect(persisted?.totalTokens).toBe(123);
+    expect(persisted?.contextBudgetStatus).toBeUndefined();
+    expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
     expect(persisted?.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt);
   });
 

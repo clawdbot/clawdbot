@@ -35,6 +35,20 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain("was not composed by the build");
   });
 
+  it("binds the lazy Playwright accessor to bundled modules", () => {
+    const runtimePath = path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts");
+    const source = fs.readFileSync(runtimePath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, runtimePath);
+
+    expect(transformed).toContain('import * as playwrightCore from "playwright-core";');
+    expect(transformed).toContain('import { getUserAgent } from "playwright-core/lib/coreBundle";');
+    expect(transformed).toContain("return playwrightCore;");
+    expect(transformed).not.toContain("createRequire");
+    expect(transformed).not.toContain('require("playwright-core")');
+  });
+
   it("bundles the undici dispatcher dependency without a worker runtime require", () => {
     const dispatcherPath = path.resolve("src/infra/net/undici-dispatcher-options.ts");
     const source = fs.readFileSync(dispatcherPath, "utf8");

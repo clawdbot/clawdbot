@@ -13,13 +13,10 @@ import {
 } from "./update-package-manager.js";
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
 import {
-  mapManagerResolutionFailure,
   resolveBuildEnv,
   resolveDevPreflightLintEnv,
   resolveInstallEnv,
-  resolveRetryInstallArgs,
-  shouldPreferIgnoreScriptsForWindowsPreflight,
-  shouldRetryWindowsInstallIgnoringScripts,
+  shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
 import type {
@@ -327,7 +324,7 @@ async function testPreflightCandidates(params: {
       "require-preferred",
     );
     if (manager.kind === "missing-required") {
-      managerReason = mapManagerResolutionFailure(manager.reason);
+      managerReason = manager.reason;
       params.steps.push({
         name: `preflight package manager (${shortSha})`,
         command: `resolve ${manager.preferred} package manager`,
@@ -339,7 +336,7 @@ async function testPreflightCandidates(params: {
       continue;
     }
     try {
-      const preferIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(manager.manager);
+      const preferIgnoreScripts = shouldInstallWithoutScriptsOnWindows(manager.manager);
       const ignoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
       const installArgv =
         preferIgnoreScripts && ignoreScriptsArgv
@@ -351,26 +348,9 @@ async function testPreflightCandidates(params: {
         ? `preflight deps install (ignore scripts) (${shortSha})`
         : `preflight deps install (${shortSha})`;
       const installEnv = resolveInstallEnv(manager.manager, manager.env);
-      let installStep = await runStep(
+      const installStep = await runStep(
         params.step(installName, installArgv, params.worktreeDir, installEnv),
       );
-      if (
-        installStep.exitCode !== 0 &&
-        !preferIgnoreScripts &&
-        shouldRetryWindowsInstallIgnoringScripts(manager.manager)
-      ) {
-        const retryArgv = resolveRetryInstallArgs(manager.manager);
-        if (retryArgv) {
-          installStep = await runStep(
-            params.step(
-              `preflight deps install (ignore scripts) (${shortSha})`,
-              retryArgv,
-              params.worktreeDir,
-              installEnv,
-            ),
-          );
-        }
-      }
       if (installStep.exitCode !== 0) {
         sawOtherFailure = true;
         continue;
@@ -381,7 +361,7 @@ async function testPreflightCandidates(params: {
       };
       const buildArgs = managerScriptArgs(manager.manager, "build");
       const buildEnv = resolveBuildEnv(
-        manager.env,
+        manager.env ?? params.defaultCommandEnv,
         path.join(params.gitRoot, ".artifacts", "build-all-cache"),
       );
       const configCommand = ["config", "validate", "--json"];

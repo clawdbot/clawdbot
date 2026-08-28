@@ -228,6 +228,19 @@ Find yours with the [username to ID converter](https://www.streamweasels.com/too
 
 ## Troubleshooting
 
+### Execution identity audit
+
+With [execution identity collection](/gateway/audit#run-identity-inspection) enabled,
+a trusted native Twitch plugin attributes the run to the native Twitch sender,
+scoped to the configured account. The audit stores an opaque identity, not the raw
+Twitch user ID. Roles such as moderator authorize access; they do not replace
+the sender's identity. Missing native user IDs remain unknown even when a role or
+open policy allows a reply. External plugin installations do not gain trusted
+participant evidence through this path. Audit collection never changes these
+access decisions.
+
+### Connection and replies
+
 First, run diagnostic commands:
 
 ```bash

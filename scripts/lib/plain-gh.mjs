@@ -52,7 +52,7 @@ function pathEntries(env) {
  * @param {NodeJS.ProcessEnv} env
  * @returns {NodeJS.ProcessEnv}
  */
-function plainGhAuthenticatedEnv(env) {
+export function plainGhAuthenticatedEnv(env) {
   const next = plainGhEnv(env);
   if (
     next.GH_TOKEN ||

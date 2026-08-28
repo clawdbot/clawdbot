@@ -17,7 +17,8 @@ page owns the Docker setup shared by those hosts.
 You need:
 
 - A Debian or Ubuntu VM with Docker Engine and Docker Compose v2
-- At least 2 GB RAM for a source image build; 4 GB is more reliable
+- At least 6 GB RAM for a source image build; smaller hosts should use the
+  official pre-built image below
 - The OpenClaw source checkout on the VM
 - Provider and model credentials for onboarding
 - An SSH-only or otherwise restricted provider firewall; do not expose the
@@ -153,17 +154,17 @@ docker compose run --rm openclaw-cli devices approve <requestId>
 OpenClaw runs in Docker, but the container filesystem is not the source of
 truth. Long-lived state must survive restarts, rebuilds, and reboots.
 
-| Component            | Container location                  | Persistence mechanism       | Notes                                                                      |
-| -------------------- | ----------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
-| Gateway state/config | `/home/node/.openclaw/`             | `OPENCLAW_CONFIG_DIR` mount | Includes `openclaw.json`, shared state, and installed plugin package roots |
-| Agent workspace      | `/home/node/.openclaw/workspace/`   | Workspace mount             | Code and agent artifacts                                                   |
-| Channel credentials  | `/home/node/.openclaw/credentials/` | Config mount                | Channel credential material                                                |
-| Model auth profiles  | `/home/node/.openclaw/agents/`      | Config mount                | `agents/<agentId>/agent/auth-profiles.json`                                |
-| Auth-profile key     | `/home/node/.config/openclaw/`      | Secret-directory mount      | Encryption key material; keep separate from the config mount               |
-| Skill state          | `/home/node/.openclaw/skills/`      | Config mount                | Skill-level state                                                          |
-| External binaries    | `/usr/local/bin/`                   | Docker image                | Must be baked at build time                                                |
-| Node and OS packages | Container filesystem                | Docker image                | Rebuilt with the image; do not install at runtime                          |
-| Docker container     | Ephemeral                           | Restartable                 | Safe to replace after mounted state is verified                            |
+| Component            | Container location                  | Persistence mechanism       | Notes                                                                                      |
+| -------------------- | ----------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------ |
+| Gateway state/config | `/home/node/.openclaw/`             | `OPENCLAW_CONFIG_DIR` mount | Includes `openclaw.json`, shared state, and installed plugin package roots                 |
+| Agent workspace      | `/home/node/.openclaw/workspace/`   | Workspace mount             | Code and agent artifacts                                                                   |
+| Channel credentials  | `/home/node/.openclaw/credentials/` | Config mount                | Channel credential material                                                                |
+| Model auth profiles  | `/home/node/.openclaw/`             | Config mount                | Shared `state/openclaw.sqlite`; agent-local `agents/<agentId>/agent/openclaw-agent.sqlite` |
+| Auth-profile key     | `/home/node/.config/openclaw/`      | Secret-directory mount      | Encryption key material; keep separate from the config mount                               |
+| Skill state          | `/home/node/.openclaw/skills/`      | Config mount                | Skill-level state                                                                          |
+| External binaries    | `/usr/local/bin/`                   | Docker image                | Must be baked at build time                                                                |
+| Node and OS packages | Container filesystem                | Docker image                | Rebuilt with the image; do not install at runtime                                          |
+| Docker container     | Ephemeral                           | Restartable                 | Safe to replace after mounted state is verified                                            |
 
 ## Update OpenClaw
 

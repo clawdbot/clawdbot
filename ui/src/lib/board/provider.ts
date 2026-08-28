@@ -85,6 +85,7 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
 }
 
 class NullProvider implements BoardProvider {
+  readonly appViewGeneration = 0;
   readonly canMutate = false;
   readonly canGrant = false;
   readonly canPinWidgets = false;
@@ -125,6 +126,7 @@ class NullProvider implements BoardProvider {
 }
 
 class MockBoardProvider implements BoardProvider {
+  readonly appViewGeneration = 0;
   readonly canMutate = true;
   readonly canGrant = true;
   readonly canPinWidgets = true;
@@ -260,6 +262,10 @@ class ScopedGatewayBoardProvider implements BoardProvider {
 
   get sessionKey(): string {
     return this.transport.sessionKey;
+  }
+
+  get appViewGeneration(): number {
+    return this.transport.appViewGeneration;
   }
 
   get canPinWidgets(): boolean {

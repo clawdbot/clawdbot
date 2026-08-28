@@ -1271,6 +1271,26 @@ Available action groups in current Slack tooling:
 
 Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
+Use `emoji-list` to discover workspace custom emoji and aliases:
+
+```json
+{ "action": "emoji-list", "channel": "slack", "limit": 25 }
+```
+
+Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
+
+```json
+{
+  "ok": true,
+  "emojis": [
+    { "name": "celebrate", "identifier": "celebrate", "aliasOf": "party" },
+    { "name": "party", "identifier": "party" }
+  ]
+}
+```
+
+Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
+
 ## Access control and routing
 
 <Tabs>
@@ -1296,6 +1316,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     Multi-account precedence:
 
+    - Omitted account `dmPolicy` and `groupPolicy` inherit the channel root. Explicit account policies win; with neither scope set, defaults remain `pairing` and `allowlist` respectively.
+    - `userTokenReadOnly` also inherits the channel setting when omitted; its default remains `true`.
     - `channels.slack.accounts.default.allowFrom` applies only to the `default` account.
     - Named accounts inherit `channels.slack.allowFrom` when their own `allowFrom` is unset.
     - Named accounts do not inherit `channels.slack.accounts.default.allowFrom`.
@@ -1314,6 +1336,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `disabled`
 
     Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid org installs require `team:<team-id>:channel:<channel-id>` so policies cannot cross workspace boundaries.
+
+    When invited into an allowed channel, OpenClaw posts one short introduction grounded in the channel name, purpose or topic, and available recent messages. Set `channels.slack.joinIntro: false` to disable these introductions; `channels.slack.accounts.<accountId>.joinIntro` overrides the channel-wide setting. Introductions are enabled by default and do not require a mention, but they never bypass channel access policy or run in direct messages.
 
     Without a `channels.slack` block, the Gateway does not auto-start Slack from `SLACK_*` environment variables. Once the block exists, those variables remain default-account credential fallbacks. Passing `--ambient-channels` opts into env-only auto-configuration; that path uses `groupPolicy="allowlist"` and logs a warning, even if `channels.defaults.groupPolicy` is set.
 
@@ -1858,26 +1882,30 @@ Config path:
 - `channels.slack.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
 - `agentFilter`, `sessionFilter`
 
-Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
-exec approver resolves. Slack can also handle native plugin approvals through this native-client
-path when Slack plugin approvers resolve and the request matches the native-client filters. Set
-`enabled: false` to disable Slack as a native approval client explicitly. Set `enabled: true` to
-force native approvals on when approvers resolve. Disabling Slack exec approvals does not disable
-native Slack plugin approval delivery that is enabled through `approvals.plugin`; plugin approval
-delivery uses Slack plugin approvers instead.
+Slack native exec approvals require `enabled: true` or `"auto"` and at least one
+resolved exec approver. Leaving `enabled` unset or setting it to `false` disables
+native exec approval delivery. Slack can also handle native plugin approvals
+through this native-client path when Slack plugin approvers resolve and the
+request matches its filters. Disabling Slack exec approvals does not disable
+native plugin approval delivery enabled through `approvals.plugin`, which uses
+Slack plugin approvers instead.
 
-Default behavior with no explicit Slack exec approval config:
+Minimal Slack-native configuration using command owners as approvers:
 
 ```json5
 {
+  channels: {
+    slack: {
+      execApprovals: { enabled: "auto" },
+    },
+  },
   commands: {
     ownerAllowFrom: ["slack:U12345678"],
   },
 }
 ```
 
-Explicit Slack-native config is only needed when you want to override approvers, add filters, or
-opt into origin-chat delivery:
+To override approvers, add filters, or opt into origin-chat delivery:
 
 ```json5
 {
@@ -1906,6 +1934,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- When the bot itself joins an allowed channel, it posts one introduction grounded in the channel name, purpose or topic, and available recent messages. Introductions are enabled by default, never run in direct messages, and can be disabled with `channels.slack.joinIntro: false` or overridden per account with `channels.slack.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for the history limits, once-per-room behavior, and untrusted-content handling.
 - Optional presence polling can map an observed human participant's `away` to `active` transition into the participant's most recently active eligible Slack session. The default is off.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
@@ -1959,10 +1988,11 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 
 <Accordion title="High-signal Slack fields">
 
-- mode/auth: `identity`, `mode`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
+- mode/auth: `postAs`, `mode`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
+- group introductions: `joinIntro`, `accounts.*.joinIntro` (default: `true`)
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - presence wakes: `presenceEvents.mode`, `presenceEvents.prompt`, `channels.*.presenceEvents.*` (`off|auto|on`; default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
@@ -2119,6 +2149,8 @@ When a single Slack message contains multiple file attachments:
 - Downloaded media references are aggregated into the message context.
 - Processing order follows Slack's file order in the event payload.
 - A failure in one attachment's download does not block others.
+- Failed or blocked files remain in the agent context with a bounded reason, and each failed file produces one warning after any URL refresh retry.
+- Files beyond the eight-file limit are not downloaded. Their references carry an `omitted: 8-file limit` reason. Long unavailable-file lists are visibly truncated, while the notice retains the total unavailable attachment count.
 
 ### Size, download, and model limits
 

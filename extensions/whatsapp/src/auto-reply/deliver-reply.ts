@@ -9,6 +9,7 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import type { ChunkMode, ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isReasoningReplyPayload,
+  resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -203,11 +204,10 @@ async function deliverWebReplyInActivityScope(
     normalizeWhatsAppOutboundPayload(replyResult, {
       normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
     });
-  const textChunks = markdownToWhatsAppChunks(
-    normalizedReply.text ?? "",
-    textLimit,
-    tableMode,
-    chunkMode,
+  const text = normalizedReply.text ?? "";
+  const textChunks = resolveTextChunksWithFallback(
+    text,
+    markdownToWhatsAppChunks(text, textLimit, tableMode, chunkMode),
   );
   const mediaList = normalizedReply.mediaUrls ?? [];
 

@@ -137,6 +137,9 @@ export function createChatSendReplyDispatch(params: {
   const deliveredReplies: DeliveredChatSendReply[] = [];
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
   let appendedWebchatAgentMedia = false;
+  const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
+    isMediaBearingPayload(payload) ||
+    getReplyPayloadMetadata(payload)?.assistantMediaNormalizationFailed === true;
   const agentMediaTranscriptKey = (payload: ReplyPayload): string => {
     const metadata = getReplyPayloadMetadata(payload);
     const ownedIdempotencyKey =
@@ -152,7 +155,7 @@ export function createChatSendReplyDispatch(params: {
     return "unkeyed";
   };
   const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-    if (!isAgentRunStarted() || !isMediaBearingPayload(payload)) {
+    if (!isAgentRunStarted() || !needsAgentMediaTranscriptFinalization(payload)) {
       return;
     }
     const finalizationKey = agentMediaTranscriptKey(payload);
@@ -202,9 +205,12 @@ export function createChatSendReplyDispatch(params: {
       assistantContent,
       mediaMessage,
     );
-    const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
-      ? persistedAssistantContent
-      : undefined;
+    const mediaNormalizationFailed =
+      getReplyPayloadMetadata(transcriptPayload)?.assistantMediaNormalizationFailed === true;
+    const persistedContentForAppend =
+      hasAssistantDisplayMediaContent(persistedAssistantContent) || mediaNormalizationFailed
+        ? persistedAssistantContent
+        : undefined;
     if (!persistedContentForAppend?.length) {
       return;
     }
@@ -366,7 +372,7 @@ export function createChatSendReplyDispatch(params: {
     const latestPayloadByKey = new Map<string, ReplyPayload>();
     const orderedKeys: string[] = [];
     for (const { payload } of deliveredReplies) {
-      if (!isMediaBearingPayload(payload)) {
+      if (!needsAgentMediaTranscriptFinalization(payload)) {
         continue;
       }
       const key = agentMediaTranscriptKey(payload);

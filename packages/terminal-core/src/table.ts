@@ -55,8 +55,9 @@ function padCell(text: string, width: number, align: Align): string {
   // A single grapheme wider than the cell (e.g. a width-2 CJK/emoji glyph in a
   // width-1 column) survives wrapLine intact, so clamp here to keep every cell
   // exactly `width` columns and preserve the border-alignment invariant.
-  const content = visibleWidth(text) > width ? truncateToVisibleWidth(text, width) : text;
-  const w = visibleWidth(content);
+  const textWidth = visibleWidth(text);
+  const content = textWidth > width ? truncateToVisibleWidth(text, width) : text;
+  const w = content === text ? textWidth : visibleWidth(content);
   if (w >= width) {
     return content;
   }
@@ -364,6 +365,11 @@ function activeOsc8After(tokens: readonly AnsiToken[]): Osc8Link | undefined {
 
 function wrapLine(text: string, width: number): string[] {
   if (width <= 0) {
+    return [text];
+  }
+  // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
+  // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
+  if (text.length <= width && /^[!-~](?:[ -~]*[!-~])?$/u.test(text)) {
     return [text];
   }
 

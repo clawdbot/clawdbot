@@ -23,6 +23,7 @@ export const dispatchReplyWithBufferedBlockDispatcherCore: DispatchReplyWithBuff
       toolsAllow: params.toolsAllow,
       replyResolver: params.replyResolver,
       replyOptions: params.replyOptions,
+      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
     });
   };
 

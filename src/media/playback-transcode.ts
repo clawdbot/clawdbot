@@ -662,7 +662,8 @@ export async function resolvePlaybackTranscode(
   }
   const failedAtMs = playbackFailures.get(operationKey);
   if (failedAtMs !== undefined) {
-    if (Date.now() - failedAtMs < PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS) {
+    const nowMs = Date.now();
+    if (failedAtMs <= nowMs && nowMs - failedAtMs < PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS) {
       return { kind: "fallback" };
     }
   }

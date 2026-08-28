@@ -66,10 +66,15 @@ export function selectGuardianSandbox(
 }
 
 export function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
+  if (value === "untrusted") {
+    throw new Error(
+      'Codex app-server approval policy "untrusted" is retired; run "openclaw doctor --fix" and use "on-request".',
+    );
+  }
   if (value === "on-failure") {
     return "on-request";
   }
-  return value === "on-request" || value === "untrusted" || value === "never" ? value : undefined;
+  return value === "on-request" || value === "never" ? value : undefined;
 }
 
 export function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {

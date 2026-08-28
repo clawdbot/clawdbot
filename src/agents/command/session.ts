@@ -80,6 +80,7 @@ export function clearRotatedSessionMetadata(entry: InternalSessionEntry): Intern
     sessionFile: undefined,
     status: undefined,
     lifecycleRunId: undefined,
+    lastRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,

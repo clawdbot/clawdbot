@@ -743,7 +743,7 @@ describe("openclaw.chat", () => {
     );
   });
 
-  it("seeds a new engine with the persisted tail before recording its welcome", async () => {
+  it("seeds a new engine with the persisted tail without recording an idle welcome", async () => {
     stubEngineOverview();
     transcriptStoreMocks.readTranscriptTail.mockReturnValue([
       { role: "user", text: "Earlier question", at: 1 },
@@ -761,9 +761,7 @@ describe("openclaw.chat", () => {
       { role: "user", text: "Earlier question" },
       { role: "assistant", text: "Earlier answer" },
     ]);
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledWith(
-      expect.objectContaining({ role: "assistant", text: expect.any(String) }),
-    );
+    expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
   });
 
   it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {
@@ -920,14 +918,12 @@ describe("openclaw.chat", () => {
     } finally {
       releaseApproval.resolve();
     }
-    await vi.waitFor(() => {
-      expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
-      expect(runGatewayRestart).toHaveBeenCalledOnce();
-      expect(systemAgentLane().activeCount).toBe(0);
-    });
+    expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
+    expect(runGatewayRestart).toHaveBeenCalledOnce();
     await expect(resolveOperatorApproval.mock.results[0]?.value).resolves.toMatchObject({
       text: expect.stringContaining("[openclaw] done: gateway.restart"),
     });
+    await vi.waitFor(() => expect(systemAgentLane().activeCount).toBe(0));
     expect(readLastSystemAgentAuditEntry()).toMatchObject({
       operation: "gateway.restart",
       summary: "Scheduled Gateway restart",

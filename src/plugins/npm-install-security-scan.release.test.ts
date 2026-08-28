@@ -60,14 +60,13 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<strin
   ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
   ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/api.js", 1],
-  ["@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 2],
-  ["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/shared-client-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
   ["@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 1],
   ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
-
 function parseNpmPackFiles(raw: string, packageName: string): string[] {
   const parsed = JSON.parse(raw) as unknown;
   const entries = resolveNpmJsonEntries(parsed);
@@ -116,6 +115,7 @@ function normalizePackedFindingPath(packedPath: string): string {
     "runtime-entry",
     "service",
     "session-catalog",
+    "shared-client",
     "transport-stdio",
   ]) {
     if (packedPath.startsWith(`dist/${prefix}-`) && packedPath.endsWith(".js")) {
@@ -123,6 +123,48 @@ function normalizePackedFindingPath(packedPath: string): string {
     }
   }
   return packedPath;
+}
+
+type GeneratedCodexFindingAttribution = {
+  hasSourceRegions: boolean;
+  sourceKey?: string;
+};
+
+function attributeGeneratedCodexFinding(params: {
+  packageName: string;
+  ruleId: string;
+  source: string;
+  line: number;
+}): GeneratedCodexFindingAttribution {
+  const regionStack: string[] = [];
+  let hasSourceRegions = false;
+  let sourceAtFinding: string | undefined;
+  const lines = params.source.split("\n");
+  for (const [index, line] of lines.entries()) {
+    const start = /^\s*\/\/#region\s+(\S+)\s*$/u.exec(line)?.[1];
+    if (start) {
+      const normalized = toRepoPath(start);
+      regionStack.push(normalized);
+      if (normalized.startsWith("extensions/codex/src/")) {
+        hasSourceRegions = true;
+      }
+    } else if (/^\s*\/\/#endregion\b/u.test(line)) {
+      regionStack.pop();
+    }
+    if (index + 1 === params.line) {
+      sourceAtFinding = regionStack.at(-1);
+    }
+  }
+  if (
+    !sourceAtFinding?.startsWith("extensions/codex/src/") ||
+    sourceAtFinding.split("/").includes("..")
+  ) {
+    return { hasSourceRegions };
+  }
+  return {
+    hasSourceRegions,
+    sourceKey: `${params.packageName}:${params.ruleId}:${sourceAtFinding.slice("extensions/codex/".length)}`,
+  };
 }
 
 function expandReviewedFindingCounts(counts: ReadonlyMap<string, number>): string[] {
@@ -294,8 +336,26 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
   const reviewedCriticalFindings: string[] = [];
   const expectedReviewedCriticalFindings: string[] = [];
   const unexpectedCriticalFindings: string[] = [];
+  const generatedCodexFindings: Array<{
+    evidence: string;
+    line: number;
+    packedKey: string;
+    sourceKey: string;
+  }> = [];
   const packedFiles = await collectNpmPackedFiles(plugin.packageDir, plugin.packageName);
   for (const packedFile of packedFiles) {
+    const isGeneratedCodexFile =
+      plugin.packageName === "@openclaw/codex" &&
+      packedFile.startsWith("dist/") &&
+      packedFile.endsWith(".js");
+    const hasSourceRegions =
+      isGeneratedCodexFile &&
+      readFileSync(resolve(plugin.packageDir, packedFile), "utf8").includes(
+        "//#region extensions/codex/src/",
+      );
+    if (hasSourceRegions) {
+      continue;
+    }
     for (const key of expectedOptionalReviewedFindingsForPackedPath(
       plugin.packageName,
       packedFile,
@@ -304,34 +364,73 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
     }
   }
   const stageDir = stageScannerRelevantPackedFiles(plugin.packageDir, packedFiles);
-  let summary: Awaited<ReturnType<typeof scanDirectoryWithSummary>>;
   try {
-    summary = await scanDirectoryWithSummary(stageDir, {
+    const summary = await scanDirectoryWithSummary(stageDir, {
       excludeTestFiles: true,
       maxFiles: 10_000,
     });
+
+    for (const finding of summary.findings) {
+      if (finding.severity !== "critical") {
+        continue;
+      }
+      const rawPackedPath = toRepoPath(relative(stageDir, finding.file));
+      const packedPath = normalizePackedFindingPath(rawPackedPath);
+      const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
+      if (plugin.packageName === "@openclaw/codex" && rawPackedPath.startsWith("dist/")) {
+        const attribution = attributeGeneratedCodexFinding({
+          packageName: plugin.packageName,
+          ruleId: finding.ruleId,
+          source: readFileSync(finding.file, "utf8"),
+          line: finding.line,
+        });
+        if (attribution.sourceKey) {
+          generatedCodexFindings.push({
+            evidence: finding.evidence,
+            line: finding.line,
+            packedKey: key,
+            sourceKey: attribution.sourceKey,
+          });
+          continue;
+        }
+        if (attribution.hasSourceRegions) {
+          unexpectedCriticalFindings.push([key, `${finding.line}`, finding.evidence].join(":"));
+          continue;
+        }
+      }
+      if (isReviewedPublishableCriticalFinding(key)) {
+        reviewedCriticalFindings.push(key);
+        continue;
+      }
+      unexpectedCriticalFindings.push([key, `${finding.line}`, finding.evidence].join(":"));
+    }
+
+    const reviewedSourceFindings = new Set(reviewedCriticalFindings);
+    for (const generated of generatedCodexFindings) {
+      if (
+        isReviewedPublishableCriticalFinding(generated.sourceKey) &&
+        reviewedSourceFindings.has(generated.sourceKey)
+      ) {
+        continue;
+      }
+      unexpectedCriticalFindings.push(
+        [
+          generated.packedKey,
+          `${generated.line}`,
+          `unreviewed generated source ${generated.sourceKey}`,
+          generated.evidence,
+        ].join(":"),
+      );
+    }
+
+    return {
+      reviewedCriticalFindings,
+      expectedReviewedCriticalFindings,
+      unexpectedCriticalFindings,
+    };
   } finally {
     rmSync(stageDir, { recursive: true, force: true });
   }
-
-  for (const finding of summary.findings) {
-    if (finding.severity !== "critical") {
-      continue;
-    }
-    const packedPath = normalizePackedFindingPath(toRepoPath(relative(stageDir, finding.file)));
-    const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
-    if (isReviewedPublishableCriticalFinding(key)) {
-      reviewedCriticalFindings.push(key);
-      continue;
-    }
-    unexpectedCriticalFindings.push([key, `${finding.line}`, finding.evidence].join(":"));
-  }
-
-  return {
-    reviewedCriticalFindings,
-    expectedReviewedCriticalFindings,
-    unexpectedCriticalFindings,
-  };
 }
 
 describe("publishable plugin npm package install security scan", () => {
@@ -396,7 +495,7 @@ describe("publishable plugin npm package install security scan", () => {
         "@openclaw/codex",
         "dist/dynamic-tools-current.js",
       ),
-    ).toEqual([dynamicToolsKey, dynamicToolsKey]);
+    ).toEqual([dynamicToolsKey]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
         "@openclaw/codex",
@@ -408,10 +507,53 @@ describe("publishable plugin npm package install security scan", () => {
         "@openclaw/codex",
         "dist/session-catalog-current.js",
       ),
-    ).toEqual(["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js"]);
+    ).toEqual([]);
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        "@openclaw/codex",
+        "dist/shared-client-current.js",
+      ),
+    ).toEqual(["@openclaw/codex:dangerous-exec:dist/shared-client-<hash>.js"]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", "dist/client-retired.js"),
     ).toEqual([]);
+  });
+
+  it("attributes generated Codex findings to their enclosing source region", () => {
+    const generated = [
+      "//#region extensions/codex/src/app-server/transport-process-containment.ts",
+      'const inspector = execFile("ps", args, {',
+      "//#endregion",
+      'execFile("outside-region")',
+    ].join("\n");
+
+    expect(
+      attributeGeneratedCodexFinding({
+        packageName: "@openclaw/codex",
+        ruleId: "dangerous-exec",
+        source: generated,
+        line: 2,
+      }),
+    ).toEqual({
+      hasSourceRegions: true,
+      sourceKey: "@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts",
+    });
+    expect(
+      attributeGeneratedCodexFinding({
+        packageName: "@openclaw/codex",
+        ruleId: "dangerous-exec",
+        source: generated,
+        line: 4,
+      }),
+    ).toEqual({ hasSourceRegions: true });
+    expect(
+      attributeGeneratedCodexFinding({
+        packageName: "@openclaw/codex",
+        ruleId: "dangerous-exec",
+        source: 'execFile("legacy")',
+        line: 1,
+      }),
+    ).toEqual({ hasSourceRegions: false });
   });
 
   it("accepts either complete reviewed Codex source layout", () => {

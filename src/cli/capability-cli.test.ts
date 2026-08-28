@@ -7,15 +7,25 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
-import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
+import { registerCapabilityCli } from "./capability-cli.js";
+import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runCap(...argv: string[]): Promise<void> {
-  return runRegisteredCli({ register: registerCapabilityCli as (program: Command) => void, argv });
+function createIsomBrandBuffer(brand: "hevc" | "msf1"): Buffer {
+  const buffer = Buffer.alloc(24);
+  buffer.writeUInt32BE(buffer.length, 0);
+  buffer.write("ftyp", 4, "ascii");
+  buffer.write(brand, 8, "ascii");
+  return buffer;
+}
+
+async function runCap(...argv: string[]): Promise<void> {
+  const program = new Command();
+  await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+  await program.parseAsync(argv, { from: "user" });
 }
 
 function runCapability(domain: string, action: string, ...argv: string[]): Promise<void> {
@@ -192,12 +202,15 @@ const mocks = vi.hoisted(() => ({
   getProviderEnvVars: vi.fn((providerId: string) => [
     `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
   ]),
+  embedBatch: vi.fn(async (inputs: unknown[], options?: { inputType?: string }) =>
+    inputs.map(() => (options?.inputType === "document" ? [0.1, 0.2] : [9, 9])),
+  ),
   createEmbeddingProvider: vi.fn(async () => ({
     provider: {
       id: "openai",
       model: "text-embedding-3-small",
-      embedQuery: async () => [0.1, 0.2],
-      embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
+      embed: async () => [0.1, 0.2],
+      embedBatch: (...args: Parameters<typeof mocks.embedBatch>) => mocks.embedBatch(...args),
       close: closeEmbeddingProviderMock,
     },
   })),
@@ -555,6 +568,32 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
+  it.each(
+    [
+      { args: ["image", "edit", "--prompt", "crop the image"], option: "--file <path>" },
+      { args: ["image", "describe-many"], option: "--file <path>" },
+      { args: ["embedding", "create"], option: "--text <text>" },
+    ].flatMap(({ args, option }) =>
+      ["infer", "capability"].map((root) => ({ args, option, root })),
+    ),
+  )("rejects missing required repeatable input for $root $args", async ({ root, args, option }) => {
+    const argv = [root, ...args, "--json"];
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+    await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+
+    await expect(
+      program.parseAsync(argv, { from: "user" }).then(() => undefined),
+    ).rejects.toMatchObject({
+      code: "commander.missingMandatoryOptionValue",
+      message: `error: required option '${option}' not specified`,
+    });
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -865,6 +904,16 @@ describe("capability cli", () => {
     });
   });
 
+  it("renders an explicit empty model list without changing JSON output", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([]);
+
+    await runCapability("model", "list", "--json");
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([]);
+
+    await runCapability("model", "list");
+    expect(mocks.runtime.log).toHaveBeenCalledWith("No results found.");
+  });
+
   it("reports model providers configured through their environment key", async () => {
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
 
@@ -969,6 +1018,53 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("Pass --agent <id> or set agents.defaults.systemAgent.agentId");
     expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { position: "parent", systemAgent: undefined },
+    { position: "leaf", systemAgent: undefined },
+    { position: "parent", systemAgent: "alpha" },
+    { position: "leaf", systemAgent: "alpha" },
+  ])(
+    "scopes audio providers to the $position-level agent with system owner $systemAgent",
+    async ({ position, systemAgent }) => {
+      const cfg = {
+        agents: {
+          ownership: "explicit" as const,
+          ...(systemAgent ? { defaults: { systemAgent: { agentId: systemAgent } } } : {}),
+          entries: { alpha: {}, beta: {} },
+        },
+      };
+      mocks.loadConfig.mockReturnValue(cfg);
+      mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+        new Map([["openai", { id: "openai", capabilities: ["audio"] }]]),
+      );
+      mocks.loadAuthProfileStoreForRuntime.mockImplementation(
+        (agentDir) =>
+          ({
+            version: 1,
+            profiles:
+              agentDir === "/tmp/agent-beta" ? { "openai:beta": { provider: "openai" } } : {},
+            order: {},
+          }) as never,
+      );
+      mocks.listProfilesForProvider.mockImplementation((store, provider) =>
+        Object.entries(store.profiles as Record<string, { provider: string }>)
+          .filter(([, profile]) => profile.provider === provider)
+          .map(([id]) => id),
+      );
+
+      if (position === "parent") {
+        await runCapabilityWithParentAgent("audio", "providers", "beta", "--json");
+      } else {
+        await runCapability("audio", "providers", "--agent", "beta", "--json");
+      }
+
+      expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/agent-beta");
+      expect(firstJsonOutput()).toEqual([
+        expect.objectContaining({ id: "openai", configured: true }),
+      ]);
+    },
+  );
 
   it("scopes web search auth inspection to the selected agent", async () => {
     mocks.loadConfig.mockReturnValue({
@@ -1233,6 +1329,54 @@ describe("capability cli", () => {
     expect(inputs).toHaveLength(1);
     expect(inputs[0]?.path).toBe(tempInput);
     expect(inputs[0]?.mimeType).toBe("image/jpeg");
+  });
+
+  it("normalizes sniffed HEIC sequences to JPEG before local model probes", async () => {
+    const source = createIsomBrandBuffer("hevc");
+    const tempInput = path.join(tempDirs.make("openclaw-model-run-heic-sequence-"), "opaque.bin");
+    await fs.writeFile(tempInput, source);
+
+    await runCapability("model", "run", "--prompt", "describe this", "--file", tempInput, "--json");
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(source);
+    const call = firstCompletionCall();
+    expect(call?.context?.messages?.[0]?.content).toEqual([
+      { type: "text", text: "describe this" },
+      {
+        type: "image",
+        data: Buffer.from("jpeg-normalized").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    ]);
+    expect(firstJsonOutput()?.inputs).toEqual([{ path: tempInput, mimeType: "image/jpeg" }]);
+  });
+
+  it("normalizes sniffed HEIF sequences to JPEG before gateway model probes", async () => {
+    const source = createIsomBrandBuffer("msf1");
+    const tempInput = path.join(tempDirs.make("openclaw-model-run-heif-sequence-"), "opaque.bin");
+    await fs.writeFile(tempInput, source);
+
+    await runCapability(
+      "model",
+      "run",
+      "--prompt",
+      "describe this",
+      "--file",
+      tempInput,
+      "--gateway",
+      "--json",
+    );
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(source);
+    expect(firstGatewayCall()?.params?.attachments).toEqual([
+      {
+        type: "image",
+        fileName: "opaque.bin",
+        mimeType: "image/jpeg",
+        content: Buffer.from("jpeg-normalized").toString("base64"),
+      },
+    ]);
+    expect(firstJsonOutput()?.inputs).toEqual([{ path: tempInput, mimeType: "image/jpeg" }]);
   });
 
   it("rejects non-image files for model probes", async () => {
@@ -1535,6 +1679,22 @@ describe("capability cli", () => {
     expect(outputs).toHaveLength(1);
     expect(outputs[0]?.kind).toBe("image.description");
   });
+
+  it.each([
+    { domain: "audio", action: "transcribe", file: "memo.m4a", result: "meeting notes" },
+    { domain: "image", action: "describe", file: "photo.jpg", result: "friendly lobster" },
+    { domain: "image", action: "describe-many", file: "photo.jpg", result: "friendly lobster" },
+    { domain: "video", action: "describe", file: "clip.mp4", result: "friendly lobster" },
+  ])(
+    "prints both the input path and result for $domain $action by default",
+    async ({ domain, action, file, result }) => {
+      await runCapability(domain, action, "--file", file);
+
+      const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
+      expect(output).toContain(path.resolve(file));
+      expect(output).toContain(result);
+    },
+  );
 
   it("keeps encoded image describe HTTP URLs intact", async () => {
     const mediaUrl = "https://cdn.example.com/clip%2Emp4?download=1#preview";
@@ -2283,6 +2443,8 @@ describe("capability cli", () => {
       "edit",
       "--file",
       inputPath,
+      "--file",
+      inputPath,
       "--prompt",
       "make three variants",
       "--count",
@@ -2291,6 +2453,7 @@ describe("capability cli", () => {
     );
 
     expect(firstImageGenerationCall()?.count).toBe(3);
+    expect(firstImageGenerationCall()?.inputImages).toHaveLength(2);
   });
 
   it("rejects unsupported image output format and background hints", async () => {
@@ -2474,9 +2637,9 @@ describe("capability cli", () => {
     ]);
   });
 
-  it("keeps capability inspect metadata flags in sync with each command's registered options", () => {
+  it("keeps capability inspect metadata flags in sync with each command's registered options", async () => {
     const program = new Command();
-    registerCapabilityCli(program);
+    await registerCapabilityCli(program, ["node", "openclaw", "infer", "--help"]);
     const capability =
       program.commands.find((command) => command.name() === "infer") ??
       program.commands.find((command) => command.aliases().includes("capability"));
@@ -3544,13 +3707,20 @@ describe("capability cli", () => {
   );
 
   it("uses only embedding providers for embedding creation", async () => {
-    await runCapability("embedding", "create", "--text", "hello", "--json");
+    await runCapability("embedding", "create", "--text", "hello", "--text", "world", "--json");
 
     expect(firstEmbeddingProviderCall()?.provider).toBe("auto");
     expect(firstEmbeddingProviderCall()?.fallback).toBe("none");
     expect(firstJsonOutput()?.capability).toBe("embedding.create");
     expect(firstJsonOutput()?.provider).toBe("openai");
     expect(firstJsonOutput()?.model).toBe("text-embedding-3-small");
+    expect(firstJsonOutput()).toMatchObject({
+      outputs: [
+        { text: "hello", embedding: [0.1, 0.2] },
+        { text: "world", embedding: [0.1, 0.2] },
+      ],
+    });
+    expect(mocks.embedBatch).toHaveBeenCalledWith(["hello", "world"], { inputType: "document" });
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
   });
 
@@ -3560,7 +3730,7 @@ describe("capability cli", () => {
       provider: {
         id: "openai",
         model: "text-embedding-3-small",
-        embedQuery: async () => [0.1, 0.2],
+        embed: async () => [0.1, 0.2],
         embedBatch: async () => {
           throw new Error("embedding failed");
         },

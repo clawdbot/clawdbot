@@ -1,12 +1,15 @@
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
+  captureUiProofEnabled,
   captureProjectUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
   prepareProjectUiProof,
+  projectProofArtifactDir,
   replaceGatewayClient,
 } from "./new-session-page.test-support.ts";
 
@@ -145,54 +148,94 @@ suite.define(() => {
     }
   });
 
-  it("uses advertised system info for Gateway place labels", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "system.info"],
-      methodResponses: {
-        "system.info": {
-          machineName: "Peters-Mac-Studio",
-          hostname: "peters-mac-studio.local",
-          platform: "darwin",
+  it.each(["recovery scope", "system info"] as const)(
+    "updates Gateway place labels after late %s",
+    async (late) => {
+      await prepareProjectUiProof();
+      const context = await suite.browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        ...(captureUiProofEnabled ? { recordVideo: { dir: projectProofArtifactDir } } : {}),
+      });
+      const page = await context.newPage();
+      if (late === "recovery scope") {
+        // Resolve auth recovery after name discovery to exercise their independent lifetimes.
+        await page.addInitScript(() => {
+          const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+          const delayed = new Promise<void>((resolve) => {
+            window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
+          });
+          crypto.subtle.digest = async (algorithm, data) => {
+            if (new TextDecoder().decode(data) === "e2e-device-token") {
+              await delayed;
+            }
+            return originalDigest(algorithm, data);
+          };
+        });
+      }
+      const systemInfo = {
+        machineName: "QA-Gateway",
+        hostname: "qa-gateway.local",
+        platform: "darwin",
+      };
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "system.info"],
+        heldMethods: late === "system info" ? ["system.info"] : [],
+        methodResponses: {
+          "system.info": systemInfo,
+          "environments.list": {
+            environments: [gatewayEnvironment],
+            profiles: [],
+          },
         },
-        "environments.list": {
-          environments: [gatewayEnvironment],
-          profiles: [],
-        },
-      },
-    });
+      });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("system.info");
-      const trigger = page.locator("#new-session-where-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
-      await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: /Local/u }).waitFor();
-      await page.keyboard.press("Escape");
-      await page.locator("#new-session-project-trigger").click();
-      await page
-        .locator("wa-popover.new-session-page__project-popover")
-        .getByRole("button", { name: "Browse folders" })
-        .click();
-      await expect
-        .poll(() =>
-          page.locator("input.new-session-page__browser-path").getAttribute("placeholder"),
-        )
-        .toBe("Gateway · Peters-Mac-Studio");
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("system.info");
+        const trigger = page.locator("#new-session-where-trigger");
+        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+        const place = page.locator("wa-popover.new-session-page__where-popover");
+        const local = place.locator('[data-value="gateway"]');
+        if (late === "recovery scope") {
+          await trigger.click();
+          await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
+          const catalogRequests = (await gateway.getRequests("environments.list")).length;
+          await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
+          await gateway.waitForRequest("environments.list", { after: catalogRequests });
+          await page.keyboard.press("Escape");
+        }
+        await page.locator("#new-session-project-trigger").click();
+        await page
+          .locator("wa-popover.new-session-page__project-popover")
+          .getByRole("button", { name: "Browse folders" })
+          .click();
+        const pathInput = page.locator("input.new-session-page__browser-path");
+        await pathInput.fill("");
+        if (late === "system info") {
+          await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · local");
+          await gateway.resolveDeferred("system.info", systemInfo);
+          await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
+        }
+        await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
+        await captureProjectUiProof(page, `gateway-name-${late.replaceAll(" ", "-")}.png`);
 
-      await replaceGatewayClient(page);
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
-      await trigger.click();
-      await place.getByRole("button", { name: /Local/u }).waitFor();
-    } finally {
-      await context.close();
-    }
-  });
+        await page.keyboard.press("Escape");
+        await replaceGatewayClient(page);
+        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+        await trigger.click();
+        await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
+      } finally {
+        try {
+          await captureProjectUiProof(page, `gateway-name-${late.replaceAll(" ", "-")}-final.png`);
+        } finally {
+          await context.close();
+        }
+      }
+    },
+  );
 
   it("keeps and disambiguates recent locations with the same basename", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
@@ -309,7 +352,7 @@ suite.define(() => {
       await where.getByText("Cloud", { exact: true }).waitFor();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe("Cloud needs a Git checkout");
+      await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("clone and inspect this project");

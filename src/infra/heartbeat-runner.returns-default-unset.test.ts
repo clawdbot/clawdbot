@@ -852,6 +852,49 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("runs an exec-event wake for a configured agent when cadence is disabled", async () => {
+    const tmpDir = await createCaseDir("hb-disabled-exec-event");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "0m", target: "none" },
+        },
+        list: [{ id: "main" }],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedWhatsAppSession(storePath, sessionKey);
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.fn();
+    replySpy.mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey,
+      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+    });
+
+    expect(res.status).toBe("ran");
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(replyBody(replySpy).Provider).toBe("exec-event");
+  });
+
   it.each([
     ["the heartbeat main session", (cfg: OpenClawConfig) => resolveMainSessionKey(cfg)],
     ["another session for the same agent", () => "agent:main:telegram:alerts"],

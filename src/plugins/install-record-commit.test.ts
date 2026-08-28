@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
     replaceConfigFile: vi.fn(),
     restorePersistedInstalledPluginIndexIfCurrent:
       vi.fn<
-        typeof import("./installed-plugin-index-store.js").restorePersistedInstalledPluginIndexIfCurrent
+        typeof import("./installed-plugin-index-store-write.js").restorePersistedInstalledPluginIndexIfCurrent
       >(),
     transformConfigFileWithRetry: vi.fn(),
     withPluginLifecycleLease: vi.fn(
@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: async () => ({ valid: true, config: {} }),
   replaceConfigFile: mocks.replaceConfigFile,
   resolveConfigWriteAfterWrite: (value?: unknown) => value ?? { mode: "auto" },
   transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
@@ -66,8 +67,8 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./installed-plugin-index-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./installed-plugin-index-store-write.js")>();
   return {
     ...actual,
     restorePersistedInstalledPluginIndexIfCurrent:
@@ -1026,7 +1027,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
     const result = await commitConfigWithPendingPluginInstalls({ nextConfig });
 
-    expect(mocks.loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig,

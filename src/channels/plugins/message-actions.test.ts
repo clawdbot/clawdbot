@@ -17,7 +17,7 @@ import {
   resolveChannelMessageToolSchemaProperties,
 } from "./message-action-discovery.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
-import type { ChannelPlugin } from "./types.public.js";
+import type { ChannelMessageToolSchemaContribution, ChannelPlugin } from "./types.public.js";
 
 const emptyRegistry = createTestRegistry([]);
 const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
@@ -199,6 +199,39 @@ describe("message action capability checks", () => {
         channel: "demo-unified",
       }),
     ).toHaveProperty("components");
+  });
+
+  it("keeps all-configured schema account-neutral from another current channel", () => {
+    const schema: ChannelMessageToolSchemaContribution[] = [
+      {
+        actions: ["react"],
+        properties: { emoji: Type.Optional(Type.String()) },
+      },
+      {
+        actions: ["send"],
+        properties: { components: Type.Optional(Type.Object({})) },
+        visibility: "all-configured",
+      },
+    ];
+    activateDiscoveredMessageActionPlugin({
+      id: "discord",
+      label: "Discord",
+      describeMessageTool: ({ accountId }) =>
+        accountId
+          ? { actions: [], schema: null }
+          : {
+              actions: ["react", "send"],
+              schema,
+            },
+    });
+
+    const properties = resolveChannelMessageToolSchemaProperties({
+      cfg: {} as OpenClawConfig,
+      channel: "slack",
+      accountId: "slack-workspace",
+    });
+    expect(properties).toHaveProperty("components");
+    expect(properties).not.toHaveProperty("emoji");
   });
 
   it("keeps contributed schema properties optional so only action stays required", () => {

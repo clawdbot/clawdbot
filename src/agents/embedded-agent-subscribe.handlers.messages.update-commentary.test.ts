@@ -109,7 +109,13 @@ describe("handleMessageUpdate commentary phase", () => {
       | undefined;
     expect(commentaryEvent?.stream).toBe("assistant");
     expect(commentaryEvent?.data?.phase).toBe("commentary");
-    expect(commentaryEvent?.data?.delta).toBe("Working...");
+    expect(commentaryEvent?.data).toMatchObject({
+      text: "Working...",
+      delta: "",
+      replace: true,
+      phase: "commentary",
+      itemId: "item_commentary",
+    });
     expect(ctx.state.deltaBuffer).toBe("Working...");
     expect(ctx.state.blockBuffer).toBe("");
 

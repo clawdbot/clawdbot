@@ -26,6 +26,7 @@ export const GatewayErrorDetailCodes = {
   CRON_JOB_NOT_FOUND: "CRON_JOB_NOT_FOUND",
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  OUTBOUND_DELIVERY_QUEUED: "OUTBOUND_DELIVERY_QUEUED",
   USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
   SKILL_PROPOSAL_REVISION_CHANGED: "SKILL_PROPOSAL_REVISION_CHANGED",
@@ -49,6 +50,10 @@ export type MissingScopeErrorDetails = {
 
 export type McpAppViewExpiredErrorDetails = {
   code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
+};
+
+export type OutboundDeliveryQueuedErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED;
 };
 
 /** Per-profile preference quota details returned by users.prefs.set. */
@@ -94,6 +99,7 @@ export type GatewayErrorDetails =
   | CronJobNotFoundErrorDetails
   | MissingScopeErrorDetails
   | McpAppViewExpiredErrorDetails
+  | OutboundDeliveryQueuedErrorDetails
   | UserPrefsLimitExceededErrorDetails
   | SkillProposalRevisionChangedErrorDetails
   | ProjectCloneErrorDetails

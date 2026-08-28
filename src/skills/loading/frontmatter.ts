@@ -158,6 +158,16 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (downloadUrl) {
     spec.url = downloadUrl;
   }
+  if (spec.kind === "download" && raw.sha256 !== undefined) {
+    if (typeof raw.sha256 !== "string") {
+      return undefined;
+    }
+    const sha256 = raw.sha256.trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/u.test(sha256)) {
+      return undefined;
+    }
+    spec.sha256 = sha256;
+  }
   if (typeof raw.archive === "string") {
     spec.archive = raw.archive;
   }

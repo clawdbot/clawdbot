@@ -78,7 +78,7 @@ vi.mock("./agent-runner-memory.js", () => ({
     sessionEntry,
     outcome: "skipped",
   }),
-  runPreflightCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
+  runSessionCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
     sessionEntry,
 }));
 

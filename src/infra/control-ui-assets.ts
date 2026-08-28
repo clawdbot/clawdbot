@@ -8,34 +8,29 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
-const CONTROL_UI_DIST_PATH_SEGMENTS = ["dist", "control-ui", "index.html"] as const;
-
 export function resolveControlUiDistIndexPathForRoot(root: string): string {
-  return path.join(root, ...CONTROL_UI_DIST_PATH_SEGMENTS);
+  return path.join(root, "dist", "control-ui", "index.html");
 }
 
-type ControlUiDistIndexHealth = {
-  indexPath: string | null;
-  exists: boolean;
-};
+type ControlUiAssetHealth =
+  | { kind: "missing-index"; indexPath: string | null }
+  | { kind: "incomplete"; indexPath: string; missingAsset: string }
+  | { kind: "ready"; indexPath: string };
 
-export async function resolveControlUiDistIndexHealth(
+export async function resolveControlUiAssetHealth(
   opts: {
     root?: string;
     argv1?: string;
     moduleUrl?: string;
   } = {},
-): Promise<ControlUiDistIndexHealth> {
+): Promise<ControlUiAssetHealth> {
   const indexPath = opts.root
     ? resolveControlUiDistIndexPathForRoot(opts.root)
     : await resolveControlUiDistIndexPath({
         argv1: opts.argv1 ?? process.argv[1],
         moduleUrl: opts.moduleUrl,
       });
-  return {
-    indexPath,
-    exists: Boolean(indexPath && controlUiFsRuntime.existsSync(indexPath)),
-  };
+  return inspectControlUiAssetHealth(indexPath);
 }
 
 function resolveControlUiRepoRoot(opts: {
@@ -282,15 +277,18 @@ function controlUiAssetsFailure(message: string, built = false): EnsureControlUi
   return { ok: false, built, message };
 }
 
-function findMissingControlUiStartupAsset(indexPath: string): string | undefined {
+function inspectControlUiAssetHealth(indexPath: string | null): ControlUiAssetHealth {
+  if (!indexPath) {
+    return { kind: "missing-index", indexPath };
+  }
   let html: string;
   try {
     if (controlUiFsRuntime.statSync(indexPath).size > 256 * 1024) {
-      return "index.html exceeds its size limit";
+      return { kind: "incomplete", indexPath, missingAsset: "index.html exceeds its size limit" };
     }
     html = controlUiFsRuntime.readFileSync(indexPath, "utf8");
   } catch {
-    return "index.html";
+    return { kind: "missing-index", indexPath };
   }
   let references = 0;
   for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
@@ -305,17 +303,21 @@ function findMissingControlUiStartupAsset(indexPath: string): string | undefined
     }
     const asset = reference.slice(marker);
     if (++references > 128 || reference.split("/").includes("..")) {
-      return references > 128 ? "too many startup assets" : asset;
+      return {
+        kind: "incomplete",
+        indexPath,
+        missingAsset: references > 128 ? "too many startup assets" : asset,
+      };
     }
     if (!controlUiFsRuntime.existsSync(path.join(path.dirname(indexPath), asset))) {
-      return asset;
+      return { kind: "incomplete", indexPath, missingAsset: asset };
     }
   }
-  return undefined;
+  return { kind: "ready", indexPath };
 }
 
 export function isControlUiStartupAssetsReady(root: string): boolean {
-  return !findMissingControlUiStartupAsset(path.join(root, "index.html"));
+  return inspectControlUiAssetHealth(path.join(root, "index.html")).kind === "ready";
 }
 
 function summarizeCommandOutput(text: string): string | undefined {
@@ -335,15 +337,14 @@ export async function ensureControlUiAssetsBuilt(
   opts: EnsureControlUiAssetsOptions = {},
 ): Promise<EnsureControlUiAssetsResult> {
   const argv1 = opts.argv1 ?? process.argv[1];
-  const health = await resolveControlUiDistIndexHealth({
+  const health = await resolveControlUiAssetHealth({
     ...(opts.root ? { root: opts.root } : {}),
     argv1,
     moduleUrl: opts.moduleUrl,
   });
   const indexFromDist = health.indexPath;
-  let missingStartupAsset =
-    health.exists && indexFromDist ? findMissingControlUiStartupAsset(indexFromDist) : undefined;
-  if (!opts.force && health.exists && !missingStartupAsset) {
+  let missingStartupAsset = health.kind === "incomplete" ? health.missingAsset : undefined;
+  if (!opts.force && health.kind === "ready") {
     return { ok: true, built: false };
   }
   if (!opts.force && !opts.root) {
@@ -354,8 +355,10 @@ export async function ensureControlUiAssetsBuilt(
       execPath: opts.execPath,
     });
     if (detectedRoot) {
-      missingStartupAsset = findMissingControlUiStartupAsset(path.join(detectedRoot, "index.html"));
-      if (!missingStartupAsset) {
+      const detectedHealth = inspectControlUiAssetHealth(path.join(detectedRoot, "index.html"));
+      missingStartupAsset =
+        detectedHealth.kind === "incomplete" ? detectedHealth.missingAsset : undefined;
+      if (detectedHealth.kind === "ready") {
         return { ok: true, built: false };
       }
     }
@@ -379,11 +382,7 @@ export async function ensureControlUiAssetsBuilt(
   }
 
   const indexPath = resolveControlUiDistIndexPathForRoot(repoRoot);
-  if (
-    !opts.force &&
-    controlUiFsRuntime.existsSync(indexPath) &&
-    !findMissingControlUiStartupAsset(indexPath)
-  ) {
+  if (!opts.force && inspectControlUiAssetHealth(indexPath).kind === "ready") {
     return { ok: true, built: false };
   }
 
@@ -429,16 +428,16 @@ export async function ensureControlUiAssetsBuilt(
     );
   }
 
-  if (!controlUiFsRuntime.existsSync(indexPath)) {
+  const builtHealth = inspectControlUiAssetHealth(indexPath);
+  if (builtHealth.kind === "missing-index") {
     return controlUiAssetsFailure(
       `Control UI build completed but ${indexPath} is still missing.`,
       true,
     );
   }
-  const missingBuiltAsset = findMissingControlUiStartupAsset(indexPath);
-  if (missingBuiltAsset) {
+  if (builtHealth.kind === "incomplete") {
     return controlUiAssetsFailure(
-      `Control UI build completed but startup asset ${missingBuiltAsset} is missing.`,
+      `Control UI build completed but startup asset ${builtHealth.missingAsset} is missing.`,
       true,
     );
   }

@@ -219,6 +219,8 @@ function collectLoadedLmstudioModelIds(discovery: LmstudioDiscoveryResult): Set<
 function resolveLmstudioDiscoveryFailure(params: {
   baseUrl: string;
   discovery: LmstudioDiscoveryResult;
+  requestedModelId?: string;
+  resetPreflight?: boolean;
 }): { noteLines: [string, string]; retryLine?: string; reason: string } | null {
   const { baseUrl, discovery } = params;
   if (!discovery.reachable) {
@@ -240,7 +242,7 @@ function resolveLmstudioDiscoveryFailure(params: {
     return {
       noteLines: [
         `LM Studio returned HTTP ${discovery.status} while listing models at ${baseUrl}.`,
-        retryable
+        retryable && !params.resetPreflight
           ? "Wait for LM Studio to recover, then re-run setup."
           : "Check the base URL and API key, then re-run setup.",
       ],
@@ -248,7 +250,10 @@ function resolveLmstudioDiscoveryFailure(params: {
       reason: `LM Studio discovery failed (${discovery.status})`,
     };
   }
-  if (collectLoadedLmstudioModelIds(discovery).size === 0) {
+  if (
+    !(params.resetPreflight && params.requestedModelId) &&
+    collectLoadedLmstudioModelIds(discovery).size === 0
+  ) {
     return {
       noteLines: [
         `No loaded LM Studio LLM models were found at ${baseUrl}.`,
@@ -285,33 +290,6 @@ function resolvePersistedLmstudioApiKey(params: {
   })
     ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
     : undefined;
-}
-
-/** Keeps explicit model entries first and appends unique discovered entries. */
-function mergeDiscoveredModels(params: {
-  explicitModels?: ModelDefinitionConfig[];
-  discoveredModels?: ModelDefinitionConfig[];
-}): ModelDefinitionConfig[] {
-  const explicitModels = Array.isArray(params.explicitModels) ? params.explicitModels : [];
-  const discoveredModels = Array.isArray(params.discoveredModels) ? params.discoveredModels : [];
-  if (explicitModels.length === 0) {
-    return discoveredModels;
-  }
-  if (discoveredModels.length === 0) {
-    return explicitModels;
-  }
-
-  const merged = [...explicitModels];
-  const seen = new Set(normalizeStringEntries(explicitModels.map((model) => model.id)));
-  for (const model of discoveredModels) {
-    const id = model.id.trim();
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    merged.push(model);
-  }
-  return merged;
 }
 
 async function discoverLmstudioProviderCatalog(params: {
@@ -387,6 +365,8 @@ async function discoverLmstudioSetupModels(params: {
   baseUrl: string;
   apiKey?: string;
   headers?: Record<string, string>;
+  requestedModelId?: string;
+  resetPreflight?: boolean;
   timeoutMs?: number;
 }): Promise<
   | { value: LmstudioSetupDiscovery }
@@ -401,6 +381,8 @@ async function discoverLmstudioSetupModels(params: {
   const failure = resolveLmstudioDiscoveryFailure({
     baseUrl: params.baseUrl,
     discovery,
+    requestedModelId: params.requestedModelId,
+    resetPreflight: params.resetPreflight,
   });
   if (failure) {
     return { failure };
@@ -421,38 +403,49 @@ async function discoverLmstudioSetupModels(params: {
   };
 }
 
-/** Read-only local discovery plus a success-gated config proposal for guided setup. */
-export async function prepareAppGuidedLmstudioSetup(
-  ctx: ProviderAppGuidedSetupContext & { modelRef?: string },
-): Promise<ProviderAuthResult | null> {
+async function resolveAppGuidedLmstudioConnection(ctx: ProviderAppGuidedSetupContext) {
   const existingProvider = ctx.config.models?.providers?.[PROVIDER_ID];
   const baseUrl = resolveLmstudioInferenceBase(
     existingProvider?.baseUrl ?? resolveLmstudioSetupDefaultInferenceBaseUrl(ctx.env),
   );
-  let headers: Record<string, string> | undefined;
-  let configuredValue: string | undefined;
   try {
-    headers = await resolveLmstudioProviderHeaders({
+    const headers = await resolveLmstudioProviderHeaders({
       config: ctx.config,
       env: ctx.env,
       headers: existingProvider?.headers,
     });
-    configuredValue = await resolveLmstudioConfiguredApiKey({
+    const configuredValue = await resolveLmstudioConfiguredApiKey({
       config: ctx.config,
       env: ctx.env,
       allowUnresolved: true,
     });
+    const accessValue = configuredValue ?? ctx.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
+    return {
+      existingProvider,
+      accessValue,
+      discoveryRequest: {
+        baseUrl,
+        apiKey: accessValue ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+        ...(headers ? { headers } : {}),
+        timeoutMs: 5000,
+      },
+    };
   } catch {
     return null;
   }
-  const environmentValue = ctx.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
-  const accessValue = configuredValue ?? environmentValue;
-  const setupDiscovery = await discoverLmstudioSetupModels({
-    baseUrl,
-    apiKey: accessValue ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-    ...(headers ? { headers } : {}),
-    timeoutMs: 5000,
-  });
+}
+
+/** Read-only local discovery plus a success-gated config proposal for guided setup. */
+export async function prepareAppGuidedLmstudioSetup(
+  ctx: ProviderAppGuidedSetupContext & { modelRef?: string },
+): Promise<ProviderAuthResult | null> {
+  const connection = await resolveAppGuidedLmstudioConnection(ctx);
+  if (!connection) {
+    return null;
+  }
+  const { existingProvider, accessValue, discoveryRequest } = connection;
+  const { baseUrl, headers } = discoveryRequest;
+  const setupDiscovery = await discoverLmstudioSetupModels(discoveryRequest);
   if ("failure" in setupDiscovery) {
     return null;
   }
@@ -482,14 +475,6 @@ export async function prepareAppGuidedLmstudioSetup(
         })
       ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
       : undefined;
-  const providerAccess = { apiKey: persistedAccess };
-  const providerSetup = {
-    ...providerAccess,
-    existingProvider,
-    baseUrl,
-    headers: existingProvider?.headers,
-    models: setupDiscovery.value.models,
-  };
   return {
     profiles: [],
     defaultModel: `${PROVIDER_ID}/${selectedModelId}`,
@@ -497,7 +482,13 @@ export async function prepareAppGuidedLmstudioSetup(
       models: {
         mode: ctx.config.models?.mode ?? "merge",
         providers: {
-          [PROVIDER_ID]: buildLmstudioSetupProviderConfig(providerSetup),
+          [PROVIDER_ID]: buildLmstudioSetupProviderConfig({
+            existingProvider,
+            baseUrl,
+            apiKey: persistedAccess,
+            headers: existingProvider?.headers,
+            models: setupDiscovery.value.models,
+          }),
         },
       },
     },
@@ -508,35 +499,11 @@ export async function prepareAppGuidedLmstudioSetup(
 export async function detectAppGuidedLmstudioAvailability(
   ctx: ProviderAppGuidedSetupContext,
 ): Promise<boolean> {
-  const existingProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-  const baseUrl = resolveLmstudioInferenceBase(
-    existingProvider?.baseUrl ?? resolveLmstudioSetupDefaultInferenceBaseUrl(ctx.env),
-  );
-  let headers: Record<string, string> | undefined;
-  let configuredValue: string | undefined;
-  try {
-    headers = await resolveLmstudioProviderHeaders({
-      config: ctx.config,
-      env: ctx.env,
-      headers: existingProvider?.headers,
-    });
-    configuredValue = await resolveLmstudioConfiguredApiKey({
-      config: ctx.config,
-      env: ctx.env,
-      allowUnresolved: true,
-    });
-  } catch {
+  const connection = await resolveAppGuidedLmstudioConnection(ctx);
+  if (!connection) {
     return false;
   }
-  const environmentValue = ctx.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
-  const accessValue = configuredValue ?? environmentValue;
-  const discovery = await fetchLmstudioModels({
-    baseUrl,
-    apiKey: accessValue ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-    ...(headers ? { headers } : {}),
-    timeoutMs: 5000,
-  });
-  return discovery.reachable;
+  return (await fetchLmstudioModels(connection.discoveryRequest)).reachable;
 }
 
 /** Interactive LM Studio setup with connectivity and model-availability checks. */
@@ -751,53 +718,31 @@ export async function promptAndConfigureLmstudioInteractive(params: {
   };
 }
 
-/** Non-interactive setup path backed by the shared self-hosted helper. */
-export async function configureLmstudioNonInteractive(
-  ctx: ProviderAuthMethodNonInteractiveContext,
-): Promise<OpenClawConfig | null> {
+async function validateNonInteractiveLmstudioDiscovery(
+  ctx: Omit<ProviderAuthMethodNonInteractiveContext, "toApiKeyCredential">,
+  resetPreflight = false,
+) {
   const customBaseUrl = normalizeOptionalSecretInput(ctx.opts.customBaseUrl);
   const baseUrl = resolveLmstudioInferenceBase(
     customBaseUrl || resolveLmstudioSetupDefaultInferenceBaseUrl(),
   );
-  const normalizedCtx = customBaseUrl
-    ? {
-        ...ctx,
-        opts: {
-          ...ctx.opts,
-          customBaseUrl: baseUrl,
-        },
-      }
-    : ctx;
-  const configureShared = async (configureCtx: ProviderAuthMethodNonInteractiveContext) =>
-    await configureOpenAICompatibleSelfHostedProviderNonInteractive({
-      ctx: configureCtx,
-      providerId: PROVIDER_ID,
-      providerLabel: LMSTUDIO_PROVIDER_LABEL,
-      defaultBaseUrl: resolveLmstudioSetupDefaultInferenceBaseUrl(),
-      defaultApiKeyEnvVar: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-      modelPlaceholder: LMSTUDIO_MODEL_PLACEHOLDER,
-    });
-  const requestedModelId = normalizeOptionalSecretInput(normalizedCtx.opts.customModelId);
-  const resolved = await normalizedCtx.resolveApiKey({
+  const requestedModelId = normalizeOptionalSecretInput(ctx.opts.customModelId);
+  const providerApiKey = normalizeOptionalSecretInput(ctx.opts.lmstudioApiKey);
+  const resolved = await ctx.resolveApiKey({
     provider: PROVIDER_ID,
-    flagValue:
-      normalizeOptionalSecretInput(normalizedCtx.opts.lmstudioApiKey) ??
-      normalizeOptionalSecretInput(normalizedCtx.opts.customApiKey),
-    flagName:
-      normalizeOptionalSecretInput(normalizedCtx.opts.lmstudioApiKey) !== undefined
-        ? "--lmstudio-api-key"
-        : "--custom-api-key",
+    flagValue: providerApiKey ?? normalizeOptionalSecretInput(ctx.opts.customApiKey),
+    flagName: providerApiKey === undefined ? "--custom-api-key" : "--lmstudio-api-key",
     envVar: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
     envVarName: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
     required: false,
   });
 
-  const existingProvider = normalizedCtx.config.models?.providers?.[PROVIDER_ID];
+  const existingProvider = ctx.config.models?.providers?.[PROVIDER_ID];
   // Auth setup updates auth/profile/provider model fields but does not mutate
   // user-provided header overrides. Runtime request assembly is the source of truth for auth.
   const persistedHeaders = existingProvider?.headers;
   const resolvedHeaders = await resolveLmstudioProviderHeaders({
-    config: normalizedCtx.config,
+    config: ctx.config,
     env: process.env,
     headers: persistedHeaders,
   });
@@ -813,21 +758,23 @@ export async function configureLmstudioNonInteractive(
       ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
       : undefined);
   if (!setupDiscoveryApiKey && !hasAuthorizationHeader) {
-    normalizedCtx.runtime.error(
+    ctx.runtime.error(
       `LM Studio API key is required. Set ${LMSTUDIO_DEFAULT_API_KEY_ENV_VAR} or pass --lmstudio-api-key.`,
     );
-    normalizedCtx.runtime.exit(1);
+    ctx.runtime.exit(1);
     return null;
   }
   const setupDiscovery = await discoverLmstudioSetupModels({
     baseUrl,
     apiKey: setupDiscoveryApiKey,
     ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
+    requestedModelId,
+    resetPreflight,
     timeoutMs: 5000,
   });
   if ("failure" in setupDiscovery) {
-    normalizedCtx.runtime.error(setupDiscovery.failure.noteLines.join("\n"));
-    normalizedCtx.runtime.exit(1);
+    ctx.runtime.error(setupDiscovery.failure.noteLines.join("\n"));
+    ctx.runtime.exit(1);
     return null;
   }
   const discoveredModels = setupDiscovery.value.models;
@@ -839,7 +786,7 @@ export async function configureLmstudioNonInteractive(
     selectedModelId !== undefined && setupDiscovery.value.loadedModelIds.has(selectedModelId);
   if (!selectedModelId || !selectedModel || !selectedModelLoaded) {
     const availableModels = discoveredModels.map((model) => model.id).join(", ");
-    normalizedCtx.runtime.error(
+    ctx.runtime.error(
       requestedModelId && selectedModel && !selectedModelLoaded
         ? [
             `LM Studio model ${requestedModelId} is installed but not loaded at ${baseUrl}.`,
@@ -855,9 +802,60 @@ export async function configureLmstudioNonInteractive(
               `Available models: ${availableModels || "(none)"}`,
             ].join("\n"),
     );
-    normalizedCtx.runtime.exit(1);
+    ctx.runtime.exit(1);
     return null;
   }
+
+  return {
+    baseUrl,
+    customBaseUrl,
+    discoveredModels,
+    existingProvider,
+    persistedHeaders,
+    resolved,
+    resolvedHeaders,
+    selectedModelId,
+    setupDiscoveryApiKey,
+    useHeaderOnlyAuth,
+  };
+}
+
+/** Checks endpoint auth and loaded models without mutating config, profiles, or the server. */
+export async function validateLmstudioNonInteractive(
+  ctx: Omit<ProviderAuthMethodNonInteractiveContext, "toApiKeyCredential">,
+): Promise<boolean> {
+  return Boolean(await validateNonInteractiveLmstudioDiscovery(ctx, true));
+}
+
+/** Non-interactive setup path backed by the shared self-hosted helper. */
+export async function configureLmstudioNonInteractive(
+  ctx: ProviderAuthMethodNonInteractiveContext,
+): Promise<OpenClawConfig | null> {
+  const validated = await validateNonInteractiveLmstudioDiscovery(ctx);
+  if (!validated) {
+    return null;
+  }
+  const {
+    baseUrl,
+    customBaseUrl,
+    discoveredModels,
+    existingProvider,
+    persistedHeaders,
+    resolved,
+    resolvedHeaders,
+    selectedModelId,
+    setupDiscoveryApiKey,
+    useHeaderOnlyAuth,
+  } = validated;
+  const normalizedCtx = customBaseUrl
+    ? {
+        ...ctx,
+        opts: {
+          ...ctx.opts,
+          customBaseUrl: baseUrl,
+        },
+      }
+    : ctx;
   if (useHeaderOnlyAuth) {
     await removeProviderAuthProfilesWithLock({
       provider: PROVIDER_ID,
@@ -900,13 +898,20 @@ export async function configureLmstudioNonInteractive(
   // state and credential storage are handled consistently. The pre-resolved key
   // is injected via resolveApiKey to skip a second prompt. The returned config
   // is then post-patched below to add the discovered model list and base URL.
-  const configured = await configureShared({
-    ...normalizedCtx,
-    opts: {
-      ...normalizedCtx.opts,
-      customModelId: selectedModelId,
+  const configured = await configureOpenAICompatibleSelfHostedProviderNonInteractive({
+    ctx: {
+      ...normalizedCtx,
+      opts: {
+        ...normalizedCtx.opts,
+        customModelId: selectedModelId,
+      },
+      resolveApiKey: async () => resolvedOrSynthetic,
     },
-    resolveApiKey: async () => resolvedOrSynthetic,
+    providerId: PROVIDER_ID,
+    providerLabel: LMSTUDIO_PROVIDER_LABEL,
+    defaultBaseUrl: resolveLmstudioSetupDefaultInferenceBaseUrl(),
+    defaultApiKeyEnvVar: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
+    modelPlaceholder: LMSTUDIO_MODEL_PLACEHOLDER,
   });
   if (!configured) {
     return null;
@@ -958,21 +963,15 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
   let resolvedHeaders: Record<string, string> | undefined;
+  let hasAuthorizationHeader: boolean;
+  let configuredDiscoveryApiKey: string | undefined;
   try {
     resolvedHeaders = await resolveLmstudioProviderHeaders({
       config: ctx.config,
       env: ctx.env,
       headers: explicit?.headers,
     });
-  } catch (error) {
-    if (isLmstudioDiscoveryConfigResolutionError(error)) {
-      return null;
-    }
-    throw error;
-  }
-  const hasAuthorizationHeader = hasLmstudioAuthorizationHeader(resolvedHeaders);
-  let configuredDiscoveryApiKey: string | undefined;
-  try {
+    hasAuthorizationHeader = hasLmstudioAuthorizationHeader(resolvedHeaders);
     configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
       config: ctx.config,
       env: ctx.env,
@@ -989,39 +988,17 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
     : (discoveryApiKey ?? configuredDiscoveryApiKey);
   // CLI/runtime-resolved key takes precedence over static provider config key.
   const resolvedApiKey = apiKey ?? explicit?.apiKey;
-  if (hasExplicitModels && explicitWithoutHeaders) {
-    const persistedApiKey = resolvePersistedLmstudioApiKey({
-      currentApiKey: resolvedApiKey,
-      explicitAuth,
-      fallbackApiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-      hasModels: hasExplicitModels,
-      hasAuthorizationHeader,
-    });
-    const persistedAuth = resolveLmstudioProviderAuthMode(persistedApiKey);
-    return {
-      provider: {
-        ...explicitWithoutHeaders,
-        ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
-        baseUrl: resolveLmstudioInferenceBase(explicitWithoutHeaders.baseUrl),
-        // Keep explicit API unless absent, then fall back to provider default.
-        api: explicitWithoutHeaders.api ?? "openai-completions",
-        ...(persistedApiKey ? { apiKey: persistedApiKey } : {}),
-        ...(persistedAuth ? { auth: persistedAuth } : {}),
-        models: explicitWithoutHeaders.models,
-      },
-    };
-  }
-  const provider = await discoverLmstudioProviderCatalog({
-    baseUrl: explicit?.baseUrl,
-    // Prefer resolved discovery auth, then configured provider auth.
-    apiKey: resolvedDiscoveryApiKey,
-    headers: resolvedHeaders,
-    quiet: !apiKey && !explicit && !resolvedDiscoveryApiKey,
-  });
-  const models = mergeDiscoveredModels({
-    explicitModels: explicit?.models,
-    discoveredModels: provider.models,
-  });
+  const explicitProvider = hasExplicitModels ? explicitWithoutHeaders : undefined;
+  const provider =
+    explicitProvider ??
+    (await discoverLmstudioProviderCatalog({
+      baseUrl: explicit?.baseUrl,
+      // Prefer resolved discovery auth, then configured provider auth.
+      apiKey: resolvedDiscoveryApiKey,
+      headers: resolvedHeaders,
+      quiet: !apiKey && !explicit && !resolvedDiscoveryApiKey,
+    }));
+  const models = provider.models;
   if (models.length === 0 && !apiKey && !explicit?.apiKey) {
     return null;
   }
@@ -1039,6 +1016,7 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
       ...explicitWithoutHeaders,
       ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
       baseUrl: resolveLmstudioInferenceBase(explicit?.baseUrl ?? provider.baseUrl),
+      ...(explicitProvider ? { api: explicitProvider.api ?? "openai-completions" } : {}),
       ...(persistedApiKey ? { apiKey: persistedApiKey } : {}),
       ...(persistedAuth ? { auth: persistedAuth } : {}),
       models,
@@ -1046,9 +1024,9 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
   };
 }
 
-export async function prepareLmstudioDynamicModels(
+export async function prepareLmstudioDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,
-): Promise<ProviderRuntimeModel[]> {
+): Promise<ProviderRuntimeModel | undefined> {
   const baseUrl = resolveLmstudioInferenceBase(ctx.providerConfig?.baseUrl);
   const { apiKey, headers } = await resolveLmstudioRequestContext({
     config: ctx.config,
@@ -1062,15 +1040,18 @@ export async function prepareLmstudioDynamicModels(
     headers,
     quiet: true,
   });
-  return discoveredModels.map((model) =>
-    Object.assign({}, model, {
-      provider: PROVIDER_ID,
-      api: ctx.providerConfig?.api ?? `openai-completions`,
-      baseUrl,
-      input: model.input.filter(
-        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-      ),
-    }),
-  );
+  const model = discoveredModels.find((candidate) => candidate.id === ctx.modelId);
+  if (!model) {
+    return undefined;
+  }
+  return {
+    ...model,
+    provider: PROVIDER_ID,
+    api: ctx.providerConfig?.api ?? "openai-completions",
+    baseUrl,
+    input: model.input.filter(
+      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+    ),
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

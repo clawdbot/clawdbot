@@ -253,6 +253,7 @@ export function listMemoryPromptPreparations(): MemoryPromptPreparationRegistrat
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  contextWindowTokens?: number;
 }): MemoryFlushPlan | null {
   return getMemoryCapability()?.capability.flushPlanResolver?.(params) ?? null;
 }

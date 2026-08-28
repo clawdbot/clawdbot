@@ -11,7 +11,7 @@ Build and run the OpenClaw macOS application from source.
 
 ## Prerequisites
 
-- **Xcode 26.2+** (Swift 6.2 toolchain), on the latest macOS available in
+- **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
 - **Node.js 24.15+ & pnpm** for the gateway, CLI, and packaging scripts. Node
   22.22.3+ also works.
@@ -28,8 +28,9 @@ pnpm install
 ./scripts/package-mac-app.sh
 ```
 
-Outputs `dist/OpenClaw.app`. Without an Apple Developer ID certificate, the
-script falls back to ad-hoc signing.
+Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
+default; ad-hoc signing is an explicit opt-in and does not preserve TCC grants.
+See [macOS signing](/platforms/mac/signing).
 
 Set `OPENCLAW_SKIP_MLX_TTS=1` to package a dev/proof build without the local
 MLX voice helper. This skips the `openclaw-mlx-tts` binary and its large
@@ -71,8 +72,8 @@ runtime for the Gateway itself.
 
 ### Build fails: toolchain or SDK mismatch
 
-The macOS app build expects the latest macOS SDK and the Swift 6.2 toolchain
-(Xcode 26.2+).
+The macOS app build expects the latest macOS SDK and the Swift 6.3 toolchain
+(Xcode 26.4+).
 
 ```bash
 xcodebuild -version

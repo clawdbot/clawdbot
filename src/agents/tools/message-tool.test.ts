@@ -1,5 +1,6 @@
 // Message tool tests cover channel action discovery, secret scoping, and
 // outbound message execution context.
+import fs from "node:fs/promises";
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
@@ -28,6 +29,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
@@ -150,6 +152,12 @@ const mocks = vi.hoisted(() => ({
       };
     },
   ),
+}));
+const bootMocks = vi.hoisted(() => ({ agentCommandFromSystem: vi.fn() }));
+
+vi.mock("../../commands/agent.js", async () => ({
+  ...(await vi.importActual<typeof import("../../commands/agent.js")>("../../commands/agent.js")),
+  agentCommandFromSystem: bootMocks.agentCommandFromSystem,
 }));
 
 vi.mock("../../channels/plugins/bundled.js", async () => {
@@ -405,6 +413,7 @@ beforeEach(() => {
   resetPluginRuntimeStateForTest();
   resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
+  bootMocks.agentCommandFromSystem.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -1163,6 +1172,21 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
     expect(input?.params).toMatchObject({ action: "send", message: "hi" });
+  });
+
+  it("does not discover bundled plugins for an internal WebChat session", async () => {
+    const { getBundledChannelPlugin } = await import("../../channels/plugins/bundled.js");
+    const bundledPluginLookup = vi.mocked(getBundledChannelPlugin);
+    bundledPluginLookup.mockClear();
+
+    createMessageTool({
+      config: { agents: { entries: { main: { default: true } } } },
+      preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+      currentChannelProvider: "webchat",
+      agentSessionKey: "agent:main:webchat:dm:dashboard",
+    });
+
+    expect(bundledPluginLookup).not.toHaveBeenCalled();
   });
 
   it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
@@ -3686,12 +3710,26 @@ describe("message tool schema scoping", () => {
   it.each<{
     action: ChannelMessageActionName;
     fields: string[];
+    descriptions?: Record<string, string>;
   }>([
+    {
+      action: "react",
+      fields: ["messageId", "emoji"],
+      descriptions: { emoji: "Unicode emoji; channels may also support custom emoji." },
+    },
     { action: "search", fields: ["query", "limit"] },
     { action: "reactions", fields: ["messageId", "limit"] },
     { action: "sticker-search", fields: ["query", "limit"] },
-    { action: "emoji-list", fields: ["guildId", "limit"] },
-    { action: "emoji-upload", fields: ["guildId", "emojiName", "media", "roleIds"] },
+    {
+      action: "emoji-list",
+      fields: ["guildId", "limit"],
+      descriptions: { limit: "Maximum number of results to return." },
+    },
+    {
+      action: "emoji-upload",
+      fields: ["guildId", "emojiName", "media", "roleIds"],
+      descriptions: { emojiName: "Name for an uploaded custom emoji." },
+    },
     {
       action: "sticker-upload",
       fields: ["guildId", "stickerName", "stickerDesc", "stickerTags", "media"],
@@ -3704,7 +3742,7 @@ describe("message tool schema scoping", () => {
     { action: "setGroupIcon", fields: ["name", "filename", "buffer"] },
     { action: "channel-info", fields: ["channelId", "pageSize", "pageToken"] },
     { action: "channel-list", fields: ["query", "limit"] },
-  ])("keeps fields consumed by scoped $action handlers", ({ action, fields }) => {
+  ])("keeps fields consumed by scoped $action handlers", ({ action, fields, descriptions }) => {
     const plugin = createChannelPlugin({
       id: "test-channel",
       label: "Test Channel",
@@ -3725,6 +3763,11 @@ describe("message tool schema scoping", () => {
 
     for (const field of fields) {
       expect(properties, `${action} should advertise ${field}`).toHaveProperty(field);
+    }
+    for (const [field, description] of Object.entries(descriptions ?? {})) {
+      expect(properties[field], `${action} should describe ${field}`).toMatchObject({
+        description,
+      });
     }
   });
 
@@ -4146,6 +4189,48 @@ describe("message tool description", () => {
     expect(tool.description).not.toContain("Current channel");
     expect(tool.description).not.toContain("Other configured channels");
     expect(tool.description).not.toContain("telegram (");
+  });
+
+  it("keeps cross-channel Telegram reactions available when emoji schema is metadata-only", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send"],
+    });
+    const telegramPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send", "react"],
+      toolSchema: {
+        actions: [],
+        properties: {
+          emoji: Type.Optional(Type.String()),
+        },
+      },
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: signalPlugin },
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+
+    const properties = getToolProperties(tool);
+    expect(getActionEnum(properties)).toContain("react");
+    expect(properties.emoji).toMatchObject({ type: "string" });
+    expect((properties.emoji as { description?: string }).description).not.toContain(
+      "custom_emoji_id",
+    );
   });
 
   it("does not advertise cross-channel actions whose params are hidden by current-channel schema", () => {
@@ -4583,28 +4668,39 @@ describe("message tool boot-echo guard", () => {
     clearBootEchoContextForSession("agent:main");
   });
 
-  it("suppresses text-only sends that echo a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-
-    // The model is paraphrasing out the wrapper but copying the BOOT.md
-    // sentence verbatim — exactly the leak vector clawsweeper called out
-    // on #75128 that the marker-only strip would miss.
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const { call, result } = await executeSendWithResult({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
+  it("delivers a distinct surrogate collision once and suppresses an identical boot echo", async () => {
+    const bootText = `${"x".repeat(79)}😀 boot`;
+    const distinct = `${"x".repeat(79)}😁 visible`;
+    const identical = `${"x".repeat(79)}😀`;
+    const outcomes: Awaited<ReturnType<typeof executeSendWithResult>>[] = [];
+    mockSendResult({ channel: "qa-channel", to: "channel:boot-proof" });
+    bootMocks.agentCommandFromSystem.mockImplementationOnce(async ({ sessionKey }) => {
+      for (const message of [distinct, identical]) {
+        outcomes.push(
+          await executeSendWithResult({
+            action: { target: "channel:boot-proof", message },
+            toolOptions: { agentSessionKey: sessionKey, currentChannelProvider: "qa-channel" },
+          }),
+        );
+      }
     });
-    expect(call).toBeUndefined();
-    expect(mocks.runMessageAction).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({
+    await withTempDir("openclaw-boot-echo-", async (workspaceDir) => {
+      await fs.writeFile(`${workspaceDir}/BOOT.md`, bootText);
+      const { runBootOnce } = await import("../../gateway/boot.js");
+      await expect(
+        runBootOnce({
+          cfg: { agents: { list: [{ id: "main", default: true }] } },
+          deps: {} as never,
+          workspaceDir,
+        }),
+      ).resolves.toEqual({ status: "ran" });
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+    expect(firstRunMessageActionInput()?.params?.message).toBe(distinct);
+    expect(outcomes[1]?.result.details).toMatchObject({
       status: "suppressed",
       reason: "internal_runtime_context_echo",
     });
-    expect(JSON.stringify(result)).not.toContain("thoughtful greeting");
   });
 
   it("sanitizes boot echo text and still sends when media content remains", async () => {

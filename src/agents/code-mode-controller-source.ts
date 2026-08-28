@@ -246,16 +246,30 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     callableMetadata.set(frozen, metadata);
     return frozen;
   }
-  function serializeCatalogHandles(value) {
+  // Final values may nest handles (Promise.all of searches, keyed maps); an
+  // unserialized handle dumps as null and the model never learns the tool name.
+  function serializeCatalogHandles(value, seen = new Set()) {
     const metadata = callableMetadata.get(value);
     if (metadata) return metadata;
-    if (!Array.isArray(value)) return value;
-    return value.map((entry) => callableMetadata.get(entry) ?? entry);
+    if (value === null || typeof value !== "object" || seen.has(value)) return value;
+    const proto = Object.getPrototypeOf(value);
+    if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) return value.map((entry) => serializeCatalogHandles(entry, seen));
+      const plain = {};
+      for (const [key, entry] of Object.entries(value)) {
+        plain[key] = serializeCatalogHandles(entry, seen);
+      }
+      return plain;
+    } finally {
+      seen.delete(value);
+    }
   }
   const catalog = Object.freeze({
     search: async (query, options) => {
       const matches = await request("search", [query, options]);
-      return Object.freeze((Array.isArray(matches) ? matches : []).map((name) =>
+      return Object.freeze(matches.map((name) =>
         callableHandles.get(String(name))
       ).filter(Boolean));
     },

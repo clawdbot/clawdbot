@@ -9,13 +9,6 @@ let cached:
   | { connection: ModelSetupDetectionConnection; result: SystemAgentSetupDetectResult }
   | undefined;
 
-export function cacheModelSetupDetection(
-  connection: ModelSetupDetectionConnection,
-  result: SystemAgentSetupDetectResult,
-): void {
-  cached = { connection, result };
-}
-
 export function consumeCachedModelSetupDetection(
   connection: ModelSetupDetectionConnection,
 ): SystemAgentSetupDetectResult | null {

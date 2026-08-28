@@ -80,16 +80,17 @@ endpoint and adapter:
 | Explicit exact official endpoint using HTTP                                                                                                                                     | Rejected              |
 | Route with an authored provider/model request override                                                                                                                          | OpenClaw              |
 
-Valid model-scoped `params.fastMode` / `params.fast_mode` values and valid
-cutoff keys are typed agent-runtime controls, not authored provider request
-params. They do not disqualify implicit Codex selection or select a runtime by
-themselves. Pin `agentRuntime.id: "openclaw"` or `agentRuntime.id: "codex"`
-when a recipe depends on one runtime.
+Valid model-scoped `params.fastMode` / `params.fast_mode`, cutoff, and `thinking`
+values are typed agent-runtime controls, not authored provider request params.
+Affirmative reasoning support and native reasoning-effort metadata also preserve
+Codex selection. See [Runtime selection](/concepts/agent-runtimes#runtime-selection)
+for the supported capability values and the request overrides that remain protected.
 
-An explicit non-default provider/model `agentRuntime.id` remains authoritative.
-For example, `agentRuntime.id: "openclaw"` keeps an otherwise Codex-eligible
-route on OpenClaw, while `agentRuntime.id: "codex"` requires Codex and fails
-closed when the effective route is not declared Codex-compatible.
+An explicit `agentRuntime.id: "openclaw"` keeps a Codex-eligible route on
+OpenClaw. Explicit `agentRuntime.id: "codex"` requires a registered Codex harness;
+unsupported routes/auth fail closed, except that authored request overrides may
+use Codex's declared exact-request OpenClaw fallback before execution. Inspect
+the completed result's actual harness when a recipe depends on native execution.
 Runtime selection does not change credential type or billing: Platform API-key
 auth and ChatGPT/Codex subscription auth remain distinct.
 
@@ -1307,9 +1308,10 @@ request settings, so an otherwise eligible `auto` route stays on OpenClaw
 instead of selecting Codex implicitly. Valid `fastMode` / `fast_mode` values
 and valid cutoff keys are typed agent-runtime controls and do not select a
 runtime. Runtime-specific examples therefore pin `agentRuntime.id` explicitly.
-The native Codex app-server harness owns its own transport and request settings;
-explicit `agentRuntime.id: "codex"` fails closed when the effective route is
-not declared Codex-compatible.
+The native Codex app-server harness owns its transport and request settings.
+Authored embedded-provider settings can therefore select the declared OpenClaw
+fallback even with explicit `agentRuntime.id: "codex"`; see
+[Runtime selection](/concepts/agent-runtimes#runtime-selection).
 
 <AccordionGroup>
   <Accordion title="Transport (WebSocket vs SSE)">

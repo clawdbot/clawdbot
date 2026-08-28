@@ -97,8 +97,14 @@ const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 
 The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
 `run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
-`task-suggestions`, `terminal-offset-seq`, `tool-events`, and `ui-commands`.
+`task-suggestions`, `terminal-offset-seq`, `tool-events`, `ui-commands`, and
+`usage-refreshing`.
 Advertise only capabilities the client actually implements.
+
+`usage-refreshing` allows a cold `usage.status` request to return immediately
+with `refreshing: true` and an empty provider list. A client advertising it must
+keep that payload cache-cold and refetch on a short bounded schedule. Other
+clients retain the blocking cold read.
 
 <Warning>
 `tool-events` gates live tool-execution streaming. The Gateway registers only
@@ -139,8 +145,10 @@ snapshot, so re-read them on every reconnect.
 Treat every successful reconnect as a new projection over durable history and
 current in-memory run state:
 
-1. Re-establish `sessions.subscribe` and the selected session's
-   `sessions.messages.subscribe` subscription.
+1. Re-establish `sessions.subscribe` with your list parameters to receive the
+   current roster in the same response, as described
+   [below](/gateway/clients#subscribe-instead-of-polling-usage). Also re-establish
+   the selected session's `sessions.messages.subscribe` subscription.
 2. Call `chat.history` for the selected `sessionKey` and replace local persisted
    rows with the returned `messages` projection.
 3. If `inFlightRun` is present, adopt its `runId`, buffered `text`, and optional
@@ -234,8 +242,27 @@ archive history; anchored responses intentionally omit numeric paging metadata.
 
 ## Subscribe instead of polling usage
 
-Load the initial catalog with `sessions.list`, then call `sessions.subscribe` once
-per connection. Merge `sessions.changed` events by `sessionKey`. Session change
+Install the `sessions.changed` listener, then call `sessions.subscribe` once per
+connection with your `sessions.list` parameters, such as
+`{ limit: 60, ownerFirst: true }`. The response is `{ subscribed: true, list }`,
+where `list` is the normal `SessionsListResult` snapshot. Passing `{}` activates
+the subscription but returns only `{ subscribed: true }`, without a list.
+
+The Gateway activates the subscription before reading the snapshot. Events can
+therefore arrive before the response. Track changes received during bootstrap
+and follow the response with a `sessions.list` refresh when needed; do not let
+the snapshot silently overwrite a newer event. Re-establish this flow after
+every reconnect.
+
+`ownerFirst: true` prepends up to 60 matching sessions owned by the authenticated
+viewer to the normal first page, removing duplicates within that response. It
+applies only when `offset` is zero or omitted. The Gateway derives the viewer
+identity from the authenticated connection, not a client-supplied identity.
+The shared page's pagination metadata is unchanged, so use `nextOffset`, not the
+number of returned rows, when loading another page, and merge rows by session
+key. See [Session list bootstrap](/gateway/protocol#session-list-bootstrap).
+
+Merge subsequent `sessions.changed` events by `sessionKey`. Session change
 payloads can carry live `inputTokens`, `outputTokens`, `totalTokens`,
 `totalTokensFresh`, `contextTokens`, `estimatedCostUsd`, response-usage settings,
 and active-run state.

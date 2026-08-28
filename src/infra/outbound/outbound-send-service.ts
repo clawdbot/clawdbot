@@ -26,28 +26,18 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
-import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { NormalizedOutboundPayload, OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
+import type { MessageActionGateway } from "./message-action-contracts.js";
 import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 
 const log = createSubsystemLogger("outbound/send-service");
-
-/** Gateway connection settings forwarded to outbound send helpers. */
-type OutboundGatewayContext = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
-  clientName: GatewayClientName;
-  clientDisplayName?: string;
-  mode: GatewayClientMode;
-};
 
 /** Shared execution context for message-tool send and poll actions. */
 type OutboundSendContext = {
@@ -75,7 +65,7 @@ type OutboundSendContext = {
   runId?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   inboundEventKind?: InboundEventKind;
-  gateway?: OutboundGatewayContext;
+  gateway?: MessageActionGateway;
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
   dryRun: boolean;
@@ -94,10 +84,18 @@ type OutboundSendContext = {
   deliveryIntentId?: string;
   /** Serializable owner state finalized by live send or recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** The caller resends proven-not-sent payloads itself, so recovery must not. */
+  deliveryRetryOwner?: "caller";
   /** Runs after queue persistence and before platform I/O. */
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** Revalidates authority once per durable queue execution, before adapter fanout. */
+  onDeliveryAttempt?: () => Promise<void>;
   /** Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** Revalidates caller authority immediately before recipient-visible I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** Keep ephemeral-authority sends out of replayable recovery. */
+  skipQueue?: boolean;
   /** Runs once a plugin action accepted the send, before transcript mirroring. */
   onPluginSendAccepted?: () => Promise<void>;
 };
@@ -192,9 +190,13 @@ async function sendCoreMessage(params: {
     gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
     deliveryIntentId: params.ctx.deliveryIntentId,
     deliveryCompletion: params.ctx.deliveryCompletion,
+    deliveryRetryOwner: params.ctx.deliveryRetryOwner,
     requireUnknownSendReconciliation: params.ctx.requireQueuePersistence ? false : undefined,
     onDeliveryIntent: params.ctx.onDeliveryIntent,
+    onDeliveryAttempt: params.ctx.onDeliveryAttempt,
     onDeliveryResult: params.ctx.onDeliveryResult,
+    onPlatformSendDispatch: params.ctx.onPlatformSendDispatch,
+    skipQueue: params.ctx.skipQueue,
     onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });
   const deliveredText =

@@ -670,6 +670,31 @@ describe("config schema", () => {
     );
   });
 
+  it.each(["bundled", "extended"])(
+    "keeps core channel settings discoverable with %s metadata",
+    (metadata) => {
+      const schema = metadata === "bundled" ? baseSchema : buildConfigSchemaCore(mergedSchemaInput);
+      const channels = lookupConfigSchema(schema, "channels");
+      expect(channels?.children.map((child) => child.key)).toEqual(
+        expect.arrayContaining(["defaults", "modelByChannel", "matrix"]),
+      );
+      expect(channels?.children.map((child) => child.key)).not.toContain("*");
+      expect(lookupConfigSchema(schema, "channels.unknownChannel")).toBeNull();
+      expect(lookupConfigSchema(schema, "channels.defaults.groupPolicy")?.schema).toMatchObject({
+        enum: ["open", "disabled", "allowlist"],
+      });
+      expect(
+        lookupConfigSchema(schema, "channels.defaults.botLoopProtection.maxEventsPerWindow")
+          ?.schema,
+      ).toMatchObject({ type: "integer" });
+      expect(
+        lookupConfigSchema(schema, "channels.modelByChannel.matrix.room")?.schema,
+      ).toMatchObject({
+        type: "string",
+      });
+    },
+  );
+
   it("omits a single oversized plugin schema from the full schema response", () => {
     const res = buildConfigSchemaCore({
       cache: false,

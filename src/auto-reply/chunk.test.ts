@@ -407,6 +407,36 @@ describe("resolveTextChunkLimit", () => {
 });
 
 describe("chunkMarkdownText", () => {
+  it.each(["length", "newline"] as const)(
+    "preserves indentation at fenced line boundaries in %s mode",
+    (mode) => {
+      for (const indent of ["    ", "\t", " \t "]) {
+        const body = `${indent}value = 1\n`.repeat(10);
+        const chunks = chunkMarkdownTextWithMode(`\`\`\`txt\n${body}\`\`\``, 34, mode);
+        expect(chunks.length).toBeGreaterThan(1);
+        expectFencesBalanced(chunks);
+        // Every split is at an existing line ending; retain it while removing fences.
+        expect
+          .soft(chunks.map((chunk) => chunk.slice(7, -3)).join(""), JSON.stringify(indent))
+          .toBe(body);
+        expect(chunks.every((chunk) => chunk.length <= 34)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["length", "newline"] as const)(
+    "preserves spaces at hard fenced boundaries in %s mode",
+    (mode) => {
+      const body = "abc def ghi jkl mno";
+      const chunks = chunkMarkdownTextWithMode(`\`\`\`txt\n${body}\n\`\`\``, 14, mode);
+      expect(chunks.length).toBeGreaterThan(1);
+      expectFencesBalanced(chunks);
+      // Single-line chunks gain a newline only to close their transport fence.
+      expect(chunks.map((chunk) => chunk.slice(7, -4)).join("")).toBe(body);
+      expect(chunks.every((chunk) => chunk.length <= 14)).toBe(true);
+    },
+  );
+
   it.each([
     {
       name: "keeps fenced blocks intact when a safe break exists",
@@ -520,6 +550,68 @@ describe("chunkByNewline", () => {
       text: "Line one\n\n",
       limit: 1000,
       expected: ["Line one\n\n"],
+    },
+    {
+      name: "caps trailing blank lines to the final chunk's remaining space",
+      text: "x" + "\n".repeat(50),
+      limit: 10,
+      expected: ["x" + "\n".repeat(9)],
+    },
+    {
+      name: "does not append blank lines to a full chunk",
+      text: "abcdefghij\n\n",
+      limit: 10,
+      expected: ["abcdefghij"],
+    },
+    {
+      name: "counts astral text in UTF-16 units before appending blank lines",
+      text: "😀\n\n",
+      limit: 3,
+      expected: ["😀\n"],
+    },
+    {
+      name: "reserves a whole first code point after leading blank lines",
+      text: "\n😀",
+      limit: 2,
+      expected: ["😀"],
+    },
+    {
+      name: "reserves a whole first code point after interior blank lines",
+      text: "a\n\n😀",
+      limit: 2,
+      expected: ["a", "😀"],
+    },
+    {
+      name: "normalizes fractional limits for leading and trailing blank lines",
+      text: "\n😀\n\n",
+      limit: 2.9,
+      expected: ["😀"],
+    },
+    {
+      name: "keeps an indivisible code point without adding blank lines",
+      text: "😀\n\n",
+      limit: 1,
+      expected: ["😀"],
+    },
+    {
+      name: "keeps unsplit long lines without appending excess blank lines",
+      text: "abcdefghij\n\n",
+      limit: 3,
+      options: { splitLongLines: false },
+      expected: ["abcdefghij"],
+    },
+    {
+      name: "counts untrimmed text when bounding trailing blank lines",
+      text: "  x \n\n",
+      limit: 5,
+      options: { trimLines: false },
+      expected: ["  x \n"],
+    },
+    {
+      name: "preserves trailing blank lines when the limit is disabled",
+      text: "x\n\n",
+      limit: 0,
+      expected: ["x\n\n"],
     },
     {
       name: "keeps whitespace when trimLines is false",

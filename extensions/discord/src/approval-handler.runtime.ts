@@ -1,14 +1,9 @@
 // Discord plugin module implements approval handler behavior.
 import { ButtonStyle } from "discord-api-types/v10";
 import type {
+  ApprovalViewModel,
   ChannelApprovalCapabilityHandlerContext,
-  ExecApprovalExpiredView,
-  ExecApprovalPendingView,
-  ExecApprovalResolvedView,
   PendingApprovalView,
-  PluginApprovalExpiredView,
-  PluginApprovalPendingView,
-  PluginApprovalResolvedView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -243,169 +238,79 @@ function resolveCommandPreviews(
   };
 }
 
-function createExecApprovalRequestContainer(params: {
-  view: ExecApprovalPendingView;
+function createApprovalContainer(params: {
+  view: ApprovalViewModel;
   cfg: OpenClawConfig;
   accountId: string;
   actionRow?: Row<Button>;
 }): ExecApprovalContainer {
-  const { commandPreview, commandSecondaryPreview } = resolveCommandPreviews(
-    params.view.commandText,
-    params.view.commandPreview,
-    1000,
-    500,
-  );
-  const expiresAtSeconds = Math.max(0, Math.floor(params.view.expiresAtMs / 1000));
-
-  return new ExecApprovalContainer({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    title: "Exec Approval Required",
-    description: "A command needs your approval.",
-    commandPreview,
-    commandSecondaryPreview,
-    metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    actionRow: params.actionRow,
-    footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
-    accentColor: "#FFA500",
-  });
-}
-
-function createPluginApprovalRequestContainer(params: {
-  view: PluginApprovalPendingView;
-  cfg: OpenClawConfig;
-  accountId: string;
-  actionRow?: Row<Button>;
-}): ExecApprovalContainer {
-  const expiresAtSeconds = Math.max(0, Math.floor(params.view.expiresAtMs / 1000));
-  const severity = params.view.severity;
-  const accentColor =
-    severity === "critical" ? "#ED4245" : severity === "info" ? "#5865F2" : "#FAA61A";
-  return new ExecApprovalContainer({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    title: "Plugin Approval Required",
-    description: "A plugin action needs your approval.",
-    commandPreview: formatCommandPreview(params.view.title, 700),
-    commandSecondaryPreview: formatOptionalCommandPreview(params.view.description, 1000),
-    metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    actionRow: params.actionRow,
-    footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
-    accentColor,
-  });
-}
-
-function createExecResolvedContainer(params: {
-  view: ExecApprovalResolvedView;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): ExecApprovalContainer {
-  const { commandPreview, commandSecondaryPreview } = resolveCommandPreviews(
-    params.view.commandText,
-    params.view.commandPreview,
-    500,
-    300,
-  );
+  const { view } = params;
+  const plugin = view.approvalKind === "plugin";
+  const pending = view.phase === "pending";
+  const approvalLabel = plugin ? "Plugin" : "Exec";
+  const { commandPreview, commandSecondaryPreview } = plugin
+    ? {
+        commandPreview: formatCommandPreview(view.title, 700),
+        commandSecondaryPreview: formatOptionalCommandPreview(view.description, 1000),
+      }
+    : resolveCommandPreviews(
+        view.commandText,
+        view.commandPreview,
+        pending ? 1000 : 500,
+        pending ? 500 : 300,
+      );
   const decisionLabel =
-    params.view.decision === "allow-once"
-      ? "Allowed (once)"
-      : params.view.decision === "allow-always"
-        ? "Allowed (always)"
-        : "Denied";
+    view.phase !== "resolved"
+      ? undefined
+      : view.decision === "allow-once"
+        ? "Allowed (once)"
+        : view.decision === "allow-always"
+          ? "Allowed (always)"
+          : "Denied";
+  const title = pending
+    ? `${approvalLabel} Approval Required`
+    : `${approvalLabel} Approval: ${view.phase === "expired" ? "Expired" : decisionLabel}`;
+  const description = pending
+    ? plugin
+      ? "A plugin action needs your approval."
+      : "A command needs your approval."
+    : view.phase === "expired"
+      ? "This approval request has expired."
+      : view.resolvedBy
+        ? `Resolved by ${formatDiscordApprovalDisplayValue(view.resolvedBy)}`
+        : "Resolved";
   const accentColor =
-    params.view.decision === "deny"
-      ? "#ED4245"
-      : params.view.decision === "allow-always"
-        ? "#5865F2"
-        : "#57F287";
+    view.phase === "expired"
+      ? "#99AAB5"
+      : view.phase === "resolved"
+        ? view.decision === "deny"
+          ? "#ED4245"
+          : view.decision === "allow-always"
+            ? "#5865F2"
+            : "#57F287"
+        : plugin
+          ? view.severity === "critical"
+            ? "#ED4245"
+            : view.severity === "info"
+              ? "#5865F2"
+              : "#FAA61A"
+          : "#FFA500";
+  const approvalId = formatDiscordApprovalDisplayValue(view.approvalId);
+  const footer = pending
+    ? `Expires <t:${Math.max(0, Math.floor(view.expiresAtMs / 1000))}:R> · ID: ${approvalId}`
+    : `ID: ${approvalId}`;
 
   return new ExecApprovalContainer({
     cfg: params.cfg,
     accountId: params.accountId,
-    title: `Exec Approval: ${decisionLabel}`,
-    description: params.view.resolvedBy
-      ? `Resolved by ${formatDiscordApprovalDisplayValue(params.view.resolvedBy)}`
-      : "Resolved",
+    title,
+    description,
     commandPreview,
     commandSecondaryPreview,
-    metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    footer: `ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
+    metadataLines: buildApprovalMetadataLines(view.metadata),
+    actionRow: params.actionRow,
+    footer,
     accentColor,
-  });
-}
-
-function createPluginResolvedContainer(params: {
-  view: PluginApprovalResolvedView;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): ExecApprovalContainer {
-  const decisionLabel =
-    params.view.decision === "allow-once"
-      ? "Allowed (once)"
-      : params.view.decision === "allow-always"
-        ? "Allowed (always)"
-        : "Denied";
-  const accentColor =
-    params.view.decision === "deny"
-      ? "#ED4245"
-      : params.view.decision === "allow-always"
-        ? "#5865F2"
-        : "#57F287";
-
-  return new ExecApprovalContainer({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    title: `Plugin Approval: ${decisionLabel}`,
-    description: params.view.resolvedBy
-      ? `Resolved by ${formatDiscordApprovalDisplayValue(params.view.resolvedBy)}`
-      : "Resolved",
-    commandPreview: formatCommandPreview(params.view.title, 700),
-    commandSecondaryPreview: formatOptionalCommandPreview(params.view.description, 1000),
-    metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    footer: `ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
-    accentColor,
-  });
-}
-
-function createExecExpiredContainer(params: {
-  view: ExecApprovalExpiredView;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): ExecApprovalContainer {
-  const { commandPreview, commandSecondaryPreview } = resolveCommandPreviews(
-    params.view.commandText,
-    params.view.commandPreview,
-    500,
-    300,
-  );
-  return new ExecApprovalContainer({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    title: "Exec Approval: Expired",
-    description: "This approval request has expired.",
-    commandPreview,
-    commandSecondaryPreview,
-    metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    footer: `ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
-    accentColor: "#99AAB5",
-  });
-}
-
-function createPluginExpiredContainer(params: {
-  view: PluginApprovalExpiredView;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): ExecApprovalContainer {
-  return new ExecApprovalContainer({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    title: "Plugin Approval: Expired",
-    description: "This approval request has expired.",
-    commandPreview: formatCommandPreview(params.view.title, 700),
-    commandSecondaryPreview: formatOptionalCommandPreview(params.view.description, 1000),
-    metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    footer: `ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
-    accentColor: "#99AAB5",
   });
 }
 
@@ -501,21 +406,12 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolved) {
         return { body: {} };
       }
-      const actionRow = createApprovalActionRow(view);
-      const container =
-        view.approvalKind === "plugin"
-          ? createPluginApprovalRequestContainer({
-              view,
-              cfg,
-              accountId: resolved.accountId,
-              actionRow,
-            })
-          : createExecApprovalRequestContainer({
-              view,
-              cfg,
-              accountId: resolved.accountId,
-              actionRow,
-            });
+      const container = createApprovalContainer({
+        view,
+        cfg,
+        accountId: resolved.accountId,
+        actionRow: createApprovalActionRow(view),
+      });
       return {
         body: stripUndefinedFields(serializePayload(buildExecApprovalPayload(container))),
       };
@@ -525,18 +421,11 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolvedContext) {
         return { kind: "delete" } as const;
       }
-      const container =
-        view.approvalKind === "plugin"
-          ? createPluginResolvedContainer({
-              view,
-              cfg,
-              accountId: resolvedContext.accountId,
-            })
-          : createExecResolvedContainer({
-              view,
-              cfg,
-              accountId: resolvedContext.accountId,
-            });
+      const container = createApprovalContainer({
+        view,
+        cfg,
+        accountId: resolvedContext.accountId,
+      });
       return { kind: "update", payload: container } as const;
     },
     buildExpiredResult: ({ cfg, accountId, context, view }) => {
@@ -544,18 +433,11 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolvedContext) {
         return { kind: "delete" } as const;
       }
-      const container =
-        view.approvalKind === "plugin"
-          ? createPluginExpiredContainer({
-              view,
-              cfg,
-              accountId: resolvedContext.accountId,
-            })
-          : createExecExpiredContainer({
-              view,
-              cfg,
-              accountId: resolvedContext.accountId,
-            });
+      const container = createApprovalContainer({
+        view,
+        cfg,
+        accountId: resolvedContext.accountId,
+      });
       return { kind: "update", payload: container } as const;
     },
   },

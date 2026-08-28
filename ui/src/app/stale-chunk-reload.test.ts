@@ -331,6 +331,28 @@ describe("retryStaleChunkReloadWhenReachable single-shot", () => {
 });
 
 describe("retryStaleChunkReloadWhenReachable", () => {
+  it.each(["before", "during"] as const)(
+    "does not reload when recovery is retired %s the document probe",
+    async (retirement) => {
+      const response = deferred<boolean>();
+      const probe = vi.fn(() => response.promise);
+      const reload = vi.fn();
+      let current = retirement === "during";
+      const pending = retryStaleChunkReloadWhenReachable({
+        canReload: () => current,
+        probe,
+        reload,
+      });
+
+      current = false;
+      response.resolve(true);
+
+      await expect(pending).resolves.toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+      expect(probe).toHaveBeenCalledTimes(retirement === "during" ? 1 : 0);
+    },
+  );
+
   it("reloads immediately when the gateway already answers", async () => {
     const reload = vi.fn();
     const probe = vi.fn().mockResolvedValue(true);

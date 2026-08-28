@@ -54,6 +54,9 @@ omit `--allow-scripts=openclaw`.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
+Version-bound runtime plugins converge to the base release cohort when the
+core is a correction release (for example, `YYYY.M.P-2` uses plugin
+`YYYY.M.P`).
 Catalog installs created by current OpenClaw versions retain that default
 intent. Older records that contain only an exact version remain pinned because
 OpenClaw cannot safely distinguish an old automatic pin from a user pin; run
@@ -100,6 +103,11 @@ checkout. The `stable`, `extended-stable`, and `beta` channels use package
 installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
 the service metadata and restarts it unless you pass `--no-restart`.
+
+Dev updates build the complete runtime, including plugins and the Control UI,
+without generating TypeScript declarations. Preflight still validates the
+candidate, and the final checkout is rebuilt after checkout or rebase. Ordinary
+`pnpm build` and package builds continue to generate declarations.
 
 For package installs with a managed Gateway service, `openclaw update` targets
 the package root used by that service. If the shell `openclaw` command comes
@@ -322,9 +330,13 @@ Every failed apply ends the campaign so the UI does not remain on
 in the restart sentinel and surface after the Gateway returns; direct
 unsupervised failures remain in the running Gateway's logs.
 
-`OPENCLAW_NO_AUTO_UPDATE=1` and external-supervisor mode disable automatic
-applies entirely. Startup update hints can still run unless
-`update.checkOnStart` is also disabled.
+`update.checkOnStart: false` disables all automatic update checks, feature
+statistics, and update notices, even when `update.auto.enabled` is `true`.
+`OPENCLAW_NO_AUTO_UPDATE=1` also disables automatic checks and applies.
+External-supervisor mode disables automatic applies; startup update hints can
+still run unless `update.checkOnStart` is also disabled. See
+[Usage telemetry and update checks](/gateway/telemetry) for the information
+sent by the daily check and optional anonymous feature statistics.
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this
@@ -379,6 +391,10 @@ openclaw doctor
 ```
 
 Migrates config, audits DM policies, and checks gateway health. Details: [Doctor](/gateway/doctor)
+
+If you use the unpacked Chrome extension, also run `openclaw browser doctor --browser-profile chrome`.
+For a version-mismatch warning, reload the extension from `chrome://extensions`;
+fully restart Chrome if the warning remains.
 
 ### Restart the gateway
 

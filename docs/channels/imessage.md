@@ -495,7 +495,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
   <Accordion title="Multi-account pattern">
     iMessage supports per-account config under `channels.imessage.accounts`.
 
-    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists.
+    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `dmPolicy`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists. Omitted account policies inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
   </Accordion>
 

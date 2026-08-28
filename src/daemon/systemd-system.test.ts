@@ -1,13 +1,20 @@
 // System systemd ownership tests cover loaded, installed, and unverifiable states.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecResult } from "./exec-file.js";
 
 const state = vi.hoisted(() => ({
-  systemctl: { stdout: "not-found\n", stderr: "", code: 0 },
+  systemctl: {
+    stdout: "not-found\n",
+    stderr: "",
+    code: 0,
+    termination: "exit" as ExecResult["termination"],
+  },
   managerUnitPath: {
     stdout:
       "/etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system\n",
     stderr: "",
     code: 0,
+    termination: "exit" as ExecResult["termination"],
   },
   paths: new Set<string>(),
   pathErrors: new Map<string, string>(),
@@ -47,12 +54,13 @@ describe("system systemd ownership", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    state.systemctl = { stdout: "not-found\n", stderr: "", code: 0 };
+    state.systemctl = { stdout: "not-found\n", stderr: "", code: 0, termination: "exit" };
     state.managerUnitPath = {
       stdout:
         "/etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system\n",
       stderr: "",
       code: 0,
+      termination: "exit",
     };
     state.paths.clear();
     state.pathErrors.clear();
@@ -75,7 +83,7 @@ describe("system systemd ownership", () => {
   });
 
   it("reports a unit loaded by the system manager", async () => {
-    state.systemctl = { stdout: "loaded\n", stderr: "", code: 0 };
+    state.systemctl = { stdout: "loaded\n", stderr: "", code: 0, termination: "exit" };
 
     await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
       ownership: { status: "loaded", unitName: "openclaw-gateway.service" },
@@ -113,6 +121,7 @@ describe("system systemd ownership", () => {
       stdout: "",
       stderr: "Failed to connect to bus: Permission denied",
       code: 1,
+      termination: "exit",
     };
 
     await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
@@ -130,6 +139,7 @@ describe("system systemd ownership", () => {
       stdout: "",
       stderr: "Failed to connect to bus: No such file or directory",
       code: 1,
+      termination: "exit",
     };
 
     await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
@@ -140,6 +150,23 @@ describe("system systemd ownership", () => {
       },
     });
   });
+
+  it.each(["exit", "timeout", "signal"] as const)(
+    "accepts system-manager absence only after a completed query (%s)",
+    async (termination) => {
+      const detail = "Unit openclaw-gateway.service could not be found.";
+      state.systemctl = { stdout: "", stderr: detail, code: 1, termination };
+
+      const result = assertNoSystemSystemdOwnership("openclaw-gateway.service");
+      if (termination === "exit") {
+        await expect(result).resolves.toBeUndefined();
+      } else {
+        await expect(result).rejects.toMatchObject({
+          ownership: { status: "unverifiable", operation: "systemctl", detail },
+        });
+      }
+    },
+  );
 
   it("fails closed when an exact system path cannot be inspected", async () => {
     const unitPath = "/etc/systemd/system/openclaw-gateway.service";
@@ -160,6 +187,7 @@ describe("system systemd ownership", () => {
       stdout: "",
       stderr: "manager UnitPath unavailable",
       code: 1,
+      termination: "exit",
     };
 
     await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
@@ -179,8 +207,8 @@ describe("system systemd ownership", () => {
       }
       systemctlCalls += 1;
       return systemctlCalls === 1
-        ? { stdout: "not-found\n", stderr: "", code: 0 }
-        : { stdout: "loaded\n", stderr: "", code: 0 };
+        ? { stdout: "not-found\n", stderr: "", code: 0, termination: "exit" }
+        : { stdout: "loaded\n", stderr: "", code: 0, termination: "exit" };
     });
 
     await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({

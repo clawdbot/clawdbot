@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { getPath } from "./path-utils.js";
 import {
@@ -21,14 +22,13 @@ const {
   loadPluginMetadataSnapshotMock: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (params: unknown) =>
+    createPluginMetadataSnapshotFixture(loadPluginMetadataSnapshotMock(params)),
   resolvePluginMetadataSnapshot: (params: unknown) => {
     const snapshot = loadPluginMetadataSnapshotMock(params) as { plugins: PluginManifestRecord[] };
-    return {
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    };
+    return createPluginMetadataSnapshotFixture({ plugins: snapshot.plugins });
   },
   listPluginOriginsFromMetadataSnapshot: (snapshot: {
     plugins: Array<{ id: string; origin: PluginOrigin }>;

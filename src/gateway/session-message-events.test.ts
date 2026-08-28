@@ -272,6 +272,17 @@ describe("session.message websocket events", () => {
         );
       };
       const declaredKeys = ["agent:main:watch-00", "agent:main:watch-01"];
+      const replacementKey = "agent:main:replacement";
+      const storePath = await createSessionStoreFile();
+      await writeSessionStore({
+        storePath,
+        entries: Object.fromEntries(
+          [...declaredKeys, replacementKey].map((key) => [
+            key,
+            { sessionId: key, updatedAt: Date.now() },
+          ]),
+        ),
+      });
       const declaredPresence = onceMessage(observerWs, (message) => {
         const entry = findWatchedEntry(message);
         return (
@@ -318,7 +329,6 @@ describe("session.message websocket events", () => {
         )?.watchedSessions,
       ).toEqual(declaredKeys);
 
-      const replacementKey = "agent:main:replacement";
       const replacementPresence = onceMessage(observerWs, (message) => {
         const entry = findWatchedEntry(message);
         return Array.isArray(entry?.watchedSessions) && entry.watchedSessions[0] === replacementKey;
@@ -1033,7 +1043,7 @@ describe("session.message websocket events", () => {
           error: new Error("WebChat uses canonical session events"),
         },
         deliveryRequested: true,
-        skipHeartbeatDelivery: false,
+        undeliveredRunStatus: "ok",
         spawnOnlyHandoff: false,
         sourceDeliveryOutcome: {
           visibleDeliveries: [],
@@ -1974,6 +1984,39 @@ describe("session.message websocket events", () => {
         modelProvider: "openai",
         model: "gpt-5.4",
       });
+    });
+  });
+
+  test("marks display-cap truncation structurally on live session.message events", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
+      storePath,
+    });
+    const transcriptMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "x".repeat(9_000) }],
+      timestamp: Date.now(),
+    };
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId: "sess-main", sessionKey: "agent:main:main", storePath },
+      { messages: [{ message: transcriptMessage }], updateMode: "none" },
+    );
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
+        ws,
+        sessionKey: "agent:main:main",
+        sessionFile: "agent:main:main",
+        message: transcriptMessage,
+        messageId: "msg-capped",
+      });
+      const payload = requireRecord(messageEvent.payload, "capped message payload");
+      const message = requireRecord(payload.message, "capped message");
+      // The preview is bounded by the display cap and says so structurally, so a
+      // non-UI consumer can fetch the full row instead of sniffing the sentinel.
+      expect(JSON.stringify(message.content)).toContain("...(truncated)...");
+      expect(message["__openclaw"]).toMatchObject({ truncated: true, reason: "display-cap" });
     });
   });
 

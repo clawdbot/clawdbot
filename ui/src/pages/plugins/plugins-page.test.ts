@@ -261,17 +261,17 @@ describe("PluginsPage", () => {
     } satisfies PluginInstallRequest;
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
-    await page.install(catalogRequest, installIdentity);
+    await page.consentController.install(catalogRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (1).",
     );
 
-    await page.install(searchRequest, installIdentity);
+    await page.consentController.install(searchRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (2).",
     );
 
-    await page.install(
+    await page.consentController.install(
       { ...searchRequest, acknowledgeInstallPolicyWarning: true },
       installIdentity,
     );
@@ -497,7 +497,7 @@ describe("PluginsPage", () => {
       runtimeConfig.patchForm(["pending"], true);
 
       if (action === "install") {
-        await page.install(
+        await page.consentController.install(
           {
             source: "clawhub",
             packageName: "example-plugin",
@@ -758,6 +758,57 @@ describe("PluginsPage", () => {
       ),
     );
     expect(calls).toContainEqual(["plugins.list", {}]);
+  });
+
+  it("does not let an older uninstall republish its page notice after a newer row action", async () => {
+    const uninstallResult = deferred<unknown>();
+    const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
+    const removable = createPlugin({
+      id: "community-thing",
+      name: "Community Thing",
+      origin: "global",
+      removable: true,
+      featured: false,
+    });
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.uninstall") {
+        return uninstallResult.promise;
+      }
+      if (method === "plugins.setEnabled") {
+        return { ok: true, plugin: enabledPlugin, restartRequired: false };
+      }
+      if (method === "plugins.list") {
+        return createResult(enabledPlugin);
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, {
+        plugins: [createPlugin(), removable],
+        diagnostics: [],
+        mutationAllowed: true,
+      }),
+    );
+
+    const uninstall = page.uninstall("community-thing", "plugin:community-thing");
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: "community-thing" }),
+    );
+    await page.updateEnabled("workboard", true);
+
+    uninstallResult.resolve({
+      ok: true,
+      pluginId: "community-thing",
+      restartRequired: true,
+      removed: ["config entry", "install record", "directory"],
+    });
+    await uninstall;
+    await page.updateComplete;
+
+    expect(page.querySelector(".plugins-page-notice")).toBeNull();
+    expect(page.messages["plugin:workboard"]?.text).toContain("Enabled Workboard");
   });
 
   it("adds an MCP server through the shared config seam", async () => {

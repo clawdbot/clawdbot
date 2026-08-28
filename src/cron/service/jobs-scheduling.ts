@@ -9,13 +9,13 @@ import { parseAbsoluteTimeMs } from "../parse.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
+import { CRON_STUCK_RUN_MS } from "../store/run-receipt-store.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
@@ -323,8 +323,13 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     if (everyMs < 1) {
       return undefined;
     }
+    const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;
+    const anchorMs = resolveEveryAnchorMs({
+      schedule: job.schedule,
+      fallbackAnchorMs,
+    });
     const lastRunAtMs = job.state.lastRunAtMs;
-    if (isFiniteTimestamp(lastRunAtMs)) {
+    if (isFiniteTimestamp(lastRunAtMs) && lastRunAtMs >= anchorMs) {
       const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
       if (!isFiniteTimestamp(nextFromLastRun)) {
         return undefined;
@@ -333,11 +338,6 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
         return nextFromLastRun;
       }
     }
-    const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;
-    const anchorMs = resolveEveryAnchorMs({
-      schedule: job.schedule,
-      fallbackAnchorMs,
-    });
     const next = computeNextRunAtMs({ ...job.schedule, everyMs, anchorMs }, nowMs);
     return isFiniteTimestamp(next) ? next : undefined;
   }
@@ -496,7 +496,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   const queuedAt = job.state.queuedAtMs;
   if (
     typeof queuedAt === "number" &&
-    Math.abs(nowMs - queuedAt) > STUCK_RUN_MS &&
+    Math.abs(nowMs - queuedAt) > CRON_STUCK_RUN_MS &&
     !ownsCronRunMarker(state, job.id, queuedAt)
   ) {
     state.deps.log.warn(
@@ -510,7 +510,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   const runningAt = job.state.runningAtMs;
   if (
     typeof runningAt === "number" &&
-    Math.abs(nowMs - runningAt) > STUCK_RUN_MS &&
+    Math.abs(nowMs - runningAt) > CRON_STUCK_RUN_MS &&
     !ownsCronRunMarker(state, job.id, runningAt)
   ) {
     state.deps.log.warn(
@@ -670,8 +670,7 @@ export function recomputeSingleJobForMaintenance(
   const hasPendingStartupCatchup =
     isFiniteTimestamp(startupCatchupAtMs) &&
     hasScheduledNextRunAtMs(nextRunAtMs) &&
-    startupCatchupAtMs === nextRunAtMs &&
-    now < startupCatchupAtMs;
+    startupCatchupAtMs === nextRunAtMs;
   if (startupCatchupAtMs !== undefined && !hasPendingStartupCatchup) {
     job.state.startupCatchupAtMs = undefined;
     changed = true;
@@ -698,6 +697,7 @@ export function recomputeSingleJobForMaintenance(
     changed = recomputeJob() || changed;
   } else if (
     recomputeExpired &&
+    !hasPendingStartupCatchup &&
     !hasForcePreservedNextRun &&
     now >= job.state.nextRunAtMs &&
     typeof job.state.queuedAtMs !== "number" &&
@@ -731,16 +731,36 @@ export function recomputeNextRunsForMaintenance(
   return changed;
 }
 
-/** Returns the next enabled wake timestamp from the in-memory cron store. */
-export function nextWakeAtMs(state: CronServiceState) {
+/** Summarizes the resident job schedule in one pass for timer and status projections. */
+export function summarizeCronJobSchedule(state: CronServiceState) {
+  const jobs = state.store?.jobs ?? [];
   let nextWake: number | undefined;
-  for (const job of state.store?.jobs ?? []) {
+  let jobCount = 0;
+  let enabledCount = 0;
+  for (const job of jobs) {
+    jobCount += 1;
     const nextRun = job.state.nextRunAtMs;
-    if (isJobEnabled(job) && hasScheduledNextRunAtMs(nextRun)) {
+    const hasNextRun = hasScheduledNextRunAtMs(nextRun);
+    const rawEnabled = job.enabled;
+    // Timer diagnostics historically count only explicit enablement, while
+    // wake selection keeps older jobs without `enabled` runnable.
+    if (rawEnabled) {
+      enabledCount += 1;
+    }
+    if ((rawEnabled ?? true) && hasNextRun) {
       nextWake = nextWake === undefined ? nextRun : Math.min(nextWake, nextRun);
     }
   }
-  return nextWake;
+  return {
+    jobCount,
+    enabledCount,
+    nextWakeAtMs: nextWake,
+  };
+}
+
+/** Returns the next enabled wake timestamp from the in-memory cron store. */
+export function nextWakeAtMs(state: CronServiceState) {
+  return summarizeCronJobSchedule(state).nextWakeAtMs;
 }
 
 /** Applies one canonical server-authored authority envelope to a tool-bearing job. */
