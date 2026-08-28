@@ -194,12 +194,14 @@ suite.define(() => {
         ]);
         await expect
           .poll(async () => {
-            const [headerBox, titleBox, workspaceBox, contentSurfaceBox] = await Promise.all([
-              header.boundingBox(),
-              title.boundingBox(),
-              workspace.boundingBox(),
-              contentSurface.boundingBox(),
-            ]);
+            const [headerBox, titleBox, workspaceBox, contentSurfaceBox, layoutViewportWidth] =
+              await Promise.all([
+                header.boundingBox(),
+                title.boundingBox(),
+                workspace.boundingBox(),
+                contentSurface.boundingBox(),
+                page.evaluate(() => document.documentElement.clientWidth),
+              ]);
             return headerBox && titleBox && workspaceBox && contentSurfaceBox
               ? {
                   headerLeft: Math.round(headerBox.x),
@@ -207,12 +209,11 @@ suite.define(() => {
                   titleLeft: Math.round(titleBox.x),
                   workspaceLeft: Math.round(workspaceBox.x),
                   workspaceRightInset: Math.round(
-                    document.documentElement.clientWidth - (workspaceBox.x + workspaceBox.width),
+                    layoutViewportWidth - (workspaceBox.x + workspaceBox.width),
                   ),
                   contentLeft: Math.round(contentSurfaceBox.x),
                   contentRightInset: Math.round(
-                    document.documentElement.clientWidth -
-                      (contentSurfaceBox.x + contentSurfaceBox.width),
+                    layoutViewportWidth - (contentSurfaceBox.x + contentSurfaceBox.width),
                   ),
                 }
               : null;
