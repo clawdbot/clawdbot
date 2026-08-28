@@ -6709,6 +6709,15 @@ button.chat-pr__diff {
   font-weight: 650;
 }
 
+.chat-controls__effort-value {
+  min-width: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: end;
+  white-space: nowrap;
+}
+
 .chat-controls__effort-scale {
   display: flex;
   justify-content: space-between;

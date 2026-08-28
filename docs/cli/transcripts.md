@@ -63,6 +63,14 @@ occurs on more than one day, for example `openclaw transcripts show
 2026-05-22/standup`. Default session ids include a timestamp and random
 suffix; give a session a fixed id only when that id is unique within the day.
 
+If the filesystem-safe export name exceeds 255 bytes, OpenClaw shortens it
+to a prefix plus a deterministic SHA-256 hash of the complete original session
+ID. Only the derived export name and its selector change; the raw session ID,
+provider stop handle, and stored notes stay intact. Names that already fit
+remain unchanged. Use the selector printed by `list` for the shortened name.
+For existing sessions with oversized stored names, run `openclaw doctor --fix`
+to repair their derived selectors without changing stored notes.
+
 ## Output
 
 `list` prints one tab-separated line per session: selector, start time, title,
@@ -103,11 +111,23 @@ when it will not repeat on the same date.
 
 ## Missing summaries
 
-Live sessions save summaries when capture stops; imported transcripts do so
-immediately after import. Tool-driven stops, configured auto-start shutdown, and
-imports also attempt to materialize `summary.md`. A session can appear in `list`
-without a summary while capture is still active, if a provider failed during stop,
-or if metadata was stored before any utterances arrived.
+The tool's `status` action lists active capture subscriptions, not historical
+notes. When a provider ends or replaces a subscription, OpenClaw records
+`stoppedAt` and stores its summary; the transcript remains available to `list`,
+`show`, and the tool's `summarize` action. A temporary transport disconnect does
+not end a subscription. Stopping historical notes does not stop a newer capture
+or change the recorded stop time.
+
+Provider-driven completion stores the summary without exporting files. Explicit
+tool stop, import, summarize, and configured auto-start shutdown also attempt to
+materialize `summary.md`.
+If terminal persistence fails, `status` reports the ended capture under
+`pendingFinalization`, separately from active captures. Use the tool's `stop`
+action for that session to retry persistence without stopping the provider again.
+
+A session can appear in `list` without a summary while capture is still active,
+if a provider failed during stop, or if metadata was stored before any utterances
+arrived.
 
 Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown

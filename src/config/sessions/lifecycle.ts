@@ -18,11 +18,15 @@ type SessionWorkStartEntry = Pick<
   | "mainRestartRecovery"
   | "modelSelectionLocked"
   | "sessionId"
+  | "pendingProjectGitUrl"
+  | "pendingWorktree"
 >;
 
 type SessionWorkStartOptions = {
   allowRestartTombstoneReplacement?: boolean;
   expectedSessionId?: string;
+  /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
+  allowPendingWorkspace?: true;
 };
 
 export function isRestartRecoveryTombstone(
@@ -90,9 +94,16 @@ export function resolveSessionWorkStartError(
       ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
       : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`;
   }
-  return entry?.archivedAt === undefined
-    ? undefined
-    : `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+  if (entry?.archivedAt !== undefined) {
+    return `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+  }
+  if (
+    !options?.allowPendingWorkspace &&
+    (entry?.pendingProjectGitUrl !== undefined || entry?.pendingWorktree !== undefined)
+  ) {
+    return `Session "${sessionKey}" workspace is not ready. Wait for setup to finish or retry in chat.`;
+  }
+  return undefined;
 }
 
 // Transcript headers are read lazily to recover startedAt without parsing full files.

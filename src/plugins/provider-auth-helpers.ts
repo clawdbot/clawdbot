@@ -153,7 +153,6 @@ export function applyAuthProfileConfig(
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
-  const normalizedProvider = resolveProviderIdForAuth(params.provider, { config: cfg });
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -164,73 +163,56 @@ export function applyAuthProfileConfig(
     },
   };
 
-  const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
-    .filter(
-      ([, profile]) =>
-        resolveProviderIdForAuth(profile.provider, { config: cfg }) === normalizedProvider,
-    )
-    .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
-
-  // Maintain `auth.order` when it already exists. Additionally, if we detect
-  // mixed auth modes for the same provider, keep the newly selected profile first.
-  const matchingProviderOrderEntries = Object.entries(cfg.auth?.order ?? {}).filter(
-    ([providerId]) => resolveProviderIdForAuth(providerId, { config: cfg }) === normalizedProvider,
-  );
-  const existingProviderOrder =
-    matchingProviderOrderEntries.length > 0
-      ? uniqueStrings(matchingProviderOrderEntries.flatMap(([, order]) => order))
-      : undefined;
+  const next = { ...cfg, auth: { ...cfg.auth, profiles } };
+  const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {});
+  const orderEntries = Object.entries(cfg.auth?.order ?? {});
   const preferProfileFirst = params.preferProfileFirst ?? true;
-  const reorderedProviderOrder =
-    existingProviderOrder && preferProfileFirst
-      ? [
-          params.profileId,
-          ...existingProviderOrder.filter((profileId) => profileId !== params.profileId),
-        ]
-      : existingProviderOrder;
-  const hasMixedConfiguredModes = configuredProviderProfiles.some(
-    ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
-  );
-  const derivedProviderOrder =
-    existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
-      ? [
-          params.profileId,
-          ...configuredProviderProfiles
-            .map(({ profileId }) => profileId)
-            .filter((profileId) => profileId !== params.profileId),
-        ]
-      : undefined;
-  const baseOrder =
-    matchingProviderOrderEntries.length > 0
-      ? Object.fromEntries(
-          Object.entries(cfg.auth?.order ?? {}).filter(
-            ([providerId]) =>
-              resolveProviderIdForAuth(providerId, { config: cfg }) !== normalizedProvider,
-          ),
-        )
-      : cfg.auth?.order;
-  const order =
-    existingProviderOrder !== undefined
-      ? {
-          ...baseOrder,
-          [normalizedProvider]: reorderedProviderOrder?.includes(params.profileId)
-            ? reorderedProviderOrder
-            : [...(reorderedProviderOrder ?? []), params.profileId],
-        }
-      : derivedProviderOrder
-        ? {
-            ...baseOrder,
-            [normalizedProvider]: derivedProviderOrder,
-          }
-        : baseOrder;
-  return {
-    ...cfg,
-    auth: {
-      ...cfg.auth,
-      profiles,
-      ...(order ? { order } : {}),
-    },
-  };
+  // Aliases only affect ordering. A config-only profile insertion must not
+  // discover plugins (and open their state database) when order cannot change.
+  if (
+    orderEntries.length === 0 &&
+    (!preferProfileFirst ||
+      !configuredProfiles.some(
+        ([profileId, profile]) => profileId !== params.profileId && profile.mode !== params.mode,
+      ))
+  ) {
+    return next;
+  }
+
+  const normalizedProvider = resolveProviderIdForAuth(params.provider, { config: cfg });
+  const matchesProvider = (provider: string) =>
+    resolveProviderIdForAuth(provider, { config: cfg }) === normalizedProvider;
+  const matchingOrderEntries = orderEntries.filter(([provider]) => matchesProvider(provider));
+  let providerOrder: string[] | undefined;
+  if (matchingOrderEntries.length > 0) {
+    const existingOrder = uniqueStrings(matchingOrderEntries.flatMap(([, order]) => order));
+    providerOrder = preferProfileFirst
+      ? [params.profileId, ...existingOrder.filter((profileId) => profileId !== params.profileId)]
+      : existingOrder.includes(params.profileId)
+        ? existingOrder
+        : [...existingOrder, params.profileId];
+  } else if (preferProfileFirst) {
+    const peers = configuredProfiles.filter(([, profile]) => matchesProvider(profile.provider));
+    if (
+      peers.some(
+        ([profileId, profile]) => profileId !== params.profileId && profile.mode !== params.mode,
+      )
+    ) {
+      providerOrder = [
+        params.profileId,
+        ...peers
+          .map(([profileId]) => profileId)
+          .filter((profileId) => profileId !== params.profileId),
+      ];
+    }
+  }
+  if (providerOrder) {
+    next.auth.order = {
+      ...Object.fromEntries(orderEntries.filter(([provider]) => !matchesProvider(provider))),
+      [normalizedProvider]: providerOrder,
+    };
+  }
+  return next;
 }
 
 /** Returns true when config still names a removed auth profile. */

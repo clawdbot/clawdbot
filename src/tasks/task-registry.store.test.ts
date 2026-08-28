@@ -36,10 +36,15 @@ import {
   findTaskByRunId,
   getTaskById,
   listFreshTasksForOwnerKey,
+  listTaskRecords,
   markTaskTerminalById,
   reloadTaskRegistryFromStore,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
+import {
+  getInspectableActiveTaskRestartBlockers,
+  resetTaskRegistryMaintenanceRuntimeForTests,
+} from "./task-registry.maintenance.js";
 import {
   configureTaskRegistryRuntime,
   type TaskRegistryObserverEvent,
@@ -189,6 +194,7 @@ describe("task-registry store runtime", () => {
     testState.applyEnv();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    resetTaskRegistryMaintenanceRuntimeForTests();
     loggingState.rawConsole = null;
     setLoggerOverride(null);
     resetLogger();
@@ -387,6 +393,61 @@ describe("task-registry store runtime", () => {
     expect(tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
     expect(listTasksForOwnerKey).toHaveBeenCalledWith("agent:main:main");
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clone non-blocker details when inspecting restart blockers", () => {
+    const now = Date.now();
+    const active: TaskRecord = {
+      ...createStoredTask(),
+      runtime: "cli",
+      createdAt: now,
+      lastEventAt: now,
+      detail: ["active detail"],
+    };
+    const nonBlockerDetail = { history: "not needed for restart inspection" };
+    const storedTasks: TaskRecord[] = [
+      { ...active, taskId: "older", createdAt: now - 1_000 },
+      { ...active, taskId: "tie-first" },
+      ...(["queued", "succeeded", "failed", "timed_out", "cancelled", "lost"] as const).map(
+        (status) => Object.assign({}, active, { taskId: status, status, detail: nonBlockerDetail }),
+      ),
+      { ...active, taskId: "running-ended", endedAt: now, detail: nonBlockerDetail },
+      { ...active, taskId: "tie-last" },
+    ];
+    const saveSnapshot = vi.fn();
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(storedTasks.map((task) => [task.taskId, task])),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot,
+      },
+    });
+    // Restore before measuring: the hot query, not startup hydration, owns this assertion.
+    expect(getTaskById("older")?.taskId).toBe("older");
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const blockers = getInspectableActiveTaskRestartBlockers();
+      expect(blockers.map((task) => task.taskId)).toEqual(["tie-last", "tie-first", "older"]);
+      expect(clone).not.toHaveBeenCalledWith(nonBlockerDetail);
+      blockers[0]!.title = "caller mutation";
+      expect(getInspectableActiveTaskRestartBlockers()[0]?.title).toBe(active.task);
+      expect(saveSnapshot).not.toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
+
+    const allTasks = listTaskRecords();
+    expect(allTasks).toHaveLength(storedTasks.length);
+    expect(allTasks[0]?.taskId).toBe("tie-last");
+    const returnedDetail = allTasks[0]?.detail;
+    expect(returnedDetail).toEqual(["active detail"]);
+    if (!Array.isArray(returnedDetail)) {
+      throw new Error("expected array task detail");
+    }
+    returnedDetail.push("caller mutation");
+    expect(listTaskRecords()[0]?.detail).toEqual(["active detail"]);
   });
 
   it("rejects invalid persisted task enum values", () => {

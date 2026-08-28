@@ -438,6 +438,7 @@ describe("loadControlUiSessionPullRequests", () => {
       signal: null,
       killed: false,
       termination: "exit" as const,
+      timeoutMs: 120_000,
     }));
     const load = (sessionKey: string, refresh = false) =>
       loadControlUiSessionPullRequests(

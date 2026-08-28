@@ -21,12 +21,13 @@ import {
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { hasCotFramePrefix } from "./cot-frame.js";
+import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "channel_transform";
+export type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
 export type NormalizeReplyOutcome<T = ReplyPayload> =
   | { kind: "deliver"; payload: T }

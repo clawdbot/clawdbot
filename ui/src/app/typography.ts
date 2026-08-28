@@ -107,3 +107,15 @@ export function applyTypefaceOverrides(ui?: TypefaceId, chat?: TypefaceId): void
     }
   }
 }
+
+/* Serif hairlines at chat size need macOS stem darkening; the app-wide
+   `antialiased` smoothing (base.css body) thins them into gray smear, so serif
+   chat faces opt chat prose back into `auto` (.chat-text consumes the
+   variable). Sans and mono faces keep the inherited app default. */
+export function applyChatFontSmoothing(chat: TypefaceId): void {
+  if (TYPEFACE_METADATA[chat].kind === "serif") {
+    document.documentElement.style.setProperty("--chat-font-smoothing", "auto");
+  } else {
+    document.documentElement.style.removeProperty("--chat-font-smoothing");
+  }
+}

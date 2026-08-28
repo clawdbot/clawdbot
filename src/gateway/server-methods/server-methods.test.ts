@@ -4965,8 +4965,9 @@ describe("gateway healthHandlers.health cache freshness", () => {
       prefix: "openclaw-health-cached-dq-",
     });
     try {
-      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
-        await import("../../infra/delivery-queue-sqlite.js");
+      const { upsertDeliveryQueueEntry } = await import("../../infra/delivery-queue-sqlite.js");
+      const { moveDeliveryQueueEntryToFailedForTest } =
+        await import("../../infra/delivery-queue-test-support.js");
       const cachedPressure = [
         {
           channelId: "slack",
@@ -4985,7 +4986,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
         queueName: "outbound",
         entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5, retainOnFailure: true },
       });
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+      moveDeliveryQueueEntryToFailedForTest("outbound", "dead-1");
       const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
       const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
         await import("../../channels/message/ingress-retry-policy.js");

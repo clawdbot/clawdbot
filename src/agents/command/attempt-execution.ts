@@ -545,7 +545,7 @@ export async function runAgentAttempt(params: {
     stream: string;
     data?: Record<string, unknown>;
     sessionKey?: string;
-  }) => void;
+  }) => void | Promise<void>;
   deferTerminalLifecycle?: boolean;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -569,6 +569,13 @@ export async function runAgentAttempt(params: {
   }) => void;
 }) {
   const runStartedAt = Date.now();
+  const onRuntimeActivity = (info: { phase: string }) => {
+    // CLI preparation and child launch do not prove a native turn. Parsed
+    // assistant/tool activity does, even when the backend omits lifecycle events.
+    if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
+      void params.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+    }
+  };
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
   const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
@@ -968,6 +975,7 @@ export async function runAgentAttempt(params: {
               runId: params.runId,
               lifecycleGeneration: params.lifecycleGeneration,
               onExecutionStarted: params.opts.onExecutionStarted,
+              onExecutionPhase: onRuntimeActivity,
               lane: params.opts.lane,
               extraSystemPrompt: params.opts.extraSystemPrompt,
               inputProvenance: params.opts.inputProvenance,
@@ -1403,6 +1411,7 @@ export async function runAgentAttempt(params: {
     disableTools,
     allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
+    onExecutionPhase: onRuntimeActivity,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,

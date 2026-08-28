@@ -279,65 +279,20 @@
   min-width: 0;
 }
 
-.config-advanced-divider {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
+.config-advanced-disclosure {
   margin-top: var(--space-5);
-  padding: 0 var(--space-4) var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 550;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
-.config-advanced-divider__toggle {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--accent);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.config-tier-groups > .config-advanced-disclosure:first-child {
+  margin-top: 0;
+}
+
+.config-advanced-disclosure__summary {
   cursor: var(--cursor-action);
 }
 
-.config-advanced-divider__toggle:hover {
-  text-decoration: underline;
-}
-
-.config-advanced-ghost {
-  width: 100%;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--secondary);
-  text-align: left;
-  transition: background var(--duration-fast) ease;
-}
-
-.config-advanced-ghost:hover {
-  background: var(--bg-hover);
-}
-
-.config-advanced-ghost__count {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.config-advanced-ghost__action {
-  color: var(--accent);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 600;
-  flex: 0 0 auto;
+.config-advanced-disclosure > .settings-group {
+  margin-top: var(--space-3);
 }
 
 /* ── Row ── */
@@ -360,7 +315,7 @@
 .settings-row__text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
   min-width: 0;
   flex: 1 1 auto;
 }

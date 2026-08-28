@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
@@ -32,6 +33,45 @@ defineDiscordVoiceTests(
     expectUserMessageIncludes,
     expectUserMessageNotIncludes,
   }) => {
+    it.each(["before-final", "before-delivery"] as const)(
+      "keeps realtime transcript output with its retired audio binding %s",
+      async (ordering) => {
+        const manager = createAgentProxyManager(undefined, {
+          voice: { realtime: { requireWakeName: true } },
+        });
+        await manager.join({ guildId: "g1", channelId: "1001" });
+        const first = vi.fn();
+        const second = vi.fn();
+        await manager.join(
+          { guildId: "g1", channelId: "1001" },
+          { transcripts: { sessionId: "old", onUtterance: first } },
+        );
+        const entry = getSessionEntry(manager);
+        const bridge = lastRealtimeBridgeParams();
+        beginSpeakerTurn(entry);
+        if (ordering === "before-delivery") {
+          bridge?.onTranscript?.("user", "old room speech", true);
+        }
+        const replacing = manager.join(
+          { guildId: "g1", channelId: "1001" },
+          { transcripts: { sessionId: "new", onUtterance: second } },
+        );
+        await replacing;
+        if (ordering === "before-final") {
+          bridge?.onTranscript?.("user", "old room speech", true);
+        }
+        await Promise.resolve();
+        expect(first).not.toHaveBeenCalled();
+        expect(second).not.toHaveBeenCalled();
+        beginSpeakerTurn(entry);
+        await emitFinalRealtimeUserTranscript(bridge, "fresh room speech");
+        expect(second).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: "new", text: "fresh room speech" }),
+        );
+        await manager.destroy();
+      },
+    );
+
     it("applies Discord realtime model and voice overrides during provider auto-selection", async () => {
       const manager = createManager(
         makeVoiceConfig(
@@ -455,7 +495,7 @@ defineDiscordVoiceTests(
       expect(wakeAckCount()).toBe(2);
     });
 
-    it("replays zero-audio exact speech once after provider continuity reset", async () => {
+    it("replays zero-audio exact speech once after provider reconnect readiness", async () => {
       agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
         .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
@@ -476,7 +516,8 @@ defineDiscordVoiceTests(
       expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
       expect(realtimeSessionMock.close).not.toHaveBeenCalled();
 
-      bridgeParams?.onReady?.();
+      // OpenAI's onReady fires once; automatic recovery reports this event instead.
+      bridgeParams.onEvent?.({ direction: "client", type: "session.reconnect.ready" });
       expect(sentUserMessages().filter((message) => message.includes("first answer"))).toHaveLength(
         2,
       );
@@ -545,50 +586,72 @@ defineDiscordVoiceTests(
       ).toHaveLength(1);
     });
 
-    it("drops stale native consult delivery after provider continuity reset", async () => {
-      let resolveOld: ((result: { payloads: Array<{ text: string }> }) => void) | undefined;
-      agentCommandMock
-        .mockReturnValueOnce(
-          new Promise((resolve) => {
-            resolveOld = resolve;
-          }),
-        )
-        .mockResolvedValueOnce({ payloads: [{ text: "fresh answer" }] });
-      const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
-      beginSpeakerTurn(entry);
-      const oldSubmission = bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-old",
-          callId: "call-old",
-          name: "openclaw_agent_consult",
-          args: { question: "same question" },
-        },
-        realtimeSessionMock,
-      );
-      await Promise.resolve();
+    it.each(["continuity reset", "terminal close"] as const)(
+      "drops stale native consult delivery after provider %s",
+      async (transition) => {
+        const oldAnswer = createDeferred<{ payloads: Array<{ text: string }> }>();
+        agentCommandMock
+          .mockReturnValueOnce(oldAnswer.promise)
+          .mockResolvedValueOnce({ payloads: [{ text: "fresh answer" }] });
+        const fixture = await createJoinedAgentProxyFixture();
+        const { manager } = fixture;
+        let { bridgeParams, entry } = fixture;
+        try {
+          beginSpeakerTurn(entry);
+          const oldSubmission = bridgeParams?.onToolCall?.(
+            {
+              itemId: "item-old",
+              callId: "call-old",
+              name: "openclaw_agent_consult",
+              args: { question: "same question" },
+            },
+            realtimeSessionMock,
+          );
+          await Promise.resolve();
 
-      bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
-      resolveOld?.({ payloads: [{ text: "stale answer" }] });
-      await oldSubmission;
-      expect(
-        realtimeSessionMock.submitToolResult.mock.calls.some(([callId]) => callId === "call-old"),
-      ).toBe(false);
+          if (transition === "terminal close") {
+            bridgeParams.onClose?.("error");
+          } else {
+            bridgeParams.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+            bridgeParams.onEvent?.({ direction: "client", type: "session.reconnect.scheduled" });
+          }
+          oldAnswer.resolve({ payloads: [{ text: "stale answer" }] });
+          await oldSubmission;
+          expect(
+            realtimeSessionMock.submitToolResult.mock.calls.some(
+              ([callId]) => callId === "call-old",
+            ),
+          ).toBe(false);
 
-      bridgeParams?.onReady?.();
-      beginSpeakerTurn(entry);
-      await bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-fresh",
-          callId: "call-fresh",
-          name: "openclaw_agent_consult",
-          args: { question: "same question" },
-        },
-        realtimeSessionMock,
-      );
-      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-fresh", {
-        text: "fresh answer",
-      });
-    });
+          if (transition === "terminal close") {
+            expect(manager.status()).toEqual([]);
+            await manager.join({ guildId: "g1", channelId: "1001" });
+            entry = getSessionEntry(manager);
+            bridgeParams = lastRealtimeBridgeParams();
+          } else {
+            expect(manager.status()).toHaveLength(1);
+            expect(realtimeSessionMock.close).not.toHaveBeenCalled();
+            expect(getSessionEntry(manager)).toBe(entry);
+          }
+          bridgeParams?.onReady?.();
+          beginSpeakerTurn(entry);
+          await bridgeParams?.onToolCall?.(
+            {
+              itemId: "item-fresh",
+              callId: "call-fresh",
+              name: "openclaw_agent_consult",
+              args: { question: "same question" },
+            },
+            realtimeSessionMock,
+          );
+          expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-fresh", {
+            text: "fresh answer",
+          });
+        } finally {
+          await manager.destroy();
+        }
+      },
+    );
 
     it("treats a bare wake name as an activation for the next realtime transcript", async () => {
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "follow-up answer" }] });

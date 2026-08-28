@@ -1,4 +1,4 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
@@ -15,6 +15,7 @@ import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
   CronDeliveryTrace,
+  CronResolvedDeliveryState,
   CronJob,
   CronNextCheckProposal,
   CronRunOutcome,
@@ -47,6 +48,7 @@ export async function executeJobCore(
       deliveryAttempted?: boolean;
       deliveryError?: string;
       deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
       nextCheck?: CronNextCheckProposal;
       scriptStateChanged?: boolean;
@@ -373,6 +375,7 @@ async function executeDetachedCronJob(
       deliveryAttempted?: boolean;
       deliveryError?: string;
       deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
       nextCheck?: CronNextCheckProposal;
     }
@@ -408,6 +411,8 @@ async function executeDetachedCronJob(
       error: res.error,
       errorClassification: res.errorClassification,
       deliveryError: res.deliveryError,
+      deliverySuppressionReason: res.deliverySuppressionReason,
+      deliveryState: res.deliveryState,
       summary: res.summary,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
@@ -469,6 +474,7 @@ async function executeDetachedCronJob(
     // emit it on the finished event for CLI/UI/API run logs (#95419).
     deliveryError: res.deliveryError,
     deliverySuppressionReason: res.deliverySuppressionReason,
+    deliveryState: res.deliveryState,
     nextCheck: res.nextCheck,
     summary: res.summary,
     delivered: res.delivered,
@@ -563,6 +569,8 @@ async function executeScriptCronJob(
     delivered: result.delivered,
     deliveryAttempted: result.deliveryAttempted,
     deliveryError: result.deliveryError,
+    deliverySuppressionReason: result.deliverySuppressionReason,
+    deliveryState: result.deliveryState,
     delivery: result.delivery,
     nextCheck: result.nextCheck,
     scriptStateChanged: result.stateChanged === true,

@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dispatchScript = join(process.cwd(), "scripts/pr-lib/ci-dispatch.mjs");
 const sha = "0123456789abcdef0123456789abcdef01234567";
+const baseSha = "1111111111111111111111111111111111111111";
 const changedSha = "fedcba9876543210fedcba9876543210fedcba98";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
@@ -28,7 +29,7 @@ case "$1 $2" in
     if [ "\${OPENCLAW_TEST_GH_MODE:-}" = "pending-head-change" ]; then
       printf '{"workflow_runs":[]}\\n'
     elif [ -e "$OPENCLAW_TEST_GH_SEEN_RUN_LIST" ]; then
-      printf '{"workflow_runs":[{"id":99,"html_url":"https://github.com/openclaw/openclaw/actions/runs/99","head_sha":"%s","created_at":"2026-01-01T00:00:00Z","status":"queued"}]}\\n' "$OPENCLAW_TEST_HEAD_SHA"
+      printf '{"workflow_runs":[{"id":99,"html_url":"https://github.com/openclaw/openclaw/actions/runs/99","head_sha":"%s","head_branch":"main","display_title":"PR Crabbox gate #12345 / run_abc123","created_at":"2026-01-01T00:00:00Z","status":"queued"}]}\\n' "$OPENCLAW_TEST_HEAD_SHA"
     else
       : > "$OPENCLAW_TEST_GH_SEEN_RUN_LIST"
       printf '{"workflow_runs":[]}\\n'
@@ -61,6 +62,7 @@ esac
 function runDispatch(
   fakeGh: ReturnType<typeof createFakeGh>,
   options: {
+    backend?: "ci" | "crabbox";
     mode?: "observed-head-change" | "pending-head-change";
     immediateTimers?: boolean;
     cwd?: string;
@@ -94,7 +96,26 @@ function runDispatch(
   }
   return spawnSync(
     process.execPath,
-    [dispatchScript, "12345", "contributor/fix-hosted-gates", sha, "false"],
+    [
+      dispatchScript,
+      "12345",
+      "contributor/fix-hosted-gates",
+      sha,
+      baseSha,
+      "false",
+      ...(options.backend === "crabbox"
+        ? [
+            "--backend",
+            "crabbox",
+            "--run-id",
+            "run_abc123",
+            "--lease-id",
+            "cbx_def456",
+            "--bootstrap-sha256",
+            "a".repeat(64),
+          ]
+        : []),
+    ],
     {
       cwd: options.cwd,
       encoding: "utf8",
@@ -152,11 +173,54 @@ describePosix("scripts/pr ci-dispatch", () => {
     expect(callLines.some((call) => /^real-gh\t(?:api|pr view)/u.test(call))).toBe(false);
   });
 
+  it("dispatches the protected-main Crabbox publisher with the immutable proof handle", () => {
+    const fakeGh = createFakeGh();
+    const result = runDispatch(fakeGh, { backend: "crabbox" });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const calls = readFileSync(fakeGh.calls, "utf8");
+    expect(calls).toContain(
+      `real-gh\tworkflow run pr-crabbox-gate-publisher.yml --ref main -f pr_number=12345 -f head_sha=${sha} -f base_sha=${baseSha} -f crabbox_run_id=run_abc123 -f crabbox_lease_id=cbx_def456 -f bootstrap_sha256=${"a".repeat(64)}`,
+    );
+    expect(calls).toContain(
+      "gh\tapi --method GET repos/openclaw/openclaw/actions/workflows/pr-crabbox-gate-publisher.yml/runs -f event=workflow_dispatch -f branch=main -f per_page=20",
+    );
+  });
+
+  it("rejects an incomplete Crabbox proof handle before dispatch", () => {
+    const fakeGh = createFakeGh();
+    const result = spawnSync(
+      process.execPath,
+      [
+        dispatchScript,
+        "12345",
+        "contributor/fix-hosted-gates",
+        sha,
+        baseSha,
+        "false",
+        "--backend",
+        "crabbox",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_GH_BIN: fakeGh.realGh,
+          OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
+          PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/Expected value|requires valid/u);
+    expect(existsSync(fakeGh.dispatched)).toBe(false);
+  });
+
   it("refuses a fork-local branch name before invoking GitHub", () => {
     const fakeGh = createFakeGh();
     const result = spawnSync(
       process.execPath,
-      [dispatchScript, "12345", "fix-hosted-gates", sha, "true"],
+      [dispatchScript, "12345", "fix-hosted-gates", sha, baseSha, "true"],
       {
         encoding: "utf8",
         env: {

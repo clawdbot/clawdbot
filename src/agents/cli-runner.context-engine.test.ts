@@ -184,32 +184,44 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     restoreCliRunnerTestDeps();
   });
 
-  it("keeps isolated completion outside hooks, history, and context-engine lifecycle", async () => {
-    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
-      bootstrapped: true,
-    }));
-    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
-    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
-      createMaintenanceResult(),
-    );
-    const dispose = vi.fn(async () => {});
-    const context = buildPreparedContext(
-      createContextEngine({ bootstrap, afterTurn, maintain, dispose }),
-    );
-    context.params.isolatedCompletion = true;
+  it.each([
+    ["final answer", true],
+    ["", true],
+    ["", false],
+  ] as const)(
+    "keeps isolated output %j outside turn lifecycle (strict: %s)",
+    async (text, strict) => {
+      const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+        bootstrapped: true,
+      }));
+      const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+      const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+        createMaintenanceResult(),
+      );
+      const dispose = vi.fn(async () => {});
+      const context = buildPreparedContext(
+        createContextEngine({ bootstrap, afterTurn, maintain, dispose }),
+      );
+      context.params.isolatedCompletion = true;
+      context.params.outputTextPolicy = strict ? "strict-visible" : undefined;
+      executePreparedCliRunMock.mockResolvedValueOnce({ text });
 
-    const result = await runPreparedCliAgent(context);
-
-    expect(result.payloads).toEqual([{ text: "final answer" }]);
-    expect(executePreparedCliRunMock).toHaveBeenCalledWith(context, undefined, undefined);
-    expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
-    expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
-    expect(loadCliSessionContextEngineMessagesMock).not.toHaveBeenCalled();
-    expect(bootstrap).not.toHaveBeenCalled();
-    expect(afterTurn).not.toHaveBeenCalled();
-    expect(maintain).not.toHaveBeenCalled();
-    expect(dispose).not.toHaveBeenCalled();
-  });
+      const result = runPreparedCliAgent(context);
+      if (!text && !strict) {
+        await expect(result).rejects.toMatchObject({ reason: "empty_response" });
+      } else {
+        expect((await result).payloads).toEqual(text ? [{ text }] : undefined);
+      }
+      expect(executePreparedCliRunMock).toHaveBeenCalledWith(context, undefined, undefined);
+      expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
+      expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
+      expect(loadCliSessionContextEngineMessagesMock).not.toHaveBeenCalled();
+      expect(bootstrap).not.toHaveBeenCalled();
+      expect(afterTurn).not.toHaveBeenCalled();
+      expect(maintain).not.toHaveBeenCalled();
+      expect(dispose).not.toHaveBeenCalled();
+    },
+  );
 
   it("skips the top-level before-reply hook for isolated completion", async () => {
     const context = buildPreparedContext(createContextEngine());

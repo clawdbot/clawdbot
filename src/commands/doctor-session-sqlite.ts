@@ -374,12 +374,10 @@ async function inspectOrMigrateTarget(params: {
       );
     }
     if (validationPassed) {
-      // Post-import compact retrofits auto_vacuum=INCREMENTAL onto pre-flip
-      // databases and returns the pages the import churn freed.
+      // Finalization enables incremental vacuum where needed and releases free pages.
       compactSqliteDatabase(params.target, report, {
-        closeImportedHandle: true,
         env: params.env,
-        migrateOlderSchema: true,
+        operation: "import-finalize",
       });
     }
   }
@@ -1206,21 +1204,15 @@ function compactSqliteDatabase(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
   options: {
-    closeImportedHandle?: boolean;
     env?: NodeJS.ProcessEnv;
-    migrateOlderSchema?: boolean;
+    operation?: "import-finalize";
   } = {},
 ): void {
   try {
-    if (options.closeImportedHandle) {
+    if (options.operation === "import-finalize") {
       closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
     }
-    report.compact = options.migrateOlderSchema
-      ? compactDoctorSessionSqliteTarget(target, {
-          env: options.env,
-          migrateOlderSchema: true,
-        })
-      : compactDoctorSessionSqliteTarget(target, { env: options.env });
+    report.compact = compactDoctorSessionSqliteTarget(target, options);
   } catch (err) {
     report.issues.push({
       code: "sqlite_compact_failed",

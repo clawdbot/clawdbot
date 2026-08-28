@@ -650,14 +650,16 @@ function normalizeGitHubAuthenticationAlias(
 
 export function syncGitHubIdentity(
   params: {
-    identity: { accountId: number; login: string };
+    identity: { accountId: number; login: string; name?: string };
     authenticationAlias: GitHubAuthenticationAlias;
     initialDisplayName?: string;
   },
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileListItem {
   const alias = normalizeGitHubAuthenticationAlias(params.authenticationAlias);
-  const initialDisplayName = normalizeInitialDisplayName(params.initialDisplayName);
+  const githubDisplayName = normalizeInitialDisplayName(params.identity.name);
+  const initialDisplayName =
+    githubDisplayName ?? normalizeInitialDisplayName(params.initialDisplayName);
   ensureUserProfilesSchema(options);
   ensureUserPreferencesSchema(options);
   return runOpenClawStateWriteTransaction(
@@ -672,24 +674,21 @@ export function syncGitHubIdentity(
         mergeProfiles: (sourceProfileId, targetProfileId) =>
           mergeUserProfiles(db, sourceProfileId, targetProfileId, now),
       });
-      if (initialDisplayName) {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("user_profiles")
-            .set({ display_name: initialDisplayName, updated_at: now })
-            .where("id", "=", canonicalProfileId)
-            .where("display_name", "is", null),
-        );
-      }
+      const profile = selectUserProfileListItemById(db, canonicalProfileId);
+      // Only the exact current GitHub login may be upgraded; preserve every other saved name.
+      // Read the merge head inside this transaction so edits during lookup remain authoritative.
+      const displayName =
+        githubDisplayName && profile.displayName === params.identity.login.trim()
+          ? githubDisplayName
+          : (profile.displayName ?? initialDisplayName);
       executeSqliteQuerySync(
         db,
         kysely
           .updateTable("user_profiles")
-          .set({ updated_at: now })
+          .set({ display_name: displayName, updated_at: now })
           .where("id", "=", canonicalProfileId),
       );
-      return selectUserProfileListItemById(db, canonicalProfileId);
+      return { ...profile, displayName, updatedAt: now };
     },
     options,
     { operationLabel: "user-profiles.sync-github-identity" },

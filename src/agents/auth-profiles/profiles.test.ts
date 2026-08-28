@@ -37,7 +37,7 @@ import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreStateMutationToken,
-  listRuntimeAuthProfileStoreSnapshots,
+  listOwnedRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
 import {
@@ -1004,7 +1004,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
 
         expect(committed.publishRuntimeSnapshots()).toBe(true);
-        expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+        expect(listOwnedRuntimeAuthProfileStoreSnapshots()).toEqual([
           expect.objectContaining({
             databasePath,
             store: expect.objectContaining({
@@ -1017,7 +1017,7 @@ describe("promoteAuthProfileInOrder", () => {
 
         restoreAuthProfileStorePersistenceSnapshot(snapshot, committed.owned);
 
-        expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+        expect(listOwnedRuntimeAuthProfileStoreSnapshots()).toEqual([
           expect.objectContaining({
             databasePath,
             store: expect.objectContaining({

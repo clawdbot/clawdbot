@@ -767,10 +767,6 @@ const config = {
       "harness.ts!",
       "media-understanding-provider.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/daytona`]: bundledPluginWorkspace([
-      // Copied to dist and spawned by the Daytona backend for sandbox execs.
-      "src/daytona-exec-launcher.mjs!",
-    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: bundledPluginWorkspace(),

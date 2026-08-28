@@ -18,6 +18,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
 import {
@@ -250,7 +251,11 @@ export async function attachAuthenticatedGatewayConnect(
       ? []
       : rolePolicy
         ? effectiveScopes.scopes.filter((scope) =>
-            rolePolicy.scopes.some((allowedScope) => allowedScope === scope),
+            roleScopesAllow({
+              role: "operator",
+              requestedScopes: [scope],
+              allowedScopes: rolePolicy.scopes,
+            }),
           )
         : effectiveScopes.scopes;
   state.scopes = scopes;

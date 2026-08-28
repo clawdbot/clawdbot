@@ -238,6 +238,64 @@ describe("session transcript projection", () => {
     expect(state.messages).toEqual([persisted]);
   });
 
+  it("reorders a provisional final when older durable neighbors arrive first", () => {
+    const synthetic = createMessage("assistant", "current final");
+    const previous = createMessage("assistant", "previous final", {
+      id: "previous-final",
+      seq: 370,
+      runId: "previous-run",
+    });
+    const prompt = createMessage("user", "current prompt", {
+      id: "current-user",
+      seq: 371,
+    });
+    const persisted = createMessage("assistant", "current final", {
+      id: "current-final",
+      seq: 372,
+      runId: "current-run",
+    });
+    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), synthetic, {
+      runId: "current-run",
+    });
+    state = projectLiveSessionMessage(state, previous, { runId: "previous-run" });
+    state = projectLiveSessionMessage(state, prompt);
+    state = projectLiveSessionMessage(state, persisted, { runId: "current-run" });
+
+    expect(state.messages).toEqual([previous, prompt, persisted]);
+  });
+
+  it("keeps older durable neighbors before a late prompt and its provisional final", () => {
+    const runId = "current-run";
+    const synthetic = createMessage("assistant", "current final");
+    const previous = createMessage("assistant", "previous final", {
+      id: "previous-final",
+      seq: 370,
+      runId: "previous-run",
+    });
+    const prompt = createMessage("user", "current prompt", {
+      id: "current-user",
+      seq: 371,
+      idempotencyKey: `${runId}:user`,
+    });
+    const persisted = createMessage("assistant", "current final", {
+      id: "current-final",
+      seq: 372,
+      runId,
+    });
+    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: synthetic,
+    });
+    state = projectLiveSessionMessage(state, synthetic, { runId });
+    state = projectLiveSessionMessage(state, previous, { runId: "previous-run" });
+    state = projectLiveSessionMessage(state, prompt, { clientRunId: runId });
+    state = projectLiveSessionMessage(state, persisted, { runId });
+
+    expect(state.messages).toEqual([previous, prompt, persisted]);
+  });
+
   it("does not promote a provisional final into same-run Codex commentary", () => {
     const commentary = createMessage("assistant", "commentary", {
       id: "commentary-1",

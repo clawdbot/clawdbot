@@ -14,10 +14,10 @@ import {
 import {
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
-  moveDeliveryQueueEntryToFailed,
   upsertDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.types.js";
+import { moveDeliveryQueueEntryToFailedForTest } from "../delivery-queue-test-support.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -53,7 +53,7 @@ describe("outbound delivery namespace ownership", () => {
       entry: { id, enqueuedAt: terminalAt - 1, retryCount: 0, completionRetention },
       stateDir,
     });
-    moveDeliveryQueueEntryToFailed(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+    moveDeliveryQueueEntryToFailedForTest(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
   }
 
   function seedOwnerSet(prefix: string) {

@@ -5620,13 +5620,6 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* The 16px PR glyph inks 1px beyond its 14px track. Inset only that glyph so
-   the other trailing atoms keep their shared axis inside the clipped endcap. */
-.session-row-state [data-session-pr-state] {
-  position: relative;
-  left: 1px;
-}
-
 .sidebar-session-fork-indicator {
   display: inline-flex;
   margin-right: 4px;
@@ -5671,7 +5664,7 @@ td.data-table-key-col {
 }
 
 .session-row-badge--pull-request[data-pull-request-state="merged"] {
-  color: var(--accent);
+  color: var(--pr-merged);
 }
 
 .session-row-badge--cloud[data-placement-state="failed"],

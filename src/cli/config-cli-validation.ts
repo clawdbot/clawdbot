@@ -1,21 +1,18 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigFileSnapshot } from "../config/config.js";
-import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../config/config.js";
+import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
+import type { ConfigValidationIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  coerceSecretRef,
-  resolveSecretInputRef,
-  type PluginIntegrationSecretProviderConfig,
-  type SecretRef,
-} from "../config/types.secrets.js";
+import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import { assertSecureExecCommandPath } from "../secrets/exec-provider-path-validation.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
@@ -68,18 +65,6 @@ export function ensureValidConfigSnapshotForCli(
   return false;
 }
 
-export async function loadValidConfig(
-  runtime: RuntimeEnv = defaultRuntime,
-  options: { observe?: boolean; json?: boolean } = {},
-) {
-  const snapshot =
-    options.observe === false
-      ? await readConfigFileSnapshot({ observe: false })
-      : await readConfigFileSnapshot();
-  ensureValidConfigSnapshotForCli(snapshot, runtime, options);
-  return snapshot;
-}
-
 export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {
   const prepared = await readConfigFileSnapshotForWrite();
   ensureValidConfigSnapshotForCli(prepared.snapshot, runtime);
@@ -88,10 +73,10 @@ export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRunti
 
 export { formatInvalidConfigRepairHint };
 
-export function strictlyValidateConfigSnapshotForCli(
+export async function strictlyValidateConfigSnapshotForCli(
   snapshot: ConfigFileSnapshot,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
-): ConfigFileSnapshot {
+): Promise<ConfigFileSnapshot> {
   if (!snapshot.valid) {
     return snapshot;
   }
@@ -99,7 +84,10 @@ export function strictlyValidateConfigSnapshotForCli(
     semanticValidation: "strict",
     pluginMetadataSnapshot,
   });
-  return validated.ok ? snapshot : { ...snapshot, valid: false, issues: validated.issues };
+  const issues = validated.ok
+    ? await collectConfigSecretProviderErrors({ config: snapshot.runtimeConfig })
+    : validated.issues;
+  return issues.length === 0 ? snapshot : { ...snapshot, valid: false, issues };
 }
 
 function collectSecretRefsFromUnknown(value: unknown): SecretRef[] {
@@ -289,14 +277,16 @@ function touchesSecretProviderCollection(path: readonly string[]): boolean {
   );
 }
 
-export function collectPluginIntegrationProviderErrors(params: {
+export async function collectConfigSecretProviderErrors(params: {
   config: OpenClawConfig;
-  operations: ConfigSetOperation[];
-}): ConfigSetDryRunError[] {
+  operations?: ConfigSetOperation[];
+}): Promise<ConfigValidationIssue[]> {
   const providers = params.config.secrets?.providers ?? {};
-  let validateAllProviders = false;
   const touchedProviderAliases = new Set<string>();
-  for (const operation of params.operations) {
+  // Explicit validation checks all manual providers; writes must leave unrelated
+  // dormant providers alone so operators can repair the rest of their config.
+  let validateAllProviders = params.operations === undefined;
+  for (const operation of params.operations ?? []) {
     if (operation.touchedProviderAlias) {
       touchedProviderAliases.add(operation.touchedProviderAlias);
     }
@@ -308,42 +298,46 @@ export function collectPluginIntegrationProviderErrors(params: {
     }
     validateAllProviders ||= touchesSecretProviderCollection(operation.setPath);
   }
-  if (!validateAllProviders && touchedProviderAliases.size === 0) {
-    return [];
-  }
-  const integrationProviders: Array<{
-    alias: string;
-    provider: PluginIntegrationSecretProviderConfig;
-  }> = [];
+  const issues: ConfigValidationIssue[] = [];
+  let manifestRegistry: PluginMetadataSnapshot["manifestRegistry"] | undefined;
   for (const [alias, provider] of Object.entries(providers)) {
-    if (
-      (validateAllProviders || touchedProviderAliases.has(alias)) &&
-      isPluginIntegrationSecretProviderConfig(provider)
-    ) {
-      integrationProviders.push({ alias, provider });
+    if (!validateAllProviders && !touchedProviderAliases.has(alias)) {
+      continue;
+    }
+    const providerPath = `secrets.providers.${alias}`;
+    if (isPluginIntegrationSecretProviderConfig(provider)) {
+      // Preserve write-time manifest validation without adding executable-path
+      // policy to plugin integrations; activation owns their materialized command.
+      if (!params.operations) {
+        continue;
+      }
+      manifestRegistry ??= loadPluginMetadataSnapshot({
+        config: params.config,
+        env: process.env,
+      }).manifestRegistry;
+      const resolved = resolveSecretProviderIntegrationConfig({
+        manifestRegistry,
+        providerAlias: alias,
+        providerConfig: provider,
+        config: params.config,
+        env: process.env,
+      });
+      if (!resolved.ok) {
+        issues.push({ path: providerPath, message: resolved.reason });
+      }
+    } else if (isPlainRecord(provider) && "command" in provider) {
+      try {
+        await assertSecureExecCommandPath({
+          command: provider.command,
+          label: `${providerPath}.command`,
+          trustedDirs: provider.trustedDirs,
+        });
+      } catch (err) {
+        issues.push({ path: `${providerPath}.command`, message: formatErrorMessage(err) });
+      }
     }
   }
-  if (integrationProviders.length === 0) {
-    return [];
-  }
-  const manifestRegistry = loadPluginMetadataSnapshot({
-    config: params.config,
-    env: process.env,
-  }).manifestRegistry;
-  const errors: ConfigSetDryRunError[] = [];
-  for (const { alias, provider } of integrationProviders) {
-    const resolved = resolveSecretProviderIntegrationConfig({
-      manifestRegistry,
-      providerAlias: alias,
-      providerConfig: provider,
-      config: params.config,
-      env: process.env,
-    });
-    if (!resolved.ok) {
-      errors.push({ kind: "schema", message: `secrets.providers.${alias}: ${resolved.reason}` });
-    }
-  }
-  return errors;
+  return issues;
 }
 
 export function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {

@@ -261,7 +261,9 @@ extension OpenClawChatViewModel {
             activeRunIDs: change.activeRunIds,
             activeRunIDsPresent: change.activeRunIdsPresent)
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
-        self.persistSessionsToCache(self.sessions)
+        self.persistSessionsToCache(
+            self.sessions,
+            agentID: self.currentSessionSnapshot().deliveryAgentID)
         return .merged
     }
 

@@ -113,6 +113,7 @@ describe("createOpenClawAgentHarness", () => {
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
+      outputTextPolicy: "strict-visible",
     } as unknown as Parameters<
       NonNullable<ReturnType<typeof createOpenClawAgentHarness>["runIsolatedCompletionV2"]>
     >[0];
@@ -124,6 +125,7 @@ describe("createOpenClawAgentHarness", () => {
       expect.objectContaining({
         model: expect.objectContaining({ provider: "openai", id: "gpt-test" }),
         auth: expect.objectContaining({ apiKey: "secret", mode: "api-key" }),
+        options: expect.objectContaining({ strictReasoningTags: true }),
         context: {
           systemPrompt: "system",
           messages: [expect.objectContaining({ role: "user", content: "user" })],

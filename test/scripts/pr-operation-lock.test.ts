@@ -222,11 +222,18 @@ function installPrCliFixture(repoDir: string) {
     "scripts/pr-lib/changelog.sh",
     "scripts/pr-lib/gates.sh",
     "scripts/pr-lib/ci-dispatch.mjs",
+    "scripts/pr-lib/crabbox-gate-contract.mjs",
+    "scripts/pr-lib/crabbox-gate-plan.mts",
+    "scripts/pr-lib/crabbox-merge-bypass.mjs",
+    "scripts/pr-lib/crabbox-merge-bypass.sh",
     "scripts/pr-lib/push.sh",
     "scripts/pr-lib/review.sh",
     "scripts/pr-lib/review-artifacts.mjs",
     "scripts/pr-lib/prepare-core.sh",
     "scripts/pr-lib/merge.sh",
+    "scripts/crabbox-untrusted-bootstrap.sh",
+    "scripts/pr-crabbox-gate-publisher.mjs",
+    ".github/workflows/pr-crabbox-gate-publisher.yml",
   ];
   for (const file of files) {
     const target = join(repoDir, file);
@@ -1254,9 +1261,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
         mergeScript,
         `${readFileSync(mergeScript, "utf8")}\n` +
           "validate_review_artifact_data() { :; }\n" +
-          "merge_verify() { mark_pr_operation_side_effects_started; }\n",
+          "merge_verify() { MERGE_USE_CRABBOX_ADMIN_BYPASS=false; mark_pr_operation_side_effects_started; }\n",
       );
-      git("add", "scripts");
+      git("add", "scripts", ".github");
       git("commit", "-qm", "test: native cleanup fixture");
       const preparedHead = git("rev-parse", "HEAD");
       git("update-ref", "refs/remotes/origin/main", preparedHead);

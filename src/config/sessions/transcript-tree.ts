@@ -163,7 +163,7 @@ function resolveCanonicalParentId<T>(
  * older appenders. Treat those rows as a linear continuation of the current
  * append cursor so a later leaf control can still address their full history.
  */
-export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTranscriptTree<T> {
+export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTranscriptTree<T> {
   const nodes: SessionTranscriptTreeNode<T>[] = [];
   const byId = new Map<string, SessionTranscriptTreeNode<T>>();
   let leafId: string | null = null;
@@ -176,7 +176,9 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
   const resetDescendantIds = new Set<string>();
   const invalidLeafControlIds = new Set<string>();
 
-  for (const [index, entry] of entries.entries()) {
+  let nextIndex = 0;
+  for (const entry of entries) {
+    const index = nextIndex++;
     let explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
     if (
       latestResetId &&
@@ -359,11 +361,11 @@ export function selectSessionTranscriptTreePathNodes<T>(
       break;
     }
     if (!isSessionTranscriptLeafControl(current.entry)) {
-      path.unshift(current);
+      path.push(current);
     }
     currentId = current.parentId;
   }
-  return path;
+  return path.toReversed();
 }
 
 /** Merge normalized paths in original file order and expose their retained parent links. */

@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleDirFetch } from "./dir-fetch.js";
 import { createCanonicalDirListCommand } from "./dir-list-worker-command.js";
 import { handleDirList } from "./dir-list.js";
 
@@ -15,6 +16,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
@@ -53,6 +55,79 @@ describe("handleDirList — fs errors", () => {
     const f = path.join(tmpRoot, "f.txt");
     await fs.writeFile(f, "x");
     await expectDirListError({ path: f }, "IS_FILE");
+  });
+});
+
+describe.each([
+  ["dir.list", handleDirList, "path not found", "PERMISSION_DENIED"],
+  ["dir.fetch", handleDirFetch, "directory not found", "READ_ERROR"],
+] as const)("%s — directory binding", (_command, handle, notFoundMessage, permissionCode) => {
+  it.each(["malformed", "write", "device", "inode"] as const)(
+    "rejects a %s binding before reading the directory",
+    async (kind) => {
+      const stats = await fs.stat(tmpRoot, { bigint: true });
+      const binding = { kind: "existing", device: String(stats.dev), inode: String(stats.ino) };
+      const expectedBinding = {
+        malformed: null,
+        write: {
+          kind: "write",
+          anchorPath: tmpRoot,
+          anchorDevice: binding.device,
+          anchorInode: binding.inode,
+        },
+        device: { ...binding, device: "different" },
+        inode: { ...binding, inode: "different" },
+      }[kind];
+      const readdir = vi.spyOn(fs, "readdir");
+
+      await expect(
+        handle({ path: tmpRoot, preflightOnly: true, expectedBinding }),
+      ).resolves.toEqual({
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "filesystem identity differs from the authorized target",
+        canonicalPath: tmpRoot,
+      });
+      expect(readdir).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves path and directory errors before validating the binding", async () => {
+    const missing = path.join(tmpRoot, "missing");
+    await expect(handle({ path: missing, expectedBinding: null })).resolves.toEqual({
+      ok: false,
+      code: "NOT_FOUND",
+      message: notFoundMessage,
+    });
+    const file = path.join(tmpRoot, "file.txt");
+    await fs.writeFile(file, "keep");
+    await expect(handle({ path: file, expectedBinding: null })).resolves.toEqual({
+      ok: false,
+      code: "IS_FILE",
+      message: "path is not a directory",
+      canonicalPath: file,
+    });
+    await expect(
+      handle({ path: file, expectedCanonicalPath: tmpRoot, expectedBinding: null }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "canonical path differs from the authorized target",
+      canonicalPath: file,
+    });
+  });
+
+  it("retains the command's permission-error classification", async () => {
+    vi.spyOn(fs, "stat").mockRejectedValueOnce(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+
+    await expect(handle({ path: tmpRoot, expectedBinding: null })).resolves.toEqual({
+      ok: false,
+      code: permissionCode,
+      message: "stat failed: Error: denied",
+      canonicalPath: tmpRoot,
+    });
   });
 });
 
@@ -159,14 +234,21 @@ describe("handleDirList — happy path", () => {
 
   it("binds the canonical target before listing entries", async () => {
     await fs.writeFile(path.join(tmpRoot, "private.txt"), "secret");
+    const stats = await fs.stat(tmpRoot, { bigint: true });
+    const binding = { kind: "existing", device: String(stats.dev), inode: String(stats.ino) };
 
-    const preflight = await handleDirList({ path: tmpRoot, preflightOnly: true });
-    expect(preflight).toMatchObject({
+    const preflight = await handleDirList({
+      path: tmpRoot,
+      preflightOnly: true,
+      expectedBinding: { ...binding, extra: "not part of the binding" },
+    });
+    expect(preflight).toEqual({
       ok: true,
       path: tmpRoot,
       entries: [],
       truncated: false,
       preflight: true,
+      binding,
     });
 
     const changed = await handleDirList({

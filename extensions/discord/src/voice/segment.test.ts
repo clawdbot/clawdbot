@@ -16,9 +16,75 @@ defineDiscordVoiceTests(
     loggerWarnMock,
     makeVoiceConfig,
     processVoiceSegment,
+    transcribeAudioFileMock,
+    decodeOpusStreamMock,
     textToSpeechMock,
     textToSpeechStreamMock,
   }) => {
+    it.each(["transcribing", "queued"] as const)(
+      "drops retired transcript audio while %s",
+      async (phase) => {
+        const client = createClientWithMember("u-guest", "Guest", "4321");
+        const manager = createManager(
+          makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-guest"] }),
+          client,
+        );
+        const first = vi.fn();
+        const second = vi.fn();
+        const onStop = vi.fn();
+        await manager.join(
+          { guildId: "g1", channelId: "1001" },
+          { transcripts: { sessionId: "old", onUtterance: first, onStop } },
+        );
+        const entry = getSessionEntry(manager);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let entered!: () => void;
+        const started = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        let processing: Promise<void>;
+        if (phase === "transcribing") {
+          transcribeAudioFileMock.mockImplementationOnce(async () => {
+            entered();
+            await gate;
+            return { text: "retired" };
+          });
+          processing = getVoiceReceive(manager).processSegment({
+            entry,
+            wavPath: "/tmp/test.wav",
+            userId: "u-guest",
+            durationSeconds: 1,
+          });
+          await started;
+        } else {
+          entry.processingQueue = gate;
+          decodeOpusStreamMock.mockResolvedValueOnce(Buffer.alloc(192_000));
+          await getVoiceReceive(manager).handleSpeakingStart(entry, "u-guest");
+          processing = entry.processingQueue;
+        }
+        await manager.join(
+          { guildId: "g1", channelId: "1001" },
+          { transcripts: { sessionId: "new", onUtterance: second } },
+        );
+        release();
+        await processing;
+        expect(first).not.toHaveBeenCalled();
+        expect(second).not.toHaveBeenCalled();
+        expect(onStop).toHaveBeenCalledOnce();
+        await getVoiceReceive(manager).processSegment({
+          entry,
+          wavPath: "/tmp/test.wav",
+          userId: "u-guest",
+          durationSeconds: 1,
+        });
+        expect(second).toHaveBeenCalledOnce();
+        await manager.destroy();
+      },
+    );
+
     it("keeps streaming TTS audio alive until Discord finishes playback without a duration deadline", async () => {
       const release = vi.fn(async () => undefined);
       let finishPlayback!: () => void;

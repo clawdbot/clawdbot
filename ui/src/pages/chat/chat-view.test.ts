@@ -7405,6 +7405,10 @@ describe("chat model controls", () => {
     expect(getThinkingSliderValues(container)).toEqual(["adaptive", "low", "medium", "high"]);
     expect(slider?.value).toBe("3");
     expect(slider?.getAttribute("aria-valuetext")).toBe("Default (High)");
+    const effortValue = container.querySelector<HTMLElement>(".chat-controls__effort-value");
+    expect(effortValue).toBeInstanceOf(HTMLElement);
+    expect(effortValue?.classList.contains("sr-only")).toBe(false);
+    expect(getThinkingReasoningValueLabel(container)).toBe("High");
     expect(container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim()).toBe(
       "Fast mode",
     );

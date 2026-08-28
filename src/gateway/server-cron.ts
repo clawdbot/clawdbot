@@ -9,6 +9,7 @@ import {
 } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
@@ -59,7 +60,12 @@ import {
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
-import type { CronJob, CronPayload } from "../cron/types.js";
+import type {
+  CronDeliveryTrace,
+  CronJob,
+  CronPayload,
+  CronResolvedDeliveryState,
+} from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnceCore } from "../infra/heartbeat-runner-run.js";
@@ -248,6 +254,7 @@ function sanitizeCronHeartbeatOverride(
 async function finalizeCronCompletionAnnouncement(params: {
   job: CronJob;
   text?: string;
+  suppressionReason?: NormalizeReplySkipReason;
   runStartedAtMs?: number;
   abortSignal?: AbortSignal;
   deps: CliDeps;
@@ -257,7 +264,7 @@ async function finalizeCronCompletionAnnouncement(params: {
   traceResolvedFailure?: boolean;
 }) {
   const plan = resolveCronDeliveryPlan(params.job);
-  const delivery = {
+  const delivery: CronDeliveryTrace = {
     intended: pickDefined(
       {
         channel: plan.channel,
@@ -269,8 +276,25 @@ async function finalizeCronCompletionAnnouncement(params: {
       ["channel", "to", "accountId", "threadId", "source"],
     ),
   };
-  if (plan.mode !== "announce" || params.text === undefined) {
+  if (plan.mode !== "announce") {
     return { deliveryAttempted: false, delivered: false, delivery };
+  }
+  const deliveryState: CronResolvedDeliveryState = {
+    status: "not-delivered",
+    delivered: false,
+    failureNotification: { status: "not-requested" },
+  };
+  const finish = (deliveryAttempted: boolean) => ({
+    deliveryAttempted,
+    delivered: deliveryState.delivered,
+    deliveryError: deliveryState.error,
+    deliverySuppressionReason: deliveryState.deliverySuppressionReason,
+    deliveryState,
+    delivery: { ...delivery, delivered: deliveryState.delivered },
+  });
+  if (params.text === undefined) {
+    deliveryState.deliverySuppressionReason = params.suppressionReason ?? "empty";
+    return finish(false);
   }
 
   const { agentId, cfg } = params.resolveCronAgent(params.job.agentId);
@@ -311,41 +335,35 @@ async function finalizeCronCompletionAnnouncement(params: {
           },
         }),
     });
-    const delivered =
-      result.status === "sent" ? true : deliveryMayHaveReachedRecipient ? undefined : false;
-    return {
-      deliveryAttempted: true,
-      delivered,
-      delivery: { ...delivery, delivered },
-    };
+    if (result.status === "sent") {
+      deliveryState.status = "delivered";
+      deliveryState.delivered = true;
+    } else {
+      const uncertain = result.reason === "adapter_returned_no_identity";
+      deliveryState.status = uncertain ? "unknown" : "not-delivered";
+      deliveryState.delivered = uncertain ? undefined : false;
+      deliveryState.error = `cron delivery ${uncertain ? "outcome is unknown" : "was suppressed"}: ${result.reason}`;
+    }
+    return finish(true);
   } catch (err) {
     const deliveryError = formatErrorMessage(err);
     params.logger.warn(
       { jobId: params.job.id, err: deliveryError },
       `cron: ${params.label} delivery failed`,
     );
-    return {
-      deliveryAttempted: true,
-      delivered: false,
-      deliveryError,
-      delivery: {
-        ...delivery,
-        delivered: false,
-        ...(params.traceResolvedFailure
-          ? {
-              resolved: {
-                channel: plan.channel,
-                to: plan.to,
-                accountId: plan.accountId,
-                threadId: plan.threadId,
-                source: "explicit" as const,
-                ok: false,
-                error: deliveryError,
-              },
-            }
-          : {}),
-      },
-    };
+    deliveryState.error = deliveryError;
+    if (params.traceResolvedFailure) {
+      delivery.resolved = {
+        channel: plan.channel,
+        to: plan.to,
+        accountId: plan.accountId,
+        threadId: plan.threadId,
+        source: "explicit",
+        ok: false,
+        error: deliveryError,
+      };
+    }
+    return finish(true);
   }
 }
 
@@ -933,6 +951,7 @@ export function buildGatewayCronService(params: {
         const { summary: _summary, ...silentResult } = result;
         const completion = await finalizeCronCompletionAnnouncement({
           job,
+          suppressionReason: "silent",
           deps: params.deps,
           resolveCronAgent,
           logger: cronLogger,

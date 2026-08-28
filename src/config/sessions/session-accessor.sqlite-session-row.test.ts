@@ -125,7 +125,7 @@ describe("SQLite session row persistence", () => {
     expect(persisted).not.toHaveProperty("label");
   });
 
-  it("persists pending remote projects but excludes runtime-only resolved skills from SQLite JSON", async () => {
+  it("persists private workspace intent but excludes runtime-only resolved skills from SQLite JSON", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-sqlite-session-skills-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:runtime-skills";
@@ -142,6 +142,10 @@ describe("SQLite session row persistence", () => {
       sessionId: "runtime-skills-session",
       updatedAt: 42,
       pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+      pendingWorktree: {
+        name: "session-startup",
+        titleSource: "Start work",
+      },
       skillsSnapshot: {
         prompt: "compact skill prompt",
         skills: [{ name: "demo" }],
@@ -158,12 +162,12 @@ describe("SQLite session row persistence", () => {
       .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
       .get(sessionKey) as { entry_json: string };
     const persisted = JSON.parse(row.entry_json) as InternalSessionEntry;
-    expect(persisted.pendingProjectGitUrl).toBe("https://github.com/openclaw/openclaw.git");
-    expect(loadSessionEntry({ agentId: "main", env, sessionKey })?.pendingProjectGitUrl).toBe(
-      entry.pendingProjectGitUrl,
-    );
-    expect(projectPublicSessionEntry(entry)).not.toHaveProperty("pendingProjectGitUrl");
-    expect(projectPublicSessionEntryPatch(entry)).not.toHaveProperty("pendingProjectGitUrl");
+    for (const key of ["pendingProjectGitUrl", "pendingWorktree"] as const) {
+      expect(persisted[key]).toEqual(entry[key]);
+      expect(loadSessionEntry({ agentId: "main", env, sessionKey })?.[key]).toEqual(entry[key]);
+      expect(projectPublicSessionEntry(entry)).not.toHaveProperty(key);
+      expect(projectPublicSessionEntryPatch(entry)).not.toHaveProperty(key);
+    }
     expect(persisted.skillsSnapshot).toEqual({
       prompt: "compact skill prompt",
       skills: [{ name: "demo" }],

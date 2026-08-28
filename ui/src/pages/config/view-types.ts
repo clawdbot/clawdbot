@@ -82,6 +82,7 @@ export type ConfigProps = {
   embeddedEditor?: boolean;
   /** Control UI rows that belong to the active schema section but are not Gateway config. */
   sectionPrelude?: TemplateResult;
+  showSectionDocs?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;

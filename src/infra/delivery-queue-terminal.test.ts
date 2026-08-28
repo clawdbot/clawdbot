@@ -8,13 +8,13 @@ import {
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
-  moveDeliveryQueueEntryToFailed,
   pruneExpiredDeliveryQueueTombstones,
   terminalizePendingDeliveryQueueEntry,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
 import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
+import { moveDeliveryQueueEntryToFailedForTest } from "./delivery-queue-test-support.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 describe("delivery queue pending terminal transition", () => {
@@ -108,7 +108,7 @@ describe("delivery queue pending terminal transition", () => {
       ) => {
         const entry = { id, enqueuedAt: Date.now(), retryCount: 0, completionRetention };
         upsertDeliveryQueueEntry({ queueName: ownerQueue, entry, stateDir });
-        moveDeliveryQueueEntryToFailed(ownerQueue, id, stateDir);
+        moveDeliveryQueueEntryToFailedForTest(ownerQueue, id, stateDir);
       };
       const firstId = `${producerRetention.idPrefix}failed-a`;
       const secondId = `${producerRetention.idPrefix}failed-b`;
@@ -309,11 +309,11 @@ describe("delivery queue pending terminal transition", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(50_000);
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1", stateDir);
+      moveDeliveryQueueEntryToFailedForTest("outbound", "dead-1", stateDir);
       vi.setSystemTime(60_000);
-      moveDeliveryQueueEntryToFailed("outbound", "dead-2", stateDir);
+      moveDeliveryQueueEntryToFailedForTest("outbound", "dead-2", stateDir);
       vi.setSystemTime(70_000);
-      moveDeliveryQueueEntryToFailed("session", "dead-3", stateDir);
+      moveDeliveryQueueEntryToFailedForTest("session", "dead-3", stateDir);
     } finally {
       vi.useRealTimers();
     }

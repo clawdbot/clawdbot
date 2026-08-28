@@ -580,13 +580,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
 }
 
 function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
-  return {
-    inputMode: "json",
-    requestedPath: path,
-    setPath: path,
-    value: undefined,
-    mutation: "delete",
-  };
+  return { ...buildUnsetOperation(path), inputMode: "json" };
 }
 
 export function buildUnsetOperation(

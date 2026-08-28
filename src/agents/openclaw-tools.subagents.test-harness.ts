@@ -1,6 +1,5 @@
-// Shared subagent tool test harness for gateway/config/queue dependency overrides.
+// Shared subagent tool test harness for gateway/config dependency overrides.
 import { vi } from "vitest";
-import { testing as queueCleanupTesting } from "../auto-reply/reply/queue/cleanup.test-support.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { testing as subagentAnnounceTesting } from "./subagents/announce/subagent-announce.js";
@@ -35,16 +34,13 @@ export function resetSubagentsConfigOverride() {
 }
 
 function applySharedSubagentTestDeps() {
-  // Keep control, announce, and queue cleanup modules on the same mocked gateway.
+  // Keep control and announce modules on the same mocked gateway.
   subagentControlTesting.setDepsForTest({
     callGateway: callGatewayForTest,
   });
   subagentAnnounceTesting.setDepsForTest({
     callGateway: callGatewayForTest,
     getRuntimeConfig: () => configOverride,
-  });
-  queueCleanupTesting.setDepsForTests({
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   });
 }
 

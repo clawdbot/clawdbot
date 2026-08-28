@@ -73,6 +73,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gat
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
+  isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
@@ -390,8 +391,14 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(entry: SessionEntry): Partial<InternalSessionEntry> {
+function resolveReplySessionRolloverState(
+  entry: SessionEntry,
+  sessionKey: string,
+): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
+  // Stable ACP rows predate durable creation stamps. Preserve their restrictions
+  // fail-closed so rollover cannot turn an existing child into a root session.
+  const preserveSpawnLineage = isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
   return {
     thinkingLevel: entry.thinkingLevel,
     verboseLevel: entry.verboseLevel,
@@ -408,9 +415,16 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,
-    spawnedBy: entry.spawnedBy,
-    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
-    spawnedCwd: entry.spawnedCwd,
+    ...(preserveSpawnLineage
+      ? {
+          spawnedBy: entry.spawnedBy,
+          spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+          spawnedCwd: entry.spawnedCwd,
+          spawnDepth: entry.spawnDepth,
+          subagentRole: entry.subagentRole,
+          subagentControlScope: entry.subagentControlScope,
+        }
+      : {}),
     parentSessionKey: entry.parentSessionKey,
     parentSessionId: entry.parentSessionId,
     forkedFromParent: entry.forkedFromParent,
@@ -419,9 +433,6 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
     ...(entry.sandbox === "required" ? { sandbox: "required" } : {}),
-    spawnDepth: entry.spawnDepth,
-    subagentRole: entry.subagentRole,
-    subagentControlScope: entry.subagentControlScope,
   };
 }
 
@@ -806,9 +817,7 @@ async function initSessionStateAttemptLocked(
       // spawn-applied default (subagent-spawn-thinking.ts) — so unlike model
       // overrides these need no fallback-provenance filtering (#92562).
       // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
-      // Lineage/control facts belong to the session node and survive ANY rollover
-      // from an existing entry, following the #90119 carry pattern.
-      preservedState = resolveReplySessionRolloverState(entry);
+      preservedState = resolveReplySessionRolloverState(entry, sessionKey);
     }
   }
 

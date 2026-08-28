@@ -23,6 +23,7 @@ import { cronStoreKey } from "../store/key.js";
 import { upsertCronJobRow } from "../store/row-codec.js";
 import {
   claimCronRunReceiptInDatabase,
+  finishCronRunReceipt,
   inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
@@ -378,7 +379,7 @@ describe("cron durable run ownership", () => {
     }
   });
 
-  it("retries transient receipt finalization before releasing ownership", async () => {
+  it("retains a failed manual finalization receipt until its exact outcome is recovered", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
@@ -403,27 +404,74 @@ describe("cron durable run ownership", () => {
     );
     try {
       await expect(cron.run(job.id, "force")).rejects.toThrow("receipt finalization unavailable");
+      const retained = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+      expect(retained).toBeDefined();
+      expect(isCronRunReceiptOwnerStale(retained!)).toBe(true);
       expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "running" });
-      database.exec("DROP TRIGGER reject_cron_run_receipt_finish");
-      await vi.waitFor(
-        () => expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "superseded" }),
-        { timeout: 3_000, interval: 50 },
+      expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(
+        retained?.startedAtMs,
       );
+      const recovery = findCronTaskRunRecoveryInDatabase({
+        database,
+        jobId: job.id,
+        startedAt: retained!.startedAtMs,
+        storeKey: cronStoreKey(storePath),
+        receiptId: retained!.receiptId,
+      });
+      expect(recovery.finalized?.entry.status).toBe("ok");
+      // The failed transaction rolled back both row and receipt. A receipt-only
+      // supersede would sever this exact terminal fact from subsequent recovery.
+      database.exec("DROP TRIGGER reject_cron_run_receipt_finish");
     } finally {
       cron.stop();
       database.exec("DROP TRIGGER IF EXISTS reject_cron_run_receipt_finish");
     }
     expect(isCronJobActive(job.id)).toBe(false);
 
-    const replacement = makeParentService(
-      storePath,
-      vi.fn(async () => ({ status: "ok" as const })),
-    );
+    const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
+    const replacement = makeParentService(storePath, replacementRunner);
     try {
       await replacement.start();
+      expect(replacementRunner).not.toHaveBeenCalled();
+      expect(receipts(storePath, job.id)).toMatchObject([{ status: "ok" }]);
+      const recovered = (await loadCronStore(storePath)).jobs[0];
+      expect(recovered?.state.lastRunStatus).toBe("ok");
+      expect(recovered?.state.runningAtMs).toBeUndefined();
       await expect(replacement.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
     } finally {
       replacement.stop();
+    }
+  });
+
+  it("retries receipt-only finalization before releasing ownership", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("receipt-only-retry", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const receipt = claimMarkerlessReceipt(storePath, job, now);
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TEMP TRIGGER reject_receipt_only_finish
+      BEFORE UPDATE OF status ON cron_run_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'receipt finalization unavailable');
+      END;
+    `);
+    try {
+      expect(() =>
+        finishCronRunReceipt({ handle: receipt, status: "superseded", finishedAtMs: now }),
+      ).toThrow("receipt finalization unavailable");
+      releaseLocalCronRunReceiptOwnership(receipt);
+      expect(isCronRunReceiptOwnerStale(receipt)).toBe(false);
+      database.exec("DROP TRIGGER reject_receipt_only_finish");
+      await vi.waitFor(() => expect(receipts(storePath, job.id)[0]?.status).toBe("superseded"), {
+        timeout: 3_000,
+        interval: 50,
+      });
+      expect(isCronRunReceiptOwnerStale(receipt)).toBe(true);
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS reject_receipt_only_finish");
     }
   });
 

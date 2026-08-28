@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
@@ -93,7 +94,7 @@ describe("session list requests", () => {
       boardFace: "dashboard",
       includeGlobal: true,
       includeUnknown: true,
-      limit: 50,
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     });
     sessions.dispose();
   });

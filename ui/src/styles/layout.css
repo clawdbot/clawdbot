@@ -296,11 +296,10 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 .shell--settings.shell--mobile-nav {
   --settings-content-block-start-padding: 4px;
-  --settings-content-inline-padding: 4px;
 }
 
 .shell--settings .connection-action-block {
-  margin-inline: calc(0px - var(--settings-content-inline-padding));
+  margin-inline: calc(0px - var(--settings-content-inline-padding, var(--content-inline-padding)));
   border-inline: 0;
   border-radius: 0;
 }
@@ -2189,22 +2188,31 @@ openclaw-settings-save-indicator:empty {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   min-width: 0;
   min-height: 30px;
   padding: 4px 8px;
+  border: 0;
   border-radius: var(--radius-md);
+  background: transparent;
   color: var(--text);
-  text-decoration: none;
+  font: inherit;
+  text-align: left;
   transition:
     background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
     filter var(--duration-fast) ease,
     opacity var(--duration-fast) ease;
 }
 
-.sidebar-online__person:hover,
+.sidebar-online__person:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
 .sidebar-online__person:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  text-decoration: none;
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .sidebar-online__person--away {
@@ -2226,48 +2234,31 @@ openclaw-settings-save-indicator:empty {
   white-space: nowrap;
 }
 
-.sidebar-online__details {
+.sidebar-online__person-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
+  margin-left: auto;
   color: var(--muted);
   opacity: 0;
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-online__row:hover .sidebar-online__details,
-.sidebar-online__row:focus-within .sidebar-online__details,
-.sidebar-online__details[aria-expanded="true"] {
+.sidebar-online__person:hover .sidebar-online__person-action,
+.sidebar-online__person:focus-visible .sidebar-online__person-action,
+.sidebar-online__person[aria-expanded="true"] .sidebar-online__person-action {
   opacity: 1;
 }
 
-.sidebar-online__details:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.sidebar-online__details:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.sidebar-online__details svg {
+.sidebar-online__person-action svg {
   display: block;
   width: 13px;
   height: 13px;
 }
 
 @media (hover: none), (pointer: coarse) {
-  .sidebar-online__details {
-    width: 44px;
-    height: 44px;
+  .sidebar-online__person-action {
     opacity: 1;
   }
 
@@ -2278,7 +2269,7 @@ openclaw-settings-save-indicator:empty {
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar-online__person,
-  .sidebar-online__details {
+  .sidebar-online__person-action {
     transition: none;
   }
 }
@@ -4046,7 +4037,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content {
   grid-area: content;
-  padding: 16px 20px 32px;
+  --content-inline-padding: 20px;
+  padding: 16px var(--content-inline-padding) 32px;
   display: block;
   min-height: 0;
   overflow-y: auto;
@@ -4370,24 +4362,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   width: 9px;
   height: 9px;
   font-size: 6px;
-}
-
-.sidebar-session-pr-indicator--open {
-  color: var(--ok);
-}
-
-.sidebar-session-pr-indicator--merged {
-  color: var(--pr-merged);
-}
-
-.sidebar-session-pr-indicator svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-recent-session__text {

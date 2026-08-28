@@ -6,6 +6,7 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
@@ -129,6 +130,7 @@ async function openPicker(picker: Locator) {
     ),
     picker.click(),
   ]);
+  await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
 }
 
 async function selectPickerOption(picker: Locator, value: string) {
@@ -148,6 +150,7 @@ async function clickPickerOption(picker: Locator, value: string) {
     ),
     option.click(),
   ]);
+  await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
 }
 
 suite.define(() => {
@@ -176,9 +179,12 @@ suite.define(() => {
           .fontFamily,
         code: getComputedStyle(panel.querySelector("code")!).fontFamily,
       }));
+    const chatSmoothing = () =>
+      page.evaluate(() => document.documentElement.style.getPropertyValue("--chat-font-smoothing"));
     const initial = await families();
     expect(initial.ui).toContain("DM Sans");
     expect(initial.chat).toContain("Fraunces");
+    expect(await chatSmoothing()).toBe("auto");
     if (captureUiProof) {
       await preview.scrollIntoViewIfNeeded();
     }
@@ -190,8 +196,13 @@ suite.define(() => {
     await clickPickerOption(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     expect((await families()).chat).toContain("Fraunces");
+    await selectPickerOption(chat, "geist");
+    await expect.poll(async () => (await families()).chat).toContain("Geist");
+    // A sans chat override on a serif theme drops the serif smoothing opt-in.
+    await expect.poll(chatSmoothing).toBe("");
     await selectPickerOption(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
+    await expect.poll(chatSmoothing).toBe("auto");
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -208,6 +219,24 @@ suite.define(() => {
     await expect.poll(async () => (await families()).chat).toContain("Lora");
     await selectPickerOption(ui, "system");
     await expect.poll(async () => (await families()).ui).toContain("-apple-system");
+    // Model a popup transition outliving wa-after-show: restoring the theme
+    // must not depend on Chromium advancing the animation timeline.
+    await ui.evaluate((select) => {
+      select.addEventListener(
+        "wa-after-show",
+        () => {
+          const popup = select
+            .shadowRoot!.querySelector("wa-popup")!
+            .shadowRoot!.querySelector<HTMLElement>('[part="popup"]')!;
+          popup.style.transition = "none";
+          popup.style.transform = "translateX(600px)";
+          popup.getBoundingClientRect();
+          popup.style.transition = "transform 60s linear";
+          popup.style.transform = "translateX(0px)";
+        },
+        { once: true },
+      );
+    });
     await selectPickerOption(ui, "theme");
     await selectPickerOption(chat, "theme");
     await expect.poll(families).toEqual(initial);
@@ -221,21 +250,22 @@ suite.define(() => {
   });
 
   it.each([
-    ["claw", "Instrument Sans", "Instrument Sans", ["instrument-sans"]],
-    ["knot", "Geist", "Geist", ["geist"]],
-    ["dash", "DM Sans", "Fraunces", ["dm-sans", "fraunces"]],
-    ["absolutely", "Space Grotesk", "Lora", ["space-grotesk", "lora"]],
-    ["tide", "IBM Plex Sans", "IBM Plex Sans", ["ibm-plex-sans"]],
+    ["claw", "Instrument Sans", "Instrument Sans", ["instrument-sans"], "antialiased"],
+    ["knot", "Geist", "Geist", ["geist"], "antialiased"],
+    ["dash", "DM Sans", "Fraunces", ["dm-sans", "fraunces"], "auto"],
+    ["absolutely", "Space Grotesk", "Lora", ["space-grotesk", "lora"], "auto"],
+    ["tide", "IBM Plex Sans", "IBM Plex Sans", ["ibm-plex-sans"], "antialiased"],
     [
       "beacon",
       "Atkinson Hyperlegible Next",
       "Atkinson Hyperlegible Next",
       ["atkinson-hyperlegible"],
+      "antialiased",
     ],
-    ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"]],
+    ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
   ] as const)(
     "paints %s chrome and chat prose in its own faces",
-    async (theme, body, chat, faces) => {
+    async (theme, body, chat, faces, chatSmoothing) => {
       const { themeRequests, gateway, page } = await openThemedChat(theme, "dark");
       await page.goto(`${suite.server.baseUrl}chat`);
       await renderAssistantProse(gateway, page);
@@ -248,6 +278,9 @@ suite.define(() => {
           (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
         return {
           chatFontFamily: lastChat ? primary(getComputedStyle(lastChat).fontFamily) : null,
+          chatFontSmoothing: lastChat
+            ? getComputedStyle(lastChat).getPropertyValue("-webkit-font-smoothing")
+            : null,
           bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
           linkHrefs: [...document.querySelectorAll('link[id^="openclaw-typeface-"]')].map((link) =>
             link.getAttribute("href"),
@@ -259,6 +292,9 @@ suite.define(() => {
       expect(report.linkHrefs).toEqual(faces.map((face) => `/fonts/${face}.css`));
       expect(report.bodyFontFamily).toBe(body);
       expect(report.chatFontFamily).toBe(chat);
+      // Serif chat faces opt out of the app-wide `antialiased` thinning
+      // (applyChatFontSmoothing) so their hairlines stay crisp.
+      expect(report.chatFontSmoothing).toBe(chatSmoothing);
       expect(new Set(report.loaded)).toEqual(new Set([body, chat]));
       expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
 

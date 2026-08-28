@@ -45,7 +45,6 @@ const pluginSdkLightIncludePatternByFile = new Map(
   ]),
 );
 
-export const pluginSdkLightSourceFiles = pluginSdkLightEntries.map(({ source }) => source);
 export const pluginSdkLightTestFiles = pluginSdkLightEntries.map(({ test }) => test);
 
 export function isPluginSdkLightTarget(file) {

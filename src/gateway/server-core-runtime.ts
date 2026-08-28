@@ -6,8 +6,6 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
@@ -152,7 +150,7 @@ export async function startGatewayCoreRuntime(input: {
     broadcastPluginEvent,
     activateRuntimeSecrets,
   } = runtime;
-  let currentPluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
+  const pluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
   if (desktopSessionRegistry) {
     kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
   }
@@ -503,6 +501,8 @@ export async function startGatewayCoreRuntime(input: {
       runtimeConfig: params.nextConfig,
       activationSourceConfig: params.sourceConfig,
       env: params.env,
+      manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
+      discovery: pluginMetadataSnapshot?.discovery,
       ambientEnvTriggers,
     });
     const nextPluginLookUpTable = loadPluginLookUpTable({
@@ -510,6 +510,7 @@ export async function startGatewayCoreRuntime(input: {
       workspaceDir: pluginWorkspaceDir,
       env: params.env,
       activationSourceConfig: params.sourceConfig,
+      metadataSnapshot: pluginMetadataSnapshot,
       // Workers can be created after startup; reload planning needs the live durable set.
       workerProviderIds: workerEnvironmentStartup?.listDurableProviderIds() ?? [],
       ambientEnvTriggers,
@@ -583,12 +584,6 @@ export async function startGatewayCoreRuntime(input: {
           channelManager.setAmbientAutostartSuppressedChannelIds(
             nextAmbientAutostartSuppressedChannelIds,
           );
-          const nextPluginMetadataSnapshot = completePluginMetadataSnapshot({
-            snapshot: nextPluginLookUpTable,
-            config: params.sourceConfig,
-            env: params.env,
-            workspaceDir: pluginWorkspaceDir,
-          });
           loaded = prepareGatewayPluginLoad({
             cfg: params.nextConfig,
             activationSourceConfig: params.sourceConfig,
@@ -598,17 +593,10 @@ export async function startGatewayCoreRuntime(input: {
             hostServices: pluginHostServices,
             baseMethods,
             pluginLookUpTable: nextPluginLookUpTable,
-            pluginMetadataSnapshot: nextPluginMetadataSnapshot,
+            pluginMetadataSnapshot,
             ambientEnvTriggers,
             resolveGatewayContext: resolvePluginGatewayContext,
           });
-          setCurrentPluginMetadataSnapshot(nextPluginMetadataSnapshot, {
-            config: params.sourceConfig,
-            compatibleConfigs: [params.nextConfig],
-            env: params.env,
-            workspaceDir: pluginWorkspaceDir,
-          });
-          currentPluginMetadataSnapshot = nextPluginMetadataSnapshot;
           replaceAttachedPluginRuntime(loaded);
         }) ||
         !loaded
@@ -682,6 +670,6 @@ export async function startGatewayCoreRuntime(input: {
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
-    getPluginMetadataSnapshot: () => currentPluginMetadataSnapshot,
+    getPluginMetadataSnapshot: () => pluginMetadataSnapshot,
   };
 }

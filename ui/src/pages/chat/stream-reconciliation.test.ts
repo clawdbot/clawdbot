@@ -6,6 +6,8 @@ import {
   appendTerminalAssistantMessage,
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
+  visibleAssistantStreamParts,
+  visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
   discardStreamSegmentIndexes,
@@ -214,15 +216,15 @@ describe("stream reconciliation", () => {
 
     prunePersistedToolStreamMessages(state, new Set(["call_1"]));
 
-    expect(state.chatStreamSegments).toEqual([
-      { text: "keyed preamble", ts: 2, itemId: "preamble-1" },
+    expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toMatchObject([
+      { text: "keyed preamble", itemId: "preamble-1" },
     ]);
     expect(state.chatToolMessages).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
 
-  it("rebases surviving accumulated segments after discarding an earlier prefix", () => {
+  it("retains the cumulative baseline after discarding an earlier displayed prefix", () => {
     const state = makeIdleStreamState({
       chatStreamSegments: [
         {
@@ -242,12 +244,15 @@ describe("stream reconciliation", () => {
 
     discardStreamSegmentIndexes(state, [0]);
 
-    expect(state.chatStreamSegments).toEqual([
-      expect.objectContaining({
-        text: "After steer.",
-        afterBoundaryRunId: "steer-run",
-      }),
+    expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toMatchObject([
+      { text: "After steer.", afterBoundaryRunId: "steer-run" },
     ]);
+    expect(
+      visibleCurrentAssistantStreamTail(
+        { ...state, chatStream: "Before steer. After steer. Continued." },
+        () => false,
+      ),
+    ).toBe("Continued.");
   });
 
   it("prunes only the persisted run when sibling tools share a call id", () => {
@@ -272,9 +277,9 @@ describe("stream reconciliation", () => {
     expect(state.toolStreamById.has(foregroundIdentity)).toBe(true);
     expect(state.toolStreamById.has(backgroundIdentity)).toBe(false);
     expect(state.chatToolMessages).toEqual([foregroundMessage]);
-    expect(state.chatStreamSegments).toEqual([
-      { text: "before foreground", ts: 2, runId: "run-foreground", toolCallId },
-    ]);
+    expect(
+      visibleAssistantStreamParts(state, { ...visibleStreamOptions, includeCurrent: false }),
+    ).toMatchObject([{ text: "before foreground", runId: "run-foreground", toolCallId }]);
   });
 
   it("does not attribute an unscoped persisted result to either colliding run", () => {
@@ -337,7 +342,7 @@ describe("stream reconciliation", () => {
     expect(state.toolStreamOrder).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.chatToolMessages).toEqual([]);
-    expect(state.chatStreamSegments).toEqual([]);
+    expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toEqual([]);
   });
 
   it("does not treat a transcript message ID as a second content-block tool call", () => {

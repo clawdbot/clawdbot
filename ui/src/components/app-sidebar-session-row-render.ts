@@ -27,6 +27,7 @@ import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
 } from "./app-sidebar-session-catalogs.ts";
+import type { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import {
   rowDemandsVisibility,
@@ -41,7 +42,6 @@ import {
   describeSessionTrailingState,
   renderSessionLeadingState,
 } from "./session-leading-indicator.ts";
-import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
@@ -105,10 +105,7 @@ export interface SessionListHost {
     options?: ApplicationNavigationOptions,
   ) => void;
 
-  sessionPullRequestIndicatorState(
-    sessionKey: string,
-    worktreeId: string,
-  ): SessionPullRequestIndicatorState;
+  readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
   mainSessionRow(): { key: string } | null;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(sessionKey: string): boolean;
@@ -182,9 +179,10 @@ export function renderRecentSession(params: {
     narrationLine: host.sidebarNarrationLines.get(session.key),
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
-  const pullRequestState = session.worktreeId
-    ? host.sessionPullRequestIndicatorState(session.key, session.worktreeId)
-    : "none";
+  const initialPullRequest = session.pullRequest ?? display?.pullRequest;
+  const pullRequest = session.worktreeId
+    ? host.sessionPullRequests.summary(session.key, session.worktreeId, initialPullRequest)
+    : initialPullRequest;
   const ownerAttribution =
     host.sessionsStatusFilter === "archived"
       ? "archived"
@@ -223,7 +221,6 @@ export function renderRecentSession(params: {
   const { running, leadingIndicator, trailingIndicator, renderedOwnerId } =
     renderSessionLeadingState(
       session,
-      pullRequestState,
       ownerActor,
       ownerAttribution,
       ownerViewing,
@@ -235,7 +232,7 @@ export function renderRecentSession(params: {
     ? running && session.unread
       ? t("sessionsView.unread")
       : ""
-    : describeSessionTrailingState(session, pullRequestState);
+    : describeSessionTrailingState(session);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = trailingDescription ? sidebarSessionStateId(session.key) : undefined;
@@ -308,7 +305,7 @@ export function renderRecentSession(params: {
           label,
           session.archived === true,
           session.forkSource !== undefined,
-          session.pullRequest ?? display.pullRequest,
+          pullRequest,
         ]),
         marqueeLabelTemplate,
       )
@@ -382,7 +379,7 @@ export function renderRecentSession(params: {
               ${renderSessionRowBadges({
                 ...session,
                 hasComposerDraft: session.hasComposerDraft === true,
-                pullRequest: session.pullRequest ?? display?.pullRequest,
+                pullRequest,
                 hasApproval: sessionHasPendingApproval(
                   host.sessionData.approvalBadgeSnapshot(),
                   session.key,

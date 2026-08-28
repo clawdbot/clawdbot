@@ -269,7 +269,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const catalog = Object.freeze({
     search: async (query, options) => {
       const matches = await request("search", [query, options]);
-      return Object.freeze((Array.isArray(matches) ? matches : []).map((name) =>
+      return Object.freeze(matches.map((name) =>
         callableHandles.get(String(name))
       ).filter(Boolean));
     },

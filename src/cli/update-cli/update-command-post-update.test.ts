@@ -389,9 +389,15 @@ describe("successful update finalization ordering", () => {
     }
   });
 
-  it("removes inherited operator overrides from the managed install environment", async () => {
+  it("removes operator overrides and process identity from the managed install environment", async () => {
     const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
-    const managedEnvironment = { ANTHROPIC_API_KEY: "managed-provider", MANAGED_VALUE: "base" };
+    const managedEnvironment = {
+      ANTHROPIC_API_KEY: "managed-provider",
+      MANAGED_VALUE: "base",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
+    };
     const effectiveEnvironment = {
       ...managedEnvironment,
       ANTHROPIC_API_KEY: "drop-in-provider",
@@ -440,6 +446,9 @@ describe("successful update finalization ordering", () => {
       expect(installEnv?.OPENCLAW_PROFILE).toBeUndefined();
       expect(installEnv?.OPENCLAW_STATE_DIR).toBeUndefined();
       expect(installEnv?.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      expect(installEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+      expect(installEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
+      expect(installEnv?.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     } finally {
       vi.unstubAllEnvs();
     }

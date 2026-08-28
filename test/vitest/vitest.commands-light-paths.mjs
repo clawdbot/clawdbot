@@ -91,9 +91,6 @@ const commandsLightIncludePatternByFile = new Map(
   ),
 );
 
-export const commandsLightSourceFiles = commandsLightEntries.flatMap(({ source }) =>
-  source ? [source] : [],
-);
 export const commandsLightTestFiles = commandsLightEntries.map(({ test }) => test);
 
 export function isCommandsLightTarget(file) {

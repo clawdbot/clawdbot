@@ -403,14 +403,19 @@ describe("config view", () => {
       setShowAdvancedSettings,
     });
 
-    const ghost = queryRequired(collapsed.container, ".config-advanced-ghost", HTMLButtonElement);
-    expect(ghost.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "1 advanced setting hidden Show advanced",
+    const disclosure = queryRequired(
+      collapsed.container,
+      "details.config-advanced-disclosure",
+      HTMLDetailsElement,
     );
-    ghost.click();
+    expect(disclosure.open).toBe(false);
+    expect(queryRequired(disclosure, "summary", HTMLElement).textContent?.trim()).toBe(
+      "Advanced settings",
+    );
+    expect(normalizedText(collapsed.container)).not.toContain("Reload mode");
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event("toggle"));
     expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
-    expect(ghost.classList.contains("config-show-advanced")).toBe(true);
-    expect(ghost.getAttribute("aria-pressed")).toBe("false");
 
     const global = renderConfigView({
       schema,
@@ -419,13 +424,14 @@ describe("config view", () => {
       activeSection: "gateway",
       showAdvancedSettings: true,
     });
-    expect(global.container.querySelector(".config-advanced-ghost")).toBeNull();
-    const divider = queryRequired(global.container, ".config-advanced-divider", HTMLElement);
-    expect(divider.textContent?.replace(/\s+/g, " ").trim()).toBe("Advanced Hide Advanced");
-    const hide = queryRequired(divider, ".config-advanced-divider__toggle", HTMLButtonElement);
-    expect(hide.classList.contains("config-show-advanced")).toBe(true);
-    expect(hide.getAttribute("aria-pressed")).toBe("true");
-    hide.click();
+    const expandedDisclosure = queryRequired(
+      global.container,
+      "details.config-advanced-disclosure",
+      HTMLDetailsElement,
+    );
+    expect(expandedDisclosure.open).toBe(true);
+    expandedDisclosure.open = false;
+    expandedDisclosure.dispatchEvent(new Event("toggle"));
     expect(global.props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
     expect(normalizedText(global.container)).toContain("Reload mode");
 
@@ -436,7 +442,10 @@ describe("config view", () => {
       activeSection: "gateway",
       forceAdvancedSection: "gateway",
     });
-    expect(searchHit.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(searchHit.container, "details.config-advanced-disclosure", HTMLDetailsElement)
+        .open,
+    ).toBe(true);
     expect(normalizedText(searchHit.container)).toContain("Reload mode");
 
     const nested = document.createElement("div");
@@ -466,7 +475,9 @@ describe("config view", () => {
       }),
       nested,
     );
-    expect(nested.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(nested, "details.config-advanced-disclosure", HTMLDetailsElement).open,
+    ).toBe(true);
     expect(normalizedText(nested)).toContain("Tuning");
 
     const forcedPage = renderConfigView({
@@ -477,7 +488,10 @@ describe("config view", () => {
       forceShowAdvanced: true,
     });
     expect(findOptionalButtonByText(forcedPage.container, "Show advanced")).toBeUndefined();
-    expect(forcedPage.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(forcedPage.container, "details.config-advanced-disclosure", HTMLDetailsElement)
+        .open,
+    ).toBe(true);
     expect(normalizedText(forcedPage.container)).toContain("Reload mode");
   });
 
@@ -505,7 +519,7 @@ describe("config view", () => {
       activeSection: "diagnostics",
     });
     expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeUndefined();
-    expect(unhinted.container.querySelector(".config-advanced-ghost")).not.toBeNull();
+    expect(unhinted.container.querySelector("details.config-advanced-disclosure")).not.toBeNull();
 
     // An advanced hint in a different top-level section must not surface a
     // no-op toggle on a fully-common active section.
@@ -519,7 +533,7 @@ describe("config view", () => {
       activeSection: "gateway",
     });
     expect(findOptionalButtonByText(offScope.container, "Show advanced")).toBeUndefined();
-    expect(offScope.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(offScope.container.querySelector("details.config-advanced-disclosure")).toBeNull();
   });
 
   it("shows the form-unsafe banner only for populated unsupported paths", () => {
@@ -599,19 +613,14 @@ describe("config view", () => {
   }
 
   function sectionTabLabels(container: HTMLElement): Array<string | undefined> {
-    return Array.from(container.querySelectorAll(".config-toolbar wa-radio")).map((tab) =>
+    return Array.from(container.querySelectorAll(".config-toolbar .hub-tab")).map((tab) =>
       tab.textContent?.trim(),
     );
   }
 
   function selectConfigTab(container: HTMLElement, name: string) {
-    const group = queryRequired(
-      container,
-      ".config-toolbar wa-radio-group",
-      HTMLElement,
-    ) as HTMLElement & { value: string };
-    group.value = name;
-    group.dispatchEvent(new Event("change", { bubbles: true }));
+    const tab = queryRequired(container, `#config-sections-tab-${name}`, HTMLElement);
+    tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
   }
 
   function queryRequired<T extends Element>(
@@ -822,19 +831,37 @@ describe("config view", () => {
     );
 
     expect(sectionTabLabels(container)).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
-    // Segmented pills replaced the old tab strip and the inner panel chrome.
-    expect(container.querySelector("wa-tab-group")).toBeNull();
+    expect(container.querySelector("wa-tab-group.hub-tabs")).not.toBeNull();
     expect(container.querySelector(".config-layout")).toBeNull();
+    expect(container.querySelector("#config-section-panel")?.getAttribute("role")).toBe("tabpanel");
+    expect(container.querySelector("#config-section-panel")?.getAttribute("aria-labelledby")).toBe(
+      "config-sections-tab-root",
+    );
 
     selectConfigTab(container, "gateway");
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
 
     onSectionChange.mockClear();
-    const active = container.querySelector(".config-toolbar .settings-segmented__btn--active");
+    const active = container.querySelector(".config-toolbar .hub-tab[active]");
     expect(active?.textContent?.trim()).toBe("Settings");
     selectConfigTab(container, "agents");
     expect(onSectionChange).toHaveBeenCalledWith("agents");
 
+    render(
+      renderConfig({
+        ...baseProps(),
+        activeSection: "agents",
+        onSectionChange,
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", properties: {} },
+            agents: { type: "object", properties: {} },
+          },
+        },
+      }),
+      container,
+    );
     onSectionChange.mockClear();
     selectConfigTab(container, "root");
     expect(onSectionChange).toHaveBeenCalledWith(null);
@@ -1086,22 +1113,27 @@ describe("config view", () => {
         messages: { inbox: "smart" },
       },
     });
+    document.body.append(container);
 
-    const content = queryRequired(container, ".config-content", HTMLElement);
-    content.scrollTop = 280;
-    content.scrollLeft = 24;
-    content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
-      content.scrollTop = top ?? content.scrollTop;
-      content.scrollLeft = left ?? content.scrollLeft;
-    }) as typeof content.scrollTo;
+    try {
+      const content = queryRequired(container, ".config-content", HTMLElement);
+      content.scrollTop = 280;
+      content.scrollLeft = 24;
+      content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+        content.scrollTop = top ?? content.scrollTop;
+        content.scrollLeft = left ?? content.scrollLeft;
+      }) as typeof content.scrollTo;
 
-    selectConfigTab(container, "messages");
-    await Promise.resolve();
+      selectConfigTab(container, "messages");
+      await Promise.resolve();
 
-    expect(content["scrollTo"]).toHaveBeenCalledOnce();
-    expect(content["scrollTo"]).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
-    expect(content.scrollTop).toBe(0);
-    expect(content.scrollLeft).toBe(0);
+      expect(content["scrollTo"]).toHaveBeenCalledOnce();
+      expect(content["scrollTo"]).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+      expect(content.scrollTop).toBe(0);
+      expect(content.scrollLeft).toBe(0);
+    } finally {
+      container.remove();
+    }
   });
 
   it("resets config content scroll when switching from form to raw mode", async () => {
@@ -1151,6 +1183,28 @@ describe("config view", () => {
     });
 
     expect(sectionTabLabels(container)).toEqual(["Channels", "Messages"]);
+  });
+
+  it("hides contextual section help when the page owns its introduction", () => {
+    const { container } = renderConfigView({
+      activeSection: "messages",
+      showRootTab: false,
+      showSectionDocs: false,
+      includeSections: ["messages", "tts"],
+      schema: {
+        type: "object",
+        properties: {
+          messages: { type: "object", properties: {} },
+          tts: { type: "object", properties: {} },
+        },
+      },
+      uiHints: {
+        messages: { docsUrl: "https://docs.openclaw.ai/concepts/messages" },
+        tts: { docsUrl: "https://docs.openclaw.ai/tts" },
+      },
+    });
+
+    expect(container.querySelector(".settings-section__help-button")).toBeNull();
   });
 
   it("does not normalize off-scope schema sections for scoped config tabs", () => {
@@ -1260,9 +1314,11 @@ describe("config view", () => {
     });
 
     expect(
-      [...container.querySelectorAll(".settings-section__heading")].map((title) =>
-        title.textContent?.trim(),
-      ),
+      [
+        ...container.querySelectorAll(
+          ".settings-section > .settings-section__header .settings-section__heading",
+        ),
+      ].map((title) => title.textContent?.trim()),
     ).toEqual(["Authentication", "Gateway"]);
   });
 

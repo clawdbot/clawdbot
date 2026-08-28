@@ -165,10 +165,9 @@ function isToolErrorOutput(outputText: string | undefined): boolean {
 }
 
 export function isToolCardError(card: ToolCard): boolean {
-  if (card.isError !== undefined) {
-    return card.isError;
-  }
-  return isToolErrorOutput(card.outputText);
+  // Progress can contain error-shaped text; only a result may imply failure.
+  const canInferFailure = card.live !== true || card.completed === true;
+  return card.isError ?? (canInferFailure && isToolErrorOutput(card.outputText));
 }
 
 export function resolveToolCardOutcome(

@@ -10,6 +10,8 @@
     "../../src/plugin-sdk/**/*.test.tsx",
     "../../src/skills/**/*.test.ts",
     "../../src/skills/**/*.test.tsx",
+    "../../src/logging/**/*.test.ts",
+    "../../src/logging/**/*.test.tsx",
     "../../src/secrets/**/*.test.ts",
     "../../src/secrets/**/*.test.tsx",
     "../../src/shared/**/*.test.ts",

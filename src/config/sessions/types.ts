@@ -686,6 +686,13 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   activeWriterRunId?: string;
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
+  /** Authorized worktree intent awaiting preparation by an admitted turn. */
+  pendingWorktree?: {
+    workspace?: string;
+    name?: string;
+    baseRef?: string;
+    titleSource: string;
+  };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   mainRestartRecovery?: MainRestartRecoveryState;

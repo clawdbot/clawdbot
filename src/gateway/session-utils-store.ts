@@ -21,12 +21,9 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import {
-  resolveAgentMainSessionKey,
-  type SessionEntry,
-  type SessionScope,
-} from "../config/sessions.js";
+import { resolveAgentMainSessionKey, type SessionScope } from "../config/sessions.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
@@ -154,7 +151,7 @@ function loadSessionEntryWithMode(
   const store = target.store;
   const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
-  const entry =
+  const entry: SessionEntry | undefined =
     readOnly && opts?.clone !== false && canonicalMatch?.entry
       ? structuredClone(canonicalMatch.entry)
       : canonicalMatch?.entry;

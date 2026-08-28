@@ -679,7 +679,7 @@ describe("DraftSubmissionFlow", () => {
     { methods: ["sessions.create"], allowed: false, worktree: false },
     { methods: ["projects.add"], allowed: false, worktree: false },
     { methods: ["projects.add", "sessions.create"], allowed: true, worktree: false },
-    { methods: ["sessions.create"], allowed: false, worktree: true },
+    { methods: ["sessions.create"], allowed: true, worktree: true },
   ])("checks remote-project access with worktree=$worktree", ({ methods, allowed, worktree }) => {
     const { flow, place } = createDraftFixture({ methods });
     place.selectRemoteProject({
@@ -696,8 +696,7 @@ describe("DraftSubmissionFlow", () => {
 
   it.each([
     { scenario: "an empty session", message: "", worktree: false },
-    { scenario: "a prompted worktree", message: "inspect the project", worktree: true },
-    { scenario: "an attachment-only worktree", message: "", worktree: true },
+    { scenario: "an empty worktree session", message: "", worktree: true },
   ])("materializes a remote project before $scenario", async ({ message, worktree }) => {
     let materializeProject!: (project: { id: string }) => void;
     const materializedProject = new Promise<{ id: string }>((resolve) => {
@@ -722,19 +721,8 @@ describe("DraftSubmissionFlow", () => {
       place.toggleWorktree();
     }
     flow.setMessage(message);
-    if (worktree && !message) {
-      flow.attachmentDraft.replace([
-        {
-          id: "attachment-1",
-          dataUrl: "data:text/plain;base64,SGk=",
-          mimeType: "text/plain",
-          fileName: "note.txt",
-        },
-      ]);
-    } else if (!message) {
-      // Empty-draft button gating is independent from the remote-project submission contract.
-      vi.spyOn(flow, "canSubmit").mockReturnValue(true);
-    }
+    // Empty-draft button gating is independent from the remote-project submission contract.
+    vi.spyOn(flow, "canSubmit").mockReturnValue(true);
 
     const submitted = flow.submit();
     await vi.waitFor(() =>
@@ -780,9 +768,11 @@ describe("DraftSubmissionFlow", () => {
   });
 
   it.each([
-    { scenario: "an initial prompt and attachments", message: "keep this prompt" },
-    { scenario: "attachments without an initial prompt", message: "" },
-  ])("admits a remote project once with $scenario", async ({ message }) => {
+    { scenario: "an initial prompt and attachments", message: "keep this prompt", worktree: false },
+    { scenario: "attachments without an initial prompt", message: "", worktree: false },
+    { scenario: "a prompted worktree", message: "keep this prompt", worktree: true },
+    { scenario: "an attachment-only worktree", message: "", worktree: true },
+  ])("admits a remote project once with $scenario", async ({ message, worktree }) => {
     const { context, flow, place, request } = createDraftFixture();
     let admitSession!: (value: { key: string; initialRun: { status: "idle" } }) => void;
     vi.mocked(context.sessions.createResult).mockImplementationOnce(
@@ -798,6 +788,9 @@ describe("DraftSubmissionFlow", () => {
       identity: "openclaw/openclaw",
       cloneUrl: "https://github.com/openclaw/openclaw.git",
     });
+    if (worktree) {
+      place.toggleWorktree();
+    }
     flow.setMessage(message);
     flow.attachmentDraft.replace([
       {
@@ -821,6 +814,9 @@ describe("DraftSubmissionFlow", () => {
       { reconciliation: "background" },
     );
     expect(request).not.toHaveBeenCalledWith("projects.add", expect.anything(), expect.anything());
+    expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]?.worktree).toBe(
+      worktree || undefined,
+    );
 
     admitSession({ key: "agent:main:remote-project", initialRun: { status: "idle" } });
     await Promise.all([submitted, duplicate]);

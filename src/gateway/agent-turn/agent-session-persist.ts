@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
+import {
+  getMainSessionRecoveryRetryCount,
+  transitionMainSessionRecovery,
+} from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import {
@@ -212,7 +215,7 @@ export async function persistAgentSessionPhase(params: {
               (internalFreshEntry.mainRestartRecovery?.tombstone ||
                 (internalFreshEntry.status === "running" &&
                   internalFreshEntry.abortedLastRun === true &&
-                  (internalFreshEntry.mainRestartRecovery?.chargedAttempts ?? 0) >=
+                  getMainSessionRecoveryRetryCount(internalFreshEntry.mainRestartRecovery) >=
                     MAX_RECOVERY_RETRIES))
             ) {
               restartRecoveryReservationConflict =

@@ -5,10 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Covers plugin registry assembly, contribution lookup, and reset behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -399,6 +400,30 @@ describe("plugin registry facade", () => {
         matches: "tools",
       }),
     ).toEqual(["demo"]);
+
+    const policies: Array<[OpenClawConfig["plugins"], boolean]> = [
+      [undefined, true],
+      [{ enabled: false }, false],
+      [{ deny: ["demo"] }, false],
+      [{ allow: ["other"] }, false],
+      [{ allow: ["demo"] }, true],
+      [{ entries: { demo: { enabled: false } } }, false],
+      [{ entries: { demo: { enabled: true } } }, true],
+    ];
+    for (const matches of ["demo-alias", (id: string) => id === "demo-alias"]) {
+      for (const [plugins, enabled] of policies) {
+        const params = {
+          lookUpTable,
+          ...(plugins ? { config: { plugins } } : {}),
+          contribution: "modelCatalogProviders" as const,
+          matches,
+        };
+        expect(resolvePluginContributionOwners(params)).toEqual(enabled ? ["demo"] : []);
+        expect(resolvePluginContributionOwners({ ...params, includeDisabled: true })).toEqual([
+          "demo",
+        ]);
+      }
+    }
   });
 
   it("normalizes plugin config ids through registry contribution aliases", () => {

@@ -72,6 +72,8 @@ import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
+const realDelay = delay;
+const realNow = Date.now;
 
 type RunTaskkill = NonNullable<
   NonNullable<Parameters<typeof signalProcessGroup>[2]>["runTaskkill"]
@@ -968,6 +970,7 @@ describe("kitchen-sink RPC caller loading", () => {
     const scriptPath = path.join(root, "term-zero-grandchild.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
     const grandchildReadyPath = path.join(root, "grandchild.ready");
+    const parentPidPath = path.join(root, "parent.pid");
     let grandchildPid = 0;
     const grandchildScript = [
       "const fs = require('node:fs');",
@@ -986,45 +989,69 @@ const grandchild = spawn(process.execPath, [
   "-e",
   ${JSON.stringify(grandchildScript)},
 ], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
-fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => process.exit(0));
+fs.writeFileSync(process.argv[4], String(process.pid));
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
 setInterval(() => {}, 1000);
 `,
       "utf8",
     );
 
+    // Readiness polling uses real time; command deadlines advance only after
+    // the real processes have installed their signal handlers.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const runPromise = runCommand(
       process.execPath,
-      [scriptPath, grandchildPidPath, grandchildReadyPath],
+      [scriptPath, grandchildPidPath, grandchildReadyPath, parentPidPath],
       {
-        timeoutKillGraceMs: 2_000,
-        timeoutMs: 1_500,
+        timeoutKillGraceMs: 100,
+        timeoutMs: 100,
       },
     );
+    let settled = false;
     const runErrorPromise = runPromise.then(
       () => {
-        throw new Error("expected timed command to reject");
+        settled = true;
       },
-      (error: unknown) => error,
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
     );
+    const finishCommand = () =>
+      waitFor(async () => {
+        await vi.runOnlyPendingTimersAsync();
+        return settled;
+      });
 
     try {
       await waitFor(() => existsSync(grandchildPidPath));
-      await waitFor(() => existsSync(grandchildReadyPath));
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+      const parentPid = Number.parseInt(readText(parentPidPath), 10);
+      await waitFor(() => existsSync(grandchildReadyPath));
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
+      await vi.advanceTimersByTimeAsync(100);
+      await waitFor(() => !isProcessAlive(parentPid));
+      await finishCommand();
       const runError = await runErrorPromise;
       expect(runError).toBeInstanceOf(Error);
-      expect((runError as Error).message).toContain("timed out after 1500ms");
+      expect((runError as Error).message).toContain("timed out after 100ms");
+      expect(runError).toMatchObject({ status: 0, signal: null });
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
-      await runPromise.catch(() => {});
-      if (grandchildPid && isProcessAlive(grandchildPid)) {
-        process.kill(grandchildPid, "SIGKILL");
+      try {
+        // A readiness/assertion failure must still fire the deadline and kill grace.
+        await finishCommand();
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        cleanupTempDirs(tempDirs);
       }
-      cleanupTempDirs(tempDirs);
     }
   });
 
@@ -2225,13 +2252,13 @@ function readText(file: string) {
   return readFileSync(file, "utf8");
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
+async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 3_000) {
+  const startedAt = realNow();
+  while (!(await condition())) {
+    if (realNow() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await realDelay(25);
   }
 }
 
