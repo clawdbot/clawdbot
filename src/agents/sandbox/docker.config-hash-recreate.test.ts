@@ -281,6 +281,31 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     await loadFreshDockerModuleForTest();
   });
 
+  it("passes the configured runtime only to Docker tool containers", async () => {
+    const workspaceDir = tempDirs.make("openclaw-docker-runtime-");
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    cfg.docker.runtime = "sysbox-runc";
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const dockerCreate = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      scopeKey: "docker-runtime",
+    });
+    expect(collectDockerFlagValues(dockerCreate.args, "--runtime")).toEqual(["sysbox-runc"]);
+
+    spawnState.calls.length = 0;
+    const podmanCreate = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      scopeKey: "podman-runtime",
+      engine: PODMAN_SANDBOX_ENGINE,
+    });
+    expect(collectDockerFlagValues(podmanCreate.args, "--runtime")).toEqual([]);
+  });
+
   it("serializes concurrent provisioning for one container", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);

@@ -14,6 +14,8 @@ export type SandboxDockerSettings = {
   tmpfs?: string[];
   /** Container network mode (bridge|none|custom). */
   network?: string;
+  /** Approved Docker runtime for this sandbox container. */
+  runtime?: "runc" | "sysbox-runc";
   /** Container user (uid:gid). */
   user?: string;
   /** Drop Linux capabilities. */

@@ -116,6 +116,34 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("accepts approved Docker sandbox runtimes and rejects unknown runtimes", () => {
+    const valid = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              runtime: "sysbox-runc",
+            },
+          },
+        },
+      },
+    });
+    expect(valid.ok).toBe(true);
+
+    const invalid = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              runtime: "untrusted-runtime",
+            },
+          },
+        },
+      },
+    });
+    expect(invalid.ok).toBe(false);
+  });
+
   it("rejects empty Docker GPU passthrough config", () => {
     const res = validateConfigObject({
       agents: {

@@ -103,6 +103,14 @@ The Docker backend runs tools locally through the `docker` CLI. Its selection an
 
 Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:bookworm-slim`.
 
+To select an installed Docker runtime for a specific Docker sandbox, set
+`agents.defaults.sandbox.docker.runtime` (or a per-agent override). The
+allowlist is `runc` and `sysbox-runc`; when omitted, Docker uses its existing
+default runtime. This setting is passed to Docker as `--runtime` and does not
+enable privileged mode, extra capabilities, devices, or host Docker-socket
+mounts. It applies only to Docker backend tool containers; Podman and sandbox
+browser containers ignore it.
+
 This explicit configuration keeps the agent workspace read-only and preserves
 the default restricted runtime posture:
 
