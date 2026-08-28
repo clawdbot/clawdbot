@@ -21,6 +21,7 @@ import * as path from "node:path";
 import * as v8 from "node:v8";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
+import { parseNonNegativeInt, parsePositiveInt } from "./lib/numeric-options.mjs";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
 type Abortable = <T>(signal: AbortSignal, promise: Promise<T>) => Promise<T>;
@@ -77,11 +78,11 @@ function parseArgs(argv: string[]): Options {
     }
     switch (arg) {
       case "--iters":
-        opts.iters = parsePositiveInt(next, arg);
+        opts.iters = parsePositiveInt(readValue(next, arg), arg);
         i += 1;
         break;
       case "--batches":
-        opts.batches = parsePositiveInt(next, arg);
+        opts.batches = parsePositiveInt(readValue(next, arg), arg);
         i += 1;
         break;
       case "--snap-dir":
@@ -106,15 +107,15 @@ function parseArgs(argv: string[]): Options {
         break;
       }
       case "--max-rss-growth-mb":
-        opts.maxRssGrowthMb = parseNonNegativeInt(next, arg);
+        opts.maxRssGrowthMb = parseNonNegativeInt(readValue(next, arg), arg);
         i += 1;
         break;
       case "--max-tracked-retention":
-        opts.maxTrackedRetention = parseNonNegativeInt(next, arg);
+        opts.maxTrackedRetention = parseNonNegativeInt(readValue(next, arg), arg);
         i += 1;
         break;
       case "--scope-bytes":
-        opts.scopeBytes = parsePositiveInt(next, arg);
+        opts.scopeBytes = parsePositiveInt(readValue(next, arg), arg);
         i += 1;
         break;
       case "--quiet":
@@ -129,48 +130,7 @@ function parseArgs(argv: string[]): Options {
         fail(`Unknown arg: ${arg}`);
     }
   }
-  if (!Number.isFinite(opts.iters) || opts.iters <= 0) {
-    fail("--iters must be > 0");
-  }
-  if (!Number.isFinite(opts.batches) || opts.batches <= 0) {
-    fail("--batches must be > 0");
-  }
   return opts;
-}
-
-function parsePositiveInt(raw: string | undefined, flag: string): number {
-  const value = parseStrictInt(raw, flag, "positive");
-  if (value <= 0) {
-    fail(`${flag} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw: string | undefined, flag: string): number {
-  const value = parseStrictInt(raw, flag, "non-negative");
-  if (value < 0) {
-    fail(`${flag} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parseStrictInt(
-  raw: string | undefined,
-  flag: string,
-  label: "positive" | "non-negative",
-): number {
-  const text = (raw ?? "").trim();
-  if (!text || text.startsWith("-")) {
-    fail(`${flag} requires a value`);
-  }
-  if (!/^\d+$/u.test(text)) {
-    fail(`${flag} must be a ${label} integer`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value)) {
-    fail(`${flag} must be a ${label} integer`);
-  }
-  return value;
 }
 
 function printUsage(): void {
@@ -321,7 +281,12 @@ function fmtBytes(bytes: number): string {
 }
 
 async function main(): Promise<void> {
-  const opts = parseArgs(process.argv.slice(2));
+  let opts: Options;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
   if (opts.mode === "production") {
     await loadProductionAbortable();
   }
