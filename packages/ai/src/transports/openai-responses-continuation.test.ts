@@ -171,12 +171,13 @@ describe("OpenAI Responses continuation", () => {
       lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
     };
     // The exact reshape normalizeOpenAIResponsesToolCallIds would have
-    // produced for rawCallId (verified against
-    // normalizeOpenAIResponsesFunctionCallId directly) -- not a
-    // hand-approximated shape, so the restore-to-raw path under test
-    // actually has to recognize it via the real transform, not a lucky
-    // string match.
-    const reshapedCallId = "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_d7218567a7";
+    // produced for the paired "rawCallId|fc_1" (verified against
+    // normalizeOpenAIResponsesFunctionCallId directly, then split back to
+    // just the call_id half the way the request builder splits it onto the
+    // wire) -- not a hand-approximated shape, so the restore-to-raw path
+    // under test actually has to recognize it via the real transform, not a
+    // lucky string match.
+    const reshapedCallId = "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_f_3b92d47627";
     const replayedToolCall = {
       ...toolCall,
       id: "fc_1",
