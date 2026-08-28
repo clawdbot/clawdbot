@@ -662,10 +662,17 @@ QuickJS-WASI snapshot/restore is the resume mechanism:
 Snapshots are runtime state, not user artifacts: they live only in an
 in-process map (no database or disk write), are size-limited, expire, and are
 scoped to the run and session that created them.
-Canceling the owning run or tool call, or closing its tool catalog at attempt
-teardown, immediately releases parked snapshots and cancels their pending host
-work, even if no `wait` call follows. Catalog description refreshes and client
-tool additions do not close the owner.
+One cell owner spans initial execution, suspension, and every resume. Canceling
+the owning run or current tool call, or closing its tool catalog at attempt
+teardown, cancels active workers and pending host work and releases parked
+snapshots, even if no `wait` call follows. Catalog description refreshes and
+client tool additions do not close the owner. An external operation that ignores
+cancellation may still finish, but cannot resume the closed guest, emit later
+guest output, or start another guest tool call.
+
+The process-wide limit of 64 slots applies to suspended cells and their reserved
+resume slots. A resume keeps its slot until it completes or parks again; an
+initial execution that completes without suspending does not consume a slot.
 
 `wait` fails (as a `failed` result) when:
 

@@ -10,6 +10,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { estimateTranscriptPromptTokens } from "../config/sessions/session-accessor.sqlite-parent-fork.js";
 import { projectChatDisplayMessages } from "../gateway/chat-display-projection.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { buildExecApprovalPendingToolResult } from "./bash-tools.exec-host-shared.js";
 import { disposeAllCodeModeRuns } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
@@ -29,6 +30,7 @@ import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js
 import { SessionManager } from "./sessions/session-manager.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -459,31 +461,41 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     }
   });
 
-  it("preserves the initiating sessions_yield result across its run-owner handoff", async () => {
+  it("keeps direct sessions_yield handoff successful while closing sibling Code Mode cells", async () => {
     const harness = createSubscribedCodeModeHarness({ name: "yield-handoff" });
     const handoffReason = { code: "sessions_yield", turnHandoff: true } as const;
-    const target = pluginToolWithExecute(
-      "sessions_yield",
-      "Hand off the current turn",
-      async () => {
-        harness.runAbortController.abort(handoffReason);
-        return jsonResult({ status: "yielded" });
-      },
+    const onYield = vi.fn(() => harness.runAbortController.abort(handoffReason));
+    const target = wrapToolWithAbortSignal(
+      createSessionsYieldTool({
+        sessionId: harness.sessionId,
+        claimYield: () => true,
+        onYield,
+      }),
+      harness.runAbortController.signal,
     );
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
-
+    const surface = applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
     try {
-      const result = resultDetails(
-        await expectDefined(harness.tools[0], "Code Mode exec test invariant").execute(
-          "code-call-yield-handoff",
-          { code: "return await sessions_yield({});" },
-        ),
+      const parked = resultDetails(
+        await harness.tools[0]!.execute("sibling-cell", {
+          code: "await yield_control(); return 'unreachable';",
+        }),
       );
-
-      expect(result).toMatchObject({ status: "completed", value: { status: "yielded" } });
-      expect(target.execute).toHaveBeenCalledOnce();
-      expect(countActiveToolExecutions(harness.runId)).toBe(0);
+      expect(parked.status).toBe("waiting");
+      expect(
+        harness.catalogRef.current?.entries.some((entry) => entry.name === "sessions_yield"),
+      ).toBe(false);
+      const direct = expectDefined(
+        surface.tools.find((tool) => tool.name === "sessions_yield"),
+        "direct handoff tool",
+      );
+      expect(resultDetails(await direct.execute("yield-handoff", {}))).toMatchObject({
+        status: "yielded",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
       expect(testing.activeRuns.size).toBe(0);
+      await expect(
+        harness.tools[1]!.execute("closed-sibling", { runId: parked.runId }),
+      ).rejects.toThrow(/unavailable|expired/);
     } finally {
       harness.dispose();
     }
@@ -567,11 +579,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           await exec.execute(
             "transfer-exec",
             {
-              code: `const timer = setTimeout(() => {}, 60_000);
-                await yield_control("first");
+              code: `await yield_control("first");
                 await yield_control("second");
                 await yield_control("third");
-                clearTimeout(timer);
                 return "done";`,
             },
             controller.signal,
@@ -590,10 +600,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
 
         for (let index = 0; index < 2; index += 1) {
           const previous = expectDefined(testing.activeRuns.get(runId), "previous snapshot");
-          const staleClose = expectDefined(
-            owner.catalogRef.onDispose?.values().next().value,
-            "parked owner subscription",
-          );
+          const previousController = controller;
           controller = new AbortController();
           result = resultDetails(
             await wait.execute(`transfer-wait-${index}`, { runId }, controller.signal),
@@ -601,11 +608,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           expect(result).toMatchObject({ status: "waiting", runId });
           const replacement = expectDefined(testing.activeRuns.get(runId), "replacement snapshot");
           expect(replacement).not.toBe(previous);
-          staleClose();
+          previousController.abort();
           expect(testing.activeRuns.get(runId)).toBe(replacement);
-          expect(getEventListeners(previous.ownerSignal, "abort")).toHaveLength(0);
-          expect(previous.ownerSignal.aborted).toBe(true);
-          expect(getEventListeners(replacement.ownerSignal, "abort")).toHaveLength(1);
+          expect(replacement.owner).toBe(previous.owner);
+          expect(replacement.owner.signal.aborted).toBe(false);
           expect(owner.catalogRef.onDispose?.size).toBe(1);
         }
 
@@ -624,8 +630,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         expect(testing.activeRuns.size).toBe(0);
         expect(testing.resumingRunIds.size).toBe(0);
         await Promise.all(pending.map((entry) => entry.promise));
-        expect(getEventListeners(finalState.ownerSignal, "abort")).toHaveLength(0);
-        expect(finalState.ownerSignal.aborted).toBe(true);
+        expect(getEventListeners(finalState.owner.signal, "abort")).toHaveLength(0);
+        expect(finalState.owner.signal.aborted).toBe(true);
         expect(owner.catalogRef.onDispose?.size ?? 0).toBe(0);
       } finally {
         clearToolSearchCatalog(owner);
