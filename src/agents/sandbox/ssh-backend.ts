@@ -95,7 +95,9 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
   async removeRuntime({ entry, config, agentId }) {
     const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
     const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
-    if (cfg.backend !== "ssh" || !cfg.ssh.target) {
+    const target = entry.cleanupMetadata?.target ?? cfg.ssh.target;
+    const workspaceRoot = entry.cleanupMetadata?.workspaceRoot ?? cfg.ssh.workspaceRoot;
+    if (!target) {
       return;
     }
     assertSshSandboxSecretOwnerAvailable({
@@ -103,10 +105,10 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
       scope: cfg.scope,
       agentId: effectiveAgentId,
     });
-    const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
+    const runtimePaths = resolveSshRuntimePaths(workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
-      target: cfg.ssh.target,
+      target,
     });
     try {
       const result = await runSshSandboxCommand({
@@ -193,6 +195,10 @@ class SshSandboxBackendImpl {
       env: this.params.createParams.cfg.docker.env,
       configLabel: this.params.target,
       configLabelKind: "Target",
+      cleanupMetadata: {
+        target: this.params.target,
+        workspaceRoot: this.params.createParams.cfg.ssh.workspaceRoot,
+      },
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
