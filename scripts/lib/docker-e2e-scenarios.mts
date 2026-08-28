@@ -480,14 +480,17 @@ export const mainLanes: DockerE2eLane[] = [
     npmOnboardLaneOptions,
   ),
   // Prerelease validation must pair frozen core bytes with matching target plugin bytes.
-  // Keep the registry-backed lanes above unchanged for published-package proof.
+  // The lanes above leave channel source selection to the published catalog.
   npmLane(
     "npm-onboard-discord-candidate-channel-agent",
     liveDockerScriptCommand(
       "e2e/npm-onboard-channel-agent-docker.sh",
       "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
     ),
-    npmOnboardLaneOptions,
+    {
+      ...npmOnboardLaneOptions,
+      prepublishPluginPackages: ["@openclaw/codex", "@openclaw/discord"],
+    },
   ),
   npmLane(
     "npm-onboard-slack-candidate-channel-agent",
@@ -495,7 +498,10 @@ export const mainLanes: DockerE2eLane[] = [
       "e2e/npm-onboard-channel-agent-docker.sh",
       "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
     ),
-    npmOnboardLaneOptions,
+    {
+      ...npmOnboardLaneOptions,
+      prepublishPluginPackages: ["@openclaw/codex", "@openclaw/slack"],
+    },
   ),
   npmLane(
     "release-user-journey",
