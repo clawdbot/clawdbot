@@ -1,5 +1,5 @@
 // Tsdown config tests protect package artifact build contracts.
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -137,7 +137,7 @@ describe("tsdown config", () => {
           relocatedRoot,
           worker ? "output/dist/native" : "dist/native",
         );
-        const probe = (
+        const probe = async (
           name: string,
           mode: string,
           outcome: string,
@@ -145,51 +145,74 @@ describe("tsdown config", () => {
         ) => {
           const rootDir = path.join(relocatedRoot, name);
           fs.mkdirSync(rootDir);
-          const result = spawnSync(
-            process.execPath,
-            [
-              "--input-type=module",
-              "--eval",
-              FS_SAFE_CALLER_PROBE,
-              entry,
-              observer,
-              rootDir,
-              mode,
-              outcome,
-            ],
-            {
-              cwd: relocatedRoot,
-              encoding: "utf8",
-              timeout: 30_000,
-              env: {
-                PATH: process.env.PATH,
-                SystemRoot: process.env.SystemRoot,
-                WINDIR: process.env.WINDIR,
-                HOME: temporaryRoot,
-                USERPROFILE: temporaryRoot,
-                TMPDIR: temporaryRoot,
-                TMP: temporaryRoot,
-                TEMP: temporaryRoot,
-                ...override,
+          const result = await new Promise<{
+            error: Error | null;
+            status: number | null;
+            stdout: string;
+            stderr: string;
+          }>((resolve) => {
+            const child = execFile(
+              process.execPath,
+              [
+                "--input-type=module",
+                "--eval",
+                FS_SAFE_CALLER_PROBE,
+                entry,
+                observer,
+                rootDir,
+                mode,
+                outcome,
+              ],
+              {
+                cwd: relocatedRoot,
+                encoding: "utf8",
+                timeout: 30_000,
+                env: {
+                  PATH: process.env.PATH,
+                  SystemRoot: process.env.SystemRoot,
+                  WINDIR: process.env.WINDIR,
+                  HOME: temporaryRoot,
+                  USERPROFILE: temporaryRoot,
+                  TMPDIR: temporaryRoot,
+                  TMP: temporaryRoot,
+                  TEMP: temporaryRoot,
+                  ...override,
+                },
               },
-            },
-          );
-          expect(result.error, name).toBeUndefined();
+              (error, stdout, stderr) => resolve({ error, status: child.exitCode, stdout, stderr }),
+            );
+          });
+          expect(result.error, name).toBeNull();
           expect(result.status, `${name}\n${result.stdout}\n${result.stderr}`).toBe(0);
         };
-        for (const key of ["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"]) {
-          probe(key, "require", "native", { [key]: "require" });
-        }
-        probe("shared-config", "configured", "native");
-        probe("default", "off", "fallback");
+        const joinProbes = async (probes: Promise<void>[]) => {
+          // Every child must close before assets are removed or bundles disposed,
+          // including when a sibling probe fails.
+          const results = await Promise.allSettled(probes);
+          const failures = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
+          );
+          if (failures.length) {
+            throw new AggregateError(failures, "Native fs-safe probes failed");
+          }
+        };
+        await joinProbes([
+          ...["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"].map((key) =>
+            probe(key, "require", "native", { [key]: "require" }),
+          ),
+          probe("shared-config", "configured", "native"),
+          probe("default", "off", "fallback"),
+        ]);
         const assets = nativeAssetInventory(nativeSource);
         expect(assets).toHaveLength(7);
         expect(nativeAssetInventory(nativeOutput)).toEqual(assets);
         fs.rmSync(nativeOutput, { recursive: true });
-        probe("missing", "require", "missing", { FS_SAFE_NATIVE_MODE: "require" });
-        for (const mode of ["off", "auto"]) {
-          probe(mode, mode, "fallback", { FS_SAFE_NATIVE_MODE: mode });
-        }
+        await joinProbes([
+          probe("missing", "require", "missing", { FS_SAFE_NATIVE_MODE: "require" }),
+          ...["off", "auto"].map((mode) =>
+            probe(mode, mode, "fallback", { FS_SAFE_NATIVE_MODE: mode }),
+          ),
+        ]);
       } finally {
         for (const bundle of bundles) {
           await bundle[Symbol.asyncDispose]();
