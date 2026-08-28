@@ -4,6 +4,7 @@ import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/sha
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
@@ -160,6 +161,7 @@ export async function runPostCorePluginConvergence(params: {
    * map is what gets persisted and returned via `installRecords`.
    */
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<PostCoreConvergenceResult> {
   const env: NodeJS.ProcessEnv = {
     ...params.env,
@@ -189,6 +191,7 @@ export async function runPostCorePluginConvergence(params: {
     cfg: params.cfg,
     env,
     ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
+    ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
   });
 
   const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({

@@ -20,6 +20,7 @@ import {
   type PluginUpdateOutcome,
 } from "../../plugins/update.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import {
   convergenceWarningsToOutcomes,
@@ -200,6 +201,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   const warnings: PostUpdatePluginWarning[] = [];
+  const capabilityConsent = resolvePluginCapabilityConsentCliOptions({
+    acceptCapabilities: params.opts.acceptCapabilities,
+    action: "update",
+    allowPrompt: !params.opts.json,
+  });
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
   const pluginUpdateChannel = params.channel;
@@ -217,6 +223,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       workspaceDir: params.root,
     }),
     logger: pluginLogger,
+    ...capabilityConsent,
   });
   for (const error of syncResult.summary.errors) {
     warnings.push(createPostUpdatePluginWarning({ reason: error }));
@@ -290,6 +297,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       disableOnFailure: true,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
+      ...capabilityConsent,
     });
     pluginConfig = repairResult.config;
     pluginsChanged ||= repairResult.changed;
@@ -315,6 +323,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
+    ...capabilityConsent,
   });
   pluginConfig = npmResult.config;
   pluginsChanged ||= npmResult.changed;
@@ -368,6 +377,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     cfg: pluginConfig,
     env: process.env,
     baselineInstallRecords: convergenceBaselineRecords,
+    ...capabilityConsent,
   });
   for (const change of convergence.changes) {
     if (!params.opts.json) {

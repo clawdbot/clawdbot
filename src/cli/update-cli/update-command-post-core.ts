@@ -311,6 +311,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   if (params.opts.yes) {
     argv.push("--yes");
   }
+  if (params.opts.acceptCapabilities) {
+    argv.push("--accept-capabilities");
+  }
   if (params.opts.timeout) {
     argv.push("--timeout", params.opts.timeout);
   }

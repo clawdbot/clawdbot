@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
+import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import {
@@ -59,6 +60,7 @@ export async function syncPluginsForUpdateChannel(params: {
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
@@ -205,6 +207,9 @@ export async function syncPluginsForUpdateChannel(params: {
           config: params.config,
           ...(bridge.clawhubUrl ? { baseUrl: bridge.clawhubUrl } : {}),
           mode: "update",
+          ...(params.onCapabilityConsent
+            ? { onCapabilityConsent: params.onCapabilityConsent }
+            : {}),
           expectedPluginId: targetPluginId,
           logger,
         });
@@ -222,6 +227,9 @@ export async function syncPluginsForUpdateChannel(params: {
             ...(bridgeNpmIntegrity ? { expectedIntegrity: bridgeNpmIntegrity } : {}),
             trustedSourceLinkedOfficialInstall,
             logger,
+            ...(params.onCapabilityConsent
+              ? { onCapabilityConsent: params.onCapabilityConsent }
+              : {}),
           });
         }
       } else {
@@ -233,6 +241,9 @@ export async function syncPluginsForUpdateChannel(params: {
           ...(bridgeNpmIntegrity ? { expectedIntegrity: bridgeNpmIntegrity } : {}),
           trustedSourceLinkedOfficialInstall,
           logger,
+          ...(params.onCapabilityConsent
+            ? { onCapabilityConsent: params.onCapabilityConsent }
+            : {}),
         });
       }
 
