@@ -68,7 +68,8 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
     });
   }
   if (facts) {
-    Object.assign(message, { openclawDelivery: facts });
+    const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;
+    Object.assign(message, { openclawDelivery: { ...currentFacts, ...facts } });
   }
   return message;
 }
