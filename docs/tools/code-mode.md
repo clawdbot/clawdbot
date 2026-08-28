@@ -116,7 +116,8 @@ To force code mode on for every tool-capable run, regardless of model:
 
 Object form works too: `tools.codeMode.enabled` accepts the same `false`,
 `true`, and `"auto"` values. Code mode stays off when `tools.codeMode` is
-omitted, `false`, or an object without an explicit `enabled` value.
+omitted, `false`, or an empty object. An object that configures other Code Mode
+options but omits `enabled` preserves the earlier `"auto"` behavior.
 
 See [Automatic per-model activation](#automatic-per-model-activation) for the
 exact semantics and the shipped model list.
@@ -276,9 +277,10 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 
 ## Configuration
 
-`tools.codeMode.enabled` is the activation gate. If it is omitted, including
-from object-form config that sets other fields, it inherits the `"auto"`
-default and may engage for catalog-preferred models.
+`tools.codeMode.enabled` is the activation gate. With no Code Mode
+configuration, it defaults to `false`. If an object configures another Code
+Mode field but omits `enabled`, it preserves the `"auto"` tier and may engage
+for catalog-preferred models.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
@@ -304,7 +306,8 @@ an engaged run never silently falls back to broad direct tool exposure.
 
 `tools.codeMode.enabled` accepts three values:
 
-- `false` (default): code mode is off for every run.
+- `false` (default when Code Mode is otherwise unconfigured): code mode is off
+  for every run.
 - `true`: code mode engages for every tool-capable run, regardless of model.
 - `"auto"`: code mode engages only when the run's model is flagged as a
   preferred code-mode performer in its provider catalog.

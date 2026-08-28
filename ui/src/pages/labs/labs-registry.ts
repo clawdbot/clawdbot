@@ -54,6 +54,22 @@ type LabFeatureState = {
   overridden: boolean;
 };
 
+function readConfiguredFeatureEnabled(
+  raw: unknown,
+  activeValues: readonly LabFeatureValue[],
+): boolean {
+  if (typeof raw === "boolean" || typeof raw === "string") {
+    return activeValues.includes(raw);
+  }
+  if (!isRecord(raw)) {
+    return false;
+  }
+  const enabled = raw.enabled;
+  return typeof enabled === "boolean" || typeof enabled === "string"
+    ? activeValues.includes(enabled)
+    : Object.keys(raw).some((key) => key !== "enabled");
+}
+
 const LOCAL_MODEL_LEAN_FEATURE_ID = "localModelLean";
 const LOCAL_MODEL_LEAN_AUTO_MODEL_PATH = ["wizard", "localModelLeanAutoModel"] as const;
 
@@ -69,7 +85,9 @@ export const LAB_FEATURES = [
     onValue: "auto",
     offValue: false,
     activeValues: [true, "auto"],
-    readEnabled: null,
+    // Mirrors resolveCodeModeConfig: no config is off, while an object that
+    // configures another Code Mode option preserves the prior "auto" behavior.
+    readEnabled: (raw) => readConfiguredFeatureEnabled(raw, [true, "auto"]),
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,
@@ -101,18 +119,7 @@ export const LAB_FEATURES = [
     // and an object configuring anything besides `enabled` is already on.
     // Reading only the `enabled` leaf would show `{ mode: "tools" }` as off and
     // let a click replace that operator's mode with ours.
-    readEnabled: (raw) => {
-      if (typeof raw === "boolean") {
-        return raw;
-      }
-      if (!isRecord(raw)) {
-        return false;
-      }
-      const node = raw;
-      return typeof node.enabled === "boolean"
-        ? node.enabled
-        : Object.keys(node).some((key) => key !== "enabled");
-    },
+    readEnabled: (raw) => readConfiguredFeatureEnabled(raw, [true]),
     // resolveToolSearchConfig defaults an unset mode to "code" even in object
     // form, which is the surface with the weakest recall. Pin the bounded
     // directory instead, so enabling from Labs is the variant we recommend.

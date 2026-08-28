@@ -425,14 +425,15 @@ describe("LabsPage", () => {
 });
 
 describe("LabsPage code mode enablement", () => {
-  // Mirrors resolveCodeModeConfig: the shipped default is off. Explicit
-  // `true` and `"auto"` remain valid opt-ins and must read as on.
+  // Mirrors resolveCodeModeConfig: absent or empty config is off, while an
+  // options object preserves the prior auto tier and explicit values win.
   it.each([
     { label: "unset", config: {}, expected: false },
+    { label: "empty object", config: { tools: { codeMode: {} } }, expected: false },
     {
-      label: "object without enabled",
+      label: "object with options",
       config: { tools: { codeMode: { timeoutMs: 5000 } } },
-      expected: false,
+      expected: true,
     },
     { label: "explicit true", config: { tools: { codeMode: { enabled: true } } }, expected: true },
     {
@@ -463,7 +464,7 @@ describe("LabsPage code mode enablement", () => {
     });
   });
 
-  it("selects the auto tier instead of force-on when re-enabled", async () => {
+  it("restores the options object's inherited auto tier when re-enabled", async () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { codeMode: { enabled: false, timeoutMs: 5000 } },
     });
@@ -474,7 +475,7 @@ describe("LabsPage code mode enablement", () => {
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: "auto" } } },
+      raw: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
     });
   });
