@@ -254,6 +254,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const messagePolicyParams = input.ignoreDisableMessageTool
     ? { ...params, disableMessageTool: false }
     : params;
+  const toolRunContext = buildEmbeddedAttemptToolRunContext({
+    ...params,
+    forceMessageTool: shouldForceMessageTool(messagePolicyParams),
+  });
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
     return [];
@@ -291,7 +295,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     );
     const options: OpenClawCodingToolsOptions = {
       agentId: input.sessionAgentId,
-      ...buildEmbeddedAttemptToolRunContext(params),
+      ...toolRunContext,
       exec: {
         ...params.execOverrides,
         ...(input.sessionPermissionPolicy ? { mode: input.sessionPermissionPolicy.execMode } : {}),
@@ -508,8 +512,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         transientWebSearchRestriction &&
         webSearchPolicy.persistentAllowed),
   );
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const filteredTools = filterCodexDynamicToolsForAllowlist(
+    visionFilteredTools,
+    toolRunContext.runtimeToolAllowlist,
+  );
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
@@ -626,27 +632,6 @@ function addGatewayShellDynamicToolsIfAvailable(
   }
   return [...filteredTools, ...toolsToAppend];
 }
-/** Preserves delivery-critical tools when a narrow allowlist would otherwise hide them. */
-function includeForcedCodexDynamicToolAllow(
-  toolsAllow: string[] | undefined,
-  params: EmbeddedRunAttemptParams,
-): string[] | undefined {
-  if (toolsAllow === undefined || hasWildcardCodexToolsAllow(toolsAllow)) {
-    return toolsAllow;
-  }
-  const forcedToolNames = shouldForceMessageTool(params) ? ["message"] : [];
-  if (forcedToolNames.length === 0) {
-    return toolsAllow;
-  }
-  if (toolsAllow.length === 0) {
-    return forcedToolNames;
-  }
-  const normalized = new Set(toolsAllow.map((name) => normalizeCodexDynamicToolName(name)));
-  const missingToolNames = forcedToolNames.filter(
-    (toolName) => !normalized.has(normalizeCodexDynamicToolName(toolName)),
-  );
-  return missingToolNames.length === 0 ? toolsAllow : [...toolsAllow, ...missingToolNames];
-}
 /** Decides whether Codex native code mode can own shell/file tools for this turn. */
 export function shouldEnableCodexAppServerNativeToolSurface(
   params: EmbeddedRunAttemptParams,
@@ -675,7 +660,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   ) {
     return false;
   }
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  const toolsAllow = params.toolsAllow;
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
   }

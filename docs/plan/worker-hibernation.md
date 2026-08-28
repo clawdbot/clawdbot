@@ -8,6 +8,16 @@ read_when:
 
 ## Status
 
+Implementation update (2026-08-28): warm images support `machine0` through
+`--strategy image`, refresh automatically at the next eligible teardown after
+24 hours, and delete superseded checkpoints after replacement. Scrubbing now
+also removes SSH-transport session workspaces under
+`~/.openclaw-worker/workspaces`. Core node-tunnel sync adds per-repository Git
+seeds: pristine post-sync repository copies stored outside the scrub root at
+`~/.openclaw-worker/git-seeds`, alongside retained machine-level caches. These
+extend warm starts, not phase-2 per-session hibernation, which remains gated;
+the historical phase-1 scrub description below predates this cache boundary.
+
 Accepted 2026-08-26 (maintainer: "build live test document PR land"). Phase 1
 is implemented in `extensions/crabbox/` and live-proven; phases 2 and 3 remain
 gated as designed. Written from direct source inspection of this repo and the
