@@ -49,6 +49,7 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import { createLineImageSetBuffer } from "./inbound-image-set.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
@@ -63,6 +64,13 @@ type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
+
+// Process-wide: LINE delivers each part of an image set as its own webhook
+// request, so the parts of one send never share a handler invocation.
+const bufferLineImageSetPart = createLineImageSetBuffer<{
+  media: readonly MediaRef[];
+  mediaUnavailable: boolean;
+}>();
 
 const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   "image",
@@ -414,6 +422,9 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   try {
     const allMedia: MediaRef[] = [];
     let mediaUnavailable = false;
+    // Flips once this call returns, so a later timer flush knows it is running
+    // outside the webhook request that the drain has already settled.
+    let requestReturned = false;
 
     if (isDownloadableLineMessageType(message.type)) {
       const abortSignal = context.turnAdoptionLifecycle?.abortSignal;
@@ -455,28 +466,80 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       }
     }
 
-    const messageContext = await buildLineMessageContext({
-      event,
-      allMedia,
-      mediaUnavailable,
-      cfg,
-      account,
-      commandAuthorized: decision.access.commandAccess.authorized,
-      resolveChannelIngress: decision.resolveBoundAccess,
-      inboundHistory: historyReservation.inboundHistory,
-      buildContext: context.buildContext,
-    });
+    const dispatchTurn = async (params: {
+      media: readonly MediaRef[];
+      mediaUnavailable: boolean;
+      // A set completed by a timeout dispatches after its webhook request already
+      // returned, so the drain has settled that event and there is no adoption
+      // left to hand over.
+      adopted: boolean;
+      withInboundHistory?: boolean;
+    }): Promise<boolean> => {
+      const messageContext = await buildLineMessageContext({
+        event,
+        allMedia: [...params.media],
+        mediaUnavailable: params.mediaUnavailable,
+        cfg,
+        account,
+        commandAuthorized: decision.access.commandAccess.authorized,
+        resolveChannelIngress: decision.resolveBoundAccess,
+        inboundHistory:
+          params.withInboundHistory === false ? undefined : historyReservation.inboundHistory,
+        buildContext: context.buildContext,
+      });
 
-    if (!messageContext) {
-      logVerbose("line: skipping empty message");
+      if (!messageContext) {
+        logVerbose("line: skipping empty message");
+        return false;
+      }
+
+      await processMessage(
+        messageContext,
+        params.adopted && context.turnAdoptionLifecycle
+          ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+          : {},
+      );
+      return true;
+    };
+
+    const imageSet = message.type === "image" ? message.imageSet : undefined;
+    if (imageSet) {
+      let dispatchedHere = false;
+      const flushed = await bufferLineImageSetPart({
+        key: `${account.accountId}:${imageSet.id}`,
+        messageId: message.id,
+        index: imageSet.index,
+        total: imageSet.total,
+        part: { media: allMedia, mediaUnavailable },
+        flush: async (parts) => {
+          dispatchedHere = await dispatchTurn({
+            media: parts.flatMap((entry) => entry.media),
+            mediaUnavailable: parts.some((entry) => entry.mediaUnavailable),
+            adopted: !requestReturned,
+            // The reservation is released when this handler returns, so a delayed
+            // dispatch can no longer consume the window it would render. Rendering
+            // it anyway would replay those entries into a later turn as well.
+            withInboundHistory: !requestReturned,
+          });
+        },
+        onDetachedFlushError: (error) => {
+          runtime.error?.(
+            danger(
+              `line: image set ${imageSet.id} failed after its webhook returned: ${String(error)}`,
+            ),
+          );
+        },
+      });
+      requestReturned = true;
+      if (flushed && dispatchedHere) {
+        historyReservation.commit();
+      }
       return;
     }
 
-    await processMessage(
-      messageContext,
-      context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
-    );
-    historyReservation.commit();
+    if (await dispatchTurn({ media: allMedia, mediaUnavailable, adopted: true })) {
+      historyReservation.commit();
+    }
   } finally {
     historyReservation.release();
   }

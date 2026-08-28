@@ -263,6 +263,11 @@ as untrusted.
   member who has not added the bot as a friend. If either lookup fails the raw
   id is used and the message is still delivered. Multi-person rooms have no name
   API, so they keep their room id.
+- LINE sends several images picked in one action as one webhook event per image,
+  out of order. They are held briefly, ordered, and answered as a single turn
+  carrying every image, so the agent can reason about the set. A set that never
+  completes is delivered with whatever arrived after a few seconds rather than
+  being held indefinitely.
 
 ## Structured rich messages
 

@@ -1523,5 +1523,74 @@ describe("handleLineWebhookEvents", () => {
     // Should be skipped because there is a non-bot mention and the bot was not mentioned.
     expect(processMessage).not.toHaveBeenCalled();
   });
+
+  it("answers a multi-image send as one turn instead of one turn per image", async () => {
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+    const imagePart = (messageId: string, index: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-1", index, total: 3 },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${index}`,
+      });
+
+    // LINE delivers each image as its own webhook request, and not in order.
+    await handleLineWebhookEvents([imagePart("m2", 2)], context);
+    await handleLineWebhookEvents([imagePart("m1", 1)], context);
+    expect(processMessage).not.toHaveBeenCalled();
+
+    await handleLineWebhookEvents([imagePart("m3", 3)], context);
+
+    expect(downloadLineMediaMock).toHaveBeenCalledTimes(3);
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("still delivers an image set whose remaining parts never arrive", async () => {
+    vi.useFakeTimers();
+    try {
+      downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+        path: `/media/${messageId}.png`,
+        contentType: "image/png",
+        size: 10,
+      }));
+      const processMessage = vi.fn();
+      const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+      await handleLineWebhookEvents(
+        [
+          createTestMessageEvent({
+            message: {
+              id: "lonely",
+              type: "image",
+              contentProvider: { type: "line" },
+              imageSet: { id: "image-set-incomplete", index: 1, total: 3 },
+            } as MessageEvent["message"],
+            source: { type: "user", userId: "U1" },
+            webhookEventId: "evt-lonely",
+          }),
+        ],
+        context,
+      );
+      expect(processMessage).not.toHaveBeenCalled();
+
+      // The webhook request has been answered; only the timer can still deliver.
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
