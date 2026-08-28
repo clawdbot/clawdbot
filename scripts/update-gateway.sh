@@ -11,15 +11,66 @@
 #
 # Environment:
 #   OPENCLAW_UPDATE_RESTART_CMD  restart command (default: openclaw gateway restart)
-#                                set to "" to skip the restart step
+#   OPENCLAW_UPDATE_STOP_CMD     stop command run before replacing live build output
+#                                (default: openclaw gateway stop --force)
+#                                custom stop/restart commands must be set together
 #   OPENCLAW_UPDATE_REMOTE       git remote to update from (default: origin)
 set -euo pipefail
 
 log() { echo "[update-gateway] $*"; }
+
+trim_command() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+restart_override_set=0
+stop_override_set=0
+[[ -v OPENCLAW_UPDATE_RESTART_CMD ]] && restart_override_set=1
+[[ -v OPENCLAW_UPDATE_STOP_CMD ]] && stop_override_set=1
+if [ "$restart_override_set" -ne "$stop_override_set" ]; then
+  echo "[update-gateway] OPENCLAW_UPDATE_STOP_CMD and OPENCLAW_UPDATE_RESTART_CMD must be set together" >&2
+  exit 1
+fi
+if [ "$restart_override_set" -eq 1 ]; then
+  restart_cmd="$(trim_command "$OPENCLAW_UPDATE_RESTART_CMD")"
+  stop_cmd="$(trim_command "$OPENCLAW_UPDATE_STOP_CMD")"
+else
+  restart_cmd="openclaw gateway restart"
+  # --force: gateway stop refuses non-interactive runs without it, and this
+  # script's documented entry point is non-interactive (ssh ... update-gateway.sh).
+  stop_cmd="openclaw gateway stop --force"
+fi
+if [ -z "$restart_cmd" ]; then
+  echo "[update-gateway] OPENCLAW_UPDATE_RESTART_CMD is blank; refusing to replace live build output without a restart path" >&2
+  exit 1
+fi
+if [ -z "$stop_cmd" ]; then
+  echo "[update-gateway] OPENCLAW_UPDATE_STOP_CMD is blank; refusing to replace live build output without stopping the gateway" >&2
+  exit 1
+fi
+
+gateway_stopped=0
+build_backup=""
 on_exit() {
   local code=$?
   if [ "$code" -ne 0 ]; then
+    if [ -n "$build_backup" ] && [ -d "$build_backup" ]; then
+      log "restoring previous build output"
+      rm -rf dist dist-runtime
+      [ ! -d "$build_backup/dist" ] || mv "$build_backup/dist" dist
+      [ ! -d "$build_backup/dist-runtime" ] || mv "$build_backup/dist-runtime" dist-runtime
+    fi
+    if [ "$gateway_stopped" -eq 1 ] && [ -n "$restart_cmd" ]; then
+      log "restarting gateway on previous build after update failure"
+      bash -c "$restart_cmd" || true
+    fi
     echo "[update-gateway] FAILED (exit $code)" >&2
+  fi
+  if [ -n "$build_backup" ] && [ -d "$build_backup" ]; then
+    rm -rf "$build_backup"
   fi
 }
 trap on_exit EXIT
@@ -83,7 +134,10 @@ log "installing dependencies"
 pnpm install --frozen-lockfile
 
 # Incremental builds have left stale hashed chunks and config validators from
-# the previous revision in dist; a clean build is the reliable path.
+# the previous revision in dist; a clean build is the reliable path. A running
+# gateway dynamically imports hashed chunks, so stop it before moving or
+# rebuilding dist. Keep the old output until the new build succeeds so a failed
+# compile can restore service instead of leaving the gateway unbootable.
 log "clean building"
 # These deletes must stay inside the checkout: a symlinked build dir would
 # redirect the recursion into its target, so refuse symlinks outright.
@@ -93,15 +147,21 @@ for build_path in dist dist-runtime .artifacts; do
     exit 1
   fi
 done
-rm -rf dist dist-runtime .artifacts/tsgo-cache
+
+log "stopping gateway before replacing hashed build chunks: $stop_cmd"
+bash -c "$stop_cmd"
+gateway_stopped=1
+
+build_backup="$(mktemp -d "$repo_root/.update-build-backup.XXXXXX")"
+[ ! -d dist ] || mv dist "$build_backup/dist"
+[ ! -d dist-runtime ] || mv dist-runtime "$build_backup/dist-runtime"
+rm -rf .artifacts/tsgo-cache
 pnpm build
 
-restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"
-if [ -n "$restart_cmd" ]; then
-  log "restarting gateway: $restart_cmd"
-  bash -c "$restart_cmd"
-else
-  log "restart skipped (OPENCLAW_UPDATE_RESTART_CMD is empty)"
-fi
+log "restarting gateway: $restart_cmd"
+bash -c "$restart_cmd"
+gateway_stopped=0
+rm -rf "$build_backup"
+build_backup=""
 
 log "OK $(git rev-parse --short HEAD) ($branch)"

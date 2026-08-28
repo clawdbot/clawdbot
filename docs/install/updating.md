@@ -124,6 +124,11 @@ for an efficient source-server update: it restores tracked build outputs that
 `main` (or rebases a local server branch onto `origin/main`), installs
 dependencies, builds clean, and restarts the gateway.
 
+The script stops the gateway immediately before replacing hashed `dist`
+chunks. It retains the previous build until the clean build succeeds and
+restores/restarts that build if compilation fails. This prevents a live process
+from dynamically importing chunks that a concurrent clean build has deleted.
+
 Generated output roots such as `dist`, `dist-runtime`, and package-local
 `dist` directories must be real directories. Builds refuse symbolic-link roots
 before reading or mutating their contents so cleanup cannot affect the link
@@ -134,12 +139,23 @@ building a source checkout.
 ssh you@server 'cd /path/to/openclaw && scripts/update-gateway.sh'
 ```
 
-Override the restart for custom service units, or skip it entirely:
+The default stop command is `openclaw gateway stop --force`: the CLI refuses a
+non-interactive `gateway stop` without `--force`, and this script's documented
+entry point runs over SSH without a TTY.
+
+Override the stop/restart commands for custom service units:
 
 ```bash
-OPENCLAW_UPDATE_RESTART_CMD='systemctl --user restart openclaw-gateway.service' scripts/update-gateway.sh
-OPENCLAW_UPDATE_RESTART_CMD='' scripts/update-gateway.sh
+OPENCLAW_UPDATE_STOP_CMD='systemctl --user stop openclaw-gateway.service' \
+OPENCLAW_UPDATE_RESTART_CMD='systemctl --user restart openclaw-gateway.service' \
+  scripts/update-gateway.sh
 ```
+
+Custom stop and restart commands must be provided together. The updater trims
+surrounding whitespace and refuses either command when it is blank, before it
+touches Git or the live checkout. Replacing a live checkout without both sides
+of the service lifecycle recreates the stale hashed-chunk failure this flow is
+designed to prevent.
 
 For a plain single-user source install, prefer `openclaw update --channel dev`
 instead — it manages the checkout, build, and gateway restart for you.
