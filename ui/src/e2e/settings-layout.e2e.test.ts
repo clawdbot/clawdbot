@@ -106,6 +106,71 @@ const responsiveViewports = [
 ] as const;
 
 suite.define(() => {
+  it("uses the full settings content width on mobile without changing desktop insets", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 844, width: 390 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await waitForControlUiRoute(page, {
+        pathname: "/settings/appearance",
+        routeId: "appearance",
+      });
+
+      const readInsets = () =>
+        page.evaluate(() => {
+          const header = document.querySelector<HTMLElement>(".content-header");
+          const workspace = document.querySelector<HTMLElement>(".settings-workspace");
+          const settingsPage = document.querySelector<HTMLElement>(".settings-page");
+          const group = document.querySelector<HTMLElement>(".settings-group");
+          const configContent = document.querySelector<HTMLElement>(".config-content");
+          if (!header || !workspace || !settingsPage || !group || !configContent) {
+            throw new Error("Appearance settings layout did not render");
+          }
+          const headerBox = header.getBoundingClientRect();
+          const workspaceBox = workspace.getBoundingClientRect();
+          const pageBox = settingsPage.getBoundingClientRect();
+          const groupBox = group.getBoundingClientRect();
+          return {
+            configPadding: Math.round(
+              Number.parseFloat(getComputedStyle(configContent).paddingLeft),
+            ),
+            groupInset: Math.round(groupBox.x - workspaceBox.x),
+            headerPadding: Math.round(Number.parseFloat(getComputedStyle(header).paddingLeft)),
+            pagePadding: Math.round(Number.parseFloat(getComputedStyle(settingsPage).paddingLeft)),
+            pageInset: Math.round(pageBox.x - workspaceBox.x),
+            pageWidthDelta: Math.round(workspaceBox.width - pageBox.width),
+            headerWidthDelta: Math.round(workspaceBox.width - headerBox.width),
+          };
+        });
+
+      await expect.poll(readInsets).toEqual({
+        configPadding: 0,
+        groupInset: 0,
+        headerPadding: 0,
+        pagePadding: 0,
+        pageInset: 0,
+        pageWidthDelta: 0,
+        headerWidthDelta: 0,
+      });
+
+      await page.setViewportSize({ height: 900, width: 1440 });
+      await expect.poll(readInsets).toMatchObject({
+        configPadding: 22,
+        headerPadding: 16,
+        pagePadding: 16,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("uses the shared tab system for Communications without duplicate section help", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",

@@ -769,8 +769,13 @@ textarea.settings-input {
 /* ── Mobile ── */
 
 @media (max-width: 640px) {
+  .content:has(.settings-workspace .settings-page) .content-header,
   .settings-page {
-    padding-inline: var(--space-3);
+    padding-inline: 0;
+  }
+
+  .shell--settings .config-content {
+    padding-inline: 0;
   }
 
   .settings-section__header:has(.settings-section__copy) {
