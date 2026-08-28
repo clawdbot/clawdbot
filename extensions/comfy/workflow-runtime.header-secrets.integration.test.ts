@@ -38,7 +38,7 @@ beforeAll(async () => {
     req.resume();
     if (url.pathname === failurePath) {
       const credential = req.headers.authorization?.split(" ")[1];
-      const detail = `proxy rejected ${credential} ${req.headers["x-proxy-auth"]}`;
+      const detail = `proxy rejected ${credential} ${String(req.headers["x-proxy-auth"])}`;
       res.writeHead(terminalFailure ? 200 : 403, { "content-type": "application/json" });
       res.end(
         JSON.stringify(terminalFailure ? { status: "failed", error: detail } : { error: detail }),
