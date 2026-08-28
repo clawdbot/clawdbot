@@ -176,6 +176,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
     const projectedMessage = resolved.message
       ? projectChatDisplayMessage(resolved.message, {
           maxChars: effectiveMaxChars,
+          redactInlineMedia: true,
           resolveCurrentUserProfileDisplay,
         })
       : undefined;

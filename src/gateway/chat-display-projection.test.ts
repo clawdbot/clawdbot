@@ -121,15 +121,24 @@ describe("managed document chat history", () => {
 describe("oversized multimodal chat history", () => {
   it("redacts Responses input_image data URLs only for stored history", () => {
     const imageUrl = "DATA:image/png;BASE64,cG5n";
+    const nestedImageUrl = "data:image/jpeg;base64,anBn";
+    const sourceData = "raw-inline-image";
     const message = {
       role: "assistant",
-      content: [{ type: "input_image", image_url: imageUrl }],
+      providerReplay: { opaque: true },
+      content: [
+        { type: "input_image", image_url: imageUrl },
+        { type: "input_image", image_url: { detail: "high", url: nestedImageUrl } },
+        { type: "input_image", source: { data: sourceData, media_type: "image/png" } },
+        { type: "input_image", image_url: "https://example.test/image.png" },
+      ],
     };
 
-    expect(projectChatDisplayMessages([message])).toEqual([message]);
-    expect(
-      projectChatDisplayMessages([message], { redactInlineMedia: true }),
-    ).toEqual([
+    const live = projectChatDisplayMessages([message]);
+    expect(live[0]?.content).toEqual(message.content);
+
+    const stored = projectChatDisplayMessages([message], { redactInlineMedia: true });
+    expect(stored).toEqual([
       {
         role: "assistant",
         content: [
@@ -138,9 +147,29 @@ describe("oversized multimodal chat history", () => {
             omitted: true,
             bytes: Buffer.byteLength(imageUrl, "utf8"),
           },
+          {
+            type: "input_image",
+            image_url: {
+              detail: "high",
+              omitted: true,
+              bytes: Buffer.byteLength(nestedImageUrl, "utf8"),
+            },
+          },
+          {
+            type: "input_image",
+            source: {
+              media_type: "image/png",
+              omitted: true,
+              bytes: Buffer.byteLength(sourceData, "utf8"),
+            },
+          },
+          { type: "input_image", image_url: "https://example.test/image.png" },
         ],
       },
     ]);
+    expect(JSON.stringify(stored)).not.toContain(imageUrl);
+    expect(JSON.stringify(stored)).not.toContain(nestedImageUrl);
+    expect(JSON.stringify(stored)).not.toContain(sourceData);
   });
 
   it("keeps legacy image, audio, and video transcript blocks through every history boundary", async () => {

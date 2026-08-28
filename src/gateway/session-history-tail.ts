@@ -122,6 +122,7 @@ export async function readIncrementalChatHistoryTail(params: {
     const projection = projectChatDisplayMessagesWithState(filteredRawMessages, {
       includeCommentaryFallbacks: true,
       maxChars: params.effectiveMaxChars,
+      redactInlineMedia: true,
       ...(resolveProfileDisplay ? { resolveCurrentUserProfileDisplay } : {}),
       turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(contextMessage),
     });

@@ -60,6 +60,7 @@ export function projectSessionMessagePayload(params: {
   transcriptPosition?: TranscriptDisplayPosition;
   projectionState?: SessionMessageProjectionState;
   projectCurrentUserProfile?: (message: Record<string, unknown>) => Record<string, unknown>;
+  redactInlineMedia?: boolean;
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
@@ -75,11 +76,16 @@ export function projectSessionMessagePayload(params: {
   });
   const projected = params.projectionState
     ? projectChatDisplayMessagesWithState([rawMessage], {
+        redactInlineMedia: params.redactInlineMedia,
         streamErrorFallbackPending: params.projectionState.streamErrorFallbackPending,
         turnBoundaryPending: params.projectionState.turnBoundaryPending,
       })
     : {
-        messages: [projectChatDisplayMessage(rawMessage)],
+        messages: [
+          projectChatDisplayMessage(rawMessage, {
+            redactInlineMedia: params.redactInlineMedia,
+          }),
+        ],
         streamErrorFallbackPending: false,
         turnBoundaryPending: false,
       };

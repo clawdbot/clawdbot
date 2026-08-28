@@ -1,7 +1,11 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
+import {
+  buildInboundMediaUriFromPath,
+  classifyMediaReferenceSource,
+  parseInboundMediaUri,
+} from "../media/media-reference.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -38,6 +42,51 @@ const MEDIA_FACT_PRIVATE_FIELDS = [
   "workspaceDir",
   ...MEDIA_PRIVATE_FIELDS.filter((field) => field !== "path"),
 ] as const;
+
+type ChatHistorySanitizeOptions = {
+  includeCommentaryFallbacks?: boolean;
+  redactInlineMedia?: boolean;
+};
+
+function redactResponsesInputImage(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "input_image") {
+    return false;
+  }
+  let changed = false;
+  if (
+    typeof entry.image_url === "string" &&
+    classifyMediaReferenceSource(entry.image_url).isDataUrl
+  ) {
+    const imageUrl = entry.image_url;
+    delete entry.image_url;
+    entry.omitted = true;
+    entry.bytes = Buffer.byteLength(imageUrl, "utf8");
+    changed = true;
+  }
+  const imageUrl = readRecord(entry.image_url);
+  if (imageUrl && typeof imageUrl.url === "string") {
+    if (classifyMediaReferenceSource(imageUrl.url).isDataUrl) {
+      const projectedImageUrl = { ...imageUrl };
+      const url = projectedImageUrl.url as string;
+      delete projectedImageUrl.url;
+      projectedImageUrl.omitted = true;
+      projectedImageUrl.bytes = Buffer.byteLength(url, "utf8");
+      entry.image_url = projectedImageUrl;
+      changed = true;
+    }
+  }
+  const source = readRecord(entry.source);
+  if (source && typeof source.data === "string") {
+    const projectedSource = { ...source };
+    const data = projectedSource.data as string;
+    delete projectedSource.data;
+    projectedSource.omitted = true;
+    projectedSource.bytes = Buffer.byteLength(data, "utf8");
+    entry.source = projectedSource;
+    changed = true;
+  }
+  return changed;
+}
 
 function projectChatHistoryMediaReference(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -165,7 +214,11 @@ function projectChatHistoryMediaFacts(value: unknown): unknown[] | undefined {
 
 export function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: {
+    preserveExactToolPayload?: boolean;
+    maxChars?: number;
+    redactInlineMedia?: boolean;
+  },
 ): { block: unknown; changed: boolean; truncated: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false, truncated: false };
@@ -229,6 +282,10 @@ export function sanitizeChatHistoryContentBlock(
   if ("openclawReasoningReplay" in entry) {
     delete entry.openclawReasoningReplay;
     changed = true;
+  }
+  if (opts?.redactInlineMedia === true) {
+    const inlineMediaChanged = redactResponsesInputImage(entry);
+    changed ||= inlineMediaChanged;
   }
   const mediaChanged = projectChatHistoryMediaBlock(entry);
   const attachmentChanged = projectChatHistoryAttachmentBlock(entry);
@@ -461,6 +518,7 @@ function projectWorkspaceConflictDetails(
 export function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: Pick<ChatHistorySanitizeOptions, "redactInlineMedia">,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -576,6 +634,7 @@ export function sanitizeChatHistoryMessage(
       const sanitized = sanitizeChatHistoryContentBlock(content[index], {
         preserveExactToolPayload,
         maxChars,
+        redactInlineMedia: opts?.redactInlineMedia,
       });
       const contentBlock = stripAssistantControlTokens ? readRecord(sanitized.block) : undefined;
       if (
@@ -708,7 +767,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  opts?: { includeCommentaryFallbacks?: boolean },
+  opts?: ChatHistorySanitizeOptions,
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -718,7 +777,7 @@ export function sanitizeChatHistoryMessages(
   for (const message of messages) {
     if (opts?.includeCommentaryFallbacks === true) {
       for (const commentary of projectAssistantCommentaryFallbacks(message, maxChars)) {
-        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
+        const projected = sanitizeChatHistoryMessage(commentary, maxChars, opts);
         next.push(projected.message);
         changed = true;
       }
@@ -727,7 +786,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, opts);
     changed ||= res.changed;
     if (res.changed && shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;

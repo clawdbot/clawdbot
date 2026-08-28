@@ -7122,6 +7122,46 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("stored history endpoints redact Responses inline images", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const imageUrl = "DATA:image/png;BASE64,cG5n";
+      const messageId = "msg-inline-image";
+      await writeMainSessionTranscript([
+        createTextTranscriptEvent("assistant", "", {
+          id: messageId,
+          message: { content: [{ type: "input_image", image_url: imageUrl }] },
+        }),
+      ]);
+
+      const historyMessages = await fetchHistoryMessages(ws);
+      const historyJson = JSON.stringify(historyMessages);
+      expect(historyJson).not.toContain(imageUrl);
+      expect(historyMessages[0]).toMatchObject({
+        content: [
+          {
+            type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(imageUrl, "utf8"),
+          },
+        ],
+      });
+
+      const full = await fetchChatMessage(ws, makeMainMessageParams(messageId));
+      expect(full.ok).toBe(true);
+      expect(JSON.stringify(full.message)).not.toContain(imageUrl);
+      expect(full.message).toMatchObject({
+        content: [
+          {
+            type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(imageUrl, "utf8"),
+          },
+        ],
+      });
+    });
+  });
+
   test("chat.message.get returns archive-backed rows surfaced by history", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionId = "sess-archive-backed";
