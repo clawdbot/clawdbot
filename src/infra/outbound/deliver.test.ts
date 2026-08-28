@@ -5593,6 +5593,60 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
+  it.each(
+    [false, true].flatMap((bestEffort) =>
+      [false, true].flatMap((chunked) =>
+        [undefined, "not_sent" as const].map((outcome) => ({ bestEffort, chunked, outcome })),
+      ),
+    ),
+  )(
+    "retains $outcome evidence before a later pre-send failure (chunked: $chunked, bestEffort: $bestEffort)",
+    async ({ bestEffort, chunked, outcome }) => {
+      const onPayloadDeliveryOutcome = vi.fn();
+      const sendText = vi
+        .fn()
+        .mockResolvedValueOnce({
+          channel: "matrix",
+          messageId: "",
+          ...(outcome ? { outcome } : {}),
+        })
+        .mockRejectedValueOnce(
+          new PlatformMessageNotDispatchedError("second send never dispatched", {
+            cause: new Error("upload failed"),
+          }),
+        );
+      setTestOutbound({ sendText, chunker: chunkText, chunkerMode: "text", textChunkLimit: 2 });
+      const delivery = deliverMatrix({
+        payloads: chunked ? [{ text: "abcd" }] : [{ text: "ab" }, { text: "cd" }],
+        bestEffort,
+        queuePolicy: "required",
+        onPayloadDeliveryOutcome,
+      });
+      if (bestEffort) {
+        await expect(delivery).resolves.toEqual([]);
+      } else {
+        await expect(delivery).rejects.toMatchObject({ sentBeforeError: outcome === undefined });
+      }
+      expect(sendText).toHaveBeenCalledTimes(2);
+      if (outcome === "not_sent") {
+        expect(queueMocks.markDeliveryPlatformOutcomeUnknown).not.toHaveBeenCalled();
+        expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledOnce();
+      } else {
+        expect(queueMocks.markDeliveryPlatformOutcomeUnknown).toHaveBeenCalledOnce();
+        expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+        if (chunked) {
+          expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
+            expect.objectContaining({
+              status: "failed",
+              sentBeforeError: true,
+            }),
+          );
+        }
+      }
+      expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ["identified", "mx-progress", "sent"],
     ["unknown", "", "suppressed"],

@@ -187,7 +187,7 @@ export function createDeliveryResultRecorder(params: {
     recordIdentifiedDeliveryResult,
     recordIdentifiedDeliveryResults,
     reportIdentifiedDeliveryResult,
-    getSuppressionReason: () => suppressionReason ?? "adapter_returned_no_identity",
+    getSuppressionReason: () => suppressionReason,
     resetPayloadResults: () => {
       reportedResults = [];
       suppressionReason = undefined;

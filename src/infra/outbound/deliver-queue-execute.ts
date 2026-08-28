@@ -61,13 +61,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
   };
   const payloadCount = params.preparedBatch?.sourcePayloadCount ?? params.payloads.length;
-  // Wrap onError to detect partial failures under bestEffort mode.
-  // When bestEffort is true, per-payload errors are caught and passed to onError
-  // without throwing — so the outer try/catch never fires. We track whether any
-  // payload failed so we can call failDelivery instead of ackDelivery.
-  let hadPartialFailure = false;
-  let lastPayloadError: unknown;
-  let partialFailuresAreProvenNotSent = true;
   const ownsAuditTerminal = params.deliveryQueueId === undefined;
   // Terminal evidence belongs to delivery custody, independently of audit subscribers.
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
@@ -281,9 +274,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       throwIfProducerLeaseLost();
-      hadPartialFailure = true;
-      lastPayloadError = err;
-      partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
       params.onError?.(err, payload);
     },
     onPayloadDeliveryOutcome: (outcome: OutboundPayloadDeliveryOutcome) => {
@@ -334,6 +324,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     const results = await deliverOutboundPayloadsCore(wrappedParams);
     // Core reconciles adapter progress objects with hook-bearing final results.
     deliveredResults = results;
+    const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
     allPayloadsSuppressed =
       results.length === 0 && areOutboundPayloadsIntentionallySuppressed(payloadOutcomes);
     throwIfProducerLeaseLost();
@@ -364,7 +355,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         await runOutboundDeliveryCommitHooks(results);
       }
       emitTerminals(() =>
-        hadPartialFailure
+        failedOutcomes.length > 0
           ? failedOutboundAuditTerminals({
               payloadCount,
               results,
@@ -380,11 +371,18 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       return results;
     }
     if (queueId) {
-      if (hadPartialFailure) {
+      if (failedOutcomes.length > 0) {
+        const partialFailuresAreProvenNotSent = failedOutcomes.every((outcome) =>
+          isProvenDeliveryNotSentError(outcome.error),
+        );
         const partialSendEvidence =
           results.length > 0 ||
-          (platformDispatchedPayloads.size > 0 && !partialFailuresAreProvenNotSent) ||
-          (lastPayloadError instanceof OutboundDeliveryError && lastPayloadError.sentBeforeError);
+          payloadOutcomes.some((outcome) =>
+            outcome.status === "failed"
+              ? outcome.sentBeforeError
+              : outcome.status === "suppressed" &&
+                outcome.reason === "adapter_returned_no_identity",
+          );
         const postSendState =
           queuedPostSendState ??
           (partialSendEvidence ? await persistOwnedPostSendState() : undefined);

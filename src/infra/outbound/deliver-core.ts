@@ -379,7 +379,7 @@ export async function deliverOutboundPayloadsCore(
           recordPayloadOutcome(
             suppressedPayloadOutcome({
               index: payloadIndex,
-              reason: getSuppressionReason(),
+              reason: getSuppressionReason() ?? "adapter_returned_no_identity",
             }),
           );
           continue;
@@ -461,7 +461,7 @@ export async function deliverOutboundPayloadsCore(
         recordPayloadOutcome(
           suppressedPayloadOutcome({
             index: payloadIndex,
-            reason: getSuppressionReason(),
+            reason: getSuppressionReason() ?? "adapter_returned_no_identity",
           }),
         );
         if (getSuppressionReason() === "adapter_returned_no_send") {
@@ -509,7 +509,10 @@ export async function deliverOutboundPayloadsCore(
         index: payloadIndex,
         status: "failed",
         error: err,
-        sentBeforeError: failedPayloadResults.length > 0,
+        // A later pre-send failure cannot erase an earlier chunk's unknown result.
+        sentBeforeError:
+          failedPayloadResults.length > 0 ||
+          getSuppressionReason() === "adapter_returned_no_identity",
         stage: "platform_send",
         results: failedPayloadResults,
       });

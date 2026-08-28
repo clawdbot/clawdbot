@@ -580,15 +580,31 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
     return "failed";
   }
+  if (operation.state === "prepared" || operation.state === "queued") {
+    return "continue";
+  }
+  if (operation.state === "unknown") {
+    const settled = await settleQueuedFailure({
+      ...opts,
+      error: "delivery owner state is unknown",
+    });
+    return settled === "already-gone" ? "failed" : settled;
+  }
+  try {
+    const suppressReceipt =
+      operation.state !== "delivered" && typeof opts.entry.completionRetention === "object";
+    await ackRecoveredDelivery(
+      opts.entry,
+      opts.stateDir,
+      suppressReceipt ? { suppressCompletionReceipt: true } : undefined,
+    );
+  } catch (error) {
+    const errMsg = `failed to ack owner-${operation.state} delivery: ${formatErrorMessage(error)}`;
+    opts.onFailed?.(opts.entry, errMsg);
+    opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
+    return "failed";
+  }
   if (operation.state === "delivered") {
-    try {
-      await ackRecoveredDelivery(opts.entry, opts.stateDir);
-    } catch (error) {
-      const errMsg = `failed to ack owner-completed delivery: ${formatErrorMessage(error)}`;
-      opts.onFailed?.(opts.entry, errMsg);
-      opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
-      return "failed";
-    }
     const messageId = operation.platformMessageId;
     if (messageId) {
       const result: OutboundDeliveryResult = { channel: opts.entry.channel, messageId };
@@ -602,34 +618,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
         }),
       );
     }
-    opts.onRecovered?.(opts.entry);
-    return "recovered";
-  }
-  if (operation.state === "suppressed" || operation.state === "stale") {
-    try {
-      await (typeof opts.entry.completionRetention === "object"
-        ? ackRecoveredDelivery(opts.entry, opts.stateDir, { suppressCompletionReceipt: true })
-        : ackRecoveredDelivery(opts.entry, opts.stateDir));
-    } catch (error) {
-      const errMsg = `failed to ack owner-suppressed delivery: ${formatErrorMessage(error)}`;
-      opts.onFailed?.(opts.entry, errMsg);
-      opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
-      return "failed";
-    }
-    opts.onRecovered?.(opts.entry);
-    return "recovered";
-  }
-  if (operation.state === "rejected") {
-    try {
-      await (typeof opts.entry.completionRetention === "object"
-        ? ackRecoveredDelivery(opts.entry, opts.stateDir, { suppressCompletionReceipt: true })
-        : ackRecoveredDelivery(opts.entry, opts.stateDir));
-    } catch (error) {
-      const errMsg = `failed to ack owner-rejected delivery: ${formatErrorMessage(error)}`;
-      opts.onFailed?.(opts.entry, errMsg);
-      opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
-      return "failed";
-    }
+  } else if (operation.state === "rejected") {
     emitQueuedAuditTerminals(opts.entry, () =>
       failedOutboundAuditTerminals({
         payloadCount: queuedPayloadCount(opts.entry),
@@ -643,15 +632,18 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     emitRecoveredTerminalFailure(opts.entry, error);
     opts.onFailed?.(opts.entry, error);
     return "failed";
+  } else if (operation.state === "suppressed") {
+    // A restart can separate owner suppression from queue ack. Publish only
+    // after custody ends; a stale/missing owner proves no suppression.
+    emitQueuedAuditTerminals(opts.entry, () =>
+      uniformOutboundAuditTerminals(queuedPayloadCount(opts.entry), {
+        outcome: "suppressed",
+        reasonCode: "no_visible_payload",
+      }),
+    );
   }
-  if (operation.state === "unknown") {
-    const settled = await settleQueuedFailure({
-      ...opts,
-      error: "delivery owner state is unknown",
-    });
-    return settled === "already-gone" ? "failed" : settled;
-  }
-  return "continue";
+  opts.onRecovered?.(opts.entry);
+  return "recovered";
 }
 
 function isPermanentDeliveryError(error: string): boolean {
@@ -885,6 +877,7 @@ async function drainQueuedEntry(opts: {
       },
     });
     const results = isOutboundDeliveryResultArray(result) ? result : [];
+    const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
     const adapterReturnedNoIdentity = payloadOutcomes.some(
       (outcome) =>
         outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
@@ -892,6 +885,9 @@ async function drainQueuedEntry(opts: {
     if (
       adapterReturnedNoIdentity ||
       (results.length === 0 &&
+        // Reported failures carry dispatch evidence and own retry classification.
+        // Adapter handoff alone cannot override a proven pre-send failure.
+        failedOutcomes.length === 0 &&
         platformSendStarted &&
         !areOutboundPayloadsIntentionallySuppressed(payloadOutcomes))
     ) {
@@ -919,7 +915,6 @@ async function drainQueuedEntry(opts: {
     if (results.length > 0) {
       deliveredResults = [...results];
     }
-    const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
     const failedOutcome = failedOutcomes[0];
     if (failedOutcome) {
       const errMsg = formatErrorMessage(failedOutcome.error);
