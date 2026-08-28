@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   parseRecorderReady,
   readScenarioFile,
@@ -31,6 +31,43 @@ const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = resolve(
   SKILL_DIR,
   "scripts/followup-drain-control-preload.mjs",
 );
+const ownedChildren = new Set();
+let activeCredential;
+let shutdownPromise;
+let shuttingDown = false;
+
+function assertRunnerActive() {
+  if (shuttingDown) throw new Error("Telegram E2E runner is shutting down.");
+}
+
+export function ownChild(child) {
+  ownedChildren.add(child);
+  return child;
+}
+
+async function stopOwnedChildren() {
+  await Promise.allSettled([...ownedChildren].map((child) => stopChild(child)));
+}
+
+export async function cleanupOwnedRuntime(credential = activeCredential) {
+  await stopOwnedChildren();
+  await credential?.release();
+}
+
+export async function fenceLeaseFailure({
+  error,
+  cancelControls,
+  probe,
+  controlWork,
+  persistLogs,
+}) {
+  cancelControls();
+  await stopChild(probe);
+  await stopOwnedChildren();
+  await Promise.allSettled(controlWork);
+  persistLogs();
+  throw error;
+}
 
 function parseArgs(argv) {
   const args = {
@@ -427,14 +464,15 @@ async function sutIdentity(sutToken) {
 }
 
 function spawnProcess(command, args, options) {
-  const child = spawn(command, args, {
+  assertRunnerActive();
+  const child = ownChild(spawn(command, args, {
     cwd: options.cwd,
     // Readiness detection regex-matches child output; ANSI color between
     // "[gateway]" and "ready" breaks it, so force plain logs.
     env: { ...options.env, NO_COLOR: "1", FORCE_COLOR: "0" },
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
-  });
+  }));
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.output = "";
@@ -448,11 +486,12 @@ function spawnProcess(command, args, options) {
 
 function runCommand(command, args, options) {
   return new Promise((resolveRun) => {
-    const child = spawn(command, args, {
+    assertRunnerActive();
+    const child = ownChild(spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
-    });
+    }));
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -471,17 +510,25 @@ function runCommand(command, args, options) {
         }, options.timeoutMs)
       : null;
     child.on("exit", (status) => {
+      ownedChildren.delete(child);
       if (timeout) clearTimeout(timeout);
       resolveRun({ status, stdout, stderr, timedOut });
     });
   });
 }
 
-async function runCronScenarioAction({ repoRoot, gatewayEnv, cronDeliveryTarget, message }) {
+async function runCronScenarioAction({
+  repoRoot,
+  gatewayEnv,
+  cronDeliveryTarget,
+  message,
+  isStopped,
+}) {
   let jobId;
   let runResult;
   let cronError;
   try {
+    if (isStopped()) throw new Error("Cron scenario cancelled after lease loss.");
     const added = await runCommand(
       "pnpm",
       [
@@ -511,6 +558,7 @@ async function runCronScenarioAction({ repoRoot, gatewayEnv, cronDeliveryTarget,
     }
     jobId = JSON.parse(added.stdout).id;
     if (typeof jobId !== "string" || !jobId) throw new Error("cron add returned no id");
+    if (isStopped()) throw new Error("Cron scenario cancelled after lease loss.");
     const run = await runCommand(
       "pnpm",
       ["openclaw", "cron", "run", jobId, "--wait", "--wait-timeout", "1m", "--json"],
@@ -523,7 +571,7 @@ async function runCronScenarioAction({ repoRoot, gatewayEnv, cronDeliveryTarget,
   } catch (error) {
     cronError = error;
   } finally {
-    if (jobId) {
+    if (jobId && !isStopped()) {
       const removed = await runCommand("pnpm", ["openclaw", "cron", "rm", jobId, "--json"], {
         cwd: repoRoot,
         env: gatewayEnv,
@@ -637,14 +685,18 @@ function signalChild(child, signal) {
 
 async function stopChild(child, graceMs = 5_000) {
   if (!child) return;
-  signalChild(child, "SIGTERM");
-  const [childExited, groupExited] = await Promise.all([
-    waitForExit(child, graceMs),
-    waitForProcessGroupExit(child, graceMs),
-  ]);
-  if (childExited && groupExited) return;
-  signalChild(child, "SIGKILL");
-  await Promise.all([waitForExit(child, 2_000), waitForProcessGroupExit(child, 2_000)]);
+  try {
+    signalChild(child, "SIGTERM");
+    const [childExited, groupExited] = await Promise.all([
+      waitForExit(child, graceMs),
+      waitForProcessGroupExit(child, graceMs),
+    ]);
+    if (childExited && groupExited) return;
+    signalChild(child, "SIGKILL");
+    await Promise.all([waitForExit(child, 2_000), waitForProcessGroupExit(child, 2_000)]);
+  } finally {
+    ownedChildren.delete(child);
+  }
 }
 
 async function waitForRecorderReady(pathname, child, timeoutMs = 30_000) {
@@ -698,7 +750,21 @@ async function sampleGatewayHealth(port, health, startedAt, isStopped) {
   return samples;
 }
 
+function shutdownOnSignal(signal) {
+  if (shutdownPromise) return;
+  shuttingDown = true;
+  const exitCode = signal === "SIGINT" ? 130 : 143;
+  shutdownPromise = (async () => {
+    await cleanupOwnedRuntime();
+  })()
+    .catch((error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+    })
+    .finally(() => process.exit(exitCode));
+}
+
 async function main() {
+  assertRunnerActive();
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = process.cwd();
   if (!fs.existsSync(path.join(repoRoot, "scripts/e2e/mock-openai-server.mjs"))) {
@@ -706,12 +772,17 @@ async function main() {
   }
 
   const credential = await acquireTelegramTestCredential();
+  activeCredential = credential;
   try {
     credential.assertLeaseHealthy();
     await drive(args, repoRoot, credential);
     credential.assertLeaseHealthy();
   } finally {
-    await credential.release();
+    try {
+      await credential.release();
+    } finally {
+      if (activeCredential === credential) activeCredential = undefined;
+    }
   }
 }
 
@@ -873,12 +944,12 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
 
     for (const text of args.preSend) {
       creds.assertLeaseHealthy();
-      const sent = spawnSync("uv", ["run", USER_DRIVER_PATH, "send", "--text", text], {
+      const sent = await runCommand("uv", ["run", USER_DRIVER_PATH, "send", "--text", text], {
         cwd: repoRoot,
         env: driverEnv,
-        encoding: "utf8",
+        timeoutMs: args.timeoutMs,
       });
-      if (sent.status !== 0) {
+      if (sent.status !== 0 || sent.timedOut) {
         throw new Error(`pre-send failed: ${sent.stderr || sent.stdout}`);
       }
       await new Promise((settle) => setTimeout(settle, 1000));
@@ -930,11 +1001,11 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       for (const value of args.expect) probeArgs.push("--expect", value);
       if (args.anySutReply) probeArgs.push("--any-sut-reply");
     }
-    const probe = spawn("uv", probeArgs, {
+    const probe = ownChild(spawn("uv", probeArgs, {
       cwd: repoRoot,
       env: driverEnv,
       stdio: ["inherit", "pipe", "pipe"],
-    });
+    }));
     let recorderStdout = "";
     let recorderStderr = "";
     probe.stdout.setEncoding("utf8");
@@ -1029,6 +1100,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
               gatewayEnv,
               cronDeliveryTarget: selectedChatTarget.cronDeliveryTarget,
               message: action.message,
+              isStopped: () => controlsStopped,
             }).then(
               (result) => {
                 Object.assign(actionRecord, result);
@@ -1049,17 +1121,19 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           let followupControl;
           if (action.type === "restartGateway") {
             await stopChild(gateway, action.graceMs);
+            if (controlsStopped) throw new Error("Gateway restart cancelled after lease loss.");
+            creds.assertLeaseHealthy();
             gateway = await startGateway();
           } else if (action.type === "patchConfig") {
             const current = readJson(temp.configPath);
             writePrivateJson(temp.configPath, mergeConfig(current, action.patch));
           } else if (action.type === "systemEvent") {
-            const result = spawnSync(
+            const result = await runCommand(
               "pnpm",
               ["openclaw", "system", "event", "--text", action.text, "--mode", "now", "--json"],
-              { cwd: repoRoot, env: gatewayEnv, encoding: "utf8", maxBuffer: 1024 * 1024 },
+              { cwd: repoRoot, env: gatewayEnv, timeoutMs: action.timeoutMs ?? 60_000 },
             );
-            if (result.status !== 0) {
+            if (result.status !== 0 || result.timedOut) {
               throw new Error(result.stderr || result.stdout || "system event failed");
             }
           } else if (action.type === "command") {
@@ -1145,11 +1219,18 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       creds.whenLeaseUnhealthy.then((error) => ({ type: "lease-failure", error })),
     ]);
     if (probeOutcome.type === "lease-failure") {
-      await stopChild(probe);
-      persistRecorderLogs();
-      throw probeOutcome.error;
+      await fenceLeaseFailure({
+        error: probeOutcome.error,
+        cancelControls: () => {
+          controlsStopped = true;
+        },
+        probe,
+        controlWork: [gatewayControl, gatewayHealth],
+        persistLogs: persistRecorderLogs,
+      });
     }
     const code = probeOutcome.code;
+    ownedChildren.delete(probe);
     persistRecorderLogs();
     controlsStopped = true;
     await gatewayControl;
@@ -1204,7 +1285,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.once("SIGINT", () => shutdownOnSignal("SIGINT"));
+  process.once("SIGTERM", () => shutdownOnSignal("SIGTERM"));
+  main().catch(async (error) => {
+    if (shutdownPromise) {
+      await shutdownPromise;
+      return;
+    }
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}
