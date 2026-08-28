@@ -188,7 +188,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   private readonly openPanel = () => {
     this.dispatchEvent(
       new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
-        detail: { open: true },
+        detail: { open: true, ...(this.preview ? { targetId: this.preview.targetId } : {}) },
         bubbles: true,
         composed: true,
       }),

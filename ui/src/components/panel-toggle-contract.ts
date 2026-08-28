@@ -31,6 +31,8 @@ export type BrowserPanelToggleDetail = {
   dock?: "bottom" | "right";
   newTab?: boolean;
   open?: boolean;
+  /** Existing tab to focus when the panel opens (browser-tab chat cards). */
+  targetId?: string;
   url?: string;
 };
 

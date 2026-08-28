@@ -101,7 +101,10 @@ describe("browser tab card", () => {
     expect(toggle).toHaveBeenCalledOnce();
     const event = toggle.mock.calls[0]?.[0];
     expect(event).toBeInstanceOf(CustomEvent);
-    expect(event instanceof CustomEvent ? event.detail : undefined).toEqual({ open: true });
+    expect(event instanceof CustomEvent ? event.detail : undefined).toEqual({
+      open: true,
+      targetId: "tab-1",
+    });
   });
 
   it("shares one screenshot between latest cards and leaves older cards as chips", async () => {

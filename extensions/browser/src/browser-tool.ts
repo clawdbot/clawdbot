@@ -1155,6 +1155,8 @@ export function createBrowserTool(opts?: {
         "snapshot",
         "text",
         "requests",
+        "console",
+        "emulate",
         "act",
       ].includes(action) && actRequest?.kind !== "close"
         ? withBrowserTabDetails(result, targetId)

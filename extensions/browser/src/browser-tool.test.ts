@@ -4791,6 +4791,7 @@ describe("browser observation actions and tab previews", () => {
         ok: true,
         targetId: "canonical",
         applied: ["device", "colorScheme", "timezoneId", "locale"],
+        browserTab: { targetId: "canonical" },
       });
       const expected = [
         ["device", { targetId: undefined, name: "iPhone 15" }],
