@@ -45,20 +45,6 @@ The whole point of an audit lane is exercising config the default path never use
 | `--source-gateway`          | the exact TypeScript checkout without a build step                                                                              |
 | `--pre-send '<text>'`       | posts as the QA user before the driven turn, for history-scoped rows                                                            |
 
-Scenario action `command` runs one bounded argv command without a shell in the
-isolated SUT environment. Set `cwd` to `repo`, `workspace`, `state`, or `root`;
-the summary records argv, exit status, timeout, and bounded stdout/stderr. Use
-this for CLI/plugin setup and inspection that must share the exact Gateway
-config and state used by the Telegram recording.
-
-```json
-{
-  "actions": [
-    { "type": "command", "argv": ["pnpm", "openclaw", "status", "--json"], "cwd": "repo" }
-  ]
-}
-```
-
 Bot API response controls reproduce a send that Telegram accepted while the
 fresh test Gateway callback stays unresolved. Arm one method, wait until it is
 held, then release it after the behavior checkpoint:

@@ -21,7 +21,6 @@ test("normalizes Telegram and gateway actions", () => {
         { type: "patchConfig", atMs: 750, patch: { channels: { telegram: { historyLimit: 9 } } } },
         { type: "systemEvent", atMs: 900, text: "heartbeat proof" },
         { type: "cron", atMs: 950, message: "deliver the schedule" },
-        { type: "command", atMs: 975, argv: ["node", "--version"], cwd: "repo" },
         { type: "telegramApiHold", atMs: 980, method: "sendMessage", skip: 1 },
         { type: "telegramApiWaitHeld", atMs: 990, method: "sendMessage" },
         { type: "telegramApiRelease", atMs: 1_000 },
@@ -50,13 +49,6 @@ test("normalizes Telegram and gateway actions", () => {
         },
         { type: "systemEvent", atMs: 900, text: "heartbeat proof" },
         { type: "cron", atMs: 950, message: "deliver the schedule" },
-        {
-          type: "command",
-          atMs: 975,
-          argv: ["node", "--version"],
-          cwd: "repo",
-          timeoutMs: 60_000,
-        },
         { type: "telegramApiHold", atMs: 980, method: "sendMessage", skip: 1 },
         {
           type: "telegramApiWaitHeld",
@@ -87,8 +79,8 @@ test("rejects fields and action types outside the closed schema", () => {
     /not a supported scenario action/u,
   );
   assert.throws(
-    () => parseScenario({ actions: [{ type: "command", argv: ["node"], cwd: "elsewhere" }] }),
-    /cwd must be repo, workspace, state, or root/u,
+    () => parseScenario({ actions: [{ type: "command", argv: ["node", "--version"] }] }),
+    /not a supported scenario action/u,
   );
   assert.throws(
     () => parseScenario({ actions: [{ type: "send", text: "hello", delayMs: 1 }] }),

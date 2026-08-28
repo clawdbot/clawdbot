@@ -62,7 +62,7 @@ export function sanitizeChildEnvironment(env = process.env) {
   );
 }
 
-export function createScenarioCommandEnvironment({
+function createControlEnvironment({
   baseEnv = process.env,
   configPath,
   stateDir,
@@ -963,7 +963,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       gatewayEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(repoRoot, "extensions");
       gatewayEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     }
-    const commandEnv = createScenarioCommandEnvironment({
+    const controlEnv = createControlEnvironment({
       configPath: temp.configPath,
       stateDir: temp.stateDir,
     });
@@ -1110,7 +1110,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             "patchConfig",
             "systemEvent",
             "cron",
-            "command",
             "telegramApiHold",
             "telegramApiWaitHeld",
             "telegramApiRelease",
@@ -1139,7 +1138,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           backgroundActions.push(
             runCronScenarioAction({
               repoRoot,
-              gatewayEnv: commandEnv,
+              gatewayEnv: controlEnv,
               cronDeliveryTarget: selectedChatTarget.cronDeliveryTarget,
               message: action.message,
               isStopped: () => controlsStopped,
@@ -1173,36 +1172,11 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             const result = await runCommand(
               "pnpm",
               ["openclaw", "system", "event", "--text", action.text, "--mode", "now", "--json"],
-              { cwd: repoRoot, env: commandEnv, timeoutMs: action.timeoutMs ?? 60_000 },
+              { cwd: repoRoot, env: controlEnv, timeoutMs: action.timeoutMs ?? 60_000 },
             );
             if (result.status !== 0 || result.timedOut) {
               throw new Error(result.stderr || result.stdout || "system event failed");
             }
-          } else if (action.type === "command") {
-            const cwd = {
-              repo: repoRoot,
-              workspace: temp.workspace,
-              state: temp.stateDir,
-              root: temp.root,
-            }[action.cwd];
-            const result = await runCommand(action.argv[0], action.argv.slice(1), {
-              cwd,
-              env: commandEnv,
-              timeoutMs: action.timeoutMs,
-            });
-            gatewayActions.push({
-              type: action.type,
-              elapsedMs: beganAt - scenarioStartedAt,
-              durationMs: Date.now() - beganAt,
-              status: result.status === 0 && !result.timedOut ? "completed" : "failed",
-              cwd: action.cwd,
-              argv: action.argv,
-              exitCode: result.status,
-              timedOut: result.timedOut,
-              stdout: result.stdout.slice(-16_384),
-              stderr: result.stderr.slice(-16_384),
-            });
-            continue;
           } else if (action.type === "telegramApiHold") {
             creds.telegramProxy.holdNextResponse({ method: action.method, skip: action.skip });
             telegramApi = { method: action.method, skip: action.skip };

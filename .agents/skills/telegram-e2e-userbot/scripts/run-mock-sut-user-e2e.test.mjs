@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import {
   cleanupOwnedRuntime,
-  createScenarioCommandEnvironment,
   fenceLeaseFailure,
   ownChild,
+  sanitizeChildEnvironment,
 } from "./run-mock-sut-user-e2e.mjs";
 
 function startOwnedChild() {
@@ -66,48 +63,13 @@ test("lease loss cancels and joins active cron and restart work", async () => {
   assert.equal(logsPersisted, true);
 });
 
-test("scenario commands cannot persist parent control-plane secrets", () => {
-  const sentinel = "must-not-reach-scenario-summary";
-  const credentialRoot = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-env-test-"));
-  const userDriverRoot = path.join(credentialRoot, "user-driver");
-  fs.mkdirSync(path.join(userDriverRoot, "db"), { recursive: true });
-  for (const pathname of [
-    path.join(credentialRoot, "credentials.local.json"),
-    path.join(userDriverRoot, "config.local.json"),
-    path.join(userDriverRoot, "db", "td_test.binlog"),
-  ]) {
-    fs.writeFileSync(pathname, sentinel);
-  }
-  const env = createScenarioCommandEnvironment({
-    configPath: "/tmp/disposable-sut-config.json",
-    stateDir: "/tmp/disposable-sut-state",
-    baseEnv: {
-      PATH: process.env.PATH,
-      E2E_SAFE_VALUE: "safe-value",
-      OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
-      OPENCLAW_QA_CONVEX_SECRET_CI: sentinel,
-      GITHUB_TOKEN: sentinel,
-      AWS_ACCESS_KEY_ID: sentinel,
-      CLAWSWEEPER_CRABFLEET_SERVICE_TOKEN: sentinel,
-      TELEGRAM_BOT_TOKEN: sentinel,
-      TELEGRAM_E2E_STATE_DIR: credentialRoot,
-      TELEGRAM_USER_DRIVER_STATE_DIR: userDriverRoot,
-    },
+test("credential-bearing child processes receive no parent control secrets", () => {
+  const env = sanitizeChildEnvironment({
+    PATH: "/safe/bin",
+    OPENCLAW_QA_CONVEX_SECRET_CI: "broker-secret",
+    GITHUB_TOKEN: "github-secret",
+    TELEGRAM_E2E_STATE_DIR: "/private/lease",
+    TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
   });
-  const command = spawnSync(
-    process.execPath,
-    [
-      "-e",
-      "const fs=require('node:fs');const path=require('node:path');for(const key of ['TELEGRAM_E2E_STATE_DIR','TELEGRAM_USER_DRIVER_STATE_DIR']){const root=process.env[key];if(!root)continue;for(const file of ['credentials.local.json','config.local.json','db/td_test.binlog']){try{process.stdout.write(fs.readFileSync(path.join(root,file),'utf8'))}catch{}}}process.stdout.write(JSON.stringify(process.env))",
-    ],
-    { env, encoding: "utf8" },
-  );
-  assert.equal(command.status, 0);
-  const persistedSummary = JSON.stringify({ stdout: command.stdout, stderr: command.stderr });
-  assert.match(persistedSummary, /safe-value/u);
-  assert.doesNotMatch(persistedSummary, new RegExp(sentinel, "u"));
-  assert.doesNotMatch(persistedSummary, /broker\.example\.test/u);
-  assert.doesNotMatch(persistedSummary, /telegram-command-env-test/u);
-  assert.match(persistedSummary, /disposable-sut-config/u);
-  fs.rmSync(credentialRoot, { recursive: true, force: true });
+  assert.deepEqual(env, { PATH: "/safe/bin" });
 });

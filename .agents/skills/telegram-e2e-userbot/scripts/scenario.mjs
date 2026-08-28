@@ -10,7 +10,6 @@ const ACTION_KEYS = {
   patchConfig: new Set(["type", "atMs", "patch"]),
   systemEvent: new Set(["type", "atMs", "text"]),
   cron: new Set(["type", "atMs", "message"]),
-  command: new Set(["type", "atMs", "argv", "cwd", "timeoutMs"]),
   telegramApiHold: new Set(["type", "atMs", "method", "skip"]),
   telegramApiWaitHeld: new Set(["type", "atMs", "method", "timeoutMs"]),
   telegramApiRelease: new Set(["type", "atMs"]),
@@ -82,25 +81,6 @@ export function parseScenario(value) {
         type: action.type,
         atMs,
         message: nonEmptyString(action.message, `${label}.message`),
-      };
-    }
-    if (action.type === "command") {
-      if (!Array.isArray(action.argv) || action.argv.length === 0) {
-        throw new Error(`${label}.argv must be a non-empty string array.`);
-      }
-      const argv = action.argv.map((value, argvIndex) =>
-        nonEmptyString(value, `${label}.argv[${argvIndex}]`),
-      );
-      const cwd = action.cwd ?? "repo";
-      if (!["repo", "workspace", "state", "root"].includes(cwd)) {
-        throw new Error(`${label}.cwd must be repo, workspace, state, or root.`);
-      }
-      return {
-        type: action.type,
-        atMs,
-        argv,
-        cwd,
-        timeoutMs: positiveInteger(action.timeoutMs, `${label}.timeoutMs`, 60_000),
       };
     }
     if (action.type === "telegramApiHold") {
