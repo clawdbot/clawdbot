@@ -32,10 +32,10 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./installed-plugin-index-records.js";
 import {
-  readPersistedInstalledPluginIndex,
   restorePersistedInstalledPluginIndexIfCurrent,
   type InstalledPluginIndexWriteReceipt,
-} from "./installed-plugin-index-store.js";
+} from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 import {
   clearRetainedManagedNpmInstallMarker,

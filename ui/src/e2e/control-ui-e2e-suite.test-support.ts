@@ -1,5 +1,5 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect } from "vitest";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -33,6 +33,27 @@ type ControlUiE2eSuite = {
     run: (fixture: ControlUiE2ePage) => Promise<T>,
   ) => Promise<T>;
 };
+
+export async function holdModuleResponse(page: Page, module: RegExp) {
+  let release!: () => void;
+  let requested!: (url: string) => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const request = new Promise<string>((resolve) => {
+    requested = resolve;
+  });
+  let requests = 0;
+  await page.route(module, async (route) => {
+    requests += 1;
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    requested(route.request().url());
+    await gate;
+    await route.fulfill({ response });
+  });
+  return { request, release, requests: () => requests };
+}
 
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {
   const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());

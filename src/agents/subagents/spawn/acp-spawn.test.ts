@@ -11,6 +11,7 @@ import {
   testing as acpRuntimeRegistryTesting,
 } from "../../../acp/runtime/registry.js";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
+import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
@@ -1369,49 +1370,116 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("uses configured runtime=acp agent primary model as an ACP startup model", async () => {
-    replaceSpawnConfig({
-      ...createDefaultSpawnConfig(),
-      agents: {
-        list: [
-          {
-            id: "codex-acp",
-            runtime: {
-              type: "acp",
-              acp: { agent: "codex" },
+  it.each<{
+    scenario: string;
+    model?: string;
+    ownerThinking?: ThinkLevel;
+    globalThinking?: ThinkLevel;
+    modelThinking?: ThinkLevel;
+    subagentThinking?: ThinkLevel;
+    globalSubagentThinking?: ThinkLevel;
+    thinking?: ThinkLevel;
+    expectedThinking?: ThinkLevel;
+  }>([
+    {
+      scenario: "configured primary model with global thinking default",
+      model: "anthropic/claude-sonnet-4-6",
+      globalThinking: "off",
+      expectedThinking: "off",
+    },
+    {
+      scenario: "owner default before model and global defaults",
+      model: "anthropic/claude-sonnet-4-6",
+      ownerThinking: "off",
+      modelThinking: "adaptive",
+      globalThinking: "high",
+      expectedThinking: "off",
+    },
+    {
+      scenario: "owner default without a model override",
+      ownerThinking: "off",
+      globalThinking: "high",
+      expectedThinking: "off",
+    },
+    {
+      scenario: "target subagent default before owner default",
+      ownerThinking: "off",
+      subagentThinking: "low",
+      expectedThinking: "low",
+    },
+    {
+      scenario: "global subagent default before owner default",
+      ownerThinking: "off",
+      globalSubagentThinking: "medium",
+      expectedThinking: "medium",
+    },
+    {
+      scenario: "explicit thinking before subagent and owner defaults",
+      ownerThinking: "off",
+      subagentThinking: "low",
+      thinking: "high",
+      expectedThinking: "high",
+    },
+    {
+      scenario: "harness defaults without an owner or model override",
+      globalThinking: "high",
+    },
+  ])(
+    "resolves configured ACP spawn model and thinking ($scenario)",
+    async ({
+      model,
+      ownerThinking,
+      globalThinking,
+      modelThinking,
+      subagentThinking,
+      globalSubagentThinking,
+      thinking,
+      expectedThinking,
+    }) => {
+      replaceSpawnConfig({
+        ...createDefaultSpawnConfig(),
+        agents: {
+          list: [
+            {
+              id: "codex-acp",
+              runtime: { type: "acp", acp: { agent: "codex" } },
+              model,
+              thinkingDefault: ownerThinking,
+              subagents: { thinking: subagentThinking },
             },
-            model: "anthropic/claude-sonnet-4-6",
-          },
-        ],
-        defaults: {
-          thinkingDefault: "off",
-          subagents: {
-            allowAgents: ["codex"],
-            maxSpawnDepth: 2,
+          ],
+          defaults: {
+            thinkingDefault: globalThinking,
+            ...(model && modelThinking
+              ? { models: { [model]: { params: { thinking: modelThinking } } } }
+              : {}),
+            subagents: {
+              allowAgents: ["codex"],
+              maxSpawnDepth: 2,
+              thinking: globalSubagentThinking,
+            },
           },
         },
-      },
-    });
+      });
 
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex-acp",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
+      const result = await spawnAcpDirect(
+        { task: "Investigate flaky tests", agentId: "codex-acp", thinking },
+        { agentSessionKey: "agent:main:main" },
+      );
 
-    expectAcceptedSpawn(result);
-    expectInitializeSessionFields({
-      agent: "codex",
-      runtimeOptions: {
-        model: "anthropic/claude-sonnet-4-6",
-        thinking: "off",
-      },
-    });
-  });
+      expectAcceptedSpawn(result);
+      expectInitializeSessionFields({
+        agent: "codex",
+        runtimeOptions:
+          model || expectedThinking
+            ? {
+                ...(model ? { model } : {}),
+                ...(expectedThinking ? { thinking: expectedThinking } : {}),
+              }
+            : undefined,
+      });
+    },
+  );
 
   it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
     const result = await spawnAcpDirect(

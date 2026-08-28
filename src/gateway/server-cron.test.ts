@@ -2701,6 +2701,76 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it.each(["requests-in-flight", "channel-not-ready"])(
+    "retains a direct %s retry deadline through the cron wake adapter",
+    async (reason) => {
+      const wakeRuntime = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+        "../infra/heartbeat-wake.js",
+      );
+      vi.useFakeTimers();
+      const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      const dispose = wakeRuntime.setHeartbeatWakeHandler(handler);
+      const state = loadCronService(createCronConfig("server-cron-retry-deadline"));
+      try {
+        getCronState(state).deps.requestHeartbeat(
+          {
+            source: "cron",
+            intent: "immediate",
+            reason: "cron:retained",
+            sessionKey: "discord:channel:ops",
+            heartbeat: { target: "last" },
+          },
+          { status: "skipped", reason, retryAtMs: Date.now() + 1_000 },
+        );
+        wakeRuntime.requestHeartbeat({
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:ops",
+          coalesceMs: 0,
+        });
+        wakeRuntime.requestHeartbeat({
+          source: "manual",
+          intent: "immediate",
+          reason: "global-flush",
+          coalesceMs: 0,
+        });
+
+        await vi.advanceTimersByTimeAsync(999);
+        expect(handler).toHaveBeenCalledExactlyOnceWith({
+          source: "manual",
+          intent: "immediate",
+          reason: "global-flush",
+        });
+        expect(requestHeartbeatMock).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(handler).toHaveBeenCalledTimes(2);
+        expect(handler.mock.calls[1]?.[0]).toMatchObject({
+          source: "cron",
+          intent: "immediate",
+          reason: "cron:retained",
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:ops",
+          heartbeat: { target: "last", to: undefined, accountId: undefined },
+          ...(reason === "channel-not-ready" ? { retainedWork: true } : {}),
+        });
+      } finally {
+        state.cron.stop();
+        dispose();
+        const drain = wakeRuntime.setHeartbeatWakeHandler(async () => ({
+          status: "skipped",
+          reason: "disabled",
+        }));
+        // Drain this wake deadline without advancing SQLite's recurring maintenance forever.
+        await vi.advanceTimersByTimeAsync(1_000);
+        drain();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("does not inherit explicit heartbeat destinations for direct target-last wakes", async () => {
     const cfg = {
       ...createCronConfig("server-cron-direct-heartbeat-route"),

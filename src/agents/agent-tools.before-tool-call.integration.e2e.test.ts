@@ -1476,7 +1476,10 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         );
 
         if (replacement === "return 3;") {
-          expect(result.details).toMatchObject({ status: "completed", value: 3 });
+          expect(result.details, JSON.stringify(result.details)).toMatchObject({
+            status: "completed",
+            value: 3,
+          });
         } else {
           expect(result.details).toEqual({
             status: "error",

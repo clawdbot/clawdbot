@@ -1,5 +1,9 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import path from "node:path";
+import type {
+  EvaluatedModuleNode as ViteEvaluatedModuleNode,
+  EvaluatedModules as ViteEvaluatedModules,
+} from "vite/module-runner";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
@@ -10,15 +14,13 @@ import {
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
 
-type EvaluatedModuleNode = {
-  promise?: unknown;
-  exports?: unknown;
-  evaluated?: boolean;
-  importers: Set<string>;
+type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
+  mockedExports?: unknown;
 };
 
 type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
+  invalidateModule: ViteEvaluatedModules["invalidateModule"];
 };
 
 type SerializableMocker = {
@@ -69,21 +71,23 @@ function getSharedTestHome(): string | undefined {
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
 }
 
-function resetEvaluatedModules(modules: EvaluatedModules, resetMocks: boolean) {
-  const skipPaths = [
-    /\/vitest\/dist\//,
-    /vitest-virtual-\w+\/dist/u,
-    /@vitest\/dist/u,
-    ...(resetMocks ? [] : [/^mock:/u]),
-  ];
+function resetEvaluatedModules(modules: EvaluatedModules) {
+  const skipPaths = [/\/vitest\/dist\//, /vitest-virtual-\w+\/dist/u, /@vitest\/dist/u];
 
   modules.idToModuleMap.forEach((node, modulePath) => {
     if (skipPaths.some((pattern) => pattern.test(modulePath))) {
       return;
     }
-    node.promise = undefined;
-    node.exports = undefined;
-    node.evaluated = false;
+    // Mock metadata owns factories and cached exports after the registry resets.
+    // Retire those nodes while preserving ordinary transformed-code metadata.
+    if (modulePath.startsWith("mock:") || (node.meta && "mockedModule" in node.meta)) {
+      modules.invalidateModule(node);
+      node.mockedExports = undefined;
+    } else {
+      node.promise = undefined;
+      node.exports = undefined;
+      node.evaluated = false;
+    }
     node.importers.clear();
   });
 }
@@ -482,6 +486,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     resetSharedDocumentBody();
     vi.resetModules();
     internals.moduleRunner?.mocker?.reset?.();
-    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules, true);
+    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules);
   }
 }

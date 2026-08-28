@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ClientOptions, WebSocket } from "ws";
+import type { ClientOptions } from "ws";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import {
   buildCloudflareAccessHeaders,
@@ -127,7 +127,6 @@ export function parseWorkerConnectionEndpoint(
 type WorkerConnectionTarget = {
   url: string;
   options: ClientOptions;
-  validateSocket(socket: WebSocket): Error | null;
 };
 
 export function resolveWorkerConnectionTarget(
@@ -138,7 +137,6 @@ export function resolveWorkerConnectionTarget(
     return {
       url: `ws+unix://${endpoint.socketPath}:/`,
       options: {},
-      validateSocket: () => null,
     };
   }
   if (endpoint.cloudflareAccess && new URL(endpoint.url).protocol !== "wss:") {

@@ -25,6 +25,17 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        await page.route("**/plugins/geolocation/lookup?ip=203.0.113.20", async (route) => {
+          await route.fulfill({
+            contentType: "application/json",
+            json: {
+              found: true,
+              city: "Vienna",
+              region: "Vienna",
+              attribution: { text: "IP Geolocation by DB-IP", url: "https://db-ip.com" },
+            },
+          });
+        });
         const current = new Date();
         // Keep the automation fixtures on one local calendar day in every timezone.
         const now = new Date(
@@ -51,6 +62,7 @@ suite.define(() => {
               host: "Alice's MacBook Pro",
               platform: "macOS 26.5",
               deviceFamily: "Mac",
+              ip: "203.0.113.20",
               lastInputSeconds: 32,
               watchedSessions: [releaseKey, designKey],
             },
@@ -306,12 +318,18 @@ suite.define(() => {
         });
 
         await page.locator('[data-online-user-id="profile-alice"]').click();
+        const personCard = page.getByRole("dialog", { name: "Activity for Alice Chen" });
+        await personCard.waitFor({ state: "visible" });
+        await personCard.getByRole("link", { name: "View activity", exact: true }).click();
         await expect
           .poll(() => new URL(page.url()).searchParams.get("person"))
           .toBe("profile-alice");
         await expect
           .poll(() => activityPage.locator('[data-activity-identity="profile-alice"]').isVisible())
           .toBe(true);
+        const attributionIcon = activityPage.locator(".activity-feed__device-attribution");
+        await expect.poll(() => attributionIcon.locator("svg").count()).toBe(1);
+        await expect.poll(async () => (await attributionIcon.boundingBox())?.width).toBe(16);
         await expect
           .poll(() =>
             activityPage.locator(".activity-feed__viewing-list .activity-feed__session").count(),

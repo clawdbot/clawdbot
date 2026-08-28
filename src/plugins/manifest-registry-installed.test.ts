@@ -7,10 +7,8 @@ import {
   recordInstalledPluginIndexInstallOwner,
   resolveInstalledPluginIndexInstallOwner,
 } from "./installed-plugin-index-install-owner.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasMissingInstalledPluginOwnerMetadata,

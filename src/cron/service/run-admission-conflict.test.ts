@@ -13,7 +13,7 @@ import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  isCronRunReceiptOwnerDefinitelyStale,
+  isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
@@ -352,7 +352,7 @@ it("retires a reservation when its row disappears during the post-commit reload"
       | undefined;
     expect(receipt?.status).toBe("skipped");
     expect(
-      isCronRunReceiptOwnerDefinitelyStale({
+      isCronRunReceiptOwnerStale({
         receiptId: receipt!.receiptId,
         storeKey: cronStoreKey(store.storePath),
         jobId: job.id,

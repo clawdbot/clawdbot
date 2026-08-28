@@ -198,6 +198,7 @@ export function writeSutConfig(params: {
   mockPort: number;
   outputDir: string;
   repoRoot?: string;
+  telegramApiRoot?: string;
   testerId: string;
 }) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-crabbox-sut-"));
@@ -237,7 +238,7 @@ export function writeSutConfig(params: {
     channels: {
       telegram: {
         allowFrom: [params.testerId],
-        apiRoot: "http://telegram-api-proxy:8080",
+        ...(params.telegramApiRoot ? { apiRoot: params.telegramApiRoot } : {}),
         botToken: { id: "TELEGRAM_BOT_TOKEN", provider: "default", source: "env" },
         commands: { native: true, nativeSkills: false },
         dmPolicy: "allowlist",
@@ -718,7 +719,11 @@ export async function startMantisSut(params: {
   onRuntimeDisposed?: () => void;
 }): Promise<MantisSutRuntime> {
   const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig({ ...params, mockHost: "mock-openai" });
+  const config = writeSutConfig({
+    ...params,
+    mockHost: "mock-openai",
+    telegramApiRoot: "http://telegram-api-proxy:8080",
+  });
   // The root wrapper relocates tempRoot into its bounded filesystem, then restores this
   // exact path as a symlink before Docker starts. Keep controller and claim paths anchored
   // here so live log reads, mock updates, stop, and destroy all share one runtime identity.

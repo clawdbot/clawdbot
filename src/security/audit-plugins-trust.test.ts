@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {

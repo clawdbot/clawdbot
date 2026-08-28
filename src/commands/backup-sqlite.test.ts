@@ -1,16 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   backupSqliteCreateCommand,
   backupSqliteListCommand,
@@ -27,22 +30,21 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return { ...actual, getRuntimeConfig: configMocks.getRuntimeConfig };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let previousStateDir: string | undefined;
+let state: OpenClawTestState;
 
-beforeEach(() => {
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
+beforeEach(async () => {
+  // Rejected requests can record outcomes too; every case must own its state.
+  state = await createOpenClawTestState({
+    prefix: "openclaw-backup-sqlite-",
+    layout: "state-only",
+  });
   configMocks.getRuntimeConfig.mockReset().mockReturnValue({
     agents: { list: [{ id: "main" }, { id: "ops-team" }] },
   });
 });
 
-afterEach(() => {
-  if (previousStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = previousStateDir;
-  }
+afterEach(async () => {
+  await state.cleanup();
 });
 
 function createGlobalDatabase(databasePath: string): void {
@@ -131,12 +133,10 @@ function createAgentDatabase(databasePath: string, agentId: string): void {
 
 describe("SQLite backup commands", () => {
   it("creates, lists, verifies, and fresh-restores the global database", async () => {
-    const tempDir = tempDirs.make("openclaw-backup-sqlite-");
-    const stateDir = path.join(tempDir, "state");
+    const tempDir = state.root;
     const repositoryPath = path.join(tempDir, "snapshots");
     const scratchPath = path.join(tempDir, "scratch");
     const restorePath = path.join(tempDir, "restore", "openclaw.sqlite");
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     const databasePath = resolveOpenClawStateSqlitePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.mkdir(scratchPath, { mode: 0o700 });
@@ -205,7 +205,7 @@ describe("SQLite backup commands", () => {
   });
 
   it("reports missing snapshot paths for verify and restore", async () => {
-    const tempDir = tempDirs.make("openclaw-backup-sqlite-missing-");
+    const tempDir = state.root;
     const repositoryPath = path.join(tempDir, "snapshots");
     const snapshotPath = path.join(repositoryPath, "missing-snapshot");
     const restorePath = path.join(tempDir, "restored.sqlite");
@@ -235,10 +235,8 @@ describe("SQLite backup commands", () => {
   ])(
     "creates a snapshot for a normalized $label per-agent database",
     async ({ customAgentDir }) => {
-      const tempDir = tempDirs.make("openclaw-backup-sqlite-");
-      const stateDir = path.join(tempDir, "state");
+      const tempDir = state.root;
       const repositoryPath = path.join(tempDir, "snapshots");
-      process.env.OPENCLAW_STATE_DIR = stateDir;
       const agentDir = customAgentDir ? path.join(tempDir, "external-agent") : undefined;
       if (agentDir) {
         configMocks.getRuntimeConfig.mockReturnValue({
@@ -292,7 +290,6 @@ describe("SQLite backup commands", () => {
     ["empty", "", "--agent must not be blank"],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
-    process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-backup-sqlite-agent-rejection-");
     await expect(
       backupSqliteCreateCommand(createRuntimeCapture(), {
         agent,
@@ -302,10 +299,8 @@ describe("SQLite backup commands", () => {
   });
 
   it("does not claim completion when a corrupt database also rejects outcome recording", async () => {
-    const tempDir = tempDirs.make("openclaw-backup-sqlite-corrupt-");
-    const stateDir = path.join(tempDir, "state");
+    const tempDir = state.root;
     const repositoryPath = path.join(tempDir, "snapshots");
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     const databasePath = resolveOpenClawStateSqlitePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.writeFile(databasePath, Buffer.alloc(32));
@@ -336,7 +331,7 @@ describe("SQLite backup commands", () => {
   });
 
   it("rejects generic provider artifacts before verify or restore", async () => {
-    const tempDir = tempDirs.make("openclaw-backup-sqlite-");
+    const tempDir = state.root;
     const databasePath = path.join(tempDir, "generic.sqlite");
     const repositoryPath = path.join(tempDir, "snapshots");
     const restorePath = path.join(tempDir, "restore", "generic.sqlite");

@@ -151,7 +151,9 @@ describe("ConfigPage synced preference provenance", () => {
   ])("$label", ({ selfUser, scopes, canPatch, appearanceCanSync, localeCanSync }) => {
     const page = new ConfigPage() as unknown as {
       context: ApplicationContext;
-      serverUiPrefsCanSync: (key?: "theme" | "themeMode" | "accent") => boolean | null;
+      serverUiPrefsCanSync: (
+        key?: "theme" | "themeMode" | "accent" | "fontUi" | "fontChat",
+      ) => boolean | null;
     };
     page.context = {
       gateway: {
@@ -163,6 +165,8 @@ describe("ConfigPage synced preference provenance", () => {
     expect(page.serverUiPrefsCanSync("theme")).toBe(appearanceCanSync);
     expect(page.serverUiPrefsCanSync("themeMode")).toBe(appearanceCanSync);
     expect(page.serverUiPrefsCanSync("accent")).toBe(appearanceCanSync);
+    expect(page.serverUiPrefsCanSync("fontUi")).toBe(Boolean(selfUser) && appearanceCanSync);
+    expect(page.serverUiPrefsCanSync("fontChat")).toBe(Boolean(selfUser) && appearanceCanSync);
     expect(page.serverUiPrefsCanSync()).toBe(localeCanSync);
   });
 
@@ -215,6 +219,49 @@ describe("ConfigPage synced preference provenance", () => {
     expect(page.settings.theme).toBe("dash");
     expect(changedServerUiPrefs(beforeReset, page.settings)).toEqual({ theme: null });
   });
+
+  it.each(["fontUi", "fontChat"] as const)(
+    "resets the %s profile override when its picker sentinel is selected",
+    async (key) => {
+      const gatewayUrl = "ws://font-profile.test";
+      const configObject = {};
+      const client = {
+        request: vi.fn(async () => ({ status: "ok", entries: { [`ui.${key}`]: "lora" } })),
+      } as unknown as GatewayBrowserClient;
+      await refreshProfileAppearancePrefs({
+        client,
+        profileId: "font-owner",
+        configObject,
+        scope: gatewayUrl,
+        onApplied: vi.fn(),
+      });
+      const page = new ConfigPage() as unknown as {
+        context: ApplicationContext;
+        settings: ReturnType<typeof loadSettings>;
+        setFont: (key: "fontUi" | "fontChat", font: undefined) => void;
+      };
+      page.context = {
+        gateway: {
+          connection: { gatewayUrl },
+          snapshot: {
+            selfUser: { id: "font-owner" },
+            hello: { auth: { role: "operator", scopes: ["operator.write"] } },
+          },
+        },
+        runtimeConfig: {
+          state: { connected: true, configSnapshot: { config: configObject } },
+          canPatch: false,
+        },
+        theme: { refresh: vi.fn() },
+      } as unknown as ApplicationContext;
+      const previous = loadSettings();
+      page.settings = previous;
+      page.setFont(key, undefined);
+      expect(page.settings[key]).toBeUndefined();
+      expect(changedServerUiPrefs(previous, page.settings)).toEqual({ [key]: null });
+      expect(page.context.theme.refresh).toHaveBeenCalledOnce();
+    },
+  );
 
   it("uses the committed snapshot for both display and reset while the form draft differs", () => {
     const page = new ConfigPage();
@@ -302,6 +349,27 @@ describe("ConfigPage synced preference provenance", () => {
     themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
 
     expect(changedServerUiPrefs(beforeReset, state.settings)).toEqual({ theme: null });
+  });
+});
+
+describe("ConfigPage header", () => {
+  it("renders the route subtitle for Communications", () => {
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      pageId: "communications";
+      renderAdvancedConfig: () => undefined;
+    };
+    state.context = { runtimeConfig: { state: {} } } as unknown as ApplicationContext;
+    state.pageId = "communications";
+    state.renderAdvancedConfig = () => undefined;
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    expect(container.querySelector(".page-subtitle")?.textContent?.trim()).toBe(
+      "Messages and text-to-speech settings.",
+    );
   });
 });
 

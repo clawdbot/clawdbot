@@ -260,7 +260,7 @@ Disable with:
 
 **Group access**
 
-- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). `channels.defaults.groupPolicy` can override the shared default when `channels.msteams.groupPolicy` is unset. Set it at the root to apply to all accounts, or override it at `channels.msteams.accounts.<id>.groupPolicy`.
+- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). The root schema default takes precedence over `channels.defaults.groupPolicy`. Set it at the root to apply to all accounts, or override it at `channels.msteams.accounts.<id>.groupPolicy`.
 - `channels.msteams.groupAllowFrom` controls which senders, static sender access groups, or group/channel conversation IDs can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`). Set it at the root to share it, or override it at `channels.msteams.accounts.<id>.groupAllowFrom`. Conversation IDs can use `19:...@thread.tacv2`, `19:...@thread.v2`, or `19:...@thread.skype`; preserve the exact ID casing. OpenClaw ignores `;messageid=...` suffixes. Conversation IDs never grant personal-DM access.
 - Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To block **all** channels, set `channels.msteams.groupPolicy: "disabled"`.

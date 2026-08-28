@@ -614,6 +614,29 @@ clients, socket listeners, subprocess launchers, or service startup modules.
 Put those runtime pieces in modules loaded from `registerFull(...)`, runtime
 setters, or lazy capability adapters.
 
+### Account schemas and inheritance
+
+Use `buildChannelAccountSchemaParts` from
+`openclaw/plugin-sdk/channel-config-schema`. Its `accountShape` leaves
+`dmPolicy` and `groupPolicy` optional, so an omitted account policy inherits
+the channel root. Spread its `rootPolicyShape` into the root schema
+only: it defaults DMs to `pairing` and groups to `allowlist`. Do not apply
+those defaults to account entries or remove them from the root; the former
+shadows operator settings and the latter can leave group access open.
+This replaces `buildCommonChannelAccountShape` and its defaulting flags.
+
+Use `mergeAccountConfig` or `resolveMergedAccountConfig` through the existing
+`openclaw/plugin-sdk/account-helpers` export for runtime inheritance. Their
+shared implementation lives at `src/config/channel-account-config.ts`;
+plugins must use the SDK import. Account fields replace root fields, including
+explicit empty collections. `nestedObjectKeys` selects shallow object merges;
+`inheritEmptyKeys` maps fields to `"array"` or `"object"` to inherit the root
+when that kind of account collection is empty. `preserveRootAllowFrom: true` removes an account wildcard
+when the root contains restrictive sender entries, retaining explicit account
+senders or falling back to the root list. These collection and allowlist rules
+are owner-selected, not universal channel defaults. Keep credentials, transport
+selection, and other channel-specific account concerns in the plugin.
+
 ### Other narrow channel subpaths
 
 For other hot channel paths, prefer the narrow helpers over broader legacy

@@ -32,7 +32,11 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { moveDeliveryQueueEntryToFailed } from "../../infra/delivery-queue-sqlite.js";
+import {
+  loadDeliveryQueueEntry,
+  moveDeliveryQueueEntryToFailed,
+  upsertDeliveryQueueEntry,
+} from "../../infra/delivery-queue-sqlite.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { ackDelivery, enqueueDeliveryOnce } from "../../infra/outbound/delivery-queue-storage.js";
 import {
@@ -2539,6 +2543,34 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it.each(["owed", "unresolved", "acknowledged"] as const)(
+    "preserves a prior %s notice when the same pending final completes",
+    async (state) => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const pending = makePendingFinalDelivery("Uncertain reply.", {
+        context: discordDeliveryContext,
+        intentId: "intent-notice-retained",
+        deliveries: [{ id: "delivery-notice-retained", state: "unknown" }],
+      });
+      await writeMainSession({
+        sessionsDir,
+        pendingFinalDelivery: pending,
+        pendingDeliveryNotice: {
+          createdAt: pending.createdAt,
+          context: discordDeliveryContext,
+          intentId: "intent-notice-retained",
+          state,
+        },
+      });
+      await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+      const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(entry?.pendingFinalDelivery).toBeUndefined();
+      expect(entry?.pendingDeliveryNotice?.state).toBe(state);
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
+    },
+  );
+
   it("completes an unqueued text and media final with owed notice debt instead of replaying", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -2595,7 +2627,7 @@ describe("main-session-restart-recovery", () => {
     },
   );
 
-  it.each(["pending", "failed", "completed"] as const)(
+  it.each(["pending", "failed", "completed", "settling"] as const)(
     "keeps a prepared pending final aligned with its exact queue owner in %s",
     async (ownerStatus) => {
       const deliveryId = `delivery-owner-${ownerStatus}`;
@@ -2611,7 +2643,15 @@ describe("main-session-restart-recovery", () => {
           deliveryId,
           tmpDir,
         );
-        if (ownerStatus === "failed") {
+        if (ownerStatus === "settling") {
+          const entry = loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryId, tmpDir)!;
+          upsertDeliveryQueueEntry({
+            queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+            entry: { ...entry, recoveryState: "settlement_pending" },
+            status: "failed",
+            stateDir: tmpDir,
+          });
+        } else if (ownerStatus === "failed") {
           moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryId, tmpDir);
         } else if (ownerStatus === "completed") {
           await ackDelivery(deliveryId, tmpDir);
@@ -2627,14 +2667,14 @@ describe("main-session-restart-recovery", () => {
         });
 
         await expectRecovery(
-          ownerStatus === "pending"
+          ownerStatus === "pending" || ownerStatus === "settling"
             ? { started: 0, settled: 0, failed: 0, skipped: 1 }
             : { started: 0, settled: 1, failed: 0, skipped: 0 },
         );
 
         expect(callGateway).not.toHaveBeenCalled();
         expect(sendRecoveryNotice).not.toHaveBeenCalled();
-        if (ownerStatus !== "pending") {
+        if (ownerStatus !== "pending" && ownerStatus !== "settling") {
           const sessionsStorePath = path.join(sessionsDir, "sessions.json");
           expect(
             loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionsStorePath })

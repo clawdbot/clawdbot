@@ -134,4 +134,25 @@ describe("heartbeat broadcast outcomes", () => {
     expect(await run({ source: "cron", intent: "task" })).toEqual(busy);
     expect(runOnce).toHaveBeenCalledTimes(2);
   });
+
+  it("retries a channel-not-ready alert without consuming its scheduled cadence", async () => {
+    const { run, runOnce } = startRunner();
+    runOnce.mockResolvedValueOnce({
+      status: "skipped",
+      reason: "channel-not-ready",
+      retryAtMs: 60_000,
+    });
+    const wake = {
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+    } as const;
+    heartbeatWake.requestHeartbeat({ ...wake, coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(runOnce).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runOnce).toHaveBeenCalledTimes(2);
+    expect(await run(wake)).toMatchObject({ status: "skipped", reason: "not-due" });
+  });
 });

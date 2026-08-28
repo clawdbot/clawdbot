@@ -256,17 +256,15 @@ async function restartWithOtelConfig(params: {
   });
 }
 
-async function installAndConfigure(params: {
-  configTraceEndpoint: string;
+// Return the handle before installation so the caller's finally owns every later failure.
+async function startInstallGateway(params: {
   envTraceEndpoint: string;
   mockBaseUrl: string;
   nodeOptions?: string;
-  packageVersion: string;
   registryBaseUrl: string;
   repoRoot: string;
-  sampleRate?: number;
 }) {
-  const gateway = await startQaGatewayChild({
+  return await startQaGatewayChild({
     repoRoot: params.repoRoot,
     providerBaseUrl: `${params.mockBaseUrl}/v1`,
     providerMode: "mock-openai",
@@ -292,8 +290,17 @@ async function installAndConfigure(params: {
       ...(params.nodeOptions ? { OPENCLAW_OTEL_PRELOADED: "1" } : {}),
     },
   });
+}
+
+async function installAndConfigure(params: {
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  configTraceEndpoint: string;
+  packageVersion: string;
+  sampleRate?: number;
+}) {
+  const { gateway } = params;
   const spec = `npm:${PACKAGE_NAME}@${params.packageVersion}`;
-  await gateway.runCli(["plugins", "install", spec, "--force"]);
+  await gateway.runCli(["plugins", "install", spec, "--force", "--accept-capabilities"]);
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("qa gateway state directory was not configured");
@@ -332,7 +339,6 @@ async function installAndConfigure(params: {
     id: "diagnostics-otel",
     status: "loaded",
   });
-  return gateway;
 }
 
 describe("managed diagnostics-otel install runtime", () => {
@@ -348,13 +354,16 @@ describe("managed diagnostics-otel install runtime", () => {
       const packed = await packPlugin(repoRoot, scratch);
       registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
       mock = await startQaMockOpenAiServer();
-      gateway = await installAndConfigure({
-        configTraceEndpoint: configured.baseUrl,
+      gateway = await startInstallGateway({
         envTraceEndpoint: envOnly.baseUrl,
         mockBaseUrl: mock.baseUrl,
-        packageVersion: packed.version,
         registryBaseUrl: registry.baseUrl,
         repoRoot,
+      });
+      await installAndConfigure({
+        gateway,
+        configTraceEndpoint: configured.baseUrl,
+        packageVersion: packed.version,
         sampleRate: 0,
       });
       await runTurn(gateway, "OTEL-MANAGED-SAMPLED-OUT");
@@ -457,14 +466,17 @@ describe("managed diagnostics-otel install runtime", () => {
           "globalThis.__openclawQaPreloadedOtelSdk = sdk;",
         ].join("\n"),
       );
-      gateway = await installAndConfigure({
-        configTraceEndpoint: ignoredConfig.baseUrl,
+      gateway = await startInstallGateway({
         envTraceEndpoint: receiver.baseUrl,
         mockBaseUrl: mock.baseUrl,
         nodeOptions: `--import=${pathToFileURL(preloadPath).href}`,
-        packageVersion: packed.version,
         registryBaseUrl: registry.baseUrl,
         repoRoot,
+      });
+      await installAndConfigure({
+        gateway,
+        configTraceEndpoint: ignoredConfig.baseUrl,
+        packageVersion: packed.version,
       });
       const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
       if (!stateDir) {

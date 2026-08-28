@@ -280,28 +280,37 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses provider prompt observer", () => {
-  it.each([
-    { reasoning: true, promptSource: "input.developer" },
-    { reasoning: false, promptSource: "input.system" },
-  ] as const)("observes the final $promptSource prompt", async ({ reasoning, promptSource }) => {
-    const prompt = `PRIVATE-${promptSource}-PROMPT`;
-    const run = await runObservedRequest({
-      context: createContext(prompt),
-      model: createModel({ reasoning }),
-    });
+  // createModel() defaults to a verified native OpenAI route (see
+  // usesVerifiedInstructionsEndpoint in openai-responses-payload-policy.ts),
+  // so this request carries the system prompt via top-level `instructions`
+  // rather than an `input.developer`/`input.system` message. That default is
+  // route-specific, not universal -- see the Azure test below, which is on
+  // an unverified route and falls back to input.developer.
+  // The reasoning flag no longer changes promptSource (it used to select
+  // between the developer/system input roles); both cases stay in the table
+  // to confirm reasoning=true/false doesn't regress instructions delivery.
+  it.each([{ reasoning: true }, { reasoning: false }] as const)(
+    "observes the final instructions prompt (reasoning=$reasoning)",
+    async ({ reasoning }) => {
+      const prompt = `PRIVATE-reasoning-${reasoning}-PROMPT`;
+      const run = await runObservedRequest({
+        context: createContext(prompt),
+        model: createModel({ reasoning }),
+      });
 
-    expect(run.observations).toEqual([
-      {
-        egress: "responses-sdk",
-        payloadVariant: "initial",
-        promptSource,
-        expectedChars: prompt.length,
-        observedChars: prompt.length,
-        matchesAssembledPrompt: true,
-      },
-    ]);
-    expect(JSON.stringify(run.observations)).not.toContain(prompt);
-  });
+      expect(run.observations).toEqual([
+        {
+          egress: "responses-sdk",
+          payloadVariant: "initial",
+          promptSource: "instructions",
+          expectedChars: prompt.length,
+          observedChars: prompt.length,
+          matchesAssembledPrompt: true,
+        },
+      ]);
+      expect(JSON.stringify(run.observations)).not.toContain(prompt);
+    },
+  );
 
   it("observes Azure Responses egress", async () => {
     const prompt = "PRIVATE-AZURE-PROMPT";
@@ -320,6 +329,10 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(run.observations[0]).toMatchObject({
       egress: "responses-sdk",
       payloadVariant: "initial",
+      // Azure is not a verified instructions-field route (see
+      // usesVerifiedInstructionsEndpoint in openai-responses-payload-policy.ts)
+      // -- it falls back to embedding the prompt in input, same as any other
+      // unverified route.
       promptSource: "input.developer",
       matchesAssembledPrompt: true,
     });
@@ -683,9 +696,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     if (!request) {
       throw new Error("missing captured request");
     }
-    expect((request.input as Array<Record<string, unknown>>)[0]).toMatchObject({
-      content: [{ type: "input_text", text: normalizedPrompt }],
-    });
+    expect(request.instructions).toBe(normalizedPrompt);
   });
 
   it("reports missing and same-length mutated prompts without retaining content", async () => {

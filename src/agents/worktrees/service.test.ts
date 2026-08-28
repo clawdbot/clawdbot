@@ -530,15 +530,34 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.access(setupMarker)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("removes the worktree and branch when setup fails", async () => {
+  it("bounds failed setup diagnostics without losing the fatal detail or cleanup", async () => {
     await fs.mkdir(path.join(repo, ".openclaw"));
     const script = path.join(repo, ".openclaw", "worktree-setup.sh");
-    await fs.writeFile(script, "#!/bin/sh\necho setup-broke >&2\nexit 9\n", { mode: 0o755 });
-    await expect(
-      service.create({ repoRoot: repo, name: "broken-setup", baseRef: "HEAD" }),
-    ).rejects.toThrow("setup-broke");
+    const fatal = "fatal: setup dependency could not be resolved";
+    const progress = Array.from(
+      { length: 2_000 },
+      (_, index) => `Receiving objects: ${index}/2000\r`,
+    ).join("");
+    await fs.writeFile(
+      script,
+      `#!/bin/sh\nprintf '%s\\n' "$OPENCLAW_WORKTREE_PATH" > "$OPENCLAW_SOURCE_TREE_PATH/setup-path.txt"\nprintf '%s' '${progress}\n${"x".repeat(65_536)}${fatal}\n' >&2\nexit 23\n`,
+      { mode: 0o755 },
+    );
+    const failure: unknown = await service
+      .create({ repoRoot: repo, name: "broken-setup", baseRef: "HEAD" })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected setup failure");
+    }
+    const worktreePath = (await fs.readFile(path.join(repo, "setup-path.txt"), "utf8")).trim();
+    await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("broken-setup");
     expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
+    expect(service.listRegistryRecords()).toEqual([]);
+    expect.soft(failure.message).toContain(fatal);
+    expect.soft(failure.message.length).toBeLessThanOrEqual(2_300);
+    expect.soft(/(?:exit|code|status)[^\n]*23/i.test(failure.message)).toBe(true);
   });
 
   it("restores tracked, untracked, and provisioned ignored files from the snapshot", async () => {

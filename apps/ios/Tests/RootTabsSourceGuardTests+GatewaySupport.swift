@@ -261,6 +261,8 @@ extension RootTabsSourceGuardTests {
         #expect(onboardingGatewayLink.contains("self.gatewayPassword = setupAuth.password"))
         #expect(settingsGatewayLink.contains("self.gatewayToken = setupAuth.token"))
         #expect(settingsGatewayLink.contains("self.gatewayPassword = setupAuth.password"))
+        #expect(onboardingSource.contains("ManualAuthOverride.selectingCredentialTarget("))
+        #expect(actionsSource.contains("ManualAuthOverride.selectingCredentialTarget("))
         #expect(onboardingManualConnect.contains("nodeOptions.allowStoredDeviceAuth == true"))
         #expect(onboardingManualConnect.contains("self.pendingManualAuthOverride = nil"))
         #expect(onboardingManualConnect.contains("targetStableID: stableID"))

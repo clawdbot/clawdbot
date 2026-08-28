@@ -29,7 +29,6 @@ openclaw update --tag beta
 openclaw update --dry-run
 openclaw update --no-restart
 openclaw update --yes
-openclaw update --acknowledge-clawhub-risk
 openclaw update --json
 openclaw --update
 ```
@@ -48,7 +47,6 @@ launcher scripts).
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
 | `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
-| `--acknowledge-clawhub-risk`                     | Allow post-update plugin sync to continue past community ClawHub trust warnings without an interactive prompt. Without it, risky community releases are skipped and left unchanged when OpenClaw cannot prompt. Official ClawHub packages and bundled plugin sources bypass this prompt.                                                      |
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`
@@ -100,7 +98,6 @@ converge.
 ```bash
 openclaw update repair
 openclaw update repair --channel beta
-openclaw update repair --acknowledge-clawhub-risk
 openclaw update repair --json
 ```
 
@@ -110,7 +107,6 @@ openclaw update repair --json
 | `--json`                                         | Print machine-readable finalization JSON.                                                                                                                                                                                                                           |
 | `--timeout <seconds>`                            | Timeout for repair steps. Default `1800`.                                                                                                                                                                                                                           |
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                          |
-| `--acknowledge-clawhub-risk`                     | Same behavior as on `openclaw update`.                                                                                                                                                                                                                              |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                             |
 
 `update repair` runs `openclaw doctor --fix`, reloads the repaired config and
@@ -118,6 +114,10 @@ install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
 It does not install a new core package and does not restart the Gateway.
+
+With `--json`, stdout contains one JSON document. Doctor panels and other
+diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
+plugin finalization steps still exit non-zero.
 
 ## `update wizard`
 

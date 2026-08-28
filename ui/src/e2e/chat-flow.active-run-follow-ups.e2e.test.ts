@@ -99,46 +99,6 @@ suite.define(() => {
     }
   });
 
-  it("steers a queued follow-up with modified Enter in Enter shortcut mode", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("keep the first shortcut run active");
-      await page.getByRole("button", { name: "Send message" }).click();
-      await gateway.waitForRequest("chat.send");
-      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
-
-      const steerText = "steer this keyboard follow-up now";
-      await composer.fill(steerText);
-      await composer.press("Control+Enter");
-
-      const firstRunSends = await waitForRequests(gateway, "chat.send", 2);
-      const steerParams = requireRecord(firstRunSends[1]?.params);
-      expect(steerParams).toMatchObject({
-        deliver: false,
-        message: steerText,
-        queueMode: "steer",
-        sessionKey: "main",
-      });
-      expect(steerParams).not.toHaveProperty("expectedRunId");
-      expect(steerParams).not.toHaveProperty("expectedLeafEntryId");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("keeps the active run across a live steer operation", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

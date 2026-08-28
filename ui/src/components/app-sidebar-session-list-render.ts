@@ -23,6 +23,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -188,21 +189,17 @@ function renderSessionSection(params: {
               </button>
               ${group
                 ? html`
-                    <button
-                      type="button"
-                      class="sidebar-session-group-actions sidebar-new-session"
-                      title=${newSessionAccess.allowed
-                        ? t("sessionsView.newSessionInGroup", { group })
-                        : newSessionAccess.reason}
-                      aria-label=${t("sessionsView.newSessionInGroup", { group })}
-                      ?disabled=${!newSessionAccess.allowed}
-                      @click=${(event: MouseEvent) => {
-                        event.stopPropagation();
-                        host.openNewSession({ group });
-                      }}
-                    >
-                      ${icons.plus}
-                    </button>
+                    ${renderNewSessionLink({
+                      basePath: host.basePath,
+                      agentId: host.expandedAgentId(),
+                      target: { group },
+                      className: "sidebar-session-group-actions sidebar-new-session",
+                      label: t("sessionsView.newSessionInGroup", { group }),
+                      disabledReason: newSessionAccess.allowed
+                        ? undefined
+                        : newSessionAccess.reason,
+                      onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+                    })}
                     <button
                       type="button"
                       class="sidebar-session-group-actions"
@@ -437,18 +434,14 @@ function renderSessionListToolbar(host: SidebarSessionListHost) {
       >
         ${icons.listFilter}
       </button>
-      <button
-        type="button"
-        class="sidebar-session-toolbar__button sidebar-new-session"
-        title=${newSessionAccess.allowed
-          ? t("chat.runControls.newSession")
-          : newSessionAccess.reason}
-        aria-label=${t("chat.runControls.newSession")}
-        ?disabled=${!newSessionAccess.allowed}
-        @click=${() => host.openNewSession()}
-      >
-        ${icons.plus}
-      </button>
+      ${renderNewSessionLink({
+        basePath: host.basePath,
+        agentId: host.expandedAgentId(),
+        className: "sidebar-session-toolbar__button sidebar-new-session",
+        label: t("chat.runControls.newSession"),
+        disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+      })}
     </div>
   `;
 }

@@ -596,8 +596,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(notify);
     },
     refreshList: (options) => roster.refreshList(options),
-    setOwnerFilter: (ownerId) => roster.setOwnerFilter(ownerId),
-    setInvolvingMeFilter: (enabled) => roster.setInvolvingMeFilter(enabled),
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,
@@ -608,7 +606,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     recover: operations.recover,
     patch: mutations.patch,
     archiveVisibility: mutations.archiveVisibility,
-    setArchiveVisibility: mutations.setArchiveVisibility,
+    setArchivePending: mutations.setArchivePending,
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
     think: (key, agentId) => thinkingLevelClaims.get(thinkingClaimKey(key, agentId))?.[0],

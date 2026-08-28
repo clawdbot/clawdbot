@@ -62,7 +62,7 @@ When the loaded session list contains fewer than two distinct owner identities a
 
 ## People cards
 
-Hover or focus a person in the sidebar's **Online** section to open their information card. The details button also opens the card on touch devices. Selecting the person's name or **View activity** opens their Activity page.
+Hover, focus, click, or tap a person in the sidebar's **Online** section to open their information card. Select **View activity** in the card to open that person's Activity page.
 
 The card shows how long the person has been continuously connected, their reported app/device context and time zone, and their last observed activity during that online period. Opening a different session, typing, and sending a new message count as activity; connection heartbeats and agent responses do not. **Not observed yet** means no qualifying activity has been recorded, not that the person is inactive. These timing facts are ephemeral and reset after the person's final connection closes or the Gateway restarts.
 

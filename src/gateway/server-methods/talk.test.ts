@@ -9,7 +9,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 
@@ -4135,6 +4137,88 @@ describe("talk.client.create handler", () => {
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
     expectRespondError(respond, {
       message: 'talk.client.create only supports brain="agent-consult"',
+    });
+  });
+});
+describe("role-required Talk session creation", () => {
+  it.each([
+    { method: "talk.client.create" as const, params: { sessionKey: "agent:main:talk-required" } },
+    {
+      method: "talk.session.create" as const,
+      params: {
+        sessionKey: "agent:main:talk-required",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+    },
+  ])("passes authenticated creator isolation through $method", async ({ method, params }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.clearAllMocks();
+      const profile = ensureProfileForEmail("talk-required@example.test");
+      mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+        provider: {
+          id: "openai",
+          label: "OpenAI Realtime",
+          isConfigured: () => true,
+          createBrowserSession: vi.fn(async () => ({
+            provider: "openai",
+            transport: "webrtc" as const,
+            clientSecret: "test-session-secret",
+          })),
+          createBridge: vi.fn(),
+        },
+        providerConfig: {},
+      });
+      mocks.resolveRealtimeVoiceProviderCapabilities.mockImplementation(
+        ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
+      );
+      mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-required");
+      mocks.createTalkRealtimeRelaySession.mockReturnValue({
+        provider: "openai",
+        transport: "gateway-relay",
+        relaySessionId: "relay-required",
+      });
+      const config: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: ["main"],
+                scopes: ["operator.talk"],
+                sandbox: "required",
+              },
+            },
+          },
+        },
+        talk: { realtime: { provider: "openai", providers: { openai: {} } } },
+      };
+      const respond = vi.fn();
+
+      await callTalkHandler(method, {
+        params,
+        respond,
+        client: {
+          connId: "conn-required",
+          connect: { scopes: ["operator.talk"] },
+          authenticatedUserProfile: { profileId: profile.id },
+        },
+        context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },
+      });
+
+      expectRespondOk(respond);
+      expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:talk-required",
+          creation: expect.objectContaining({
+            actor: { type: "human", id: profile.id },
+            sandbox: "required",
+          }),
+        }),
+      );
     });
   });
 });

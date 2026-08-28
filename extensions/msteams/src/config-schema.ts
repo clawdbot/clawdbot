@@ -1,11 +1,9 @@
 // Microsoft Teams helper module supports config schema behavior.
 import {
   buildChannelConfigSchema,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
-  DmPolicySchema,
-  GroupPolicySchema,
   MSTeamsReplyStyleSchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -62,16 +60,30 @@ function isAllowedMSTeamsServiceUrl(value: string): boolean {
   }
 }
 
+function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    return host === "botframework.azure.cn" || host.endsWith(".botframework.azure.cn");
+  } catch {
+    return false;
+  }
+}
+
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["name", "mentionPatterns", "replyToMode"],
+  allowFrom: z.array(z.string()).optional(),
+  groupAllowFrom: z.array(z.string()).optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
+});
+
 const MSTeamsAccountConfigBaseSchema = z
   .object({
     name: z.string().optional(),
-    ...buildCommonChannelAccountShape({
-      useDefaults: false,
-      omit: ["name", "mentionPatterns", "replyToMode"],
-      allowFrom: z.array(z.string()).optional(),
-      groupAllowFrom: z.array(z.string()).optional(),
-      streaming: ChannelPreviewStreamingConfigSchema.optional(),
-    }),
+    ...accountShape,
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     appId: z.string().optional(),
     appPassword: registerSensitiveConfigSchema(SecretInputSchema.optional()),
@@ -130,12 +142,8 @@ const MSTeamsAccountConfigBaseSchema = z
   })
   .strict();
 
-const MSTeamsAccountConfigSchema = MSTeamsAccountConfigBaseSchema.extend({
-  dmPolicy: DmPolicySchema.optional().default("pairing"),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-});
-
-export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
+export const MSTeamsConfigSchema = MSTeamsAccountConfigBaseSchema.extend({
+  ...rootPolicyShape,
   accounts: z.record(z.string(), MSTeamsAccountConfigBaseSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 })

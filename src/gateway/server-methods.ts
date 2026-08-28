@@ -271,6 +271,11 @@ function authorizeGatewayMethod(
   if (role === "node") {
     return null;
   }
+  if (method === "device.scopes.requestUpgrade" || method === "device.scopes.waitUpgrade") {
+    // Scope recovery must remain reachable from a paired operator whose grant is empty;
+    // the handlers bind both calls to the connection's exact device identity.
+    return null;
+  }
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }

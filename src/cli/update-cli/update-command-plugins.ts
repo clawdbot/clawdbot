@@ -1,13 +1,9 @@
 // Plugin synchronization and convergence after the core update.
-import { confirm, isCancel, text } from "@clack/prompts";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
-import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
 import {
@@ -46,63 +42,16 @@ const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE =
 type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
 
 function isClawHubTrustNotice(message: string): boolean {
-  const trimmed = stripAnsi(message).trimStart();
-  return (
-    trimmed.startsWith("ClawHub trust warning ") ||
-    trimmed.startsWith("╭─ REVIEW RECOMMENDED - ClawHub ") ||
-    trimmed.startsWith("╭─ WARNING - ClawHub found security risks ") ||
-    trimmed.startsWith("╭─ BLOCKED - ClawHub ")
-  );
+  return stripAnsi(message).includes("ClawHub Security Audit");
 }
 
 function isNonBlockingClawHubTrustNotice(message: string): boolean {
-  const trimmed = stripAnsi(message).trimStart();
-  return (
-    trimmed.startsWith("ClawHub trust warning ") ||
-    trimmed.startsWith("╭─ REVIEW RECOMMENDED - ClawHub ")
-  );
+  const audit = stripAnsi(message);
+  return audit.includes("ClawHub Security Audit") && audit.includes("Outcome: Review");
 }
 
 function formatPluginUpdateWarning(message: string): string {
   return message.includes("╭─") ? message : theme.warn(message);
-}
-
-function resolveUpdateClawHubRiskAcknowledgementOptions(
-  opts: UpdateCommandOptions,
-  params: {
-    renderWarningBeforePrompt?: (warning: string) => void;
-  } = {},
-): {
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => Promise<boolean>;
-} {
-  if (opts.acknowledgeClawHubRisk) {
-    return { acknowledgeClawHubRisk: true };
-  }
-  if (opts.dryRun || opts.yes || opts.json || !process.stdin.isTTY || !process.stdout.isTTY) {
-    return {};
-  }
-  return {
-    onClawHubRisk: async (request) => {
-      params.renderWarningBeforePrompt?.(request.warning);
-      const packageName = sanitizeTerminalText(request.packageName);
-      const releaseLabel = `${packageName}@${sanitizeTerminalText(request.version)}`;
-      if (request.acknowledgementKind === "type-package") {
-        const answer = await text({
-          message: stylePromptMessage(`type: '${packageName}' to update anyway`),
-          placeholder: packageName,
-        });
-        return !isCancel(answer) && answer.trim() === packageName;
-      }
-      const ok = await confirm({
-        message: stylePromptMessage(
-          `Update ClawHub package "${releaseLabel}" after reviewing the warning above?`,
-        ),
-        initialValue: false,
-      });
-      return !isCancel(ok) && ok;
-    },
-  };
 }
 
 function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): string {
@@ -251,21 +200,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   const warnings: PostUpdatePluginWarning[] = [];
-  const clawHubRiskAcknowledgementOptions = resolveUpdateClawHubRiskAcknowledgementOptions(
-    params.opts,
-    {
-      renderWarningBeforePrompt: (warning) => {
-        if (hasLoggedPluginWarning(warning)) {
-          return;
-        }
-        recordLoggedPluginWarning(warning);
-        recordClawHubTrustNotice(warning);
-        if (!params.opts.json) {
-          defaultRuntime.log(formatPluginUpdateWarning(warning));
-        }
-      },
-    },
-  );
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
   const pluginUpdateChannel = params.channel;
@@ -282,7 +216,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
     }),
-    ...clawHubRiskAcknowledgementOptions,
     logger: pluginLogger,
   });
   for (const error of syncResult.summary.errors) {
@@ -357,7 +290,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
       disableOnFailure: true,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
-      ...clawHubRiskAcknowledgementOptions,
     });
     pluginConfig = repairResult.config;
     pluginsChanged ||= repairResult.changed;
@@ -383,7 +315,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
     disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
-    ...clawHubRiskAcknowledgementOptions,
   });
   pluginConfig = npmResult.config;
   pluginsChanged ||= npmResult.changed;
@@ -437,7 +368,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
     cfg: pluginConfig,
     env: process.env,
     baselineInstallRecords: convergenceBaselineRecords,
-    ...clawHubRiskAcknowledgementOptions,
   });
   for (const change of convergence.changes) {
     if (!params.opts.json) {

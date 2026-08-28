@@ -368,21 +368,23 @@ describe("renderMemory", () => {
       })}`;
 
     const collapsed = renderInto(createProps({ editor: editor(false) }));
-    const show = collapsed.querySelector<HTMLButtonElement>(".config-show-advanced");
-    expect(show?.getAttribute("aria-pressed")).toBe("false");
+    const show = collapsed.querySelector<HTMLDetailsElement>("details.config-advanced-disclosure");
+    expect(show?.open).toBe(false);
     expect(collapsed.textContent).not.toContain("Advanced memory field");
-    show?.click();
+    show!.open = true;
+    show!.dispatchEvent(new Event("toggle"));
     expect(onAdvancedChange).toHaveBeenCalledWith(true);
 
     const expanded = renderInto(createProps({ editor: editor(true) }));
-    const hide = expanded.querySelector<HTMLButtonElement>(".config-show-advanced");
-    expect(hide?.getAttribute("aria-pressed")).toBe("true");
+    const hide = expanded.querySelector<HTMLDetailsElement>("details.config-advanced-disclosure");
+    expect(hide?.open).toBe(true);
     expect(expanded.textContent).toContain("Advanced memory field");
-    hide?.click();
+    hide!.open = false;
+    hide!.dispatchEvent(new Event("toggle"));
     expect(onAdvancedChange).toHaveBeenCalledWith(false);
 
     const overview = renderInto(createProps({ activeTab: "overview", editor: editor(false) }));
-    expect(overview.querySelector(".config-show-advanced")).toBeNull();
+    expect(overview.querySelector("details.config-advanced-disclosure")).toBeNull();
   });
 });
 

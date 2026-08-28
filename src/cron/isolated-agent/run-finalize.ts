@@ -431,6 +431,7 @@ export async function finalizeCronRun(params: {
     const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
     queueSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
       cfg: prepared.cfgWithAgentDefaults,
+      runSessionKey: prepared.runSessionKey,
       job: prepared.input.job,
       agentId: prepared.agentId,
       agentSessionKey: prepared.agentSessionKey,

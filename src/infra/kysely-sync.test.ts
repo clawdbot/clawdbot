@@ -4,6 +4,7 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { sql, type Generated } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
@@ -11,7 +12,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
-  registerNodeSqliteKyselyQueryErrorHandler,
 } from "./kysely-sync.js";
 
 type SyncHelperTestDatabase = {

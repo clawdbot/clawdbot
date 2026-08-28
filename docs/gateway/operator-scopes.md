@@ -127,11 +127,22 @@ workspace from becoming a writable bridge between guests. Maintainer sessions
 and other sessions without a role-required sandbox keep their configured scope
 and workspace access.
 
-The Gateway records the creator's sandbox requirement once when the session is
-created. Existing sessions are unaffected, and role changes, session sharing,
-maintainer participation, and `sessions.patch` cannot remove or replace the
-requirement. A person whose role requires sandboxing cannot start a run in an
-existing host-execution session, even when explicitly invited. Required sessions
+The Gateway records the authenticated creator and their sandbox requirement
+together before a new session first runs, including chat, Talk, recovery,
+forks, checkpoint branches, cron, outbound messages, and spawned children.
+Delegated child work inherits a required parent's original creator and sandbox
+policy, even after role changes. Recovery and branching requested by another
+person use that person's own role rather than the source session's policy.
+
+Required creation provenance is immutable. Role changes, sharing, participation,
+`sessions.patch`, whole-entry replacement, legacy imports, and canonical-key
+repair cannot remove or replace an existing required stamp. Blocked persisted
+overwrites emit a `session-sqlite` warning; inspect them with
+[`openclaw logs --follow`](/cli/logs). Existing unstamped sessions and new sessions
+whose creator does not require sandboxing retain their existing behavior.
+
+A person whose role requires sandboxing cannot start a run in an existing
+host-execution session, even when explicitly invited. Required sessions
 fail if their sandbox backend is unavailable or provisioning fails; they never
 fall back to the Gateway or a node. `/elevated`, `exec` host overrides, and
 configured host targets cannot bypass this restriction. The agent's managed
@@ -287,15 +298,18 @@ An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
 
-A connected limited Control UI can file that same pending request through its
-**Request admin** banner without attempting a broader reconnect. The banner can
-collapse into a persistent **Limited access** chip that reopens the action. The request is
-bound to the signed device identity on the live connection. Approval still
+A connected limited Control UI can file that same pending request through
+**Inbox > System > Limited access > Request admin** without attempting a broader
+reconnect. The request is bound to the signed device identity on the live connection. Approval still
 comes from `device.pair.approve` and therefore requires `operator.pairing` plus
 authority for every requested scope. After approval rotates the operator token,
 the Gateway returns the new token only to that device's live waiter; the browser
 stores it before reconnecting. Canceling the wait or disconnecting before
 approval falls back to the ordinary pairing repair flow on the next connection.
+
+Requests outside the authenticated person's assigned role ceiling are denied,
+not queued for device approval. The Control UI shows the denial and administrator
+guidance without **Retry**; an administrator must change the role first.
 
 The explicit exception is the administrator-capable Control UI owner profile
 issued directly on the Gateway host by `openclaw dashboard` or graphical

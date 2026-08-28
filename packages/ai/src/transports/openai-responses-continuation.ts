@@ -34,7 +34,20 @@ function jsonValuesEqual(left: object, right: object): boolean {
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
-  const { input: _input, previous_response_id: _previousResponseId, ...rest } = request;
+  // `instructions` (like `input`) carries the system prompt for every
+  // non-Codex Responses request now, rebuilt fresh from live runtime state
+  // on every attempt -- see resolveOpenAIResponsesInstructions in
+  // openai-responses-params-internal.ts. It is sent on the wire on every
+  // request regardless of continuation status (spread from the original
+  // request below), so excluding it here loses no freshness; comparing it
+  // would just move the same false-positive rejection this module already
+  // guards against in `input` into `request_changed` instead.
+  const {
+    input: _input,
+    previous_response_id: _previousResponseId,
+    instructions: _instructions,
+    ...rest
+  } = request;
   if (!isRecord(rest.metadata)) {
     return rest;
   }
