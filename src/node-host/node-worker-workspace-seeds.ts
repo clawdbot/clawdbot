@@ -94,8 +94,9 @@ export async function runNodeWorkerWorkspaceSeed(params: {
         return "absent" as const;
       }
       await fsp.cp(seedDir, workspaceDir, { recursive: true, verbatimSymlinks: true });
-      const now = new Date();
-      await fsp.utimes(seedDir, now, now);
+      // Apply must not bump the seed mtime: it is the store-freshness clock. Active
+      // seeds refresh it through the periodic re-store; bumping on use would mark a
+      // stale seed permanently "fresh" and its content would never be replaced.
       return "applied" as const;
     }
     if (!(await readSeedDirectory(path.dirname(workspaceDir), workspaceDir))) {

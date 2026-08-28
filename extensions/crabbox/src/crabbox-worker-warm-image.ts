@@ -38,7 +38,10 @@ const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
 const WARM_IMAGE_CAPTURE_TIMEOUT_MS = 180_000;
 // Machine0 image save stops the source and waits for image availability even with --wait=false.
 const WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS = 600_000;
-const WARM_IMAGE_CAPTURE_RESERVATION_TIMEOUT_MS = 2 * WARM_IMAGE_CAPTURE_TIMEOUT_MS;
+// Reservation staleness must cover the slowest provider capture budget: stealing a
+// live capture's reservation lets the finished capture overwrite the thief's record
+// and orphan its provider checkpoint outside retention cleanup.
+const WARM_IMAGE_CAPTURE_RESERVATION_TIMEOUT_MS = 2 * WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS;
 const WARM_IMAGE_MAX_ENTRIES = 128;
 const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 

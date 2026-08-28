@@ -745,7 +745,8 @@ describe("Crabbox profile warm images", () => {
     store.register(image.key, {
       ...image.value,
       checkpointId: "",
-      createdAtMs: Date.now() - 360_001,
+      // Reservation staleness covers the slowest (machine0) capture budget twice over.
+      createdAtMs: Date.now() - 1_200_001,
     });
 
     const restarted = createWarmProvider(undefined, initial.stateDir);

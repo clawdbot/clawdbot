@@ -292,6 +292,12 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
         } catch (error) {
           if (error instanceof Error && error.message.includes("INVALID_REQUEST")) {
             supportsSeeds = false;
+          } else {
+            // Seeded failure self-heals through the clone path; without this line the
+            // degradation would be invisible behind an ordinary "published-origin" sync.
+            workspaceSyncLog.info("node worker workspace seeded sync failed; cloning", {
+              error: boundedWorkerError(error),
+            });
           }
         }
       }

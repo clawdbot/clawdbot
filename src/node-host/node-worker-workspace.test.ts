@@ -74,7 +74,8 @@ describe("node worker workspace seeds", () => {
     expect(await fsp.readdir(workspace)).toEqual([".git", "link.txt", "tracked.txt"]);
     expect(await fsp.readFile(path.join(workspace, "tracked.txt"), "utf8")).toBe("original");
     expect(await fsp.readlink(path.join(workspace, "link.txt"))).toBe("tracked.txt");
-    expect((await fsp.stat(seedDir)).mtimeMs).toBeGreaterThan(old.getTime());
+    // Apply leaves the store-freshness clock untouched so a used seed still refreshes.
+    expect((await fsp.stat(seedDir)).mtimeMs).toBeLessThanOrEqual(old.getTime());
     expect(await git("rev-parse", "HEAD")).toBe(commit);
     expect(await git("status", "--porcelain")).toBe("");
     await fsp.writeFile(path.join(workspace, "tracked.txt"), "later edit");
