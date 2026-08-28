@@ -12,6 +12,7 @@ import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profile
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { createRequest, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
@@ -140,7 +141,7 @@ describe.each(["write-default", "trusted-operator"] as const)(
         const shouldEnforcePluginGatewayAuth = (
           pathContext: Parameters<typeof shouldEnforceGatewayAuthForPluginPath>[1],
         ) => shouldEnforceGatewayAuthForPluginPath(registry, pathContext);
-        const wss = new WebSocketServer({ noServer: true });
+        const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
         try {
           await withTempConfig({
             cfg,
