@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -278,17 +277,19 @@ export class OpenClawChannelBridge {
     return response.messages ?? [];
   }
 
-  async readMessage(sessionKey: string, messageId: string, limit = 100) {
-    const messages = await this.readMessages(sessionKey, limit);
-    const message = messages.find((entry) => resolveMessageId(entry) === messageId);
-    if (message || !this.supportsExactMessageLookup) {
-      return message ?? null;
+  async readMessage(sessionKey: string, messageId: string, legacyLimit = 100) {
+    await this.waitUntilReady();
+    if (!this.supportsExactMessageLookup) {
+      // v2026.5.28 shares protocol v4 but predates chat.message.get. Remove this
+      // bounded fallback when the remote compatibility floor excludes that release.
+      const messages = await this.readMessages(sessionKey, legacyLimit);
+      return messages.find((entry) => resolveMessageId(entry) === messageId) ?? null;
     }
     const result = await this.requestGateway("chat.message.get", {
       sessionKey,
       messageId,
     });
-    return result.ok === true && isRecord(result.message) ? result.message : null;
+    return result.ok === true ? (result.message ?? null) : null;
   }
 
   /** Send a reply using the same channel route stored on the conversation. */

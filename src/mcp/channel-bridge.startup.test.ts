@@ -94,13 +94,10 @@ describe("OpenClawChannelBridge startup", () => {
     await bridge.start();
 
     expect(mockState.clientOptions?.tlsFingerprint).toBe("sha256:local");
-    expect(
-      (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
-    ).toBe(true);
     await bridge.close();
   });
 
-  it("waits through retryable Gateway startup until hello succeeds", async () => {
+  it("waits through retryable startup and updates lookup support after reconnect", async () => {
     mockState.autoHello = false;
     const bridge = new OpenClawChannelBridge({} as never, {
       claudeChannelMode: "off",
@@ -119,27 +116,6 @@ describe("OpenClawChannelBridge startup", () => {
     }
     onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
 
-    await expect(started).resolves.toBeUndefined();
-    await bridge.close();
-  });
-
-  it("updates exact message lookup support after reconnecting", async () => {
-    mockState.autoHello = false;
-    const bridge = new OpenClawChannelBridge({} as never, {
-      claudeChannelMode: "off",
-      verbose: false,
-    });
-
-    const started = bridge.start();
-    await vi.waitFor(() => {
-      expect(mockState.clientOptions).not.toBeNull();
-    });
-    const onHelloOk = mockState.clientOptions?.onHelloOk;
-    if (typeof onHelloOk !== "function") {
-      throw new Error("Expected Gateway hello callback");
-    }
-
-    onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
     await expect(started).resolves.toBeUndefined();
     expect(
       (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
