@@ -214,6 +214,7 @@ export async function repairLoadedGatewayServiceForStart(
       runtime,
       runtimePath: runtime === "bun" ? installedRuntimePath : undefined,
       wrapperPath,
+      existingCommand: params.state.command,
       existingEnvironment,
       existingEnvironmentValueSources,
       config: cfg,

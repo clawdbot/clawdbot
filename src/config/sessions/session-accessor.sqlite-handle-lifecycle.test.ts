@@ -12,6 +12,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  loadTranscriptEventsSync,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
   withTranscriptWriteLock,
@@ -65,6 +66,45 @@ describe("SQLite session handle lifecycle", () => {
     archiveMaterializationHook.afterMaterialize = undefined;
     closeOpenClawAgentDatabasesForTest();
   });
+
+  it.each([0, 1])(
+    "releases a transcript read after JSON parsing fails at row %i",
+    async (index) => {
+      const events = [
+        { type: "message", id: "first", message: { role: "user", content: "first" } },
+        { type: "message", id: "second", message: { role: "assistant", content: "second" } },
+        { type: "message", id: "third", message: { role: "user", content: "third" } },
+      ];
+      await replaceTranscriptEvents(scope, events);
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+      const row = database.db
+        .prepare(
+          "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT 1 OFFSET ?",
+        )
+        .get(scope.sessionId, index) as { seq: number; event_json: string };
+      const update = database.db.prepare(
+        "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?",
+      );
+      update.run("{malformed", scope.sessionId, row.seq);
+
+      expect(() => loadTranscriptEventsSync(scope)).toThrow(SyntaxError);
+      expect(database.db.isTransaction).toBe(false);
+      // A leaked iterator can retain a read lock even after the transaction rolls back.
+      expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+        busy: 0,
+      });
+
+      update.run(row.event_json, scope.sessionId, row.seq);
+      expect(loadTranscriptEventsSync(scope)).toEqual(events);
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: "after failure" },
+      });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        ...events,
+        expect.objectContaining({ message: expect.objectContaining({ content: "after failure" }) }),
+      ]);
+    },
+  );
 
   it.each(["events", "message facts"])(
     "reads %s after a locked callback loses its handle",

@@ -2707,9 +2707,11 @@ describe("stageSystemdService", () => {
       // operator previously wrote there but staging now supplies inline.
       await fs.writeFile(
         envFilePath,
-        ["OPENCLAW_GATEWAY_TOKEN=stale-gateway-token", "OPENROUTER_API_KEY=or-operator-key"].join(
-          "\n",
-        ) + "\n",
+        [
+          "OPENCLAW_GATEWAY_TOKEN=stale-gateway-token",
+          "OPENROUTER_API_KEY=or-operator-key",
+          "NODE_OPTIONS=--require=/tmp/stale-preload.cjs",
+        ].join("\n") + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
 
@@ -2728,12 +2730,14 @@ describe("stageSystemdService", () => {
           OPENCLAW_GATEWAY_TOKEN: "fresh-gateway-token",
           LLM_API_KEY: "dotenv-key",
           OPENROUTER_API_KEY: "or-operator-key",
+          NODE_OPTIONS: "",
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_TOKEN",
         },
         environmentValueSources: {
           OPENCLAW_GATEWAY_TOKEN: "inline-and-file",
           LLM_API_KEY: "inline",
           OPENROUTER_API_KEY: "file",
+          NODE_OPTIONS: "inline",
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
         },
       });
@@ -2745,6 +2749,8 @@ describe("stageSystemdService", () => {
       // Stale inline-managed key must be removed from the env file so the
       // fresh inline Environment= value wins (EnvironmentFile would override it).
       expect(envFile).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+      expect(envFile).not.toContain("NODE_OPTIONS");
+      expect(unit).toContain("Environment=NODE_OPTIONS=\n");
       // Operator-added key not managed inline must survive.
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
       expect(envFile).not.toContain("LLM_API_KEY");

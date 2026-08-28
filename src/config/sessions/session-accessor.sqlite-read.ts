@@ -177,7 +177,7 @@ export function loadTranscriptEventsFromDatabase(
   beforeEventSeq?: number,
 ): TranscriptEvent[] {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("transcript_events")
@@ -185,8 +185,9 @@ export function loadTranscriptEventsFromDatabase(
       .where("session_id", "=", sessionId)
       .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
       .orderBy("seq", "asc"),
-  ).rows;
-  return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+  );
+  // Array.from closes the iterator on parse failure; no live cursor escapes a fenced read.
+  return Array.from(rows, (row) => JSON.parse(row.event_json) as TranscriptEvent);
 }
 
 export function readTranscriptSnapshot(

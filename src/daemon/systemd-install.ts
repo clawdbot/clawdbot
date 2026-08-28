@@ -62,7 +62,8 @@ function collectSystemdInlineManagedKeys(params: {
     keys.delete(key);
   }
   for (const [rawKey, value] of Object.entries(params.environment ?? {})) {
-    if (typeof value !== "string" || !value.trim()) {
+    // Clearing NODE_OPTIONS must also remove stale env-file flags that override inline values.
+    if (typeof value !== "string" || (!value.trim() && rawKey !== "NODE_OPTIONS")) {
       continue;
     }
     const key = normalizeServiceEnvKey(rawKey);

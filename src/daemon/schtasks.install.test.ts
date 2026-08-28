@@ -177,6 +177,7 @@ describe("installScheduledTask", () => {
           OC_BANG: "!token!",
           OC_QUOTE: 'he said "hi"',
           OC_EMPTY: "",
+          NODE_OPTIONS: "",
         },
       });
 
@@ -191,6 +192,7 @@ describe("installScheduledTask", () => {
       expect(script).toContain('set "OC_BANG=^!token^!"');
       expect(script).toContain('set "OC_QUOTE=he said ^"hi^""');
       expect(script).not.toContain('set "OC_EMPTY=');
+      expect(script).toContain('set "NODE_OPTIONS="');
       expect(script).not.toContain("set OC_INJECT=");
 
       const parsed = await readScheduledTaskCommand(env);
@@ -212,6 +214,7 @@ describe("installScheduledTask", () => {
           OC_PERCENT: "%TEMP%",
           OC_BANG: "!token!",
           OC_QUOTE: 'he said "hi"',
+          NODE_OPTIONS: "",
         },
         environmentValueSources: {
           OC_INJECT: "inline",
@@ -219,6 +222,7 @@ describe("installScheduledTask", () => {
           OC_PERCENT: "inline",
           OC_BANG: "inline",
           OC_QUOTE: "inline",
+          NODE_OPTIONS: "inline",
         },
         sourcePath: scriptPath,
       });

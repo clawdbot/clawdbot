@@ -679,18 +679,6 @@ function parseSessionTimestampMs(
   return 0;
 }
 
-function serializeTranscriptEvent(record: unknown): string | null {
-  const serialized = JSON.stringify(record);
-  return typeof serialized === "string" ? serialized : null;
-}
-
-function serializeTranscriptEvents(records: readonly unknown[]): string {
-  return records
-    .map(serializeTranscriptEvent)
-    .filter((line): line is string => line !== null)
-    .join("\n");
-}
-
 function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): number {
   const configured = opts.parseYieldEveryLines;
   if (typeof configured === "number" && Number.isFinite(configured)) {
@@ -760,34 +748,28 @@ export async function buildSessionEntry(
 ): Promise<SessionFileEntry | null> {
   try {
     const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
-    const rawSource = sqliteIdentity
+    const sqliteSource = sqliteIdentity
       ? (() => {
-          const stats = readTranscriptStatsSync({
-            ...sqliteIdentity,
-          });
-          const records = loadTranscriptEventsSync({
-            ...sqliteIdentity,
-          });
+          const stats = readTranscriptStatsSync(sqliteIdentity);
+          const records = loadTranscriptEventsSync(sqliteIdentity);
           const resetRecallCutoff = resolveSessionResetRecallCutoff(records);
-          const raw = serializeTranscriptEvents(records);
           return {
             mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
             path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
-            raw,
+            records,
             resetRecallCutoff,
             size: stats.sizeBytes,
           };
         })()
       : null;
-    let raw: string;
+    let raw = "";
     let mtimeMs: number;
     let size: number;
     let memoryPath: string;
-    if (rawSource) {
-      raw = rawSource.raw;
-      mtimeMs = rawSource.mtimeMs;
-      size = rawSource.size;
-      memoryPath = rawSource.path;
+    if (sqliteSource) {
+      mtimeMs = sqliteSource.mtimeMs;
+      size = sqliteSource.size;
+      memoryPath = sqliteSource.path;
     } else {
       const regularFile = await statRegularFile(absPath);
       if (regularFile.missing) {
@@ -859,20 +841,30 @@ export async function buildSessionEntry(
     let insideHeartbeatTurn = false;
     let insideRecalledMemoryTurn = false;
     let turnOrigin: MemoryOriginClass = "untrusted";
-    for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
+    // SQLite is fully snapshotted before yielding or invoking observers. Archives
+    // retain raw line ordinals, including blank and malformed JSONL entries.
+    for (
+      let jsonlIdx = 0, lineStart = 0;
+      sqliteSource ? jsonlIdx < sqliteSource.records.length : lineStart <= raw.length;
+      jsonlIdx++
+    ) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
-      const newlineIndex = raw.indexOf("\n", lineStart);
-      const lineEnd = newlineIndex === -1 ? raw.length : newlineIndex;
-      const line = raw.slice(lineStart, lineEnd);
-      lineStart = newlineIndex === -1 ? raw.length + 1 : newlineIndex + 1;
-      if (!line.trim()) {
-        continue;
-      }
       let record: unknown;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
+      if (sqliteSource) {
+        record = sqliteSource.records[jsonlIdx];
+      } else {
+        const newlineIndex = raw.indexOf("\n", lineStart);
+        const lineEnd = newlineIndex === -1 ? raw.length : newlineIndex;
+        const line = raw.slice(lineStart, lineEnd);
+        lineStart = newlineIndex === -1 ? raw.length + 1 : newlineIndex + 1;
+        if (!line.trim()) {
+          continue;
+        }
+        try {
+          record = JSON.parse(line);
+        } catch {
+          continue;
+        }
       }
       const identifiesDreamingNarrative =
         !generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record);
@@ -924,6 +916,15 @@ export async function buildSessionEntry(
       if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
+      // Observers and turn provenance still see excluded messages; text export does not.
+      if (
+        insideHeartbeatTurn ||
+        insideRecalledMemoryTurn ||
+        generatedByDreamingNarrative ||
+        generatedByCronRun
+      ) {
+        continue;
+      }
       const rawText = collectRawSessionText(message.content);
       if (rawText === null) {
         continue;
@@ -933,12 +934,6 @@ export async function buildSessionEntry(
       // drops cron prompts without clearing unrelated content from the archive.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
-        continue;
-      }
-      if (insideHeartbeatTurn || insideRecalledMemoryTurn) {
-        continue;
-      }
-      if (generatedByDreamingNarrative || generatedByCronRun) {
         continue;
       }
       const safe = redactSensitiveText(text, { mode: "tools" });
@@ -969,7 +964,7 @@ export async function buildSessionEntry(
           "\n" +
           JSON.stringify(lineProvenance) +
           "\n" +
-          JSON.stringify(rawSource?.resetRecallCutoff ?? { state: "absent" }),
+          JSON.stringify(sqliteSource?.resetRecallCutoff ?? { state: "absent" }),
       ),
       content,
       lineMap,
@@ -982,7 +977,7 @@ export async function buildSessionEntry(
     Object.defineProperty(entry, Symbol.for("openclaw.memory.sessionResetRecallCutoff"), {
       configurable: false,
       enumerable: false,
-      value: rawSource?.resetRecallCutoff ?? { state: "absent" },
+      value: sqliteSource?.resetRecallCutoff ?? { state: "absent" },
       writable: false,
     });
     return entry;
