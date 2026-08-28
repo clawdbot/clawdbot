@@ -381,7 +381,7 @@ export function createGrepToolDefinition(
                 data?: {
                   path?: { text?: string };
                   line_number?: unknown;
-                  lines?: { text?: string };
+                  lines?: { text?: string; bytes?: string };
                 };
               };
               try {
@@ -399,7 +399,13 @@ export function createGrepToolDefinition(
                 }
                 const filePath = event.data?.path?.text;
                 const lineNumber = event.data?.line_number;
-                const lineText = event.data?.lines?.text;
+                const lines = event.data?.lines;
+                const lineText =
+                  lines?.text !== undefined
+                    ? lines.text
+                    : lines?.bytes !== undefined
+                      ? Buffer.from(lines.bytes, "base64").toString("utf-8")
+                      : undefined;
                 if (filePath && typeof lineNumber === "number") {
                   matches.push({ filePath, lineNumber, lineText });
                 }

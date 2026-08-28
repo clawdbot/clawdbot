@@ -352,6 +352,46 @@ describe("grep tool streaming", () => {
     );
   });
 
+  it("decodes ripgrep byte-form match lines for oversized files", async () => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const readFile = vi.fn(() => {
+      throw new FsSafeError("too-large", "File exceeds 4194304 bytes: /tmp/huge.bin");
+    });
+
+    const tool = createGrepToolDefinition(process.cwd(), {
+      operations: { isDirectory: () => false, readFile },
+    });
+    const result = tool.execute(
+      "call-oversized-bytes",
+      { pattern: "foo", context: 1 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "match",
+        data: {
+          path: { text: "/tmp/huge.bin" },
+          line_number: 1,
+          lines: { bytes: Buffer.from("foo\n").toString("base64") },
+        },
+      })}\n`,
+    );
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0);
+
+    const resolved = await result;
+    expect(textContent(resolved)).toBe(
+      "huge.bin:1: foo\n\n[context omitted for 1 file larger than 4.0MB]",
+    );
+  });
+
   it("keeps context for a symlink match through the default read operation", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "grep-symlink-"));
     const targetPath = join(tmpDir, "target.txt");
