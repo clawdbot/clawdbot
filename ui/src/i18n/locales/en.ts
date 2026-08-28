@@ -6869,6 +6869,7 @@ export const en: TranslationMap = {
     },
     runEntry: {
       noSummary: "No summary.",
+      deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Run at",
       openRunChat: "Open run chat",
       next: "Next {rel}",
