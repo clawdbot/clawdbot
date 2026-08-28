@@ -156,7 +156,7 @@ export async function persistSessionTranscriptTurn(
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
-  if (options.sessionLifecyclePatch || options.sessionTurnMutation) {
+  if (options.sessionLifecyclePatch || options.sessionTurnMutation || options.initialSessionEntry) {
     throw new Error("Cannot mutate a session turn without an expected session id");
   }
   const target = await resolveTranscriptTurnTarget(scope, options.config);
@@ -351,6 +351,7 @@ async function persistExpectedSessionTranscriptTurn(
             options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
+          initialSessionEntry: options.initialSessionEntry,
           atomicGroup: options.atomicGroup,
           messages: options.messages.map((append) => ({
             ...append,

@@ -23,6 +23,8 @@ type InternalReplySessionOptions = {
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   expectedExistingSessionId?: string;
+  /** First dispatch only: admission created this exact pinned session before reply initialization. */
+  newlyCreatedSessionId?: string;
   onDeliberateSilentTerminalReply?: () => void;
   onPendingContinuation?: () => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;

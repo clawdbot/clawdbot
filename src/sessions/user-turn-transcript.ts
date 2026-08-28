@@ -275,6 +275,7 @@ async function persistUserTurnTranscript(
         ? { config: params.config as SessionTranscriptTurnPersistOptions["config"] }
         : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+      ...(params.initialSessionEntry ? { initialSessionEntry: params.initialSessionEntry } : {}),
       ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
       ...(params.sessionLifecyclePatch
         ? { sessionLifecyclePatch: params.sessionLifecyclePatch }

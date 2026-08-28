@@ -397,6 +397,8 @@ export type SessionTranscriptTurnPersistOptions = {
    * write as the transcript append and metadata touch.
    */
   expectedSessionId?: string;
+  /** Creates this entry with the turn only if the logical session is still absent. */
+  initialSessionEntry?: SessionEntry;
   /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
   expectedLifecycleRevision?: string;
   /** Rejects the turn when another admitted run owns transcript writes. */

@@ -100,14 +100,16 @@ export function createGatewayChatUserTurnController(params: {
         session.sessionKey,
         session.sessionLoadOptions,
       );
-      if (!entry?.sessionId || entry.sessionId !== acceptedSessionId) {
+      const targetEntry = entry ?? admission.initialSessionEntry;
+      if (!targetEntry?.sessionId || targetEntry.sessionId !== acceptedSessionId) {
         return undefined;
       }
       return {
-        sessionId: entry.sessionId,
-        expectedSessionId: entry.sessionId,
+        sessionId: targetEntry.sessionId,
+        expectedSessionId: targetEntry.sessionId,
+        initialSessionEntry: admission.initialSessionEntry,
         sessionKey: session.sessionKey,
-        sessionEntry: entry,
+        sessionEntry: targetEntry,
         sessionStore: store,
         storePath,
         agentId: session.agentId,

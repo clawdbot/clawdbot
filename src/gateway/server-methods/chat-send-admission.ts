@@ -12,6 +12,8 @@ import {
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
@@ -22,6 +24,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -45,6 +48,7 @@ import {
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Reserve the session lifecycle and register the abortable run before attachment work. */
@@ -166,6 +170,7 @@ export async function admitChatSend(params: {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
+  let initialSessionEntry: SessionEntry | undefined;
   let messageInjectionTarget: ReturnType<
     typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
   >;
@@ -325,12 +330,41 @@ export async function admitChatSend(params: {
       return;
     }
     admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+    if (request.goalOperation?.action === "start" && !latestEntry && !requestedSessionId) {
+      const creationError = authorizeGatewaySessionCreation({
+        cfg: latestSession.cfg,
+        client,
+        agentId,
+      });
+      if (creationError) {
+        throw new Error(creationError.message);
+      }
+      const creation = resolveOperatorSessionCreation(client);
+      const createdAt = Date.now();
+      // A caller's retry ID must never revive a retained transcript window.
+      admittedSessionId = randomUUID();
+      // Keep the seed in memory until the input, Goal, run claim, and receipt commit together.
+      initialSessionEntry = {
+        ...buildSessionCreationStamp({
+          ...creation,
+          sandbox: resolveCreatorSandbox(latestSession.cfg, creation),
+          now: createdAt,
+        }),
+        sessionId: admittedSessionId,
+        lifecycleRevision: randomUUID(),
+        updatedAt: createdAt,
+        sessionStartedAt: createdAt,
+        lastInteractionAt: createdAt,
+        chatType: "direct",
+      };
+    }
     restartSafeAdmission = resolveRestartSafeChatAdmission({
       agentId,
       cfg: latestSession.cfg,
       clientRunId,
       context,
       entry: latestEntry,
+      initialSessionEntry,
       now: Date.now(),
       request: restartSafeRequest,
       requestedSessionId,
@@ -602,6 +636,7 @@ export async function admitChatSend(params: {
     value: {
       activeRunAbort,
       admittedSessionId,
+      initialSessionEntry,
       chatSendTraceAttributes,
       cleanupAdmittedRun,
       finishAbortedChatSend,

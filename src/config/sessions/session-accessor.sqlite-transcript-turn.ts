@@ -62,6 +62,7 @@ export async function appendExpectedSessionTranscriptTurn(
     expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
+    initialSessionEntry?: SessionEntry;
     messages: readonly SessionTranscriptTurnMessageAppend[];
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
     sessionTurnMutation?: SessionTranscriptTurnMutation;
@@ -69,6 +70,27 @@ export async function appendExpectedSessionTranscriptTurn(
     touchSessionEntry?: boolean;
   },
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
+  const initialEntry = options.initialSessionEntry
+    ? cloneSessionEntry(options.initialSessionEntry)
+    : undefined;
+  if (
+    initialEntry &&
+    (initialEntry.sessionId !== options.expectedSessionId ||
+      options.expectedLifecycleRevision !== undefined ||
+      options.expectedWriterRunId !== undefined ||
+      options.expectedSessionState !== undefined)
+  ) {
+    throw new Error(
+      "Session initialization requires its new identity and no existing writer state.",
+    );
+  }
+  const resolveExpectedEntry = (selected: ResolvedSessionEntryRow | undefined) => {
+    // A prepared creation cannot adopt a row that appeared while admission was awaiting work.
+    if (initialEntry) {
+      return selected ? undefined : initialEntry;
+    }
+    return sessionMatchesExpectedTranscriptTurn(selected, options) ? selected.entry : undefined;
+  };
   const resolved = resolveSqliteTranscriptScope({
     ...scope,
     sessionId: options.expectedSessionId,
@@ -90,7 +112,10 @@ export async function appendExpectedSessionTranscriptTurn(
           mutation.operation,
         )
       : undefined;
-    if (preparedReplay && preparedEntry?.entry.sessionId === options.expectedSessionId) {
+    if (preparedReplay) {
+      if (preparedEntry?.entry.sessionId !== options.expectedSessionId) {
+        return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
+      }
       return {
         appendedMessages: [],
         sessionEntry: preparedEntry.entry,
@@ -98,7 +123,7 @@ export async function appendExpectedSessionTranscriptTurn(
         sessionTurnMutationResult: { result: preparedReplay, replayed: true },
       };
     }
-    if (!sessionMatchesExpectedTranscriptTurn(preparedEntry, options)) {
+    if (!resolveExpectedEntry(preparedEntry)) {
       return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
     }
     const messages = await selectAppendableSqliteTranscriptTurnMessages(
@@ -127,7 +152,11 @@ export async function appendExpectedSessionTranscriptTurn(
             mutation.operation,
           )
         : undefined;
-      if (replay && fresh?.entry.sessionId === options.expectedSessionId) {
+      if (replay) {
+        if (fresh?.entry.sessionId !== options.expectedSessionId) {
+          result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
+          return;
+        }
         result = {
           appendedMessages: [],
           sessionEntry: fresh.entry,
@@ -136,12 +165,13 @@ export async function appendExpectedSessionTranscriptTurn(
         };
         return;
       }
-      if (!sessionMatchesExpectedTranscriptTurn(fresh, options)) {
+      const currentEntry = resolveExpectedEntry(fresh);
+      if (!currentEntry) {
         result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
         return;
       }
       const goal = mutation
-        ? applySessionGoalOperation(fresh.entry, mutation.operation, Date.now())
+        ? applySessionGoalOperation(currentEntry, mutation.operation, Date.now())
         : undefined;
       const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
       for (const append of messages) {
@@ -185,12 +215,16 @@ export async function appendExpectedSessionTranscriptTurn(
       }
 
       if (
-        mutation &&
+        (mutation || initialEntry) &&
         (appendedMessages.length === 0 ||
           appendedMessages.length !== messages.length ||
           appendedMessages.some((message) => !message.appended))
       ) {
-        throw new Error("Goal admission requires a new transcript turn in the same transaction.");
+        throw new Error(
+          mutation
+            ? "Goal admission requires a new transcript turn in the same transaction."
+            : "Session initialization requires a new transcript turn in the same transaction.",
+        );
       }
 
       // Later explicit parents can abandon earlier rows. Capture every cursor
@@ -203,7 +237,7 @@ export async function appendExpectedSessionTranscriptTurn(
 
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
         appendedMessages,
-        currentEntry: fresh.entry,
+        currentEntry,
         expectedSessionState: options.expectedSessionState,
         sessionFile: options.sessionFile,
         sessionLifecyclePatch: options.sessionLifecyclePatch,
@@ -214,9 +248,9 @@ export async function appendExpectedSessionTranscriptTurn(
       }
       const next =
         Object.keys(sessionPatch).length > 0
-          ? mergeSessionEntry(fresh.entry, sessionPatch)
-          : fresh.entry;
-      if (next !== fresh.entry) {
+          ? mergeSessionEntry(currentEntry, sessionPatch)
+          : currentEntry;
+      if (initialEntry || next !== currentEntry) {
         const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
         previousIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
         writeSessionEntry(transactionDb, resolved.sessionKey, next);

@@ -212,6 +212,7 @@ type InitSessionStateParams = {
   ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
   pinExpectedExistingSession?: boolean;
+  newlyCreatedSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -1079,6 +1080,13 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  // Admission may commit the first row before dispatch. Preserve its Goal and generation
+  // through initialization, then report the first lifecycle only for that winning dispatch.
+  const createdByAdmission =
+    pinExpectedExistingSession &&
+    params.newlyCreatedSessionId === sessionId &&
+    !previousSessionEntry;
+  const isFirstSessionTurn = isNewSession || createdByAdmission;
   if (!isSystemEvent && !isInterSession) {
     const creation = ctx.SessionCreation;
     const creationActor = creation?.actor;
@@ -1192,12 +1200,12 @@ async function initSessionStateAttemptLocked(
     agentText: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     BodyStripped: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     SessionId: sessionId,
-    IsNewSession: isNewSession ? "true" : "false",
+    IsNewSession: isFirstSessionTurn ? "true" : "false",
   };
 
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner && isNewSession) {
+  if (hookRunner && isFirstSessionTurn) {
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
@@ -1259,7 +1267,7 @@ async function initSessionStateAttemptLocked(
       sessionStore,
       sessionKey,
       sessionId: sessionId ?? crypto.randomUUID(),
-      isNewSession,
+      isNewSession: isFirstSessionTurn,
       resetTriggered,
       systemSent,
       abortedLastRun,
