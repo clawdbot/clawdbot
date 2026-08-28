@@ -7,14 +7,21 @@ import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { resolveLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import {
+  createMessageCharEstimateCache,
+  estimateMessageCharsCached,
+  getToolResultText as getAllToolResultText,
+} from "./tool-result-char-estimator.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
   markTranscriptPromptText,
 } from "./tool-result-context-guard.js";
 import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
+import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
 
 const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
 
@@ -189,6 +196,67 @@ describe("formatContextLimitTruncationNotice", () => {
 });
 
 describe("installToolResultContextGuard", () => {
+  it.each([
+    ["ASCII diagnostic tail", "progress output\n".repeat(400), false],
+    ["separate diagnostic block", "progress output\n".repeat(400), true],
+    ["non-keyword retry hint", "progress output\n".repeat(400), true],
+    ["CJK diagnostic tail", "進捗\n".repeat(1_000), false],
+    ["UTF-16 diagnostic tail", "😀 progress\n".repeat(600), false],
+  ] as const)(
+    "preserves actionable tool text within the existing cap: %s",
+    async (name, preamble, separate) => {
+      const expected =
+        name === "non-keyword retry hint"
+          ? "Inspect src/fixture.ts before retrying."
+          : "Error: missing import; inspect src/fixture.ts before retrying.";
+      const blocks = separate ? [preamble, expected] : [preamble + expected];
+      const source = castAgentMessage({
+        ...makeToolResult("call_actionable", ""),
+        content: blocks.map((text) => ({ type: "text", text })),
+      });
+      const original = structuredClone(source);
+      const contextWindowTokens = 8_192;
+      const sourceChars = blocks.reduce(
+        (total, text) => total + estimateToolResultTextChars(text),
+        0,
+      );
+      expect(sourceChars).toBeLessThanOrEqual(
+        resolveLiveToolResultMaxChars({ contextWindowTokens }),
+      );
+
+      // ASCII multi-block controls use half the guard's weighted budget. The
+      // shared message allocator does not apply the guard's raw-weight floor.
+      const sharedMessage = separate ? truncateToolResultMessage(source, 4_096) : undefined;
+      const sharedText = sharedMessage
+        ? getAllToolResultText(sharedMessage)
+        : truncateToolResultText(blocks[0]!, contextWindowTokens, {
+            minKeepChars: 0,
+            minimumRawWeight: 2,
+          });
+      expect(sharedText).toContain(expected);
+      const sharedChars = sharedMessage
+        ? estimateMessageCharsCached(sharedMessage, createMessageCharEstimateCache())
+        : estimateToolResultTextChars(sharedText, { minimumRawWeight: 2 });
+      expect(sharedChars).toBeLessThanOrEqual(contextWindowTokens);
+
+      const transformed = (await applyGuardToContext(
+        makeGuardableAgent(),
+        [source],
+        contextWindowTokens,
+      )) as AgentMessage[];
+      const projected = expectDefined(transformed[0], "projected tool result");
+      const projectedText = getAllToolResultText(projected);
+
+      expect(source).toEqual(original);
+      expect(Buffer.from(projectedText, "utf8").toString("utf8")).toBe(projectedText);
+      expect(
+        estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
+      ).toBeLessThanOrEqual(contextWindowTokens);
+      expect(projectedText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+      expect(projectedText).toContain(expected);
+    },
+  );
+
   it("passes through unchanged context when under the per-tool and total budget", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [makeUser("hello"), makeToolResult("call_ok", "small output")];
