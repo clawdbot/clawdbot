@@ -68,6 +68,9 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const listReadOnlyChannelPluginsForConfigMock = vi.fn(
+  (_config: unknown, _options?: unknown): unknown[] => [],
+);
 const isGatewayCredentialsRequiredErrorMock = vi.fn((_value: unknown) => false);
 const isGatewaySecretRefUnavailableErrorMock = vi.fn((_value: unknown) => false);
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -113,7 +116,8 @@ vi.mock("../cli/daemon-cli/probe.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => [],
+  listReadOnlyChannelPluginsForConfig: (config: unknown, options?: unknown) =>
+    listReadOnlyChannelPluginsForConfigMock(config, options),
 }));
 
 function requireFirstRuntimeLog(): string {
@@ -166,7 +170,7 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
-  it("renders the gateway session path identically in JSON and text", async () => {
+  it("preserves plugin health in JSON while surfacing activated failures in text", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",
       count: 1,
@@ -190,6 +194,24 @@ describe("healthCommand", () => {
       },
       sessions: agentSessions,
     });
+    snapshot.plugins = {
+      loaded: ["calendar"],
+      errors: [
+        {
+          id: "calendar",
+          origin: "workspace",
+          activated: true,
+          failurePhase: "service",
+          error: "service scheduler: address already in use",
+        },
+        {
+          id: "inactive",
+          origin: "workspace",
+          activated: false,
+          error: "inactive plugin load failed",
+        },
+      ],
+    };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
@@ -200,6 +222,7 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+    expect(parsed.plugins).toEqual(snapshot.plugins);
 
     runtime.log.mockClear();
     callGatewayMock.mockResolvedValueOnce(snapshot);
@@ -207,6 +230,10 @@ describe("healthCommand", () => {
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
+    expect(output).toContain(
+      "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
+    );
+    expect(output).not.toContain("inactive plugin load failed");
   });
 
   it("prints the gateway probe duration in text output", async () => {
@@ -221,6 +248,46 @@ describe("healthCommand", () => {
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain("Gateway probe duration: 5ms");
+  });
+
+  it("surfaces unhealthy secondary accounts without an explicit account binding", async () => {
+    const primary = {
+      accountId: "main",
+      enabled: true,
+      configured: true,
+      linked: true,
+      healthState: "healthy",
+      probe: { ok: true, elapsedMs: 12 },
+    };
+    const snapshot = createHealthSummary({
+      channels: {
+        matrix: {
+          ...primary,
+          accounts: {
+            main: primary,
+            alerts: {
+              accountId: "alerts",
+              enabled: true,
+              configured: true,
+              linked: true,
+              healthState: "blocked",
+            },
+          },
+        },
+      },
+      channelOrder: ["matrix"],
+      channelLabels: { matrix: "Matrix" },
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+    listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
+      { id: "matrix", config: { listAccountIds: () => ["main", "alerts"] } },
+    ]);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Matrix: blocked");
+    expect(output).not.toContain("Matrix: ok");
   });
 
   it("shows every agent when an explicit fleet has no default owner", async () => {

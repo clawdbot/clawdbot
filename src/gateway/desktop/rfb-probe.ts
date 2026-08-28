@@ -192,14 +192,24 @@ export async function probeRfbServer(params: {
 export function classifyRfbSecurity(
   securityTypes: readonly number[],
 ): "none" | "vnc-password" | "ard-account" | "unsupported" {
-  if (securityTypes.includes(2)) {
-    return "vnc-password";
-  }
-  if (securityTypes.includes(30)) {
-    return "ard-account";
-  }
-  if (securityTypes.includes(1)) {
-    return "none";
+  // noVNC selects the first security type it supports in the server's order.
+  // Mirror that choice so the Gateway credential flow cannot disagree with the
+  // browser (macOS advertises ARD before its VncAuth compatibility option).
+  for (const securityType of securityTypes) {
+    if (securityType === 1) {
+      return "none";
+    }
+    if (securityType === 2) {
+      return "vnc-password";
+    }
+    if (securityType === 30) {
+      return "ard-account";
+    }
+    if ([6, 16, 19, 22, 113].includes(securityType)) {
+      // noVNC supports these schemes and stops here, but OpenClaw has no matching credential UX.
+      // Scanning onward would make the probe choose a route the browser never selects.
+      return "unsupported";
+    }
   }
   return "unsupported";
 }

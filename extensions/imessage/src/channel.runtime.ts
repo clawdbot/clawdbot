@@ -3,13 +3,14 @@ import {
   createAccountStatusSink,
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   listEnabledIMessageAccounts,
   resolveIMessageDuplicateSourceOwner,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
-import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "./channel-api.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { probeIMessage } from "./probe.js";

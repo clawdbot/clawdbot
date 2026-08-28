@@ -6,9 +6,9 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { formatSkillExperienceReviewTranscript } from "./experience-review-prompt.js";
 import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
 import { runSkillHistoryScanReview } from "./history-scan-review.js";
+import { formatSkillHistoryScanTranscript } from "./history-scan-transcript-content.js";
 import { listSkillProposals } from "./service.js";
 
 const LIVE =
@@ -77,7 +77,7 @@ function session(
         !Array.isArray(message) &&
         (message as { role?: unknown }).role === "assistant",
     ).length,
-    transcript: formatSkillExperienceReviewTranscript(messages),
+    transcript: formatSkillHistoryScanTranscript(messages, 80_000),
   };
 }
 

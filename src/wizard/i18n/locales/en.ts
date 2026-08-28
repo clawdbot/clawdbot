@@ -461,6 +461,13 @@ export const en = {
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
     },
+    telemetry: {
+      accept: "Yes, share feature stats",
+      decline: "No thanks",
+      description:
+        "Share which features you use (channels, providers, plugin count) as part of the daily update check. Never messages, never identifiers. See exactly what is sent: `openclaw telemetry show`. Change anytime: `openclaw telemetry on|off`.",
+      title: "Help make OpenClaw better?",
+    },
     skills: {
       configure: "Configure skills now? (recommended)",
       containerBrewHidden:
@@ -1113,8 +1120,9 @@ export const en = {
       dashboardWhenReady: "When you're ready: {command}",
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
-      daemonRuntimeNodeHint:
-        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
+      daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',
@@ -1132,8 +1140,6 @@ export const en = {
       gatewayServiceRestarted: "Gateway service restarted.",
       gatewayServiceRestarting: "Restarting Gateway service...",
       gatewayServiceRestartScheduled: "Gateway service restart scheduled.",
-      gatewayServiceUninstalled: "Gateway service uninstalled.",
-      gatewayServiceUninstalling: "Uninstalling Gateway service...",
       gatewayTokenGenerate: "Generate token: {command}",
       gatewayTokenShared: "Gateway token: shared auth for the Gateway + Control UI.",
       gatewayTokenStored:

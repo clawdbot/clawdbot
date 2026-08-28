@@ -9,7 +9,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMessageActionName,
-  ChannelMessageToolDiscovery,
+  ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
@@ -23,6 +23,7 @@ const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
   "poll-vote",
   "react",
   "reactions",
+  "emoji-list",
   "read",
   "edit",
   "delete",
@@ -77,6 +78,7 @@ function createMatrixExposedActions(params: {
   if (params.gate("reactions")) {
     actions.add("react");
     actions.add("reactions");
+    actions.add("emoji-list");
   }
   if (params.gate("pins")) {
     actions.add("pin");
@@ -98,7 +100,7 @@ function createMatrixExposedActions(params: {
   return actions;
 }
 
-function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery["schema"]> {
+function buildMatrixProfileToolSchema(): ChannelMessageToolSchemaContribution {
   return {
     actions: ["set-profile"],
     properties: {
@@ -143,10 +145,26 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       senderIsOwner,
     });
     const listedActions = Array.from(actions);
+    const schema: ChannelMessageToolSchemaContribution[] = [];
+    if (actions.has("set-profile")) {
+      schema.push(buildMatrixProfileToolSchema());
+    }
+    if (actions.has("react")) {
+      schema.push({
+        actions: ["react", "reactions"],
+        properties: {
+          emoji: Type.Optional(
+            Type.String({
+              description: `Unicode emoji or custom emote shortcode.${actions.has("emoji-list") ? ' Discover room and personal custom emotes with action:"emoji-list".' : ""}`,
+            }),
+          ),
+        },
+      });
+    }
     return {
       actions: listedActions,
       capabilities: ["presentation"],
-      schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
+      schema: schema.length > 1 ? schema : (schema[0] ?? null),
       mediaSourceParams: listedActions.includes("set-profile")
         ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
         : null,
@@ -256,6 +274,23 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         messageId,
         limit,
       });
+    }
+
+    if (action === "emoji-list") {
+      const roomId =
+        readStringParam(params, "roomId") ??
+        readStringParam(params, "channelId") ??
+        readStringParam(params, "to") ??
+        (ctx.toolContext?.currentChannelProvider === "matrix"
+          ? ctx.toolContext.currentChannelId
+          : undefined);
+      if (!roomId) {
+        throw new Error("Matrix emoji-list requires a roomId or current Matrix conversation.");
+      }
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
+      return await dispatch({ action: "emoji-list", roomId, limit });
     }
 
     if (action === "read") {

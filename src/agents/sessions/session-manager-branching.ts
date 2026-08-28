@@ -102,6 +102,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
   }
 
   async createBranchedSession(leafId: string): Promise<string | undefined> {
+    this.ensureCompletePersistedHistory();
     const previousSessionId = this.sessionId;
     const branchPath = this.collectBranchedSessionPath(leafId);
     if (branchPath.entries.length === 0) {

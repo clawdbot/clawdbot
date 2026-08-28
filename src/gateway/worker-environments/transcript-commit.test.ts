@@ -722,7 +722,7 @@ describe("worker transcript commit application", () => {
     });
   });
 
-  it("advances sequential commits and assigns run ownership only to the terminal assistant", async () => {
+  it("persists run ownership on worker output while only the terminal envelope completes it", async () => {
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const first = await committer.commit({ identity: IDENTITY, request: createRequest() });
@@ -757,6 +757,17 @@ describe("worker transcript commit application", () => {
     expect(second.result.newLeafId).toBe(second.result.entryIds[0]);
     expect(second.result.newLeafId).not.toBe(first.result.newLeafId);
     const reopened = SessionManager.open(sessionTarget);
+    expect(
+      reopened
+        .getEntries()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message),
+    ).toMatchObject([
+      { role: "user" },
+      { role: "assistant", __openclaw: { runId: IDENTITY.runId } },
+      { role: "toolResult", __openclaw: { runId: IDENTITY.runId } },
+      { role: "assistant", __openclaw: { runId: IDENTITY.runId } },
+    ]);
     expect(reopened.getEntries().at(-1)).toMatchObject({
       id: second.result.newLeafId,
       parentId: first.result.newLeafId,

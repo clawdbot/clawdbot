@@ -55,6 +55,11 @@ describe("session placement startup", () => {
       target: { kind: "device", deviceId: "device-1" } as const,
       expectedTarget: { deviceId: "device-1" },
     },
+    {
+      name: "automatic device",
+      target: { kind: "auto-device" } as const,
+      expectedTarget: { autoDevice: true },
+    },
   ])("serializes a $name target to the flat dispatch contract", async (testCase) => {
     const request = vi
       .fn()

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_SERVER_CAPS,
+  type HelloOk,
+} from "../../../../packages/gateway-protocol/src/index.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
 
@@ -82,6 +85,7 @@ function makeContext(role: "operator" | "node", scopes: string[]) {
   return {
     handler: {
       connId: `conn-${role}`,
+      bootId: "gateway-boot-a",
       gatewayMethods: [],
       events: [],
       buildRequestContext: () => ({ nodeRegistry: { get: () => undefined } }),
@@ -187,7 +191,11 @@ describe("sendGatewayHello update detail scope", () => {
       }),
     );
     expect(helloPayload(context)?.server.buildId).toBe("build-a");
+    expect(helloPayload(context)?.server.bootId).toBe("gateway-boot-a");
     expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+    );
   });
 
   it("omits package build identity for independently built configured UI roots", async () => {

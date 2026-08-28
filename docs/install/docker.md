@@ -15,7 +15,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
 ## Prerequisites
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
-- At least 2 GB RAM for image build (`pnpm install` may be OOM-killed on 1 GB hosts with exit 137)
+- At least 6 GB RAM for a local source image build; pre-built images avoid this build requirement
 - Enough disk for images and logs
 - On a VPS/public host, review [Security hardening for network exposure](/gateway/security), especially the Docker `DOCKER-USER` firewall chain
 
@@ -224,6 +224,8 @@ If Docker reports `ResourceExhausted`, `cannot allocate memory`, or aborts durin
 ```bash
 OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=4096
 ```
+
+The explicit tsdown heap override is also the supported opt-in for attempting a build below the automatically detected safe minimum. That attempt may stall or fail.
 
 ### Source-built images with selected plugins
 
@@ -581,7 +583,7 @@ Sandbox scope can be per-agent (default), per-session, or shared; each scope get
 For full configuration, images, security notes, and multi-agent profiles:
 
 - [Sandboxing](/gateway/sandboxing) -- complete sandbox reference
-- [OpenShell](/gateway/openshell) -- interactive shell access to sandbox containers
+- [OpenShell](/gateway/openshell) -- OpenShell-managed local or remote sandbox backend
 - [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides
 
 ### Quick enable
@@ -623,7 +625,7 @@ For npm installs without a source checkout, see [Sandboxing § Images and setup]
   </Accordion>
 
   <Accordion title="OOM-killed during image build (exit 137)">
-    The VM needs at least 2 GB RAM. Use a larger machine class and retry.
+    A local source image build needs at least 6 GB RAM. Use a larger machine class or a pre-built image and retry.
   </Accordion>
 
   <Accordion title="Unauthorized or pairing required in Control UI">

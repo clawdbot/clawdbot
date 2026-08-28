@@ -180,6 +180,97 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
 }
 
 describe("filtered sidebar session event refresh", () => {
+  it.each(["archived", "all"] as const)(
+    "clears a recovered %s list failure without erasing a same-text action failure",
+    async (statusFilter) => {
+      const { controller, list, selectStatusFilter } =
+        createFilteredSessionController(statusFilter);
+      controller.hostConnected();
+      list.mockRejectedValueOnce(new Error("Session request failed"));
+
+      await controller.refreshSidebarSessions();
+
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      await controller.refreshSidebarSessions();
+
+      expect(controller.sessionMutationError).toBeNull();
+      expect(controller.sessionsResult?.sessions).toHaveLength(1);
+
+      list.mockRejectedValueOnce(new Error("Session request failed"));
+      await controller.refreshSidebarSessions();
+
+      const mutation = controller.beginSessionMutation();
+      expect(mutation).not.toBeNull();
+      controller.publishSessionMutationError(mutation!, new Error("Session request failed"));
+
+      list.mockRejectedValueOnce(new Error("Background session list failed"));
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      controller.hostDisconnected();
+      expect(controller.sessionMutationError).toBeNull();
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
+    "retires the %s list failure when its selected filter changes",
+    async (statusFilter) => {
+      const { controller, list, selectStatusFilter } =
+        createFilteredSessionController(statusFilter);
+      controller.hostConnected();
+      list.mockRejectedValueOnce(new Error("Retired session list failed"));
+
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Retired session list failed");
+
+      selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+
+      expect(controller.sessionMutationError).toBeNull();
+      controller.hostDisconnected();
+    },
+  );
+
+  it("dismisses a filtered list failure without restoring it on recovery", async () => {
+    const { controller, list } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    list.mockRejectedValueOnce(new Error("Dismissed session list failed"));
+
+    await controller.refreshSidebarSessions();
+    expect(controller.sessionMutationError).toBe("Dismissed session list failed");
+
+    controller.dismissSessionMutationError();
+    expect(controller.sessionMutationError).toBeNull();
+
+    await controller.refreshSidebarSessions();
+    expect(controller.sessionMutationError).toBeNull();
+    controller.hostDisconnected();
+  });
+
+  it("ignores a retired filter's delayed failure after the replacement scope binds", async () => {
+    const { controller, list, selectStatusFilter } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    let rejectList!: (error: Error) => void;
+    const delayedList = new Promise<Awaited<ReturnType<typeof list>>>((_, reject) => {
+      rejectList = reject;
+    });
+    list.mockImplementationOnce(async () => await delayedList);
+
+    const retiredRefresh = controller.refreshSidebarSessions();
+    selectStatusFilter("all");
+    rejectList(new Error("Retired archived request failed"));
+    await retiredRefresh;
+
+    expect(controller.sessionMutationError).toBeNull();
+    controller.hostDisconnected();
+  });
+
   it("evicts cached sessions when an agent leaves the authoritative roster", () => {
     const { controller, publishAgentRoster, resultForKeys } =
       createFilteredSessionController("all");
@@ -190,10 +281,6 @@ describe("filtered sidebar session event refresh", () => {
     };
     controller.sessionsResult = controller.sessionResultsByAgent.research ?? null;
     controller.sessionsAgentId = "research";
-    controller.sessionCreatedOrder = new Map([
-      ["agent:main:kept", 0],
-      ["agent:research:removed", 1],
-    ]);
 
     publishAgentRoster(null);
     expect(Object.keys(controller.sessionResultsByAgent)).toEqual(["main", "research"]);
@@ -202,7 +289,6 @@ describe("filtered sidebar session event refresh", () => {
     expect(Object.keys(controller.sessionResultsByAgent)).toEqual(["main"]);
     expect(controller.sessionsResult).toBeNull();
     expect(controller.sessionsAgentId).toBeNull();
-    expect([...controller.sessionCreatedOrder.keys()]).toEqual(["agent:main:kept"]);
     controller.hostDisconnected();
   });
 
@@ -212,11 +298,13 @@ describe("filtered sidebar session event refresh", () => {
     controller.hostConnected();
     controller.sessionsResult = resultForKeys(["agent:main:current"]);
     controller.sessionsAgentId = "main";
-    controller.sessionCreatedOrder = new Map([["agent:main:current", 0]]);
 
     publishAgentRoster(["main"]);
 
-    expect([...controller.sessionCreatedOrder.keys()]).toEqual(["agent:main:current"]);
+    expect(controller.sessionsAgentId).toBe("main");
+    expect(controller.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+      "agent:main:current",
+    ]);
     controller.hostDisconnected();
   });
 

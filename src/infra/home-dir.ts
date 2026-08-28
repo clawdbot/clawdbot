@@ -48,7 +48,7 @@ function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): strin
   }
   if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
     const fallbackHome = resolveRawOsHomeDir(env, homedir);
-    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome) : undefined;
+    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, () => fallbackHome) : undefined;
   }
   return explicitHome;
 }
@@ -117,7 +117,7 @@ export function expandHomePrefix(
   if (!home) {
     return input;
   }
-  return input.replace(/^~(?=$|[\\/])/, home);
+  return input.replace(/^~(?=$|[\\/])/, () => home);
 }
 
 /** Resolves a user-supplied path after trimming and expanding against the effective home. */

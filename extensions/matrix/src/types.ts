@@ -1,15 +1,13 @@
 // Matrix type declarations define plugin contracts.
 import type {
   ChannelBotLoopProtectionConfig,
-  MentionPatternsPolicyConfig,
-} from "openclaw/plugin-sdk/config-contracts";
-import type {
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
+  MentionPatternsPolicyConfig,
   OpenClawConfig,
-  SecretInput,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/config-contracts";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type ReplyToMode = "off" | "first" | "all" | "batched";
 

@@ -10,6 +10,8 @@ import {
   validateApprovalHistoryResult,
   validateApprovalResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -21,12 +23,15 @@ import {
   type PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { getOperatorApprovalDetailed, insertOperatorApproval } from "../operator-approval-store.js";
 
@@ -281,6 +286,7 @@ describe("unified approval handlers", () => {
         manager.expire(record.id, "test-cleanup");
       }
     }
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
@@ -417,6 +423,144 @@ describe("unified approval handlers", () => {
     expect(secondPage.ok).toBe(true);
     expect((secondPage.result as ApprovalHistoryResult).items).toHaveLength(1);
     expect((secondPage.result as ApprovalHistoryResult).nextCursor).toBeUndefined();
+  });
+
+  it("hides foreign pending and terminal approvals from roles without foreign-session access", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const stateDir = databaseOptions.env?.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("expected isolated approval state directory");
+    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const profile = ensureProfileForEmail("approval-guest@example.test", databaseOptions);
+      setUserProfileRole(profile.id, "guest", databaseOptions);
+      const ownerKey = "agent:main:approval-owned";
+      const foreignKey = "agent:main:approval-foreign";
+      for (const [sessionKey, creatorId] of [
+        [ownerKey, profile.id],
+        [foreignKey, "foreign-owner"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: `session-${sessionKey}`,
+            updatedAt: 1,
+            createdActor: { type: "human", id: creatorId },
+          },
+        );
+      }
+      const managers = createManagers(databaseOptions);
+      const own = registerExec(managers.exec, {
+        id: "approval:owned",
+        request: { sessionKey: ownerKey },
+      });
+      const foreign = registerExec(managers.exec, {
+        id: "approval:foreign",
+        request: { sessionKey: foreignKey },
+      });
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.approvals"],
+              },
+            },
+          },
+        },
+      };
+      const context = {
+        ...createContext(),
+        getRuntimeConfig: () => cfg,
+      } as GatewayRequestHandlerOptions["context"];
+      const roleClient = {
+        ...createClient({ deviceId: "reviewer" }),
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } as GatewayRequestHandlerOptions["client"];
+      const ownerClient = {
+        ...createClient({ deviceId: "reviewer" }),
+        internal: { operatorRoleActor: { kind: "system" } },
+      } as GatewayRequestHandlerOptions["client"];
+      const handlers = createApprovalHandlers({
+        execApprovalManager: managers.exec,
+        pluginApprovalManager: managers.plugin,
+        databaseOptions,
+      });
+
+      const hidden = await invoke({
+        handlers,
+        method: "approval.get",
+        body: { id: foreign.record.id },
+        client: roleClient,
+        context,
+      });
+      expect(hidden).toMatchObject({
+        ok: false,
+        error: { details: { reason: "APPROVAL_NOT_FOUND" } },
+      });
+      expect(
+        await invoke({
+          handlers,
+          method: "approval.get",
+          body: { id: own.record.id },
+          client: roleClient,
+          context,
+        }),
+      ).toMatchObject({ ok: true, result: { approval: { id: own.record.id } } });
+      expect(
+        await invoke({
+          handlers,
+          method: "approval.get",
+          body: { id: foreign.record.id },
+          client: createClient({ deviceId: "reviewer" }),
+          context,
+        }),
+      ).toMatchObject({
+        ok: false,
+        error: { details: { reason: "APPROVAL_NOT_FOUND" } },
+      });
+      expect(
+        await invoke({
+          handlers,
+          method: "approval.get",
+          body: { id: foreign.record.id },
+          client: ownerClient,
+          context,
+        }),
+      ).toMatchObject({ ok: true, result: { approval: { id: foreign.record.id } } });
+
+      for (const id of [own.record.id, foreign.record.id]) {
+        expect(
+          await invoke({
+            handlers,
+            method: "approval.resolve",
+            body: { id, kind: "exec", decision: "deny" },
+            client: ownerClient,
+            context,
+          }),
+        ).toMatchObject({ ok: true });
+      }
+      const history = await invoke({
+        handlers,
+        method: "approval.history",
+        body: {},
+        client: roleClient,
+        context,
+      });
+      expect(history).toMatchObject({
+        ok: true,
+        result: { items: [{ id: own.record.id, source: { sessionKey: ownerKey } }] },
+      });
+      await Promise.all([own.decision, foreign.decision]);
+    });
   });
 
   it("returns an exact-id, deep-linkable exec projection without execution bindings", async () => {

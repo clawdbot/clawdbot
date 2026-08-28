@@ -2,7 +2,10 @@
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
+import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import {
   OutboundDeliveryError,
@@ -42,6 +45,7 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
+import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -108,6 +112,40 @@ function createPayloadGatewayMock(...payloads: Record<string, unknown>[]) {
 
 function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+}
+
+function createRoleRestrictedInProcessGatewayMock(response: Record<string, unknown>) {
+  const cfg = {
+    gateway: {
+      roles: {
+        default: "restricted",
+        definitions: {
+          restricted: {
+            agents: [],
+            scopes: ["operator.write"],
+            sessions: { others: "none" },
+          },
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+  const dispatchGatewayMethodInProcess = vi.fn(
+    async (
+      _method: string,
+      _agentParams: Record<string, unknown>,
+      options?: Parameters<typeof runtimeDispatchGatewayMethodInProcess>[2],
+    ) => {
+      const actor = options?.operatorRoleActor;
+      const authorizationError = actor
+        ? authorizeGatewaySessionCreation({ cfg, agentId: "main", actor })
+        : authorizeGatewaySessionCreation({ cfg, agentId: "main", profileId: undefined });
+      if (authorizationError) {
+        throw new Error(`${authorizationError.code}: ${authorizationError.message}`);
+      }
+      return response;
+    },
+  ) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+  return { cfg, dispatchGatewayMethodInProcess };
 }
 
 function createSendMessageMock() {
@@ -1303,8 +1341,15 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       expectRecordFields(result, {
         delivered: fallsBack,
         path: fallsBack ? "direct" : "none",
+        ...(fallsBack ? {} : { reason: "steer_dropped" }),
         phases: [
-          { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+          {
+            phase: "steer-primary",
+            delivered: false,
+            path: "none",
+            error: undefined,
+            ...(fallsBack ? {} : { reason: "steer_dropped" }),
+          },
           ...(fallsBack
             ? [{ phase: "direct-primary", delivered: true, path: "direct", error: undefined }]
             : []),
@@ -1880,9 +1925,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("uses in-process agent dispatch for dormant completion requesters", async () => {
+  it("delivers dormant child completion under restrictive gateway roles", async () => {
     const callGateway = createGatewayMock();
-    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
       result: {
         payloads: [{ text: "requester voice completion" }],
       },
@@ -1894,7 +1939,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sessionId: "requester-session-local",
         isActive: false,
       }),
-      getRuntimeConfig: () => ({}) as never,
+      getRuntimeConfig: () => cfg,
     });
 
     const ownerContext = { owner: "gateway-a" } as never;
@@ -1935,6 +1980,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(dispatchOptions).toMatchObject({
       expectFinal: true,
       forceSyntheticClient: true,
+      operatorRoleActor: { kind: "system" },
       delegatedToolPolicyHandoff: {
         sourceSessionKey: "agent:main:subagent:child",
         sourceSessionId: "child-session-local",
@@ -1945,6 +1991,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       timeoutMs: 120_000,
       resolveGatewayContext,
     });
+  });
+
+  it("wakes settled descendant runs under restrictive gateway roles", async () => {
+    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
+      runId: "descendant-wake-run",
+    });
+    const resolveGatewayContext: GatewayContextResolver = () => undefined;
+    const replaceSubagentRunAfterSteer = vi.fn(async () => true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      loadSessionEntry: () => ({ sessionId: "nested-session", updatedAt: 1 }),
+    });
+
+    const woke = await runDescendantWake({
+      runId: "nested-parent-run",
+      childSessionKey: "agent:main:subagent:nested-parent",
+      taskLabel: "collect descendant findings",
+      findings: "The descendant completed successfully.",
+      announceId: "descendant-completion",
+      isChildSessionEffectsAllowed: () => true,
+      hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
+        typeof entry === "object" && entry !== null,
+      resolveGatewayContext,
+      deps: {
+        callGateway: createGatewayMock(),
+        dispatchGatewayMethodInProcess,
+        getRuntimeConfig: () => cfg,
+        replaceSubagentRunAfterSteer,
+      },
+    });
+
+    expect(woke).toBe(true);
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+      resolveGatewayContext,
+    });
+    expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousRunId: "nested-parent-run",
+        nextRunId: "descendant-wake-run",
+      }),
+    );
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {
@@ -2504,6 +2591,50 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       error: "UNAVAILABLE: gateway lost final output",
     });
     expect(callGateway).toHaveBeenCalledTimes(4);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      isActive: true,
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        status: "error",
+        statusLabel: "failed: all models failed",
+        result: "(no output)",
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+      reason: "visible_reply_missing",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        },
+        {
+          phase: "steer-fallback",
+          delivered: false,
+          path: "none",
+          reason: "steer_dropped",
+          error: undefined,
+        },
+      ],
+    });
+    expect(result.terminal).toBeUndefined();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -4299,7 +4430,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "dm:U123",
     });
-    expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
+    expect(agentParams.sourceReplyDeliveryMode).toBe(requireVisibleReply ? "automatic" : undefined);
   });
 
   it.each([

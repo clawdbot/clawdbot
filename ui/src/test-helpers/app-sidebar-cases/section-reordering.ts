@@ -237,7 +237,7 @@ describe("AppSidebar section reordering", () => {
       expect(harness.patch).toHaveBeenCalledWith(
         "agent:main:group-0",
         { category: null },
-        { agentId: "main" },
+        { agentId: "main", expectedSessionId: "session:agent:main:group-0" },
       ),
     );
   });

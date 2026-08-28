@@ -28,6 +28,7 @@ import {
   isOptionalElementDefined,
   LazyCustomElementRequestController,
   type OptionalCustomElement,
+  QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
@@ -139,6 +140,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (this.runtime.documentMode?.kind === "approval") {
       this.requestLazyDocument(APPROVAL_PAGE_ELEMENT);
+    }
+    if (this.runtime.documentMode?.kind === "question") {
+      this.requestLazyDocument(QUESTION_PAGE_ELEMENT);
     }
     const context = this.runtime.context;
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
@@ -260,6 +264,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
     const approvalId =
       runtime.documentMode?.kind === "approval" ? runtime.documentMode.approvalId : "";
     return html`<openclaw-approval-page .approvalId=${approvalId ?? ""}></openclaw-approval-page>`;
+  }
+
+  private renderQuestionDocument(runtime: ApplicationRuntime) {
+    const lazyState = this.lazyCustomElements.visibleState;
+    if (lazyState?.element === QUESTION_PAGE_ELEMENT) {
+      return this.renderLazyDocumentState(QUESTION_PAGE_ELEMENT);
+    }
+    const questionId =
+      runtime.documentMode?.kind === "question" ? runtime.documentMode.questionId : "";
+    return html`<openclaw-question-page .questionId=${questionId ?? ""}></openclaw-question-page>`;
   }
 
   private replaceFocusDashboardLocation(location: RouteLocation, source: RouteLocation): void {
@@ -574,6 +588,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
       return html`
         <openclaw-tooltip-provider>
           ${gatewayUrlConfirmation} ${this.renderApprovalDocument(runtime)}
+        </openclaw-tooltip-provider>
+      `;
+    }
+    if (runtime.documentMode?.kind === "question") {
+      return html`
+        <openclaw-tooltip-provider>
+          ${gatewayUrlConfirmation} ${this.renderQuestionDocument(runtime)}
         </openclaw-tooltip-provider>
       `;
     }

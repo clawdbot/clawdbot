@@ -41,6 +41,7 @@ private data class CachedMessagePayload(
   val content: List<CachedMessageContent>,
   val provenance: CachedMessageProvenance? = null,
   @SerialName("__openclaw") val transcriptMarker: CachedTranscriptMarker? = null,
+  val senderLabel: String? = null,
 )
 
 @Serializable
@@ -365,6 +366,7 @@ class RoomChatTranscriptCache internal constructor(
               tokensAfter = it.tokensAfter,
             )
           },
+        senderLabel = payload.senderLabel,
       )
     }
   }
@@ -464,7 +466,7 @@ class RoomChatTranscriptCache internal constructor(
                     height = part.height,
                     sizeBytes = part.sizeBytes,
                   )
-                part.type == "audio" || part.type == "video" ->
+                part.type == "audio" || part.type == "video" || part.type == "file" ->
                   CachedMessageContent(
                     type = part.type,
                     mimeType = part.mimeType,
@@ -499,6 +501,7 @@ class RoomChatTranscriptCache internal constructor(
                     tokensAfter = it.tokensAfter,
                   )
                 },
+              senderLabel = message.senderLabel,
             )
           Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)

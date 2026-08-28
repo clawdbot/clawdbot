@@ -60,6 +60,11 @@ export function historicalV15AgentSchemaSql(): string {
   );
   sql = removeSchemaRange(
     sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_windows_session_key",
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at",
+  );
+  sql = removeSchemaRange(
+    sql,
     "-- Older same-version writers preserve the envelope while updating the association.",
     "CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation",
   );
@@ -67,6 +72,11 @@ export function historicalV15AgentSchemaSql(): string {
     sql,
     "CREATE TABLE IF NOT EXISTS message_tool_run_outcomes (",
     "CREATE TABLE IF NOT EXISTS transcript_events (",
+  );
+  sql = removeSchemaRange(
+    sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_identity_sequence",
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent",
   );
   sql = removeSchemaRange(
     sql,

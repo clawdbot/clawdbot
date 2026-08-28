@@ -8,7 +8,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
@@ -93,7 +93,7 @@ internal fun AdaptiveNavigationShell(
   drawerContent: @Composable () -> Unit,
   content: @Composable () -> Unit,
 ) {
-  val adaptiveInfo = currentWindowAdaptiveInfo(supportLargeAndXLargeWidth = true)
+  val adaptiveInfo = currentWindowAdaptiveInfoV2()
   val navigationMode =
     adaptiveNavigationMode(
       widthAtLeastMedium =
