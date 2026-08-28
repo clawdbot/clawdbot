@@ -17,6 +17,10 @@ function requireSuccess(command: string, args: string[]) {
 }
 
 describe("repository Telegram E2E skill", () => {
+  it("replaces the obsolete Telegram Crabbox recorder skill", () => {
+    expect(fs.existsSync(".agents/skills/telegram-crabbox-e2e-proof")).toBe(false);
+  });
+
   it("passes its Node test suite", () => {
     const tests = fs
       .readdirSync(scriptsDir)

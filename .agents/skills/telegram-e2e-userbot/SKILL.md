@@ -12,6 +12,9 @@ Prove OpenClaw behavior against Telegram's Test Server as a dedicated QA user.
 The user driver sees edits, deletions, reactions, and typing that a second bot
 cannot observe.
 
+TDLib is the headless user transport. Evidence is a structured Telegram event
+timeline, not a desktop recording.
+
 Each credential contains one SUT bot and one independent TDLib authorization
 for the shared QA user identity. Independent authorizations keep parallel runs
 from splitting Telegram updates between observers.
