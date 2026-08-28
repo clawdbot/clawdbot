@@ -42,11 +42,15 @@ export class ConfigMutationAgentRoster {
     if ((kind !== "list" && kind !== "entries") || !isRecord(agents)) {
       return;
     }
+    // Whole replacements discard the old representation without validating it.
+    // A list deletion still needs projection so unset can find its keyed target.
+    if (path.length <= 2 && !merge && (kind === "entries" || operation.mutation !== "delete")) {
+      delete agents[kind === "entries" ? "list" : "entries"];
+      this.legacyOrder = undefined;
+      return;
+    }
     if (kind === "entries") {
-      if (path.length <= 2 && !merge) {
-        delete agents.list;
-        this.legacyOrder = undefined;
-      } else if (roster?.kind === "list") {
+      if (roster?.kind === "list") {
         this.canonicalize(true);
       }
       return;

@@ -256,22 +256,53 @@ describe("config cli roster integration", () => {
     );
   });
 
-  it("validates the final replacement instead of a discarded intermediate roster", async () => {
+  it.each([
+    {
+      name: "list to keyed",
+      operations: [
+        { path: "agents.list", value: [{ id: "main" }, { id: "main" }] },
+        { path: "agents.entries", value: changedEntries },
+      ],
+    },
+    {
+      name: "malformed keyed to list",
+      operations: [
+        { path: "agents.entries", value: "discarded" },
+        { path: "agents.list", value: changedList },
+      ],
+    },
+    {
+      name: "keyed identity to list",
+      operations: [
+        { path: "agents.entries.main.id", value: "main" },
+        { path: "agents.list", value: changedList },
+      ],
+    },
+    {
+      name: "keyed identity to parent",
+      operations: [
+        { path: "agents.entries.main.id", value: "main" },
+        { path: "agents", value: { ownership: "explicit", list: changedList } },
+      ],
+    },
+    {
+      name: "keyed identity to list patch",
+      patch: { agents: { entries: { main: { id: "main" } }, list: changedList } },
+    },
+  ])("validates the final $name replacement instead of a discarded roster", async (scenario) => {
     const raw = JSON.stringify({ agents: { ownership: "explicit", entries: originalEntries } });
     await withConfigFileHarness(
       "openclaw-config-cli-roster-final-replacement-",
       raw,
-      async ({ configPath }) => {
-        const args = [
-          "config",
-          "set",
-          "--batch-json",
-          JSON.stringify([
-            { path: "agents.list", value: [{ id: "main" }, { id: "main" }] },
-            { path: "agents.entries", value: changedEntries },
-          ]),
-          "--replace",
-        ];
+      async ({ configPath, tempDir }) => {
+        const patchPath = path.join(tempDir, "replacement.json");
+        if ("patch" in scenario) {
+          fs.writeFileSync(patchPath, JSON.stringify(scenario.patch));
+        }
+        const args =
+          "patch" in scenario
+            ? ["config", "patch", "--file", patchPath, "--replace-path", "agents.list"]
+            : ["config", "set", "--batch-json", JSON.stringify(scenario.operations), "--replace"];
         await runRegisteredConfigCommand([...args, "--dry-run"]);
         expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
         await runRegisteredConfigCommand(args);
