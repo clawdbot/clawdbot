@@ -552,8 +552,13 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(testing.activeRuns.has("invalid-expiry-run")).toBe(false);
   });
 
-  it("points a backgrounded shell sessionId at the process poll route", async () => {
-    const { tools: codeModeTools } = createCodeModeHarness();
+  it("points a backgrounded shell sessionId at the process poll route when process is callable", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("process", "Control existing exec")],
+      config,
+      catalogRef,
+    });
 
     // The reporter's case: exec backgrounds a command and returns
     // {"status":"running","sessionId":"lucky-glade"}, which the model hands to wait.
@@ -566,12 +571,30 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     await expect(waitCall).rejects.toThrow('polled with process (action "poll")');
   });
 
+  it("does not advertise process when it is absent from the callable surface", async () => {
+    // Gated or empty catalogs must not send the model at a tool it cannot call.
+    const { tools: codeModeTools } = createCodeModeHarness();
+
+    const waitCall = expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+      "code-wait-no-process",
+      { runId: "lucky-glade" },
+    );
+
+    await expect(waitCall).rejects.toThrow("code mode run is unavailable or expired");
+    await expect(waitCall).rejects.not.toThrow("process");
+  });
+
   it("only names a continuation action the process tool actually implements", async () => {
     // exec returns the session id but owns no poll action, so guidance that names
     // the wrong surface reproduces the dead end. Read the action out of the real
     // rejection and bind it to the process action enum: renaming or dropping
     // "poll" must fail here.
-    const { tools: codeModeTools } = createCodeModeHarness();
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("process", "Control existing exec")],
+      config,
+      catalogRef,
+    });
     const message = await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant")
       .execute("code-wait-enum-binding", { runId: "no-such-run" })
       .then(
