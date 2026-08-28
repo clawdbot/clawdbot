@@ -362,9 +362,7 @@ async function testPreflightCandidates(params: {
     }
     try {
       const preferIgnoreScripts = shouldInstallWithoutScriptsOnWindows(manager.manager);
-      const ignoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager, {
-        preferOffline: preferIgnoreScripts,
-      });
+      const ignoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
       const installArgv =
         preferIgnoreScripts && ignoreScriptsArgv
           ? ignoreScriptsArgv

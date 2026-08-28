@@ -1455,12 +1455,20 @@ describe("runGatewayUpdate", () => {
     },
   );
 
-  it("uses prefer-offline for every Windows preflight candidate", async () => {
+  it("uses the shared prefer-offline policy for every Windows preflight candidate", async () => {
     await setupGitPackageManagerFixture();
     let buildAttempts = 0;
+    const preflightInstallEnvs: NodeJS.ProcessEnv[] = [];
     const { calls, runCommand } = createDevGitRunner({
       candidateShas: ["upstream123", "older123"],
       onCommand: (key, options) => {
+        if (
+          key === "pnpm install --ignore-scripts" &&
+          options?.cwd &&
+          preflightPrefixPattern.test(options.cwd)
+        ) {
+          preflightInstallEnvs.push(options.env ?? {});
+        }
         if (key === "pnpm build" && options?.cwd && preflightPrefixPattern.test(options.cwd)) {
           buildAttempts += 1;
           if (buildAttempts === 1) {
@@ -1482,18 +1490,53 @@ describe("runGatewayUpdate", () => {
     ).toMatchObject([
       {
         name: "preflight deps install (ignore scripts) (upstream)",
-        command: "pnpm install --prefer-offline --ignore-scripts",
+        command: "pnpm install --ignore-scripts",
         exitCode: 0,
       },
       {
         name: "preflight deps install (ignore scripts) (older123)",
-        command: "pnpm install --prefer-offline --ignore-scripts",
+        command: "pnpm install --ignore-scripts",
         exitCode: 0,
       },
     ]);
-    expect(
-      calls.filter((call) => call === "pnpm install --prefer-offline --ignore-scripts"),
-    ).toHaveLength(2);
+    expect(calls.filter((call) => call === "pnpm install --ignore-scripts")).toHaveLength(2);
+    expect(preflightInstallEnvs).toHaveLength(2);
+    for (const env of preflightInstallEnvs) {
+      expect(env).toMatchObject({
+        PNPM_CONFIG_PREFER_OFFLINE: "true",
+        pnpm_config_prefer_offline: "true",
+      });
+    }
+  });
+
+  it("preserves an explicit prefer-offline policy for Windows preflight installs", async () => {
+    await setupGitPackageManagerFixture();
+    const preflightInstallEnvs: NodeJS.ProcessEnv[] = [];
+    const { runCommand } = createDevGitRunner({
+      onCommand: (key, options) => {
+        if (
+          key === "pnpm install --ignore-scripts" &&
+          options?.cwd &&
+          preflightPrefixPattern.test(options.cwd)
+        ) {
+          preflightInstallEnvs.push(options.env ?? {});
+        }
+        return undefined;
+      },
+    });
+
+    const result = await withEnvAsync(
+      {
+        PNPM_CONFIG_PREFER_OFFLINE: "false",
+        pnpm_config_prefer_offline: undefined,
+      },
+      () => withMockedWindowsPlatform(() => runWithCommand(runCommand, { channel: "dev" })),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(preflightInstallEnvs).toHaveLength(1);
+    expect(preflightInstallEnvs[0]?.PNPM_CONFIG_PREFER_OFFLINE).toBe("false");
+    expect(preflightInstallEnvs[0]).not.toHaveProperty("pnpm_config_prefer_offline");
   });
 
   it("resolves the dev preflight package manager from the checked-out candidate worktree", async () => {
@@ -1999,7 +2042,7 @@ describe("runGatewayUpdate", () => {
           }
         }
         if (
-          key === "pnpm install --prefer-offline --ignore-scripts" &&
+          key === "pnpm install --ignore-scripts" &&
           options?.cwd &&
           preflightPrefixPattern.test(options.cwd)
         ) {
@@ -2020,7 +2063,6 @@ describe("runGatewayUpdate", () => {
         "preflight deps install (ignore scripts) (upstream)",
       );
       expect(result.steps.map((step) => step.name)).toContain("deps install (ignore scripts)");
-      expect(calls).toContain("pnpm install --prefer-offline --ignore-scripts");
       expect(calls).toContain("pnpm install --ignore-scripts");
       expect(calls).not.toContain("pnpm lint");
     });

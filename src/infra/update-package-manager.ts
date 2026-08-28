@@ -246,17 +246,9 @@ export function managerInstallArgs(manager: BuildManager, opts?: { compatFallbac
 }
 
 /** Build argv for installing dependencies while skipping lifecycle scripts. */
-export function managerInstallIgnoreScriptsArgs(
-  manager: BuildManager,
-  opts?: { preferOffline?: boolean },
-): string[] | null {
+export function managerInstallIgnoreScriptsArgs(manager: BuildManager): string[] | null {
   if (manager === "pnpm") {
-    return [
-      "pnpm",
-      "install",
-      ...(opts?.preferOffline ? ["--prefer-offline"] : []),
-      "--ignore-scripts",
-    ];
+    return ["pnpm", "install", "--ignore-scripts"];
   }
   if (manager === "bun") {
     return ["bun", "install", "--ignore-scripts"];
