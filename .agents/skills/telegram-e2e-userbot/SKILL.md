@@ -13,7 +13,7 @@ The user driver sees edits, deletions, reactions, and typing that a second bot
 cannot observe.
 
 TDLib is the headless user transport. Evidence is a structured Telegram event
-timeline, not a desktop recording.
+timeline.
 
 Each credential contains one SUT bot and one independent TDLib authorization
 for the shared QA user identity. Independent authorizations keep parallel runs
