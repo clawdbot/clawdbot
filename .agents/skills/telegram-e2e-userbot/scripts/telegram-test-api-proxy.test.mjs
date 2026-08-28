@@ -90,3 +90,34 @@ test("holds one upstream-accepted method response until explicit release", async
   await proxy.close();
   await new Promise((resolve) => upstreamServer.close(resolve));
 });
+
+test("proxy close aborts the in-flight Test Server request", async () => {
+  let upstreamStarted;
+  let upstreamAborted = false;
+  const started = new Promise((resolve) => {
+    upstreamStarted = resolve;
+  });
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async (_url, init) => {
+      upstreamStarted();
+      return await new Promise((_resolve, reject) => {
+        init.signal.addEventListener(
+          "abort",
+          () => {
+            upstreamAborted = true;
+            reject(init.signal.reason);
+          },
+          { once: true },
+        );
+      });
+    },
+  });
+  const request = fetch(`${proxy.apiRoot}/bot123:ABC/getUpdates`, {
+    method: "POST",
+    body: "{}",
+  }).catch(() => undefined);
+  await started;
+  await proxy.close();
+  await request;
+  assert.equal(upstreamAborted, true);
+});

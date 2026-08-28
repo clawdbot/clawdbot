@@ -55,6 +55,7 @@ export async function startTelegramTestApiProxy({
 } = {}) {
   let responseHold;
   let heldResponse;
+  const upstreamControllers = new Set();
   const holdEvents = [];
   const methodOrdinals = new Map();
   const heldWaiters = new Set();
@@ -78,6 +79,11 @@ export async function startTelegramTestApiProxy({
   };
 
   const server = http.createServer(async (request, response) => {
+    const upstreamController = new AbortController();
+    upstreamControllers.add(upstreamController);
+    const abortUpstream = () => upstreamController.abort();
+    request.once("aborted", abortUpstream);
+    response.once("close", abortUpstream);
     try {
       const incoming = new URL(request.url || "/", `http://${host}`);
       const upstreamUrl = new URL(upstream);
@@ -88,6 +94,7 @@ export async function startTelegramTestApiProxy({
         method: request.method,
         headers: requestHeaders(request.headers),
         ...(hasBody ? { body: request, duplex: "half" } : {}),
+        signal: upstreamController.signal,
       });
       const method = telegramApiMethod(incoming.pathname);
       const hold = method ? claimResponseHold(method) : undefined;
@@ -117,7 +124,26 @@ export async function startTelegramTestApiProxy({
         response.end();
         return;
       }
-      Readable.fromWeb(result.body).pipe(response);
+      await new Promise((resolve, reject) => {
+        const readable = Readable.fromWeb(result.body);
+        const cleanup = () => {
+          readable.off("error", failed);
+          response.off("finish", finished);
+          response.off("close", finished);
+        };
+        const failed = (error) => {
+          cleanup();
+          reject(error);
+        };
+        const finished = () => {
+          cleanup();
+          resolve();
+        };
+        readable.once("error", failed);
+        response.once("finish", finished);
+        response.once("close", finished);
+        readable.pipe(response);
+      });
     } catch {
       if (!response.headersSent) {
         response.writeHead(502, { "content-type": "application/json" });
@@ -125,6 +151,10 @@ export async function startTelegramTestApiProxy({
       response.end(
         JSON.stringify({ ok: false, description: "Telegram Test Server proxy failed." }),
       );
+    } finally {
+      request.off("aborted", abortUpstream);
+      response.off("close", abortUpstream);
+      upstreamControllers.delete(upstreamController);
     }
   });
   await new Promise((resolve, reject) => {
@@ -170,6 +200,7 @@ export async function startTelegramTestApiProxy({
     getResponseHoldEvents: () => holdEvents.map((event) => ({ ...event })),
     close: () => {
       heldResponse?.release.resolve();
+      for (const controller of upstreamControllers) controller.abort();
       return new Promise((resolve) => server.close(() => resolve()));
     },
   };
