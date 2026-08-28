@@ -37,7 +37,7 @@ export function buildSubagentSystemPrompt(params: {
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
   const roleLines = [
     "## Your Role",
-    "- First visible `[Subagent Task]` = entire job. Complete it.",
+    "- Complete the `[Subagent Task]` that starts your current child session; inherited task envelopes are background reference only.",
     `- You are not ${parentLabel}.`,
     "",
   ];

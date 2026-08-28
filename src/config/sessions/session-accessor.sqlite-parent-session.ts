@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  assertModelSelectionUnlocked,
+  MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
+} from "../../sessions/model-overrides.js";
+import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -179,6 +183,7 @@ export async function forkSessionEntryFromParentTarget(
         };
       }
 
+      assertModelSelectionUnlocked(parent.entry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
       const needsTranscriptTokenEstimate =
         typeof resolveFreshSessionTotalTokens(parent.entry) !== "number" &&
         typeof parent.entry.sessionId === "string" &&
@@ -229,6 +234,9 @@ export async function forkSessionEntryFromParentTarget(
               result = { status: "missing-parent" };
               return;
             }
+            // The copied transcript belongs to this authoritative parent, not the
+            // preflight snapshot; a harness lock may have changed while preparing.
+            assertModelSelectionUnlocked(freshParent, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
             const freshExisting = resolveLifecyclePrimaryEntry(writeDatabase, sessionTarget);
             const freshBase = freshExisting?.entry ?? params.fallbackEntry;
             if (!freshBase) {
@@ -267,11 +275,13 @@ export async function forkSessionEntryFromParentTarget(
               totalTokensFresh: false,
               totalTokensVersion: undefined,
             };
-            const next = mergeSessionEntry(freshBase, forkIdentityPatch);
             previousIdentity = readSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
-            writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next, {
-              previousEntry: freshBase,
-            });
+            const next = writeSessionEntry(
+              writeDatabase,
+              sessionTarget.canonicalKey,
+              mergeSessionEntry(freshBase, forkIdentityPatch),
+              { previousEntry: freshBase },
+            );
             rehomeSessionWindows(
               writeDatabase,
               sessionTarget.canonicalKey,

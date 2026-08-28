@@ -12,6 +12,8 @@ type ModelOverrideSelection = {
 export const MODEL_SELECTION_LOCKED_MESSAGE = "Model selection is locked for this session.";
 export const MODEL_SELECTION_LOCKED_RESET_MESSAGE =
   "This session cannot be reset while model selection is locked.";
+export const MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE =
+  "Model-selection-locked sessions cannot create child sessions from parent context.";
 
 /** Raised when a caller attempts to mutate a locked session model selection. */
 export class ModelSelectionLockedError extends Error {
@@ -25,10 +27,13 @@ export function isModelSelectionLocked(entry: SessionEntry | undefined): boolean
   return entry?.modelSelectionLocked === true;
 }
 
-/** Enforces the durable model-selection lock before any session model fields change. */
-function assertModelSelectionUnlocked(entry: SessionEntry): void {
+/** A locked harness owns both model selection and transcript lineage. */
+export function assertModelSelectionUnlocked(
+  entry: SessionEntry,
+  message = MODEL_SELECTION_LOCKED_MESSAGE,
+): void {
   if (isModelSelectionLocked(entry)) {
-    throw new ModelSelectionLockedError();
+    throw new ModelSelectionLockedError(message);
   }
 }
 

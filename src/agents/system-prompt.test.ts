@@ -914,7 +914,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Native Codex app-server plugin is available");
     expect(prompt).not.toContain("ACP needs agentId");
     expect(prompt).not.toContain("not ACP harness ids");
-    expect(prompt).toContain("- sessions_spawn: Spawn isolated subagent");
+    expect(prompt).toContain('- sessions_spawn: Spawn subagent; clean context: context="isolated"');
     expect(prompt).toContain("- agents_list: List allowed subagent ids");
   });
 
@@ -1538,12 +1538,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
     );
     expect(orchestrationWaitPrompt).toContain("wait via `sessions_yield`");
   });
@@ -2261,17 +2261,22 @@ describe("buildSubagentSystemPrompt", () => {
     );
   });
 
-  it("keeps delegated task text out of the system prompt", () => {
+  it("selects the current child's task without duplicating it in the system prompt", () => {
     const task = "line one\n  line two\n  line three";
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:subagent:parent",
       task,
-      childDepth: 1,
-      maxSpawnDepth: 1,
+      childDepth: 2,
+      maxSpawnDepth: 2,
     });
 
     expect(prompt).toContain("## Your Role");
-    expect(prompt).toContain("First visible `[Subagent Task]`");
+    expect(prompt).not.toContain("First visible `[Subagent Task]`");
+    expect(prompt).toMatch(
+      /\[Subagent Task\].*(?:current|your|this) (?:child )?session|(?:current|your|this) (?:child )?session.*\[Subagent Task\]/i,
+    );
+    expect(prompt).toMatch(/inherited[^.\n]*(?:task|envelope)[^.\n]*(?:background|reference)/i);
     expect(prompt).not.toContain("line one");
     expect(prompt).not.toContain("  line two");
     expect(prompt).not.toContain("  line three");

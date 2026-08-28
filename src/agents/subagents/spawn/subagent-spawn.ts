@@ -206,7 +206,7 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
-    const provisionalSessionIdentity = {
+    let provisionalSessionIdentity = {
       expectedSessionId: initialSession.entry?.sessionId,
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
     };
@@ -230,6 +230,15 @@ export async function spawnSubagentDirect(
         status: "error",
         error: preparedSpawnContext.error,
         childSessionKey,
+      };
+    }
+    const childEntry = preparedSpawnContext.childEntry ?? initialSession.entry;
+    if (childEntry) {
+      // Only preparation's committed entry can advance cleanup ownership. A reread
+      // of the key could capture a reset/rebound successor that this spawn does not own.
+      provisionalSessionIdentity = {
+        expectedSessionId: childEntry.sessionId,
+        expectedLifecycleRevision: childEntry.lifecycleRevision,
       };
     }
     if (resolvedModel) {
@@ -363,11 +372,11 @@ export async function spawnSubagentDirect(
         swarmSchedulerGroupKey,
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
-    if (initialSession.entry) {
+    if (childEntry) {
       recordSessionCreated({
         sessionKey: childSessionKey,
         agentId: targetAgentId,
-        entry: initialSession.entry,
+        entry: childEntry,
       });
     }
     recordSubagentSpawned({
@@ -696,6 +705,7 @@ export async function spawnSubagentDirect(
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
+      context: preparedSpawnContext.mode,
       taskName,
       note: preparedSpawnContext.forkFallbackNote
         ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`

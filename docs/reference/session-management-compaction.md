@@ -18,12 +18,12 @@ Overview docs first: [Session management](/concepts/session), [Compaction](/conc
 
 Older installs may still have `sessions.json` files under the agent `sessions/`
 directory. Treat those files as legacy session-row migration inputs or explicit
-offline-maintenance targets. Gateway startup and `openclaw doctor --fix` import
-hot legacy rows and transcript history into the per-agent SQLite store
-automatically. Run `openclaw doctor --session-sqlite inspect
---session-sqlite-all-agents`, then follow the [Doctor migration
-sequence](/cli/doctor#session-sqlite-migration), when you need explicit
-inspection or validation evidence. If a migration fails after legacy transcript
+offline-maintenance targets. Gateway startup does not import them. Stop the
+Gateway, back up its state, and use `openclaw doctor --fix` to import legacy rows
+and transcript history into the per-agent SQLite store. Run
+`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`, then
+follow the [Doctor migration sequence](/cli/doctor#session-sqlite-migration)
+for inspection and validation. If a migration fails after legacy transcript
 artifacts were archived, use the Doctor recovery mode from that sequence.
 Recovery uses migration manifests, restores only the affected archived support
 artifacts, prepares a sanitized GitHub issue report when requested, and does not
@@ -137,7 +137,8 @@ Each `sessionKey` points at a current `sessionId` (the SQLite transcript identit
 - **Control UI reconnect resume** preserves the currently visible session for one reconnect send when the Gateway receives the matching `sessionId` from an operator UI client. This is a one-shot signal; ordinary stale sends still create a new `sessionId`.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but never extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Automatic parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large (over a fixed internal cap, currently 100K tokens), OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. Sizing is automatic and not configurable; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
-- **Operator forks**: `sessions.create { parentSessionKey, fork: true }` creates a new session whose transcript branches from the parent's current state. Admission uses the selected child model's effective usable input capacity, falling back to the 100K safety cap when model capacity is unavailable. The fork is refused while the parent has an active run, inherits the parent's model selection unless one is passed explicitly, and marks the child `forkedFromParent` with fresh token counters.
+- **Operator forks**: `sessions.create { parentSessionKey, fork: true }` branches from the parent's current state. Admission uses the selected child model's effective usable input capacity, falling back to the 100K safety cap when model capacity is unavailable. A normal fork is refused while the parent has an active run; adding `forkFrom: "last-completed"` copies only through the last completed assistant message, excluding the in-progress tail. Unlike automatic parent forks, an operator fork over its capacity limit is rejected rather than accepted with isolated context. The child inherits the parent's model selection unless one is passed explicitly. The response marks it `forkedFromParent`, and token counters start fresh.
+- **Message forks**: `sessions.fork { sessionKey, entryId }` creates a child from the active-path prefix before the selected user message and returns that message to the composer for editing. The parent remains unchanged. Incognito forks retain the parent's in-memory storage class; restarting the Gateway removes both sessions. See [Control UI](/web/control-ui) for fork and rewind actions.
 
 ## Session store schema
 

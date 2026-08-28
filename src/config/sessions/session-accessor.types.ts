@@ -719,6 +719,8 @@ export type SessionMessageCutMutationResult =
 
 export type SessionMessageCutMutationParams = {
   agentId?: string;
+  /** Synchronous authority check run inside the transcript commit transaction. */
+  commitGuard?: () => void;
   creation?: {
     via: import("./session-entry-provenance.js").SessionCreatedVia;
     actor?: import("./session-entry-provenance.js").SessionCreatedActor;
