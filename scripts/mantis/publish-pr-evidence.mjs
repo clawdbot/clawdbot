@@ -228,7 +228,7 @@ function reconcileEvidenceVerdict(manifest) {
 export function validateEvidenceManifestFile(manifestPath) {
   const resolvedManifest = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolvedManifest);
-  const manifest = validateEvidenceManifest(readJson(resolvedManifest), manifestDir);
+  const manifest = validateEvidenceManifest(readJson(resolvedManifest));
   for (const artifact of manifest.artifacts ?? []) {
     resolveArtifact(manifestDir, artifact);
   }
@@ -238,9 +238,8 @@ export function validateEvidenceManifestFile(manifestPath) {
 
 /**
  * @param {EvidenceManifestFile} manifest
- * @param {string} manifestDir
  */
-function validateEvidenceManifest(manifest, manifestDir) {
+function validateEvidenceManifest(manifest) {
   if (manifest.schemaVersion !== MANTIS_EVIDENCE_SCHEMA_VERSION) {
     throw new Error(
       `Unsupported Mantis evidence manifest schema: ${manifest.schemaVersion}. Rerun the proof to create schema version 2 evidence.`,
