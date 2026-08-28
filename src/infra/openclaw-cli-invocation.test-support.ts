@@ -10,7 +10,7 @@ const checkoutTsconfig = fileURLToPath(new URL("../../tsconfig.json", import.met
 
 export async function createSourceCliFixture(root: string) {
   const realRoot = await fs.realpath(root);
-  const checkout = path.join(realRoot, "OpenClaw source %USERPROFILE%!");
+  const checkout = path.join(realRoot, "OpenClaw source & ^ %USERPROFILE%!");
   const callerCwd = path.join(realRoot, "agent-workspace");
   const entryPath = path.join(checkout, "src", "entry.ts");
   const execArgv = ["--import", pathToFileURL(requireFromHere.resolve("tsx")).href];
