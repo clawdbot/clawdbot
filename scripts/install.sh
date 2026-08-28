@@ -2632,39 +2632,20 @@ verify_git_rebase_recovery() {
     local repo_dir="$1"
     local expected_head="$2"
     local expected_status="$3"
-    local actual_head=""
-    local actual_status=""
-    local rebase_merge=""
-    local rebase_apply=""
 
-    if ! git -C "$repo_dir" rebase --abort >/dev/null 2>&1; then
-        return 1
-    fi
-    if ! actual_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
-        return 1
-    fi
-    if ! actual_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
-        return 1
-    fi
-    if ! rebase_merge="$(git -C "$repo_dir" rev-parse --git-path rebase-merge 2>/dev/null)"; then
-        return 1
-    fi
-    if ! rebase_apply="$(git -C "$repo_dir" rev-parse --git-path rebase-apply 2>/dev/null)"; then
-        return 1
-    fi
-
-    [[ "$actual_head" == "$expected_head" ]] || return 1
-    [[ "$actual_status" == "$expected_status" ]] || return 1
-    [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+    git -C "$repo_dir" rebase --abort >/dev/null 2>&1 &&
+        [[ "$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" == "$expected_head" ]] &&
+        [[ "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)" == "$expected_status" ]] &&
+        [[ ! -d "$(git -C "$repo_dir" rev-parse --git-path rebase-merge)" ]] &&
+        [[ ! -d "$(git -C "$repo_dir" rev-parse --git-path rebase-apply)" ]]
 }
 
 checkout_git_openclaw_ref() {
     local repo_dir="$1"
     local ref="$2"
-    local branch_probe_status=0
-    local tag_probe_status=0
     local original_head=""
     local original_status=""
+    local namespaces=(heads tags)
 
     GIT_REF_KIND=""
 
@@ -2697,91 +2678,49 @@ checkout_git_openclaw_ref() {
         return 0
     fi
 
-    # A normalized release selector names an immutable tag. Resolve that tag
-    # before looking for an arbitrary branch with the same short name.
+    # Normalized release selectors prefer immutable tags. A same-name branch
+    # remains a fallback for operator-supplied v-prefixed branch names.
     if [[ "$ref" == v[0-9]* ]]; then
-        if git -C "$repo_dir" ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}" >/dev/null 2>&1; then
-            tag_probe_status=0
-        else
-            tag_probe_status=$?
-        fi
+        namespaces=(tags heads)
+    fi
 
-        if (( tag_probe_status == 0 )); then
-            if ! run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"; then
-                ui_error "Could not fetch requested git tag: ${ref}"
-                return 1
-            fi
-            if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+    local namespace=""
+    local probe_status=0
+    for namespace in "${namespaces[@]}"; do
+        if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
+            if [[ "$namespace" == "heads" ]]; then
+                run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
+                run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+                GIT_REF_KIND="moving"
+            else
+                run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
+                if ! git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+                    ui_error "Requested git version is not a commit: ${ref}"
+                    return 1
+                fi
                 run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
                 GIT_REF_KIND="immutable"
-                return 0
             fi
-            if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-                run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
-                GIT_REF_KIND="immutable"
-                return 0
-            fi
-            ui_error "Requested git version not found: ${ref}"
-            return 1
-        elif (( tag_probe_status != 2 )); then
-            ui_error "Could not resolve requested git tag: ${ref}"
-            return 1
-        fi
-    fi
-
-    if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-        GIT_REF_KIND="moving"
-        return 0
-    else
-        branch_probe_status=$?
-    fi
-
-    if (( branch_probe_status != 2 )); then
-        ui_error "Could not resolve requested git branch: ${ref}"
-        return 1
-    fi
-
-    if git -C "$repo_dir" ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}" >/dev/null 2>&1; then
-        tag_probe_status=0
-    else
-        tag_probe_status=$?
-    fi
-
-    if (( tag_probe_status == 2 )); then
-        if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-            run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
-            GIT_REF_KIND="immutable"
             return 0
+        else
+            probe_status=$?
         fi
-        ui_error "Requested git version not found: ${ref}"
-        return 1
-    fi
-    if (( tag_probe_status != 0 )); then
-        ui_error "Could not resolve requested git tag: ${ref}"
-        return 1
-    fi
-
-    if ! run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"; then
-        ui_error "Could not fetch requested git tag: ${ref}"
-        return 1
-    fi
-
-    if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
-        GIT_REF_KIND="immutable"
-        return 0
-    fi
-
-    if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
-        GIT_REF_KIND="immutable"
-        return 0
-    fi
+        if (( probe_status != 2 )); then
+            ui_error "Could not resolve requested git ref: ${ref}"
+            return 1
+        fi
+    done
 
     ui_error "Requested git version not found: ${ref}"
     return 1
+}
+
+git_install_lockfile_flag() {
+    if [[ "$1" == "moving" ]]; then
+        echo "--no-frozen-lockfile"
+    else
+        echo "--frozen-lockfile"
+    fi
 }
 
 validate_git_checkout_head() {
@@ -2879,28 +2818,6 @@ NODE
         ui_info "Inspect the destination for partial files, move it or choose another --git-dir, then retry."
         return 1
     fi
-}
-
-git_install_lockfile_flag() {
-    local repo_dir="$1"
-    local ref="$2"
-    local ref_kind="${3:-$GIT_REF_KIND}"
-
-    if [[ "$ref_kind" == "moving" ]]; then
-        echo "--no-frozen-lockfile"
-        return 0
-    fi
-    if [[ "$ref_kind" == "immutable" ]]; then
-        echo "--frozen-lockfile"
-        return 0
-    fi
-
-    if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-        echo "--no-frozen-lockfile"
-        return 0
-    fi
-
-    echo "--frozen-lockfile"
 }
 
 repo_pnpm_spec() {
@@ -3383,13 +3300,18 @@ install_openclaw_from_git() {
         checkout_git_openclaw_ref "$repo_dir" "$git_ref"
     else
         ui_info "Repo has local changes; skipping git checkout/update"
+        if git -C "$repo_dir" symbolic-ref --quiet HEAD >/dev/null; then
+            GIT_REF_KIND="moving"
+        else
+            GIT_REF_KIND="immutable"
+        fi
     fi
 
     cleanup_legacy_submodules "$repo_dir"
     activate_repo_pnpm_version "$repo_dir"
 
     local install_lockfile_flag
-    install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref" "$GIT_REF_KIND")"
+    install_lockfile_flag="$(git_install_lockfile_flag "$GIT_REF_KIND")"
     CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then

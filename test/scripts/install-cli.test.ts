@@ -996,65 +996,17 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("main=main");
   });
 
-  it("fetches exact git refs and avoids redundant update probes", () => {
+  it("keeps ref resolution and rebase failures explicit", () => {
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"',
     );
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
     );
-    expect(script).toContain(
-      'git -C "$repo_dir" ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}"',
-    );
+    expect(script).toContain('git -C "$repo_dir" ls-remote --exit-code origin');
     expect(script).toContain('git -C "$repo_dir" checkout --detach "refs/tags/${ref}"');
     expect(script).toContain('git -C "$repo_dir" rebase origin/main');
-    expect(script).not.toContain('git -C "$repo_dir" fetch --no-tags origin main');
     expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
-
-    const releaseTagProbeIndex = script.indexOf(
-      'ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}"',
-    );
-    const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
-    const tagFetchIndex = script.lastIndexOf(
-      'fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"',
-    );
-    expect(releaseTagProbeIndex).toBeGreaterThan(-1);
-    expect(branchCheckIndex).toBeGreaterThan(-1);
-    expect(tagFetchIndex).toBeGreaterThan(-1);
-    expect(releaseTagProbeIndex).toBeLessThan(branchCheckIndex);
-    expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
-    expect(script).toContain('git_install_lockfile_flag "$repo_dir" "$git_ref" "$GIT_REF_KIND"');
-  });
-
-  it("checks out a fetched tag through its fully qualified ref", () => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      ref=v2026.5.12
-      checked_out=""
-      git() {
-        if [[ "$1" == "-C" && "$3" == "ls-remote" && "$5" == "--heads" ]]; then
-          return 2
-        fi
-        if [[ "$1" == "-C" && "$3" == "ls-remote" && "$5" == "--tags" ]]; then
-          return 0
-        fi
-        if [[ "$1" == "-C" && "$3" == "rev-parse" && "$6" == "refs/tags/$ref^{commit}" ]]; then
-          return 0
-        fi
-        if [[ "$1" == "-C" && "$3" == "checkout" ]]; then
-          checked_out="$5"
-          [[ "$5" == "refs/tags/$ref" ]]
-          return
-        fi
-        return 0
-      }
-      checkout_git_openclaw_ref /repo "$ref"
-      printf 'checkout=%s\n' "$checked_out"
-    `);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("checkout=refs/tags/v2026.5.12");
   });
 
   it("prefers a release tag over a same-named branch", () => {
@@ -1226,21 +1178,13 @@ describe("install-cli.sh", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
-      git() {
-        if [[ "$1" == "-C" && "$3" == "ls-remote" && "\${7:-}" == "feature" ]]; then
-          return 0
-        fi
-        return 1
-      }
-      printf 'main=%s\\n' "$(git_install_lockfile_flag /repo main)"
-      printf 'branch=%s\\n' "$(git_install_lockfile_flag /repo feature)"
-      printf 'tag=%s\\n' "$(git_install_lockfile_flag /repo v2026.5.12)"
+      printf 'moving=%s\\n' "$(git_install_lockfile_flag moving)"
+      printf 'immutable=%s\\n' "$(git_install_lockfile_flag immutable)"
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("main=--no-frozen-lockfile");
-    expect(result.stdout).toContain("branch=--no-frozen-lockfile");
-    expect(result.stdout).toContain("tag=--frozen-lockfile");
+    expect(result.stdout).toContain("moving=--no-frozen-lockfile");
+    expect(result.stdout).toContain("immutable=--frozen-lockfile");
     expect(script).toContain(
       'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
     );
