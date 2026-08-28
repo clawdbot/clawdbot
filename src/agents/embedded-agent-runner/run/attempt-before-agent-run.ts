@@ -1,9 +1,12 @@
 /**
  * Runs the fail-closed before_agent_run gate and persists blocked turns.
  */
-import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
+import {
+  runAgentHarnessBeforeAgentRunHook,
+  type AgentHarnessBeforeAgentRunBlock,
+} from "../../harness/lifecycle-hook-helpers.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
 import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
@@ -44,81 +47,53 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
     return undefined;
   }
 
-  const persistBlockedBeforeAgentRun = async (block: {
-    message: string;
-    pluginId: string;
-  }): Promise<boolean> => {
-    const idempotencyKey = `hook-block:before_agent_run:user:${input.attempt.runId}`;
-    if (sessionMessagesContainIdempotencyKey(input.activeSession.messages, idempotencyKey)) {
-      return true;
+  const persistBlockedBeforeAgentRun = async (
+    block: AgentHarnessBeforeAgentRunBlock,
+  ): Promise<void> => {
+    if (
+      sessionMessagesContainIdempotencyKey(
+        input.activeSession.messages,
+        block.blockedUserMessage.idempotencyKey,
+      )
+    ) {
+      return;
     }
-    const nowMs = Date.now();
-    const redactedUserMessage = {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: block.message }],
-      timestamp: nowMs,
-      idempotencyKey,
-      __openclaw: {
-        beforeAgentRunBlocked: {
-          blockedBy: block.pluginId,
-          blockedAt: nowMs,
-        },
-      },
-    };
     try {
       await input.withOwnedTranscriptWrite(() => {
         input.sessionManager.appendMessage(
-          redactedUserMessage as Parameters<typeof input.sessionManager.appendMessage>[0],
+          block.blockedUserMessage as Parameters<typeof input.sessionManager.appendMessage>[0],
         );
         flushSessionManagerTranscript(input.sessionManager);
       });
       input.activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
         input.sessionManager.buildSessionContext().messages,
       );
-      return true;
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted user message: ${
           (err as Error)?.message ?? String(err)
         }`,
       );
-      return false;
     }
   };
 
-  let beforeRunResult: Awaited<ReturnType<HookRunner["runBeforeAgentRun"]>> | undefined;
-  try {
-    beforeRunResult = await input.hookRunner.runBeforeAgentRun(
-      {
-        prompt: input.modelPrompt,
-        systemPrompt: input.systemPrompt,
-        /** Gives hooks an isolated message snapshot they cannot mutate in-session. */
-        messages: input.hookMessages.map((message) => structuredClone(message)),
-        channelId: input.hookContext.channelId,
-        accountId: input.attempt.agentAccountId ?? undefined,
-        senderId: input.attempt.senderId ?? undefined,
-        senderIsOwner: input.attempt.senderIsOwner ?? undefined,
-      },
-      input.hookContext,
-    );
-  } catch {
-    log.warn("before_agent_run hook failed; blocking request");
-    const blockedBy = "before_agent_run";
-    const message = resolveBlockMessage(
-      { outcome: "block", reason: "before_agent_run hook failed" },
-      { blockedBy },
-    );
-    await persistBlockedBeforeAgentRun({ message, pluginId: blockedBy });
-    return { blockedBy, promptError: new Error(message) };
-  }
-
-  const beforeRunDecision = beforeRunResult?.decision;
-  if (beforeRunDecision?.outcome !== "block") {
+  const block = await runAgentHarnessBeforeAgentRunHook({
+    runId: input.attempt.runId,
+    event: {
+      prompt: input.modelPrompt,
+      systemPrompt: input.systemPrompt,
+      messages: input.hookMessages,
+      channelId: input.hookContext.channelId,
+      accountId: input.attempt.agentAccountId ?? undefined,
+      senderId: input.attempt.senderId ?? undefined,
+      senderIsOwner: input.attempt.senderIsOwner ?? undefined,
+    },
+    ctx: input.hookContext,
+    hookRunner: input.hookRunner,
+  });
+  if (!block) {
     return undefined;
   }
-  const blockedBy = beforeRunResult?.pluginId ?? "unknown";
-  const message = resolveBlockMessage(beforeRunDecision, { blockedBy });
-  log.warn(`before_agent_run hook blocked by ${blockedBy}`);
-  await persistBlockedBeforeAgentRun({ message, pluginId: blockedBy });
-  return { blockedBy, promptError: new Error(message) };
+  await persistBlockedBeforeAgentRun(block);
+  return { blockedBy: block.blockedBy, promptError: new Error(block.message) };
 }

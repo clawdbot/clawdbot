@@ -20,7 +20,6 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
-import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   loadAuthProfileStoreForRuntime,
@@ -79,6 +78,7 @@ import { bootstrapHarnessContextEngine } from "./harness/context-engine-lifecycl
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
+  runAgentHarnessBeforeAgentRunHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
@@ -624,63 +624,32 @@ export async function runPreparedCliAgent(
     };
 
     if (hasBeforeAgentRunHooks && hookRunner) {
-      let beforeRunResult:
-        | Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>>
-        | undefined;
-      try {
-        beforeRunResult = await hookRunner.runBeforeAgentRun(
-          {
-            prompt: params.prompt,
-            systemPrompt: context.systemPrompt,
-            messages: buildAgentHookConversationMessages({
-              historyMessages,
-              currentTurnMessages: [],
-            }),
-            channelId: hookContext.channelId,
-            accountId: params.agentAccountId,
-            senderId: params.senderId ?? undefined,
-            senderIsOwner: params.senderIsOwner ?? undefined,
-          },
-          buildAgentHookContext(hookContext),
-        );
-      } catch {
-        const blockMessage = resolveBlockMessage(
-          { outcome: "block", reason: "before_agent_run hook failed" },
-          { blockedBy: "before_agent_run" },
-        );
-        await persistCliRunBlock(params, {
-          message: blockMessage,
-          pluginId: "before_agent_run",
-        });
+      const block = await runAgentHarnessBeforeAgentRunHook({
+        runId: params.runId,
+        event: {
+          prompt: params.prompt,
+          systemPrompt: context.systemPrompt,
+          messages: buildAgentHookConversationMessages({
+            historyMessages,
+            currentTurnMessages: [],
+          }),
+          channelId: hookContext.channelId,
+          accountId: params.agentAccountId,
+          senderId: params.senderId ?? undefined,
+          senderIsOwner: params.senderIsOwner ?? undefined,
+        },
+        ctx: buildAgentHookContext(hookContext),
+        hookRunner,
+      });
+      if (block) {
+        await persistCliRunBlock(params, block.blockedUserMessage);
         await runCliAgentEndHook(params, {
-          event: buildBlockedAgentEndEvent(blockMessage),
+          event: buildBlockedAgentEndEvent(block.message),
           ctx: hookContext,
           hookRunner,
         });
         return buildBlockedCliRunResult({
-          message: blockMessage,
-          context,
-          preparedContextAgentMeta,
-          sessionBindingDisabled,
-        });
-      }
-
-      const beforeRunDecision = beforeRunResult?.decision;
-      if (beforeRunDecision?.outcome === "block") {
-        const blockMessage = resolveBlockMessage(beforeRunDecision, {
-          blockedBy: beforeRunResult?.pluginId ?? "unknown",
-        });
-        await persistCliRunBlock(params, {
-          message: blockMessage,
-          pluginId: beforeRunResult?.pluginId ?? "unknown",
-        });
-        await runCliAgentEndHook(params, {
-          event: buildBlockedAgentEndEvent(blockMessage),
-          ctx: hookContext,
-          hookRunner,
-        });
-        return buildBlockedCliRunResult({
-          message: blockMessage,
+          message: block.message,
           context,
           preparedContextAgentMeta,
           sessionBindingDisabled,

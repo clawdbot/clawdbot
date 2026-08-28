@@ -19,6 +19,7 @@ import {
   runHarnessContextEngineMaintenance,
 } from "../harness/context-engine-lifecycle.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
+import type { AgentHarnessBeforeAgentRunBlock } from "../harness/lifecycle-hook-helpers.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
@@ -238,21 +239,8 @@ async function notifyCliUserMessagePersisted(
 
 export async function persistCliRunBlock(
   params: RunCliAgentParams,
-  block: { message: string; pluginId: string },
+  redactedUserMessage: AgentHarnessBeforeAgentRunBlock["blockedUserMessage"],
 ): Promise<void> {
-  const nowMs = Date.now();
-  const redactedUserMessage = {
-    role: "user" as const,
-    content: [{ type: "text" as const, text: block.message }],
-    timestamp: nowMs,
-    idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
-    __openclaw: {
-      beforeAgentRunBlocked: {
-        blockedBy: block.pluginId,
-        blockedAt: nowMs,
-      },
-    },
-  };
   try {
     const persisted = await params.userTurnTranscriptRecorder?.persistBlocked(redactedUserMessage);
     if (persisted) {

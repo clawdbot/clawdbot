@@ -8,15 +8,19 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveBlockMessage } from "../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
+  PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
+  PluginHookBeforeAgentRunEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
 import type { VoidHookRunOptions } from "../../plugins/hooks.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
@@ -25,6 +29,10 @@ const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget
 const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
+type BeforeAgentRunHookRunner = Pick<
+  NonNullable<AgentHarnessHookRunner>,
+  "hasHooks" | "runBeforeAgentRun"
+>;
 type FinalizeRetryBudget = Map<string, Map<string, number>>;
 
 /** Returns the current global hook runner for harness lifecycle hooks. */
@@ -63,6 +71,85 @@ function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
 
 function buildFinalizeRetryInstructionKey(instruction: string): string {
   return `instruction:${createHash("sha256").update(instruction).digest("hex")}`;
+}
+
+/** Fail-closed before_agent_run outcome shared by every harness runtime. */
+export type AgentHarnessBeforeAgentRunBlock = {
+  blockedBy: string;
+  message: string;
+  /** Redacted user turn each runtime persists in place of the blocked prompt. */
+  blockedUserMessage: PersistedUserTurnMessage & { idempotencyKey: string };
+};
+
+function buildBeforeAgentRunBlock(params: {
+  runId: string;
+  blockedBy: string;
+  message: string;
+}): AgentHarnessBeforeAgentRunBlock {
+  const nowMs = Date.now();
+  return {
+    blockedBy: params.blockedBy,
+    message: params.message,
+    blockedUserMessage: {
+      role: "user",
+      content: [{ type: "text", text: params.message }],
+      timestamp: nowMs,
+      idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+      __openclaw: {
+        beforeAgentRunBlocked: { blockedBy: params.blockedBy, blockedAt: nowMs },
+      },
+    },
+  };
+}
+
+/**
+ * Runs the before_agent_run gate once for a prepared prompt. Hook failure and
+ * block decisions both fail closed; callers must persist `blockedUserMessage`
+ * and skip the provider call when a block is returned.
+ */
+export async function runAgentHarnessBeforeAgentRunHook(params: {
+  runId: string;
+  event: PluginHookBeforeAgentRunEvent;
+  ctx: PluginHookAgentContext;
+  hookRunner?: BeforeAgentRunHookRunner | null;
+}): Promise<AgentHarnessBeforeAgentRunBlock | undefined> {
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_agent_run")) {
+    return undefined;
+  }
+  let result: Awaited<ReturnType<BeforeAgentRunHookRunner["runBeforeAgentRun"]>>;
+  try {
+    result = await hookRunner.runBeforeAgentRun(
+      {
+        ...params.event,
+        /** Gives hooks an isolated message snapshot they cannot mutate in-session. */
+        messages: params.event.messages.map((message) => structuredClone(message)),
+      },
+      params.ctx,
+    );
+  } catch {
+    log.warn("before_agent_run hook failed; blocking request");
+    const blockedBy = "before_agent_run";
+    return buildBeforeAgentRunBlock({
+      runId: params.runId,
+      blockedBy,
+      message: resolveBlockMessage(
+        { outcome: "block", reason: "before_agent_run hook failed" },
+        { blockedBy },
+      ),
+    });
+  }
+  const decision = result?.decision;
+  if (decision?.outcome !== "block") {
+    return undefined;
+  }
+  const blockedBy = result?.pluginId ?? "unknown";
+  log.warn(`before_agent_run hook blocked by ${blockedBy}`);
+  return buildBeforeAgentRunBlock({
+    runId: params.runId,
+    blockedBy,
+    message: resolveBlockMessage(decision, { blockedBy }),
+  });
 }
 
 /** Dispatches best-effort LLM input hooks for a harness attempt. */

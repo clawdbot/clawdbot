@@ -548,6 +548,7 @@ export {
   getAgentHarnessHookRunner,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
+  runAgentHarnessBeforeAgentRunHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "../agents/harness/lifecycle-hook-helpers.js";
