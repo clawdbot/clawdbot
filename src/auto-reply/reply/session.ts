@@ -9,6 +9,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
+import { isSubagentEnvelopeSession } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
@@ -390,8 +391,16 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(entry: SessionEntry): Partial<InternalSessionEntry> {
+function resolveReplySessionRolloverState(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  sessionKey: string;
+}): Partial<InternalSessionEntry> {
+  const { cfg, entry, sessionKey } = params;
   const preservedSelection = resolveResetPreservedSelection({ entry });
+  // ACP key shape alone is not child provenance. Keep spawn authority only
+  // when the canonical envelope classifier confirms a real spawned session.
+  const preserveSpawnLineage = isSubagentEnvelopeSession(sessionKey, { cfg, entry });
   return {
     thinkingLevel: entry.thinkingLevel,
     verboseLevel: entry.verboseLevel,
@@ -408,9 +417,16 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,
-    spawnedBy: entry.spawnedBy,
-    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
-    spawnedCwd: entry.spawnedCwd,
+    ...(preserveSpawnLineage
+      ? {
+          spawnedBy: entry.spawnedBy,
+          spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+          spawnedCwd: entry.spawnedCwd,
+          spawnDepth: entry.spawnDepth,
+          subagentRole: entry.subagentRole,
+          subagentControlScope: entry.subagentControlScope,
+        }
+      : {}),
     parentSessionKey: entry.parentSessionKey,
     parentSessionId: entry.parentSessionId,
     forkedFromParent: entry.forkedFromParent,
@@ -419,9 +435,6 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
     ...(entry.sandbox === "required" ? { sandbox: "required" } : {}),
-    spawnDepth: entry.spawnDepth,
-    subagentRole: entry.subagentRole,
-    subagentControlScope: entry.subagentControlScope,
   };
 }
 
@@ -806,9 +819,8 @@ async function initSessionStateAttemptLocked(
       // spawn-applied default (subagent-spawn-thinking.ts) — so unlike model
       // overrides these need no fallback-provenance filtering (#92562).
       // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
-      // Lineage/control facts belong to the session node and survive ANY rollover
-      // from an existing entry, following the #90119 carry pattern.
-      preservedState = resolveReplySessionRolloverState(entry);
+      // Rollover keeps spawned-run lineage only for a verified child envelope.
+      preservedState = resolveReplySessionRolloverState({ cfg, entry, sessionKey });
     }
   }
 
