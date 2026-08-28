@@ -1,6 +1,6 @@
 // Qa Lab plugin module implements lab server behavior.
 import fs from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

@@ -125,10 +125,12 @@ function createResponseDeliveryWaiter(
   return { result, cancel: () => settle(false) };
 }
 
+const OFFER_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
+
 function respondText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   res.setHeader("cache-control", "no-store");
-  res.setHeader("content-type", "text/plain; charset=utf-8");
+  res.setHeader("content-type", OFFER_TEXT_CONTENT_TYPE);
   res.setHeader("x-content-type-options", "nosniff");
   res.end(body);
 }
@@ -665,16 +667,17 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (browserDisconnected) {
         return true;
       }
-      if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
-        await sendHttpRequestRejection(req, res, 413, requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
-        return true;
-      }
-      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+      if (isRequestBodyLimitError(error)) {
+        // Keep the plain-text envelope and hardening headers the offer endpoint
+        // already sends; only the transport moves to the rejection owner.
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("x-content-type-options", "nosniff");
         await sendHttpRequestRejection(
           req,
           res,
-          408,
-          requestBodyErrorToText("REQUEST_BODY_TIMEOUT"),
+          error.statusCode,
+          requestBodyErrorToText(error.code),
+          OFFER_TEXT_CONTENT_TYPE,
         );
         return true;
       }

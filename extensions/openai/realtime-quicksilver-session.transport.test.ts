@@ -82,8 +82,8 @@ describe("GPT-Live offer transport", () => {
         headers: await offerHeaders(),
         idleTimeoutMs: 500,
       });
-      expect(declared.statusLine).toBe("HTTP/1.1 502 Bad Gateway");
-      expect(declared.body).toContain("PayloadTooLarge");
+      expect(declared.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(declared.body).toBe("Payload too large");
       expect(declared.closedByServer).toBe(true);
 
       // Chunked, so there is no declared length and the cap can only be hit by counting
@@ -96,7 +96,7 @@ describe("GPT-Live offer transport", () => {
         chunk: { bytes: 32 * 1024, intervalMs: 5 },
         idleTimeoutMs: 500,
       });
-      expect(streamed.statusLine).toBe("HTTP/1.1 502 Bad Gateway");
+      expect(streamed.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
       expect(streamed.closedByServer).toBe(true);
 
       // Control: an under-cap offer is still read and answered on a retained connection,

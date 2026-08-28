@@ -19,9 +19,6 @@ function makeBaseReq(
     req.destroyed = true;
     return req;
   }) as IncomingMessage["destroy"];
-  // Body readers pause rather than destroy when the caller still has to send a response,
-  // so the double has to model that half of the Readable contract too.
-  req.pause = () => req;
   return req;
 }
 

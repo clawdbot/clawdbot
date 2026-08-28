@@ -1,8 +1,12 @@
 import { EventEmitter } from "node:events";
-import type { ServerResponse } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
+import {
+  createMockIncomingRequest,
+  createMockServerResponse,
+  postRawWebhook,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createA2aHttpHandler } from "./http.js";
 import { A2aTaskStore } from "./task-store.js";
@@ -101,6 +105,7 @@ async function startHttpHarness(options?: {
   return {
     baseUrl,
     taskStore,
+    handler,
     async get(endpoint: string) {
       return await dispatchRequest({ method: "GET", endpoint });
     },
@@ -291,14 +296,45 @@ describe("A2A HTTP authentication and request limits", () => {
     }
   });
 
-  it("returns a readable HTTP 413 response for request bodies above 1 MiB", async () => {
+  it("delivers HTTP 413 over the wire and closes for request bodies above 1 MiB", async () => {
     const harness = await startHttpHarness();
-    const response = await harness.post("x".repeat(1024 * 1024 + 1));
-
-    expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toMatchObject({
-      error: expect.stringContaining("1 MiB"),
+    const server = createServer((req, res) => {
+      void harness.handler(req, res);
     });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected the A2A test server to have a TCP address");
+      }
+
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      const result = await postRawWebhook({
+        url: `http://127.0.0.1:${address.port}/a2a/v1`,
+        body: "x".repeat(1024 * 1024 + 1),
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer alpha-secret",
+        },
+      });
+
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(result.body)).toEqual({
+        error: "Request body exceeds the 1 MiB limit",
+      });
+      expect(result.closedByServer).toBe(true);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });
 

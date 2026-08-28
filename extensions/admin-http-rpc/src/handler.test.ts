@@ -371,7 +371,9 @@ describe("admin-http-rpc plugin handler", () => {
         url: `http://127.0.0.1:${port}/api/v1/admin/rpc`,
         body: "x".repeat(1024 * 1024 + 128 * 1024),
         headers: { "content-type": "application/json" },
-        idleTimeoutMs: 500,
+        // The transport owner half-closes first and destroys on its bounded deadline, so
+        // observing the actual close needs a window wider than that deadline.
+        idleTimeoutMs: 3_000,
       });
 
       expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");

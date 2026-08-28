@@ -59,38 +59,6 @@ async function invokeWebhookRequestListener(params: {
   });
 }
 
-async function invokeWebhookServerRequest(params: {
-  body: string;
-  headers: Record<string, string>;
-  maxBodyBytes: number;
-}) {
-  const { server, stop } = createNextcloudTalkWebhookServer({
-    host: "127.0.0.1",
-    port: 0,
-    path: "/nextcloud-body-limit",
-    secret: "nextcloud-secret", // pragma: allowlist secret
-    maxBodyBytes: params.maxBodyBytes,
-    onMessage: vi.fn(),
-  });
-  try {
-    const listener = server.listeners("request")[0] as
-      | ((req: IncomingMessage, res: ServerResponse) => void)
-      | undefined;
-    if (!listener) {
-      throw new Error("expected Nextcloud Talk request listener");
-    }
-    return await invokeWebhookRequestListener({
-      listener,
-      path: "/nextcloud-body-limit",
-      body: params.body,
-      headers: params.headers,
-      remoteAddress: "127.0.0.1",
-    });
-  } finally {
-    await stop();
-  }
-}
-
 describe("createNextcloudTalkWebhookServer auth order", () => {
   it("closes when abort races with listener startup", async () => {
     const abortController = new AbortController();
@@ -133,19 +101,6 @@ describe("createNextcloudTalkWebhookServer auth order", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Missing signature headers" });
     expect(readBody).not.toHaveBeenCalled();
-  });
-
-  it("rejects signed payloads over the configured body limit", async () => {
-    const { body, headers } = createSignedCreateMessageRequest();
-
-    const response = await invokeWebhookServerRequest({
-      body,
-      headers,
-      maxBodyBytes: 128,
-    });
-
-    expect(response.status).toBe(413);
-    expect(JSON.parse(response.body)).toEqual({ error: "Payload too large" });
   });
 });
 

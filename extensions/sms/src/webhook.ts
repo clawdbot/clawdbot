@@ -132,10 +132,6 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
         await sendHttpRequestRejection(req, res, 413, "Payload too large", TWIML_CONTENT_TYPE);
         return true;
       }
-      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        await sendHttpRequestRejection(req, res, 408, "Request body timeout", TWIML_CONTENT_TYPE);
-        return true;
-      }
       throw error;
     }
 

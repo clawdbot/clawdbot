@@ -1,7 +1,9 @@
 // Sms tests cover webhook plugin behavior.
 import { createHmac } from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { Readable } from "node:stream";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -76,6 +78,12 @@ function createSignedBody(params?: {
   };
 }
 
+function createLoopbackSocket(remoteAddress = "127.0.0.1"): Socket {
+  const socket = new Socket();
+  Object.defineProperty(socket, "remoteAddress", { value: remoteAddress });
+  return socket;
+}
+
 function createRequest(
   body: string,
   signature: string,
@@ -89,7 +97,7 @@ function createRequest(
     ...options?.headers,
   };
   Object.defineProperty(req, "socket", {
-    value: { remoteAddress: options?.remoteAddress ?? "127.0.0.1" },
+    value: createLoopbackSocket(options?.remoteAddress),
   });
   return req;
 }
@@ -97,9 +105,9 @@ function createRequest(
 function configureRequest(req: IncomingMessage): IncomingMessage {
   req.method = "POST";
   req.headers = {};
-  Object.defineProperty(req, "socket", {
-    value: { remoteAddress: "127.0.0.1" },
-  });
+  // A real socket: the reader hands a limited request to the connection-level
+  // rejection owner, which subscribes to socket events before the caller answers.
+  Object.defineProperty(req, "socket", { value: createLoopbackSocket() });
   return req;
 }
 
@@ -231,7 +239,7 @@ describe("createSmsWebhookHandler", () => {
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
   });
 
-  it("returns terminal HTTP 413 for an oversized callback body", async () => {
+  it("delivers HTTP 413 over the wire and closes for an oversized callback body", async () => {
     const delivery = createDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
@@ -239,19 +247,43 @@ describe("createSmsWebhookHandler", () => {
       ingress: createIngress(),
       delivery,
     });
-    const res = createResponse();
+    const server = createServer((req, res) => {
+      void handler(req, res);
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected the SMS webhook test server to have a TCP address");
+      }
 
-    await handler(
-      createRequest("x", "unused", {
-        headers: { "content-length": String(32 * 1024 + 1) },
-      }),
-      res,
-    );
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      const result = await postRawWebhook({
+        url: `http://127.0.0.1:${address.port}/sms`,
+        body: "x".repeat(32 * 1024 + 1),
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-twilio-signature": "unused",
+        },
+      });
 
-    expect(res.statusCode).toBe(413);
-    expect(res.body).toBe("Payload too large");
-    expect(delivery.record).not.toHaveBeenCalled();
-    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(result.body).toBe("Payload too large");
+      expect(result.closedByServer).toBe(true);
+      expect(delivery.record).not.toHaveBeenCalled();
+      expect(enqueueSmsIngress).not.toHaveBeenCalled();
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("rethrows request body timeouts for Gateway-owned retry responses", async () => {
