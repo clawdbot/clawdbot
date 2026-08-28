@@ -239,13 +239,13 @@ describe("createCopilotByokProxy", () => {
   it.each(["upstream error", "client disconnect", "proxy shutdown"] as const)(
     "releases an active response stream after %s",
     async (interruption) => {
-      const source = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+      let source: ReadableStreamDefaultController<Uint8Array> | undefined;
       const cancel = vi.fn();
       const release = vi.fn(async () => undefined);
       let upstreamSignal: AbortSignal | undefined;
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
-          source.resolve(controller);
+          source = controller;
           controller.enqueue(new TextEncoder().encode("data: first\n\n"));
         },
         cancel,
@@ -283,7 +283,9 @@ describe("createCopilotByokProxy", () => {
           () => true,
         );
         if (interruption === "upstream error") {
-          (await source.promise).error(new Error("upstream stream interrupted"));
+          expectDefined(source, "upstream response controller").error(
+            new Error("upstream stream interrupted"),
+          );
         } else if (interruption === "client disconnect") {
           disconnect.abort();
         } else {
