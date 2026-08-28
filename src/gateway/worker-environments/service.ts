@@ -1,5 +1,6 @@
 import type {
-  WorkerAdmissionHandshake,
+  WorkerGitHubPublishParams,
+  WorkerPortalParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
@@ -8,18 +9,13 @@ import type {
   WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.js";
-import type { SecretRef } from "../../config/types.secrets.js";
 import { withTimeout } from "../../infra/fs-safe.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import type {
-  WorkerProfile,
-  WorkerProvider,
-  WorkerSshEndpoint,
-  WorkerSshIdentity,
-} from "../../plugins/types.js";
+import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { WorkerConnectionIdentity } from "./admission.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
@@ -30,15 +26,18 @@ import {
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
+import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
+import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
-  WorkerEnvironmentStore,
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
+import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
@@ -67,35 +66,18 @@ class WorkerEnvironmentServiceError extends Error {
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
 
-type WorkerEnvironmentServiceOptions = {
-  store: WorkerEnvironmentStore;
-  getConfig: () => OpenClawConfig;
-  resolveProvider: (providerId: string) => WorkerProvider | undefined;
-  prepareInstallation: (
-    install: WorkerInstallationArtifact["install"],
-  ) => Promise<WorkerInstallationArtifact>;
-  bootstrapWorker: (params: {
-    operationId: string;
-    sshEndpoint: WorkerSshEndpoint;
-    installation: WorkerInstallationArtifact;
-    resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
-    signal: AbortSignal;
-  }) => Promise<WorkerAdmissionHandshake>;
-  resolveSshIdentity?: (params: {
-    provider: WorkerProvider;
-    leaseId: string;
-    profile: WorkerProfile;
-    keyRef: SecretRef;
-  }) => Promise<WorkerSshIdentity>;
-  resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
+type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
+  nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
+  nodePortalCarrier?: WorkerNodePortalCarrier;
+  closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
+  stopNodeEnrollmentWaits?: () => void;
+  stopNodeWorkerBundleTransfers?: () => void;
   reconcileIntervalMs?: number;
-  providerCallTimeoutMs?: number;
   bootstrapCallTimeoutMs?: number;
   workerCredentialTtlMs?: number;
   generateWorkerCredential?: (bytes: number) => string;
-  resolveWorkerGateway?: () => { host: "127.0.0.1" | "::1"; port: number } | undefined;
   now?: () => number;
   logger?: { warn: (message: string) => void };
   applyTranscriptCommit?: (params: {
@@ -125,9 +107,27 @@ type WorkerEnvironmentServiceOptions = {
           toolName: "sessions_send";
           request: WorkerSessionsSendParams;
           signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "github_publish";
+          request: WorkerGitHubPublishParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "portal";
+          request: WorkerPortalParams;
+          signal?: AbortSignal;
         },
   ) => Promise<WorkerSessionToolResult>;
 };
+
+export type WorkerEnvironmentReconcileCore = () => Promise<void>;
+type WorkerEnvironmentReconcileGuard = (
+  environmentId: string,
+  reconcileCore: WorkerEnvironmentReconcileCore,
+) => Promise<void>;
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
   const { store } = options;
@@ -137,12 +137,22 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const activeOperations = new Set<Promise<unknown>>();
   const now = options.now ?? Date.now;
   const tunnelLifecycle =
-    options.tunnelManager || options.nodeTunnelManager
+    options.tunnelManager ||
+    options.nodeTunnelManager ||
+    options.nodeDesktopCarrier ||
+    options.nodePortalCarrier
       ? {
-          stop: async (environmentId: string, ownerEpoch?: number) => {
+          stop: async (
+            environmentId: string,
+            ownerEpoch?: number,
+            reason?: WorkerTunnelStopReason,
+          ) => {
             await Promise.all([
               options.tunnelManager?.stop(environmentId, ownerEpoch),
-              options.nodeTunnelManager?.stop(environmentId, ownerEpoch),
+              options.nodeTunnelManager?.stop(environmentId, ownerEpoch, reason),
+              options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
+              options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
+              options.closeWorkerPortals?.(environmentId, ownerEpoch),
             ]);
           },
         }
@@ -150,7 +160,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const inference = createWorkerInferenceManager({
     execute: options.executeInference,
     getConfig: options.getConfig,
-    now,
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   const inferenceWithDrain = inference as typeof inference & {
@@ -159,6 +168,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
+  let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler((claim) =>
+    inference.cancelClaim(claim),
+  );
+  let reconcileEnvironmentGuard: WorkerEnvironmentReconcileGuard | undefined;
+  let reconcileEnvironmentGuardClosing = false;
+  // Coalesce the whole guarded closure. Serializing only provider work would still let a
+  // losing recovery pass attach or sync after the winner advances the placement.
+  const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
 
   const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
@@ -198,13 +215,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     );
   };
 
-  const callBootstrap = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  const callBootstrap = async <T>(
+    installation: WorkerInstallationArtifact,
+    run: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
     const controller = new AbortController();
     const operation = Promise.resolve().then(() => run(controller.signal));
     try {
       return await withTimeout(
         operation,
-        options.bootstrapCallTimeoutMs ?? 35 * 60_000,
+        options.bootstrapCallTimeoutMs ?? workerBootstrapOperationTimeoutMs(installation),
         "Worker bootstrap operation",
       );
     } catch (error) {
@@ -224,6 +244,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const next = store.transition({
       environmentId: record.environmentId,
       from: record.state,
+      expectedOwnerEpoch: record.ownerEpoch,
       to,
       patch,
     });
@@ -274,7 +295,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareInstallation: options.prepareInstallation,
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
-    resolveNodeWorkerBuild: options.resolveNodeWorkerBuild,
+    ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
+    prepareNodeEnrollment: options.prepareNodeEnrollment,
+    retireNodeEnrollment: options.retireNodeEnrollment,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
     credentialBroker,
@@ -293,9 +316,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     store,
     getConfig: options.getConfig,
+    prepareCurrentBundle: async () => await options.prepareInstallation("bundle"),
     tunnelManager: options.tunnelManager,
     nodeTunnelManager: options.nodeTunnelManager,
-    resolveWorkerGateway: options.resolveWorkerGateway,
+    nodeDesktopCarrier: options.nodeDesktopCarrier,
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
     inState,
@@ -318,7 +342,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     withLock,
   });
 
-  const reconcileEnvironment = async (environmentId: string) => {
+  const reconcileEnvironmentCore = async (environmentId: string) => {
     if (stopping) {
       return;
     }
@@ -329,6 +353,60 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       await providerLifecycle.reconcileRecord(current);
     });
+  };
+
+  const reconcileEnvironment = async (environmentId: string) => {
+    if (stopping) {
+      return;
+    }
+    const guard = reconcileEnvironmentGuard;
+    if (!guard) {
+      await reconcileEnvironmentCore(environmentId);
+      return;
+    }
+    if (reconcileEnvironmentGuardClosing) {
+      return;
+    }
+    const active = guardedReconcileInFlight.get(environmentId);
+    if (active) {
+      await active;
+      return;
+    }
+    const operation = guard(environmentId, async () => {
+      await reconcileEnvironmentCore(environmentId);
+    });
+    guardedReconcileInFlight.set(environmentId, operation);
+    try {
+      await operation;
+    } finally {
+      if (guardedReconcileInFlight.get(environmentId) === operation) {
+        guardedReconcileInFlight.delete(environmentId);
+      }
+    }
+  };
+
+  const closeReconcileEnvironmentGuard = async (expected?: WorkerEnvironmentReconcileGuard) => {
+    const guard = reconcileEnvironmentGuard;
+    if (!guard || (expected && guard !== expected)) {
+      return;
+    }
+    reconcileEnvironmentGuardClosing = true;
+    while (guardedReconcileInFlight.size > 0) {
+      await Promise.allSettled(guardedReconcileInFlight.values());
+    }
+    if (reconcileEnvironmentGuard === guard) {
+      reconcileEnvironmentGuard = undefined;
+      reconcileEnvironmentGuardClosing = false;
+    }
+  };
+
+  const installReconcileEnvironmentGuard = (guard: WorkerEnvironmentReconcileGuard) => {
+    if (reconcileEnvironmentGuard) {
+      throw new Error("Worker environment reconciliation guard is already installed");
+    }
+    reconcileEnvironmentGuard = guard;
+    reconcileEnvironmentGuardClosing = false;
+    return async () => await closeReconcileEnvironmentGuard(guard);
   };
 
   const reconcilePass = async () => {
@@ -343,7 +421,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           ),
       );
     await runTasksWithConcurrency({ tasks, limit: 8 });
-    store.pruneTerminalEnvironments();
+    try {
+      store.pruneTerminalEnvironments();
+    } catch (error) {
+      // Pruning is opportunistic and retries on the next sweep; lock contention must not
+      // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
+      if (!isSqliteLockError(error)) {
+        throw error;
+      }
+    }
   };
 
   const reconcileOnce = () => {
@@ -376,43 +462,114 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     stopping = true;
+    options.stopNodeEnrollmentWaits?.();
     clearInterval(interval);
     interval = undefined;
     unsubscribeSessionIdentityMutation?.();
     unsubscribeSessionIdentityMutation = undefined;
+    unsubscribeTurnClaimClosed?.();
+    unsubscribeTurnClaimClosed = undefined;
+    // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
+    // inference or tunnel teardown can invalidate its closure-bound placement authority.
+    await closeReconcileEnvironmentGuard();
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();
-    await environmentAccess.stopAllTunnels();
-    const reconciliation = reconcileInFlight;
-    if (reconciliation) {
-      await Promise.allSettled([reconciliation]);
+    options.stopNodeWorkerBundleTransfers?.();
+    try {
+      await Promise.all([environmentAccess.stopAllTunnels(), options.nodePortalCarrier?.stopAll()]);
+    } finally {
+      // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
+      const reconciliation = reconcileInFlight;
+      if (reconciliation) {
+        await Promise.allSettled([reconciliation]);
+      }
+      while (activeOperations.size > 0) {
+        await Promise.allSettled(activeOperations);
+      }
+      credentialBroker.clear();
+      turnRpc.clear();
+      options.liveEvents?.clear();
     }
-    while (activeOperations.size > 0) {
-      await Promise.allSettled(activeOperations);
+  };
+
+  const providerSupportsExecutionMode = (providerId: string, mode: WorkerExecutionMode) =>
+    options.resolveProvider(providerId)?.supportedExecutionModes?.includes(mode) === true;
+  const requireProviderExecutionMode = (providerId: string, mode?: WorkerExecutionMode) => {
+    if (!mode) {
+      return;
     }
-    credentialBroker.clear();
-    turnRpc.clear();
-    options.liveEvents?.clear();
+    const provider = options.resolveProvider(providerId);
+    if (!provider) {
+      throw serviceError("provider_not_found", `Unknown worker provider: ${providerId}`);
+    }
+    if (!provider.supportedExecutionModes?.includes(mode)) {
+      throw serviceError(
+        "invalid_profile",
+        `Worker provider ${providerId} does not support ${mode} placement`,
+      );
+    }
+  };
+  const configuredProfileProviderId = (profileId: string) => {
+    const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+    if (!profile) {
+      throw serviceError("profile_not_found", `Unknown worker profile: ${profileId}`);
+    }
+    return profile.provider;
   };
 
   const service = {
     list: environmentAccess.list,
+    supportsProviderExecutionMode: providerSupportsExecutionMode,
+    supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
+      const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+      return profile ? providerSupportsExecutionMode(profile.provider, mode) : false;
+    },
+    requiresNodeEnrollment: (profileId: string, providerId?: string) => {
+      const id = providerId ?? options.getConfig().cloudWorkers?.profiles?.[profileId]?.provider;
+      return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
+    },
     get: environmentAccess.get,
-    create: async (profileId: string, idempotencyKey: string) =>
-      environmentAccess.project(
-        await providerLifecycle.createWithProfile(profileId, idempotencyKey),
-      ),
+    supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
+      (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
+    hasPendingNodeEnrollmentSetup: (setupId: string, deviceId: string) =>
+      store.hasPendingNodeEnrollmentSetup(setupId, deviceId),
+    listMachineOptions: async (profileId: string) =>
+      providerLifecycle.listMachineOptions(profileId),
+    create: async (
+      profileId: string,
+      idempotencyKey: string,
+      machineClass?: string,
+      executionMode?: WorkerExecutionMode,
+    ) => {
+      if (executionMode) {
+        requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
+      }
+      return environmentAccess.project(
+        await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
+          machineClass,
+          executionMode,
+        }),
+      );
+    },
     createFromProfileSnapshot: async (
       profile: { profileId: string; providerId: string; profileSnapshot: WorkerProfile },
       idempotencyKey: string,
-    ) =>
-      environmentAccess.project(
+      machineClass?: string,
+      executionMode?: WorkerExecutionMode,
+    ) => {
+      requireProviderExecutionMode(profile.providerId, executionMode);
+      return environmentAccess.project(
         await providerLifecycle.createWithProfile(profile.profileId, idempotencyKey, {
-          providerId: profile.providerId,
-          profileSnapshot: profile.profileSnapshot,
+          inherited: {
+            providerId: profile.providerId,
+            profileSnapshot: profile.profileSnapshot,
+          },
+          machineClass,
+          executionMode,
         }),
-      ),
+      );
+    },
     destroy: async (environmentId: string) =>
       environmentAccess.project(await providerLifecycle.destroy(environmentId)),
     destroyUnattached: async (environmentId: string) =>
@@ -431,12 +588,38 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,
     hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveInferenceSessionForRunId: turnRpc.resolveInferenceSessionForRunId,
+    resolveSshIdentity: async (environmentId: string) => {
+      const record = store.get(environmentId);
+      if (!record) {
+        throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
+      }
+      if (!record.leaseId || !record.sshEndpoint) {
+        throw serviceError(
+          "invalid_state",
+          `Worker environment ${environmentId} has no active SSH endpoint`,
+        );
+      }
+      const provider = providerLifecycle.providerFor(record.providerId);
+      return await providerLifecycle.identityResolverFor(
+        record,
+        provider,
+        record.leaseId,
+      )(record.sshEndpoint.keyRef);
+    },
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
     startTunnel: environmentAccess.startTunnel,
-    stopTunnel: environmentAccess.stopTunnel,
+    stopTunnel: async (environmentId: string, ownerEpoch?: number) => {
+      await Promise.all([
+        environmentAccess.stopTunnel(environmentId, ownerEpoch),
+        options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
+        options.closeWorkerPortals?.(environmentId, ownerEpoch),
+      ]);
+    },
+    stopNodeEnrollmentWaits: options.stopNodeEnrollmentWaits,
+    installReconcileEnvironmentGuard,
     reconcileEnvironment,
     reconcileOnce,
     start,

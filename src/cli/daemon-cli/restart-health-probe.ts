@@ -1,13 +1,17 @@
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
@@ -22,9 +26,18 @@ export type GatewayRestartProbeAuth = {
 export type GatewayReachability = {
   reachable: boolean;
   gatewayVersion: string | null;
+  gatewayBuildId: string | null;
   activatedPluginErrors: PluginHealthErrorSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
+  probeError?: string;
 };
+
+function formatGatewayRestartProbeError(error: unknown): string {
+  return truncateUtf16Safe(
+    sanitizeTerminalText(redactSensitiveUrlLikeString(formatErrorMessage(error))),
+    1_024,
+  );
+}
 
 function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
   if (code !== 1008) {
@@ -151,28 +164,43 @@ export async function confirmGatewayReachable(params: {
   const password = normalizeOptionalString(
     params.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
   );
-  const probe = await probeGateway({
-    url: `ws://127.0.0.1:${params.port}`,
-    auth: token || password ? { token, password } : undefined,
-    timeoutMs: 3_000,
-    includeDetails: params.includeHealthDetails === true,
-    env: params.env,
-  });
-  const reachedGateway =
-    probe.ok ||
-    looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
-    (params.allowDeviceIdentityRequired === true &&
-      probe.close?.code === 1008 &&
-      normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
-    (probe.connectLatencyMs != null &&
-      probe.server?.version != null &&
-      probe.auth.capability === "connected_no_operator_scope");
-  return {
-    reachable: reachedGateway,
-    gatewayVersion: probe.server?.version ?? null,
-    activatedPluginErrors: readActivatedPluginErrors(probe.health),
-    channelProbeErrors: readChannelProbeErrors(probe.health),
-  };
+  try {
+    const probe = await probeGateway({
+      url: `ws://127.0.0.1:${params.port}`,
+      auth: token || password ? { token, password } : undefined,
+      timeoutMs: 3_000,
+      includeDetails: params.includeHealthDetails === true,
+      env: params.env,
+    });
+    const reachedGateway =
+      probe.ok ||
+      looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
+      (params.allowDeviceIdentityRequired === true &&
+        probe.close?.code === 1008 &&
+        normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
+      (probe.connectLatencyMs != null &&
+        probe.server?.version != null &&
+        probe.auth.capability === "connected_no_operator_scope");
+    return {
+      reachable: reachedGateway,
+      gatewayVersion: probe.server?.version ?? null,
+      gatewayBuildId: probe.server?.buildId ?? null,
+      activatedPluginErrors: readActivatedPluginErrors(probe.health),
+      channelProbeErrors: readChannelProbeErrors(probe.health),
+      ...(!reachedGateway && probe.error
+        ? { probeError: formatGatewayRestartProbeError(probe.error) }
+        : {}),
+    };
+  } catch (error) {
+    return {
+      reachable: false,
+      gatewayVersion: null,
+      gatewayBuildId: null,
+      activatedPluginErrors: [],
+      channelProbeErrors: [],
+      probeError: formatGatewayRestartProbeError(error),
+    };
+  }
 }
 
 export async function resolveGatewayRestartProbeAuth(
@@ -184,6 +212,7 @@ export async function resolveGatewayRestartProbeAuth(
   } as NodeJS.ProcessEnv;
   const cfg = await createConfigIO({
     env: mergedEnv,
+    observe: false,
     pluginValidation: "skip",
     suppressFutureVersionWarning: true,
   })
@@ -217,25 +246,18 @@ export async function inspectGatewayPortHealth(params: {
     };
   }
 
-  let healthy = false;
-  if (portUsage.status === "busy") {
-    const expectedListenerPid = params.expectedListenerPid;
-    const listenerOwnershipVerified =
-      expectedListenerPid !== undefined &&
-      allListenersOwnedByRuntimePid(portUsage.listeners, expectedListenerPid);
-    try {
-      healthy = (
-        await confirmGatewayReachable({
-          port: params.port,
-          auth: params.auth,
-          env: process.env,
-          allowDeviceIdentityRequired: listenerOwnershipVerified,
-        })
-      ).reachable;
-    } catch {
-      // best-effort probe
-    }
+  if (portUsage.status !== "busy") {
+    return { portUsage, healthy: false };
   }
-
-  return { portUsage, healthy };
+  const expectedListenerPid = params.expectedListenerPid;
+  const listenerOwnershipVerified =
+    expectedListenerPid !== undefined &&
+    allListenersOwnedByRuntimePid(portUsage.listeners, expectedListenerPid);
+  const { reachable, probeError } = await confirmGatewayReachable({
+    port: params.port,
+    auth: params.auth,
+    env: process.env,
+    allowDeviceIdentityRequired: listenerOwnershipVerified,
+  });
+  return { portUsage, healthy: reachable, ...(probeError ? { probeError } : {}) };
 }

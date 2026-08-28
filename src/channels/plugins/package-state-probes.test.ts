@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
 import {
+  collectBundledChannelPackageStateLoadFailures,
   hasBundledChannelPackageState,
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
@@ -109,8 +110,6 @@ describe("channel package-state probes", () => {
           id: "env-chat",
           configuredState: {
             env: { allOf: ["ENV_CHAT_TOKEN"] },
-            specifier: "./missing-configured-state",
-            exportName: "missingConfiguredState",
           },
         },
       } satisfies PluginChannelCatalogEntry,
@@ -132,6 +131,27 @@ describe("channel package-state probes", () => {
         env: { ENV_CHAT_TOKEN: " " },
       }),
     ).toBe(false);
+  });
+
+  it.each([
+    { name: "PATH", env: { PATH: "/usr/bin" }, configured: false },
+    { name: "mixed_case_token", env: { MIXED_CASE_TOKEN: "token" }, configured: true },
+  ])("applies the safe channel env-trigger contract to $name", ({ name, env, configured }) => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        ...makeBundledChannelCatalogEntry({ pluginId: "env-chat", channelId: "env-chat" }),
+        channel: { id: "env-chat", configuredState: { env: { allOf: [name] } } },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env,
+      }),
+    ).toBe(configured);
   });
 
   it("prefers built bundled package-state probes when the catalog root is source", () => {
@@ -343,6 +363,13 @@ describe("channel package-state probes", () => {
     expect(warning).toContain("failed to load persistedAuthState checker for matrix");
     expect(warning).toContain(`plugin module path not found: ${builtRoot}`);
     expect(warning).not.toContain("escapes plugin root");
+    expect(collectBundledChannelPackageStateLoadFailures()).toEqual([
+      {
+        detail: expect.stringContaining(`plugin module path not found: ${builtRoot}`),
+        metadataKey: "persistedAuthState",
+        pluginId: "matrix",
+      },
+    ]);
   });
 
   it("tries dist-runtime package-state probes before falling back to source", () => {

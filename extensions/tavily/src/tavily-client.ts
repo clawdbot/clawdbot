@@ -165,7 +165,11 @@ export async function runTavilySearch(
       excludeDomains: params.excludeDomains,
     }),
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+  const cacheTtlMs = resolveCacheTtlMs(
+    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
+    DEFAULT_CACHE_TTL_MINUTES,
+  );
+  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -203,6 +207,7 @@ export async function runTavilySearch(
     errorLabel: "Tavily Search",
     ...(params.signal ? { signal: params.signal } : {}),
   });
+  params.signal?.throwIfAborted();
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let remainingSearchContentChars = TAVILY_SEARCH_MAX_CONTENT_CHARS;
@@ -257,12 +262,7 @@ export async function runTavilySearch(
     result.truncated = true;
   }
 
-  writeCache(
-    SEARCH_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
+  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
   return result;
 }
 
@@ -321,6 +321,7 @@ export async function runTavilyExtract(
     responseMaxBytes: TAVILY_EXTRACT_RESPONSE_MAX_BYTES,
     ...(params.signal ? { signal: params.signal } : {}),
   });
+  params.signal?.throwIfAborted();
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let remainingContentChars = TAVILY_EXTRACT_MAX_CONTENT_CHARS;

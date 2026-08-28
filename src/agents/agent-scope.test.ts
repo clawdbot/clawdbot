@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
+import { findOverlappingWorkspaceAgentIds } from "./agent-delete-safety.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -22,6 +23,7 @@ import {
   resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
+  resolveAgentWorkspaceProvisioning,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentIdByWorkspacePath,
   setAgentEffectiveModelPrimary,
@@ -1127,7 +1129,167 @@ describe("resolveAgentConfig", () => {
   });
 });
 
+describe("resolveAgentWorkspaceProvisioning", () => {
+  it("marks an ACP agent without an explicit workspace but a distinct runtime cwd as runtime-managed", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [
+          { id: "main" },
+          { id: "codex", runtime: { type: "acp", acp: { cwd: "/projects/app" } } },
+        ],
+      },
+    };
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex")).toBe("runtime-managed-implicit");
+  });
+
+  it("marks an invocation with a distinct binding-derived cwd as runtime-managed", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "main" }, { id: "codex", runtime: { type: "acp" } }],
+      },
+    };
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/projects/app" })).toBe(
+      "runtime-managed-implicit",
+    );
+  });
+
+  it("keeps standard provisioning when the ACP agent declares an explicit workspace (#92015)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [
+          {
+            id: "codex",
+            workspace: "/explicit-ws",
+            runtime: { type: "acp", acp: { cwd: "/projects/app" } },
+          },
+        ],
+      },
+    };
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex")).toBe("standard");
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/projects/app" })).toBe(
+      "standard",
+    );
+  });
+
+  it("keeps standard provisioning when the invocation has no distinct cwd anywhere", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "main" }, { id: "codex", runtime: { type: "acp" } }],
+      },
+    };
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex")).toBe("standard");
+  });
+
+  it("does not treat a configured binding cwd as an invocation cwd (mixed bindings, #92015 review)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "codex", runtime: { type: "acp" } }],
+      },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: { channel: "telegram", peer: { kind: "direct", id: "123" } },
+          acp: { cwd: "/projects/app" },
+        },
+      ],
+    } as OpenClawConfig;
+    // The turn scoped to a different binding without cwd keeps bootstrap.
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex")).toBe("standard");
+    // The turn scoped to the cwd-bearing binding skips scaffolding.
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/projects/app" })).toBe(
+      "runtime-managed-implicit",
+    );
+  });
+
+  it("keeps standard provisioning when the invocation cwd equals the resolved workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "main" }, { id: "codex", runtime: { type: "acp" } }],
+      },
+    };
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/shared-ws/codex/" })).toBe(
+      "standard",
+    );
+  });
+
+  it("lets the invocation cwd win over the runtime default when it equals the workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [
+          { id: "main" },
+          { id: "codex", runtime: { type: "acp", acp: { cwd: "/projects/app" } } },
+        ],
+      },
+    };
+    expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/shared-ws/codex" })).toBe(
+      "standard",
+    );
+  });
+
+  it("keeps standard provisioning for a provisioned dir that is not the implicit workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "codex", runtime: { type: "acp", acp: { cwd: "/projects/app" } } }],
+      },
+    };
+    expect(
+      resolveAgentWorkspaceProvisioning(cfg, "codex", {
+        cwd: "/projects/app",
+        workspaceDir: "/spawned-override-ws",
+      }),
+    ).toBe("standard");
+  });
+
+  it("keeps standard provisioning for embedded agents without an explicit workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "main" }, { id: "work", runtime: { type: "embedded" } }],
+      },
+    };
+    expect(resolveAgentWorkspaceProvisioning(cfg, "work")).toBe("standard");
+    expect(resolveAgentWorkspaceProvisioning(cfg, "main")).toBe("standard");
+  });
+});
+
 describe("resolveAgentIdByWorkspacePath", () => {
+  it.runIf(process.platform === "linux")(
+    "keeps distinct Unicode workspace directories under their own agents",
+    () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "workspace-unicode-")));
+      const composed = path.join(root, "caf\u00e9");
+      const decomposed = path.join(root, "cafe\u0301");
+      try {
+        fs.mkdirSync(composed);
+        fs.mkdirSync(decomposed);
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: {
+              composed: { workspace: composed },
+              decomposed: { workspace: decomposed },
+            },
+          },
+        };
+
+        expect(fs.statSync(composed).ino).not.toBe(fs.statSync(decomposed).ino);
+        expect(resolveAgentIdByWorkspacePath(cfg, composed)).toBe("composed");
+        expect(resolveAgentIdByWorkspacePath(cfg, decomposed)).toBe("decomposed");
+        expect(findOverlappingWorkspaceAgentIds(cfg, "composed", composed)).toEqual([]);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("returns the most specific workspace match for a directory", () => {
     const workspaceRoot = `/tmp/openclaw-agent-scope-${Date.now()}-root`;
     const opsWorkspace = `${workspaceRoot}/projects/ops`;
@@ -1190,6 +1352,40 @@ describe("resolveAgentIdByWorkspacePath", () => {
       ).toBe("ops");
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("matches a dangling workspace symlink to its vanished target", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-scope-dangling-"));
+    const workspaceDir = path.join(tempRoot, "vanished-workspace");
+    const workspaceAliasDir = path.join(tempRoot, "workspace-alias");
+    try {
+      fs.symlinkSync(
+        workspaceDir,
+        workspaceAliasDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "ops", workspace: workspaceAliasDir }] },
+      };
+
+      expect(resolveAgentIdByWorkspacePath(cfg, workspaceDir)).toBe("ops");
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a cyclic workspace alias bounded and separate from unrelated paths", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "workspace-cycle-")));
+    const alias = path.join(root, "alias");
+    try {
+      fs.symlinkSync(alias, alias, process.platform === "win32" ? "junction" : "dir");
+      const cfg: OpenClawConfig = { agents: { entries: { ops: { workspace: alias } } } };
+
+      expect(resolveAgentIdByWorkspacePath(cfg, alias)).toBe("ops");
+      expect(resolveAgentIdByWorkspacePath(cfg, path.join(root, "other"))).toBeUndefined();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

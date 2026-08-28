@@ -10,7 +10,6 @@ import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
-  getReusableCatalogSnapshotCountForTest,
   isDirectVisibleCatalogTool,
   resolveCatalog,
 } from "./tool-search-catalog.js";
@@ -26,12 +25,15 @@ import {
   setToolSearchCodeModeSupportedForTest,
   setToolSearchMinCodeTimeoutMsForTest,
 } from "./tool-search-config.js";
-import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
-import { MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS } from "./tool-search-directory.js";
+import {
+  applyToolSchemaDirectoryCatalog,
+  MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
+} from "./tool-search-directory.js";
 import { readToolSearchRequest } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
+  prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
   readToolSearchId,
   ToolSearchRuntime,
@@ -370,6 +372,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       parameters: Type.Object({
         id: Type.String({ description: "Tool search result id or tool name." }),
       }),
+      prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
         jsonResult(await runtime.describe(readToolSearchId(args))),
     },
@@ -383,6 +386,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           Type.Record(Type.String(), Type.Unknown(), { description: "Tool input." }),
         ),
       }),
+      prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (
         toolCallId: string,
         args: unknown,
@@ -413,7 +417,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 }
 
 const testing = {
-  getReusableCatalogSnapshotCountForTest,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,

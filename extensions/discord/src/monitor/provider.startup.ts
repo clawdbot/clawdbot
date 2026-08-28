@@ -8,8 +8,8 @@ import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import {
   Client,
   ReadyListener,
-  type BaseCommand,
   type BaseMessageInteractiveComponent,
+  type DiscordCommand,
   type Modal,
   type Plugin,
 } from "../internal/discord.js";
@@ -26,6 +26,7 @@ import {
   waitForDiscordGatewayPluginRegistration,
 } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
+import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js";
 import {
   DiscordMessageListener,
   DiscordPresenceGuildCreateListener,
@@ -93,7 +94,7 @@ export async function createDiscordMonitorClient(params: {
   applicationId: string;
   token: string;
   restFetch?: typeof fetch;
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
   voiceEnabled: boolean;
@@ -256,6 +257,17 @@ export function registerDiscordMonitorListeners(params: {
   registerDiscordListener(
     params.client.listeners,
     new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordGuildJoinIntroductionListener({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      botUserId: params.botUserId,
+      groupPolicy: params.groupPolicy,
+      guildEntries: params.guildEntries,
+      logger: params.logger,
+    }),
   );
 
   if (shouldRegisterDiscordReactionListeners(params)) {

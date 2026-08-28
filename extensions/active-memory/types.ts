@@ -81,7 +81,7 @@ const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "sessions_yield",
   "subagents",
   "tts",
-  "update_plan",
+  "progress_card",
   "video_generate",
   "web_fetch",
   "web_search",
@@ -249,10 +249,12 @@ type ActiveRecallResult =
       searchDebug?: ActiveMemorySearchDebug;
     };
 
+type ActiveMemoryPartialTimeoutData = Partial<RecallSubagentResult> & {
+  cleanupFailed?: boolean;
+};
+
 type ActiveMemoryPartialTimeoutError = Error & {
-  activeMemoryPartialReply?: string;
-  activeMemorySearchDebug?: ActiveMemorySearchDebug;
-  activeMemoryUnavailableMemorySearch?: boolean;
+  activeMemoryPartialData?: ActiveMemoryPartialTimeoutData;
 };
 
 type TranscriptReadLimits = {
@@ -387,6 +389,7 @@ export type {
   ActiveMemoryChatType,
   ActiveMemoryMode,
   ActiveMemoryFastMode,
+  ActiveMemoryPartialTimeoutData,
   ActiveMemoryPartialTimeoutError,
   ActiveMemoryPromptStyle,
   ActiveMemorySearchDebug,

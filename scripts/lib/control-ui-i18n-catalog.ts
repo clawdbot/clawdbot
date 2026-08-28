@@ -1,6 +1,74 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import type { TranslationMap, TranslationMemoryEntry } from "./control-ui-i18n-sync-plan.ts";
+
+async function importControlUiLocaleModule<T>(filePath: string): Promise<T> {
+  const stats = await stat(filePath);
+  return (await import(`${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`)) as T;
+}
+
+export async function loadControlUiLocaleCatalog(
+  filePath: string,
+  exportName: string,
+): Promise<TranslationMap | null> {
+  if (!existsSync(filePath)) {
+    return null;
+  }
+  const module = await importControlUiLocaleModule<Record<string, TranslationMap>>(filePath);
+  return module[exportName] ?? null;
+}
+
+export async function loadControlUiSourceCatalog(
+  sourceLocalePath: string,
+  activitySourceLocalePath: string,
+  sessionPlacementSourceLocalePath: string,
+  pluginConsentSourceLocalePath: string,
+): Promise<TranslationMap> {
+  const source = await loadControlUiLocaleCatalog(sourceLocalePath, "en");
+  const activitySource = (
+    await importControlUiLocaleModule<{
+      registerActivityEnglish: { catalog: TranslationMap };
+    }>(activitySourceLocalePath)
+  ).registerActivityEnglish.catalog;
+  const sessionPlacementSource = (
+    await importControlUiLocaleModule<{
+      registerSessionPlacementEnglish: { catalog: TranslationMap };
+    }>(sessionPlacementSourceLocalePath)
+  ).registerSessionPlacementEnglish.catalog;
+  const pluginConsentSource = (
+    await importControlUiLocaleModule<{
+      registerPluginConsentEnglish: { catalog: TranslationMap };
+    }>(pluginConsentSourceLocalePath)
+  ).registerPluginConsentEnglish.catalog;
+  if (!source || !activitySource || !sessionPlacementSource || !pluginConsentSource) {
+    throw new Error("Control UI English source catalogs are incomplete");
+  }
+  return mergeControlUiTranslationMaps(
+    source,
+    activitySource,
+    sessionPlacementSource,
+    pluginConsentSource,
+  );
+}
+
+export async function readControlUiSourceCatalog(
+  sourceLocalePath: string,
+  activitySourceLocalePath: string,
+  sessionPlacementSourceLocalePath: string,
+  pluginConsentSourceLocalePath: string,
+): Promise<string> {
+  const sources = await Promise.all(
+    [
+      sourceLocalePath,
+      activitySourceLocalePath,
+      sessionPlacementSourceLocalePath,
+      pluginConsentSourceLocalePath,
+    ].map((filePath) => readFile(filePath, "utf8")),
+  );
+  return sources.join("\n");
+}
 
 export function hashControlUiTranslationText(text: string): string {
   return createHash("sha256").update(text.trim().split(/\s+/).join(" ")).digest("hex");

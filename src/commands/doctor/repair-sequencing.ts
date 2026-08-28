@@ -5,7 +5,8 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
-import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
+import { repairObsoleteGeneratedExecApprovals } from "../../infra/exec-approvals-generated-migration.js";
+import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   loadPluginMetadataSnapshot,
@@ -63,9 +64,13 @@ export async function runDoctorRepairSequence(params: {
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
   pluginMetadataSnapshotState?: DoctorPluginMetadataSnapshotState;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<{
   state: DoctorConfigMutationState;
+  /** Notes for repairs already committed to durable state (SQLite/filesystem). */
   changeNotes: string[];
+  /** Notes for candidate-config mutations that are durable only after the config write. */
+  configChangeNotes: string[];
   warningNotes: string[];
   authProfilesRepaired: boolean;
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
@@ -74,6 +79,7 @@ export async function runDoctorRepairSequence(params: {
   let state = params.state;
   const pluginMetadataSnapshotState = params.pluginMetadataSnapshotState ?? {};
   const changeNotes: string[] = [];
+  const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
   const resolveCurrentPluginMetadataScope = () => {
@@ -106,13 +112,21 @@ export async function runDoctorRepairSequence(params: {
     return params.runWithPluginMetadataSnapshot(resolveCurrentPluginMetadataScope(), run);
   };
 
+  const removedExecApprovals = repairObsoleteGeneratedExecApprovals();
+  if (removedExecApprovals > 0) {
+    changeNotes.push(
+      `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
+    );
+  }
+
   const applyMutation = (mutation: {
     config: DoctorConfigMutationState["candidate"];
     changes: string[];
     warnings?: string[];
   }) => {
     if (mutation.changes.length > 0) {
-      appendNotes(changeNotes, mutation.changes);
+      // Candidate-only mutation: report as applied only after the config write lands.
+      appendNotes(configChangeNotes, mutation.changes);
       state = applyDoctorConfigMutation({
         state,
         mutation,
@@ -197,6 +211,7 @@ export async function runDoctorRepairSequence(params: {
     repairMissingConfiguredPluginInstalls({
       cfg: state.candidate,
       env,
+      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
       ...(staleManagedNpmBundledPluginRepair
         ? { baselineRecords: staleManagedNpmBundledPluginRepair.installRecords }
         : {}),
@@ -315,12 +330,6 @@ export async function runDoctorRepairSequence(params: {
   appendRepairNotes(await migrateLegacySkillWorkshopProposals({ config: state.candidate, env }));
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(await cleanupLegacyPluginDependencyState({ env }));
-  appendRepairNotes(
-    migrateLegacyOnboardingRecommendationsScope({
-      cfg: state.candidate,
-      env,
-    }),
-  );
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
@@ -363,6 +372,7 @@ export async function runDoctorRepairSequence(params: {
   return {
     state,
     changeNotes,
+    configChangeNotes,
     warningNotes,
     authProfilesRepaired,
     ...(openAICodexAuthProfileIdMap.size > 0 ? { openAICodexAuthProfileIdMap } : {}),

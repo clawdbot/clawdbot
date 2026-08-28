@@ -6,7 +6,7 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
-import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
+import type { McpCodexToolApprovalMode, McpServerToolFilterConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
@@ -40,10 +40,7 @@ export type McpServerCatalog = {
   };
   requestTimeoutMs?: number;
   supportsParallelToolCalls?: boolean;
-  toolFilter?: {
-    include?: string[];
-    exclude?: string[];
-  };
+  toolFilter?: McpServerToolFilterConfig;
   deniedToolNames?: string[];
   codexApprovalMode?: McpCodexToolApprovalMode;
 };
@@ -145,6 +142,12 @@ export type SessionMcpRuntime = {
   dispose: () => Promise<void>;
 };
 
+/** One requester call's runtime and immutable catalog publication version. */
+export type RequesterScopedMcpRuntimeHandle = {
+  runtime: SessionMcpRuntime;
+  advertisedCatalogConfigFingerprint: string;
+};
+
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */
 export type SessionMcpRuntimeManager = {
   getOrCreate: (params: {
@@ -175,12 +178,15 @@ export type SessionMcpRuntimeManager = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }) => Promise<SessionMcpRuntime | undefined>;
+  }) => Promise<RequesterScopedMcpRuntimeHandle | undefined>;
   /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread
    * harnesses so dynamic tool specs do not rotate per sender.
    */
-  rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
+  rememberAdvertisedScopedCatalog: (
+    handle: RequesterScopedMcpRuntimeHandle,
+    catalog: McpToolCatalog,
+  ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -18,7 +19,7 @@ async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
   const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("../state/openclaw-agent-db.js"),
-    import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db-contract.js"),
   ]);
   const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({
     env: process.env,
@@ -31,6 +32,14 @@ async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
     throw new databasePreflight.OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible, {
       operation: "doctor",
     });
+  }
+  const unreadableStateDatabase = databaseSchemas.indeterminate.find(
+    (database) => database.kind === "state",
+  );
+  if (unreadableStateDatabase) {
+    throw new Error(
+      `Doctor cannot continue because the shared state database is unreadable: ${unreadableStateDatabase.path}: ${unreadableStateDatabase.reason}. The database was left unchanged; doctor will not recreate it because that could discard persistent operator data. Stop the Gateway and other OpenClaw processes, then restore this file from a verified backup or repair it manually. After recovery, run ${formatCliCommand("openclaw doctor --fix")} again. See ${stateDatabase.OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+    );
   }
 }
 
@@ -114,6 +123,32 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
   };
   const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
   await runDoctorHealthContributions(ctx);
+  if (ctx.configWriteRefusal) {
+    // Config fixes were computed but refused by the writer; the warning above
+    // already lists the manual work. This failure outranks a recoverable
+    // post-install advisory because the run did not converge.
+    outro(
+      ctx.configResultWriteCommitted === true
+        ? "Doctor finished, but some config fixes were not applied."
+        : "Doctor finished, but config fixes were not applied.",
+    );
+    effectiveRuntime.exit(1);
+    return;
+  }
+  if (options.repair === true || options.yes === true) {
+    // Migration warnings also cover optional archives; certify required runtime
+    // schemas independently before reporting success or a recoverable advisory.
+    const { assertOpenClawDatabasesReady } =
+      await import("../state/openclaw-database-preflight.js");
+    const { resolveConfiguredAgentDatabaseTargets } = await import("../config/sessions/targets.js");
+    assertOpenClawDatabasesReady({
+      env: process.env,
+      operation: "doctor",
+      configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
+        env: process.env,
+      }),
+    });
+  }
   if (ctx.postInstallDoctorResult) {
     const {
       UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -130,6 +165,5 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       return;
     }
   }
-
   outro("Doctor complete.");
 }

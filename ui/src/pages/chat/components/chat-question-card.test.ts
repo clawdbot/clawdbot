@@ -69,7 +69,6 @@ describe("shared question panel", () => {
       render(
         html`<openclaw-chat-question-panel
           .props=${createGatewayQuestionPanelProps(prompt, {
-            nowMs: 2_000,
             collapsed,
             onCollapsedChange: (nextCollapsed) => {
               collapsed = nextCollapsed;
@@ -137,6 +136,84 @@ describe("shared question panel", () => {
       target: ["Chat"],
       extras: ["Tests", "Docs", "Metrics"],
     });
+  });
+
+  it("keeps a store-bound secret masked while preserving editable destination hosts", async () => {
+    const prompt = gatewayPrompt({
+      agentId: "release-agent",
+      questions: [
+        {
+          questionId: "api_key",
+          header: "API key",
+          question: "Provide the deployment API key",
+          options: [],
+          isSecret: true,
+          secretStore: {
+            name: "FAKE_DEPLOYMENT_API_KEY",
+            kind: "secret",
+            allowedHosts: ["api.example.test"],
+            reason: "Deploy the approved release",
+          },
+          secretStoreExisting: {
+            updatedAtMs: Date.now() - 60_000,
+            updatedBy: "release-owner",
+          },
+        },
+      ],
+    });
+    const onSubmit = vi.fn();
+    drawGateway(prompt, { onSubmit });
+    const panel = await panelIn(container);
+    const hosts = container.querySelector<HTMLInputElement>(".chat-question-panel__hosts")!;
+    const secret = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+
+    expect(hosts.value).toBe("api.example.test");
+    expect(secret.autocomplete).toBe("off");
+    expect(container.textContent).toContain("release-agent");
+    expect(container.textContent).toContain("agent:main:main");
+    expect(container.textContent).toContain("Stores FAKE_DEPLOYMENT_API_KEY as Protected secret");
+    expect(container.textContent).toContain("Deploy the approved release");
+    expect(container.textContent).toContain("Replaces FAKE_DEPLOYMENT_API_KEY — last updated");
+    expect(container.textContent).toContain("by release-owner");
+
+    hosts.value = "api.example.test, uploads.example.test";
+    hosts.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await panel.updateComplete;
+    expect(prompt.secretStoreAllowedHostsDraft).toBe("api.example.test, uploads.example.test");
+
+    const fakeSecret = "fake-secret-value-for-ui-test";
+    secret.value = fakeSecret;
+    secret.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await panel.updateComplete;
+    expect(container.textContent).not.toContain(fakeSecret);
+    expect(container.innerHTML).not.toContain(fakeSecret);
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
+    expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
+  });
+
+  it("keeps environment store requests masked without exposing a destination-host editor", async () => {
+    drawGateway(
+      gatewayPrompt({
+        questions: [
+          {
+            questionId: "environment_value",
+            header: "Environment",
+            question: "Provide the environment value",
+            options: [],
+            isSecret: true,
+            secretStore: { name: "FAKE_ENVIRONMENT_VALUE", kind: "env" },
+          },
+        ],
+      }),
+    );
+    await panelIn(container);
+
+    expect(container.querySelector('input[type="password"]')).not.toBeNull();
+    expect(container.querySelector(".chat-question-panel__hosts")).toBeNull();
+    expect(container.textContent).toContain(
+      "Stores FAKE_ENVIRONMENT_VALUE as Agent-readable environment",
+    );
   });
 
   it("supports numeric selection and Enter submission while focused", async () => {
@@ -249,7 +326,7 @@ describe("shared question panel", () => {
   it("disables actions whose gateway callbacks are unavailable", async () => {
     render(
       html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), { nowMs: 2_000 })}
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
       ></openclaw-chat-question-panel>`,
       container,
     );
@@ -261,10 +338,18 @@ describe("shared question panel", () => {
     expect(container.querySelector(".chat-question-panel__skip")).toBeNull();
   });
 
+  it("does not render the request expiry countdown", async () => {
+    drawGateway(gatewayPrompt());
+    await panelIn(container);
+
+    expect(container.querySelector(".chat-question-panel__countdown")).toBeNull();
+    expect(container.textContent).not.toContain("1:00");
+  });
+
   it("manages collapse state when no controlled callback is supplied", async () => {
     render(
       html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), { nowMs: 2_000 })}
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
       ></openclaw-chat-question-panel>`,
       container,
     );
@@ -284,7 +369,6 @@ describe("shared question panel", () => {
     render(
       html`<openclaw-chat-question-panel
         .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          nowMs: 2_000,
           onSubmit,
         })}
       ></openclaw-chat-question-panel>`,
@@ -304,7 +388,6 @@ describe("shared question panel", () => {
     render(
       html`<openclaw-chat-question-panel
         .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          nowMs: 2_000,
           onSkip,
         })}
       ></openclaw-chat-question-panel>`,

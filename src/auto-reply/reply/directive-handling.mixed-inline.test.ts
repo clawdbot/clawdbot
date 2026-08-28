@@ -37,7 +37,8 @@ vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
 }));
 
-vi.mock("../../agents/sticky-model-selection.js", () => ({
+vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sticky-model-selection.js")>()),
   persistStickyModelSelectionBestEffort: vi.fn(),
 }));
 
@@ -179,6 +180,53 @@ describe("mixed inline directives", () => {
     }));
   });
 
+  describe.each(["", "please reply "])("model scope with prefix %j", (prefix) => {
+    it.each([
+      { scope: undefined, flag: "", owner: true, target: undefined, writes: true },
+      { scope: "session", flag: "", owner: true, target: undefined, writes: false },
+      { scope: "agent", flag: "", owner: true, target: "agent", writes: true },
+      { scope: "global", flag: "", owner: true, target: "defaults", writes: true },
+      { scope: "global", flag: " --session", owner: true, target: undefined, writes: false },
+      { scope: "session", flag: " --agent", owner: true, target: "agent", writes: true },
+      { scope: "agent", flag: " --global", owner: true, target: "defaults", writes: true },
+      { scope: "agent", flag: "", owner: false, target: undefined, writes: false },
+      { scope: "global", flag: "", owner: false, target: undefined, writes: false },
+    ] as const)(
+      "resolves scope=$scope flag=$flag owner=$owner without widening authority",
+      async ({ scope, flag, owner, target, writes }) => {
+        const { result, sessionEntry } = await applyMixedDirectives({
+          body: `${prefix}/model openai/gpt-5.6-luna${flag}`,
+          cfg: { agents: { defaults: { modelSelectionScope: scope } } },
+          senderIsOwner: owner,
+          allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
+        });
+
+        expect(sessionEntry).toMatchObject({
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-luna",
+          modelOverrideSource: "user",
+        });
+        const acknowledgement = {
+          text: expect.stringContaining(writes ? "update requested" : "default unchanged"),
+        };
+        expect(result).toMatchObject(
+          prefix
+            ? { kind: "continue", directiveAck: acknowledgement }
+            : { kind: "reply", reply: acknowledgement },
+        );
+        if (writes) {
+          expect(persistStickyModelSelectionBestEffort).toHaveBeenCalledExactlyOnceWith({
+            agentId: "main",
+            model: "openai/gpt-5.6-luna",
+            ...(target ? { target } : {}),
+          });
+        } else {
+          expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
+        }
+      },
+    );
+  });
+
   it("commits mixed reasoning exactly once and emits one transition", async () => {
     const { result, sessionEntry } = await applyMixedDirectives({
       body: "please reply\n/reasoning on",
@@ -237,7 +285,10 @@ describe("mixed inline directives", () => {
     expect(persistenceMocks.persist).toHaveBeenCalledOnce();
     expect(triggerSessionPatchHook).toHaveBeenCalledOnce();
     expect(refreshQueuedFollowupSession).toHaveBeenCalledOnce();
-    expect(persistStickyModelSelectionBestEffort).toHaveBeenCalledOnce();
+    expect(persistStickyModelSelectionBestEffort).toHaveBeenCalledExactlyOnceWith({
+      agentId: "main",
+      model: "openai/gpt-5.6-luna",
+    });
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Model switched to openai/gpt-5.6-luna.", {
       sessionKey: "agent:main:dm:1",
@@ -478,9 +529,9 @@ describe("mixed inline directives", () => {
   );
 
   it.each([
-    { name: "directive-only", body: "/model openai/gpt-5.6-luna" },
-    { name: "mixed-content", body: "please reply /model openai/gpt-5.6-luna" },
-  ])("reports immutable config for an owner $name selection", async ({ body }) => {
+    { name: "directive-only", body: "/model openai/gpt-5.6-luna -a" },
+    { name: "mixed-content", body: "please reply /model openai/gpt-5.6-luna -a" },
+  ])("reports immutable config for an owner $name agent-default selection", async ({ body }) => {
     vi.mocked(persistStickyModelSelectionBestEffort).mockReturnValueOnce("skipped-immutable");
 
     const { result } = await applyMixedDirectives({
@@ -490,7 +541,7 @@ describe("mixed inline directives", () => {
     });
 
     const expectedText =
-      "Model set to openai/gpt-5.6-luna for this session. Configured default unchanged because configuration is immutable.";
+      "Model set to openai/gpt-5.6-luna for this session. Agent default unchanged because configuration is immutable.";
     expect(result).toMatchObject(
       body.startsWith("/model")
         ? { kind: "reply", reply: { text: expectedText } }
@@ -498,9 +549,10 @@ describe("mixed inline directives", () => {
     );
   });
 
-  it("does not let a partial session option suppress the configured-default write", async () => {
+  it("keeps a partial scope option as text without overriding the configured scope", async () => {
     const { result } = await applyMixedDirectives({
       body: "please reply /model openai/gpt-5.6-luna -slow",
+      cfg: { agents: { defaults: { modelSelectionScope: "session" } } },
       senderIsOwner: true,
       allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
     });
@@ -510,10 +562,10 @@ describe("mixed inline directives", () => {
       provider: "openai",
       model: "gpt-5.6-luna",
       directiveAck: {
-        text: "Model set to openai/gpt-5.6-luna for this session. Configured default update requested.",
+        text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged.",
       },
     });
-    expect(persistStickyModelSelectionBestEffort).toHaveBeenCalledOnce();
+    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
   });
 
   it("clears an incompatible auth pin with a cross-provider /model default -s", async () => {
@@ -637,7 +689,7 @@ describe("mixed inline directives", () => {
       kind: "continue",
       provider: "anthropic",
       model: "claude-opus-4-6",
-      contextTokens: 90_000,
+      contextTokens: 1_000_000,
       directiveAck: {
         text: "Session model reset to configured default (anthropic/claude-opus-4-6).",
       },

@@ -1,4 +1,5 @@
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
 import {
@@ -40,6 +41,9 @@ import type {
 } from "./doctor-health-contribution-types.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import type { HealthCheck } from "./health-checks.js";
+
+const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
+  "core/doctor/channel-package-state-capabilities";
 
 export function resolveFinalDoctorHealthContributions(params: {
   runSystemdLingerHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -89,6 +93,30 @@ export function resolveFinalDoctorHealthContributions(params: {
             checkId: "core/doctor/default-account-routing",
             severity: "warning" as const,
             message: message.replace(/^- /, "").trim(),
+          }));
+        },
+      },
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:channel-package-state-capabilities",
+      label: "Channel package-state capabilities",
+      healthChecks: {
+        id: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
+        description: "Declared channel package-state checker modules must load.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          if (shouldDeferConfiguredPluginInstallRepair(ctx.env ?? process.env)) {
+            return [];
+          }
+          const { collectBundledChannelPackageStateLoadFailures } =
+            await import("../channels/plugins/package-state-probes.js");
+          return collectBundledChannelPackageStateLoadFailures().map((failure) => ({
+            checkId: CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID,
+            severity: "warning" as const,
+            message: `Plugin ${failure.pluginId} declared ${failure.metadataKey}, but its checker failed to load: ${failure.detail}`,
+            target: failure.pluginId,
+            requirement: "declared-channel-package-state-capability-loadable",
+            fixHint: `Rebuild or reinstall plugin ${failure.pluginId}, then rerun \`openclaw doctor\`.`,
           }));
         },
       },
@@ -158,6 +186,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       label: "Hooks model",
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:model-references",
+      label: "Model references",
+      healthCheckIds: ["core/doctor/model-references"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/model-references"),
     }),
     createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",

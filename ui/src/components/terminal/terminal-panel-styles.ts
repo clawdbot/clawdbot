@@ -24,27 +24,55 @@ export const terminalPanelStyles = css`
   .tp--fullscreen {
     inset: 0;
   }
+  .tp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+  .tp-header .tabstrip-tab__icon {
+    color: var(--muted, #8a919e);
+  }
+  /* Same glyph system as the side panel rail. Positioned so the session
+     menu anchors to the header, not its mid-toolbar trigger: a
+     trigger-anchored menu wider than the icons spills past the panel's
+     left edge, and header anchoring makes 100% mean "panel width". */
+  .tp-header {
+    --rail-header-action-glyph-size: 15px;
+
+    position: relative;
+  }
+  .tp-header .tabstrip-tab__icon svg,
+  .tp-header .tp-icon svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 1.6px;
+  }
   .tp-dock-modes {
     display: flex;
     align-items: center;
     gap: 2px;
   }
   .tp-session-picker {
-    position: relative;
+    position: static;
   }
   .tp-session-menu {
     position: absolute;
     z-index: 4;
-    top: 31px;
-    right: 0;
-    width: min(360px, calc(100vw - 24px));
+    top: calc(100% + 3px);
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: 360px;
+    /* Both edges are pinned, so the menu can never reach past the panel; the
+       auto margin keeps it right-aligned under its trigger while it fits. */
+    margin-left: auto;
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
     padding: var(--menu-padding);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--overlay-border);
     border-radius: var(--menu-radius);
     background: var(--bg-elevated);
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--overlay-shadow);
   }
   .tp-session-menu__header {
     display: flex;
@@ -55,13 +83,18 @@ export const terminalPanelStyles = css`
     font-size: 12px;
     font-weight: 600;
   }
+  /* Refreshing the list is not destructive, so it reads as a plain action. */
   .tp-session-refresh {
     border: 0;
     background: transparent;
-    color: var(--accent, #ff5c5c);
+    color: var(--muted, #8a919e);
     font: inherit;
     font-weight: 500;
     padding: 2px 4px;
+  }
+  .tp-session-refresh:hover,
+  .tp-session-refresh:focus-visible {
+    color: var(--text, #d7dae0);
   }
   .tp-session {
     display: grid;
@@ -127,40 +160,22 @@ export const terminalPanelStyles = css`
     padding: 6px 8px;
     caret-color: transparent;
   }
-  .tp-connecting {
-    position: absolute;
-    inset: 0;
-    z-index: 2;
+  .tp-error {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 10px;
-    color: var(--muted, #8a919e);
-    background: color-mix(in srgb, var(--bg, #0e1015) 88%, transparent);
-    font-size: 12px;
-    pointer-events: none;
-  }
-  .tp-connecting__spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid color-mix(in srgb, var(--accent, #ff5c5c) 24%, transparent);
-    border-top-color: var(--accent, #ff5c5c);
-    border-radius: 50%;
-    animation: tp-spin 0.8s linear infinite;
-  }
-  .tp-error {
+    justify-content: space-between;
+    gap: 12px;
     padding: 10px 12px;
     font-size: 12px;
     color: var(--danger, #ff6b6b);
   }
-  @keyframes tp-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .tp-connecting__spinner {
-      animation: none;
-    }
+  .tp-error .btn {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--text);
+    padding: 6px 10px;
+    font: inherit;
   }
 `;

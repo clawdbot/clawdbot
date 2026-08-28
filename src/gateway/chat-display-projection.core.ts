@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
 import { isContextOverflowError } from "../agents/failover/classify.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -30,6 +31,7 @@ import type {
 } from "./current-user-profile-display.js";
 
 type ChatDisplayProjectionOptions = {
+  includeCommentaryFallbacks?: boolean;
   maxChars?: number;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
@@ -54,10 +56,11 @@ function projectCurrentUserProfileAvatars(
     if (!metadata) {
       return message;
     }
-    const senderId = metadata.senderId;
-    if (typeof senderId !== "string" || !senderId) {
+    const identity = readTranscriptSenderIdentity(metadata.senderIdentity);
+    if (identity?.type !== "profile") {
       return message;
     }
+    const senderId = identity.id;
     let display = displayBySenderId.get(senderId);
     if (!display) {
       display = resolveDisplay(senderId);
@@ -66,13 +69,20 @@ function projectCurrentUserProfileAvatars(
     if (display.kind === "unresolved") {
       return message;
     }
-    if (metadata.senderProfileAvatarUrl === display.avatarUrl) {
+    if (
+      metadata.senderProfileAvatarUrl === display.avatarUrl &&
+      identity.id === display.profileId
+    ) {
       return message;
     }
     changed = true;
     return {
       ...message,
-      __openclaw: { ...metadata, senderProfileAvatarUrl: display.avatarUrl },
+      __openclaw: {
+        ...metadata,
+        senderIdentity: { type: "profile", id: display.profileId },
+        senderProfileAvatarUrl: display.avatarUrl,
+      },
     };
   });
   return changed ? projected : messages;
@@ -314,7 +324,11 @@ export function projectChatDisplayMessagesWithState(
   const projectedErrors = projectEmptyAssistantErrorMessages(repairedStreamErrors.messages);
   const filtered = filterVisibleProjectedHistoryMessages(
     projectSessionsSendInterSessionMessages(
-      toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
+      toProjectedMessages(
+        sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
+          includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
+        }),
+      ),
     ),
     options?.turnBoundaryPending,
   );
@@ -338,28 +352,6 @@ export function projectChatDisplayMessages(
   options?: ChatDisplayProjectionOptions,
 ): Array<Record<string, unknown>> {
   return projectChatDisplayMessagesWithState(messages, options).messages;
-}
-
-function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
-  if (
-    typeof maxMessages !== "number" ||
-    !Number.isFinite(maxMessages) ||
-    maxMessages <= 0 ||
-    messages.length <= maxMessages
-  ) {
-    return messages;
-  }
-  return messages.slice(-Math.floor(maxMessages));
-}
-
-export function projectRecentChatDisplayMessages(
-  messages: unknown[],
-  options?: ChatDisplayProjectionOptions & { maxMessages?: number },
-): Array<Record<string, unknown>> {
-  return limitChatDisplayMessages(
-    projectChatDisplayMessages(messages, options),
-    options?.maxMessages,
-  );
 }
 
 export function projectChatDisplayMessage(

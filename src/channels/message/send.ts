@@ -6,8 +6,8 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import {
+  type OutboundDeliveryResult,
   isOutboundDeliveryError,
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliverySuppressionReason,
@@ -17,6 +17,7 @@ import {
   type DeliverOutboundPayloadsParams,
   type OutboundDeliveryIntent,
 } from "../../infra/outbound/deliver.js";
+import { normalizeOutboundReplyFacts } from "../../infra/outbound/reply-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLiveMessageState, markLiveMessagePreviewUpdated } from "./live.js";
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
@@ -104,6 +105,25 @@ export type DurableMessageBatchSendResult =
       stage?: DurableMessageFailureStage;
       payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
     };
+
+/** Whether platform delivery completed or advanced far enough that retry could duplicate it. */
+export function durableMessageBatchMayHaveReachedRecipient(
+  result: DurableMessageBatchSendResult,
+): boolean {
+  if (result.status === "sent" || result.status === "partial_failed") {
+    return true;
+  }
+  if (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") {
+    return true;
+  }
+  return (
+    result.payloadOutcomes?.some((outcome) =>
+      outcome.status === "failed"
+        ? outcome.sentBeforeError
+        : outcome.status === "sent" || outcome.reason === "adapter_returned_no_identity",
+    ) === true
+  );
+}
 
 export type SerializedDurableMessagePayloadOutcome =
   | { index: number; status: "sent"; resultCount: number }
@@ -231,6 +251,7 @@ export async function withDurableMessageSendContextCore<T>(
     abortSignal,
     ...deliveryParams
   } = params;
+  const replyToId = normalizeOutboundReplyFacts(deliveryParams)?.replyToId;
   const effectiveSignal = signal ?? abortSignal;
   const queuePolicy = durability === "best_effort" ? "best_effort" : "required";
   let liveState = preview ?? createLiveMessageState<ReplyPayload>();
@@ -278,7 +299,7 @@ export async function withDurableMessageSendContextCore<T>(
         const receipt = createMessageReceiptFromOutboundResults({
           results,
           threadId: params.threadId == null ? undefined : String(params.threadId),
-          replyToId: params.replyToId ?? undefined,
+          replyToId,
         });
         const failedOutcome = payloadOutcomes.find((outcome) => outcome.status === "failed");
         if (failedOutcome) {
@@ -325,7 +346,7 @@ export async function withDurableMessageSendContextCore<T>(
             const receipt = createMessageReceiptFromOutboundResults({
               results: error.results,
               threadId: params.threadId == null ? undefined : String(params.threadId),
-              replyToId: params.replyToId ?? undefined,
+              replyToId,
             });
             return {
               status: "partial_failed",

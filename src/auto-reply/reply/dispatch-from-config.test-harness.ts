@@ -1,7 +1,10 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
+import type {
+  ChannelMessagingAdapter,
+  ChannelThreadingAdapter,
+} from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   AcpRuntime,
@@ -31,6 +34,7 @@ import {
   mocks,
   noAbortResult,
   parseGenericThreadSessionInfo,
+  placementContextMocks,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -286,7 +290,11 @@ export function firstRouteReplyCall(): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
-export function installThreadingTestPlugin(params: { defaultAccountId?: string; id: string }) {
+export function installThreadingTestPlugin(params: {
+  defaultAccountId?: string;
+  id: string;
+  resolveReplyToMode?: NonNullable<ChannelThreadingAdapter["resolveReplyToMode"]>;
+}) {
   const plugin = createChannelTestPluginBase({ id: params.id });
   const defaultAccountId = params.defaultAccountId;
   const registry = createTestRegistry([
@@ -299,7 +307,7 @@ export function installThreadingTestPlugin(params: { defaultAccountId?: string; 
           ? { ...plugin.config, defaultAccountId: () => defaultAccountId }
           : plugin.config,
         threading: {
-          resolveReplyToMode: () => "all",
+          resolveReplyToMode: params.resolveReplyToMode ?? (() => "all"),
         },
       },
     },
@@ -619,6 +627,10 @@ export const describe2BeforeEach0 = () => {
   mocks.routeReply.mockReset();
   mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
   sessionStoreMocks.currentEntry = undefined;
+  placementContextMocks.getMany.mockReset().mockReturnValue(new Map());
+  placementContextMocks.resolveSessionWorkerPlacementContext
+    .mockReset()
+    .mockReturnValue(placementContextMocks.context);
   sessionBindingMocks.resolveByConversation.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();

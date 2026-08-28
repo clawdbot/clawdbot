@@ -1,24 +1,10 @@
-// Control UI bootstrap contract served by the gateway and consumed by the
-// browser app before it knows runtime branding, media roots, or embed policy.
-/** HTTP path for the Control UI bootstrap config payload. */
-export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
-
-/** Fragment marker selecting the host-authorized browser-owner bootstrap profile. */
-export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
-export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT = "owner";
-export type ControlUiBootstrapProfileHint = typeof CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT;
-
-/** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
-export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
-
-/** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
-export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
-
-/** Authenticated same-origin prefix for a session workspace's own project icon. */
-export const CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX = "/__openclaw__/workspace-icon";
-
-/** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
-export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
+// Stable Control UI contract barrel for Gateway callers. Browser code imports
+// narrow browser-safe modules directly so lazy route owners stay out of startup.
+export * from "./control-ui-bootstrap-contract.js";
+export * from "./control-ui-plugin-frame-contract.js";
+export * from "./control-ui-resource-routes.js";
+export * from "./control-ui-root-assets.js";
+export * from "./control-ui-user-avatar-route.js";
 
 /** Targeted pushed PR snapshot event for subscribed Control UI connections. */
 export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
@@ -26,42 +12,6 @@ export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
 
 /** Maximum session keys retained by one Control UI PR subscription. */
 export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
-
-/** Reserved query key for the sandbox cookie capability probe. */
-export const CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY = "__openclaw_plugin_frame_auth_probe";
-
-/** Exact parent origin that may receive the successful probe message. */
-export const CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY = "__openclaw_plugin_frame_auth_origin";
-
-/** Message emitted only by a successful sandbox cookie capability probe. */
-export const CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE = "openclaw-plugin-frame-auth-probe";
-
-/** Extracts the same-origin route pathname from a tab descriptor URL. */
-export function resolveControlUiPluginTabPathname(path: string): string | undefined {
-  try {
-    const baseUrl = new URL("http://openclaw.invalid");
-    const tabUrl = new URL(path, baseUrl);
-    return tabUrl.origin === baseUrl.origin ? tabUrl.pathname : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Carries the gateway-configured Control UI mount path into browser bootstrap. */
-export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-path";
-
-/** Marks whether the served document CSP permits the terminal WASM runtime. */
-export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
-
-/** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
-export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
-
-/** Route grant successfully issued during authenticated Control UI bootstrap. */
-export type ControlUiPluginFrameGrantAck = {
-  pluginId: string;
-  path: string;
-  match: "exact" | "prefix";
-};
 
 /** Public GitHub metadata rendered by Control UI link hover cards. */
 export type ControlUiGitHubPreview = {
@@ -85,6 +35,22 @@ export type ControlUiGitHubPreview = {
   updatedAt: string;
 };
 
+/** Bounded session metadata rendered by Control UI session-link hover cards. */
+export type ControlUiSessionPreview =
+  | {
+      status: "ok";
+      sessionKey: string;
+      title?: string;
+      derivedTitle?: string;
+      agentId: string;
+      kind?: string;
+      channel?: string;
+      updatedAt?: number;
+      lastMessagePreview?: string;
+      archived?: boolean;
+    }
+  | { status: "unavailable" };
+
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
@@ -100,6 +66,14 @@ type ControlUiSessionPullRequestChecks = {
 /** One GitHub pull request whose head is the session's working branch. */
 export type ControlUiSessionPullRequest = {
   number: number;
+  /**
+   * Author login from the list payload GitHub already returns; no extra call.
+   * Absent for a ghosted or deleted account. Deliberately login-only: the
+   * sibling GitHub-link hovercard inlines avatars server-side rather than
+   * hotlinking them, so a remote <img> here would leak a browser request to
+   * GitHub on every hover.
+   */
+  author?: { login: string };
   owner: string;
   repo: string;
   branch: string;
@@ -108,6 +82,7 @@ export type ControlUiSessionPullRequest = {
   state: "open" | "draft" | "merged" | "closed";
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /** Latest check-run rollup for the head commit; absent when no checks ran. */
   checks?: ControlUiSessionPullRequestChecks;
   checksUrl?: string;
@@ -124,6 +99,7 @@ export type ControlUiSessionBranch = {
   /** Working-tree diff vs the merge base with the remote default branch. */
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /**
    * GitHub "open a pull request for this branch" page. Absent while the
    * branch is unpushed or has nothing to compare — the row then only reports
@@ -152,35 +128,4 @@ export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests &
 /** Targeted delta event for sessions watched by one Control UI connection. */
 export type ControlUiSessionPullRequestsChanged = {
   sessions: Record<string, ControlUiSessionPullRequestSnapshot>;
-};
-
-/** Runtime config consumed by the browser Control UI during bootstrap. */
-export type ControlUiBootstrapConfig = {
-  basePath: string;
-  assistantName: string;
-  assistantAvatar: string;
-  assistantAvatarSource?: string | null;
-  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
-  assistantAvatarReason?: string | null;
-  assistantAgentId?: string;
-  serverVersion?: string;
-  /**
-   * Git branch of a source-checkout (non-release) gateway install. Omitted for
-   * package installs and mainline (main/master) checkouts so the UI only flags
-   * gateways running unreleased branch code.
-   */
-  devGitBranch?: string;
-  localMediaPreviewRoots?: string[];
-  embedSandbox?: ControlUiEmbedSandboxMode;
-  allowExternalEmbedUrls?: boolean;
-  seamColor?: string;
-  /**
-   * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
-   * The Control UI hides the terminal entirely when false so a disabled kill
-   * switch removes the surface rather than showing a button that errors on open.
-   */
-  terminalEnabled?: boolean;
-  /** Whether the Labs-gated CLI agents model-picker group is enabled. */
-  cliAgentsEnabled?: boolean;
-  pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
 };

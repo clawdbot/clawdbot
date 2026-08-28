@@ -1,17 +1,20 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { transferMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentMessage, AgentToolResult } from "./runtime/index.js";
 import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import type { ToolSearchTargetTranscriptProjection } from "./tool-search-types.js";
 
 function readMessageToolResultId(message: AgentMessage): string | undefined {
-  const record = message as unknown as Record<string, unknown>;
-  const role = typeof record.role === "string" ? record.role : "";
+  const role: unknown = message.role;
   const canUseDirectId = role === "toolResult" || role === "tool";
-  const direct = record.toolCallId ?? record.toolUseId ?? record.tool_use_id;
+  const direct =
+    Reflect.get(message, "toolCallId") ??
+    Reflect.get(message, "toolUseId") ??
+    Reflect.get(message, "tool_use_id");
   if (canUseDirectId && typeof direct === "string" && direct.trim()) {
     return direct;
   }
-  const content = record.content;
+  const content = Reflect.get(message, "content");
   if (!Array.isArray(content)) {
     return undefined;
   }
@@ -165,5 +168,8 @@ export function snapshotToolSearchTargetTranscriptResult(
     snapshot.details =
       result.details === undefined ? undefined : toToolSearchJsonSafe(result.details);
   }
-  return freezeJsonSnapshot(snapshot) as AgentToolResult<unknown>;
+  return transferMcpCodeModeGuestResult(
+    result,
+    freezeJsonSnapshot(snapshot) as AgentToolResult<unknown>,
+  );
 }

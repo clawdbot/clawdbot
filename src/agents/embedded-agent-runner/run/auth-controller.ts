@@ -10,9 +10,11 @@ import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded
 import {
   type AuthProfileStore,
   isProfileInCooldown,
+  markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
+import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -37,6 +39,8 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
+import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
+import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -117,6 +121,9 @@ export function createEmbeddedRunAuthController(params: {
   attemptedThinking: Set<ThinkLevel>;
   fallbackConfigured: boolean;
   allowTransientCooldownProbe: boolean;
+  authProfileFailurePolicy?: AuthProfileFailurePolicy;
+  authProfileStateMode?: "read-write" | "read-only";
+  runId?: string;
   getProvider(): string;
   getModelId(): string;
   getRuntimeModel(): Model;
@@ -398,6 +405,49 @@ export function createEmbeddedRunAuthController(params: {
     return classified ?? "auth";
   };
 
+  const recordOAuthRefreshFailure = async (
+    candidate: string | undefined,
+    error: unknown,
+  ): Promise<void> => {
+    if (!(error instanceof OAuthRefreshFailureError)) {
+      return;
+    }
+    const profileId = error.profileId ?? candidate;
+    const provider = error.provider || params.getProvider();
+    const errorText = formatErrorMessage(error);
+    params.log.warn(
+      `auth profile "${profileId ?? "(unknown)"}" failed for provider "${provider}": ${errorText}`,
+    );
+    if (!profileId || params.authProfileStateMode === "read-only") {
+      return;
+    }
+    const reason = resolveAuthProfileFailureReason({
+      failoverReason: resolveAuthProfileFailoverReason({
+        allInCooldown: false,
+        message: errorText,
+      }),
+      policy: params.authProfileFailurePolicy,
+    });
+    if (!reason) {
+      return;
+    }
+    try {
+      await markAuthProfileFailure({
+        store: params.authStore,
+        profileId,
+        reason,
+        cfg: params.config,
+        agentDir: params.agentDir,
+        runId: params.runId,
+        modelId: params.getModelId(),
+      });
+    } catch (markError) {
+      params.log.warn(
+        `auth profile "${profileId}" failure bookkeeping failed for provider "${provider}": ${formatErrorMessage(markError)}`,
+      );
+    }
+  };
+
   const throwAuthProfileFailover = (failoverParams: {
     allInCooldown: boolean;
     message?: string;
@@ -431,7 +481,10 @@ export function createEmbeddedRunAuthController(params: {
       });
     if (params.fallbackConfigured) {
       const authMode =
-        reason === "billing"
+        reason === "billing" ||
+        reason === "auth" ||
+        reason === "auth_permanent" ||
+        reason === "session_expired"
           ? resolveSubscriptionAuthModeForProfiles({
               store: params.authStore,
               profileIds: failoverParams.allInCooldown
@@ -602,6 +655,7 @@ export function createEmbeddedRunAuthController(params: {
         if (err instanceof SecretSurfaceUnavailableError) {
           throw err;
         }
+        await recordOAuthRefreshFailure(candidate, err);
       }
     }
     params.setProfileIndex(params.profileCandidates.length);
@@ -652,6 +706,7 @@ export function createEmbeddedRunAuthController(params: {
       if (err instanceof FailoverError || err instanceof SecretSurfaceUnavailableError) {
         throw err;
       }
+      await recordOAuthRefreshFailure(params.profileCandidates[params.getProfileIndex()], err);
       const advanced = await advanceAuthProfile();
       if (!advanced) {
         throwAuthProfileFailover({ allInCooldown: false, error: err });

@@ -4,6 +4,7 @@ import type { PortalListResult, PortalSummary } from "@openclaw/gateway-protocol
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolvePortalUrl } from "./portal-url.ts";
 
 const probePortalReachable = vi.hoisted(() =>
@@ -43,7 +44,7 @@ function createContext(
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: { features: { methods } } as ApplicationGatewaySnapshot["hello"],
+    hello: gatewayHelloForMethods(methods, ["operator.write"]),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,

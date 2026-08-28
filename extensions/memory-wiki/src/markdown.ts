@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
 
 const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
@@ -141,29 +142,15 @@ const WIKI_RESERVED_PAGE_STEMS = new Set(["index"]);
 const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
 const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 
-function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {
-  let result = "";
-  let bytes = 0;
-  for (const char of value) {
-    const nextBytes = Buffer.byteLength(char);
-    if (bytes + nextBytes > maxBytes) {
-      break;
-    }
-    result += char;
-    bytes += nextBytes;
-  }
-  return result;
-}
-
 function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): string {
   if (Buffer.byteLength(raw) <= maxBytes) {
     return raw;
   }
   const suffix = createHash("sha1").update(raw).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
-  const truncated = truncateUtf8CodePointSafe(
-    raw,
-    maxBytes - Buffer.byteLength(`-${suffix}`),
-  ).replace(/-+$/g, "");
+  const truncated = truncateUtf8Prefix(raw, maxBytes - Buffer.byteLength(`-${suffix}`)).replace(
+    /-+$/g,
+    "",
+  );
   return `${truncated || fallback}-${suffix}`;
 }
 
@@ -761,4 +748,3 @@ export function toWikiPageSummary(params: {
   const result = scanWikiPageSummary(params);
   return result.status === "valid" ? result.page : null;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

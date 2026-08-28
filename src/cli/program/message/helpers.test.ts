@@ -1,8 +1,13 @@
 // Message program helper tests cover message command helper behavior and mocks.
+import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMessagePollCommand } from "./register.poll.js";
+import { registerMessageReactionsCommands } from "./register.reactions.js";
+import { registerMessageReadEditDeleteCommands } from "./register.read-edit-delete.js";
+import { registerMessageSendCommand } from "./register.send.js";
 
-const messageCommandMock = vi.fn(async () => {});
+const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
 vi.mock("../../../commands/message.js", () => ({
   messageCommand: messageCommandMock,
 }));
@@ -52,7 +57,7 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   runGlobalGatewayStopSafely: runGlobalGatewayStopSafelyMock,
 }));
 
-const exitMock = vi.fn((): never => {
+const exitMock = vi.fn((_code: number): never => {
   throw new Error("exit");
 });
 const errorMock = vi.fn();
@@ -137,7 +142,7 @@ describe("runMessageAction", () => {
     hasHooksMock.mockClear().mockReturnValue(false);
     runGatewayStopMock.mockClear().mockResolvedValue(undefined);
     runGlobalGatewayStopSafelyMock.mockClear();
-    exitMock.mockClear().mockImplementation((): never => {
+    exitMock.mockClear().mockImplementation((_code: number): never => {
       throw new Error("exit");
     });
   });
@@ -149,6 +154,124 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
   });
+
+  it.each([
+    { name: "sent", status: "sent" as const, exitCode: 0 },
+    { name: "suppressed", status: "suppressed" as const, exitCode: 1 },
+    { name: "failed", status: "failed" as const, exitCode: 1 },
+    { name: "partial_failed", status: "partial_failed" as const, exitCode: 1 },
+    { name: "dry-run", status: undefined, dryRun: true, exitCode: 0 },
+  ])(
+    "propagates $name send outcomes through the real CLI parser",
+    async ({ status, dryRun, exitCode }) => {
+      const sendResult = {
+        channel: "discord",
+        to: "channel:123",
+        via: "direct" as const,
+        mediaUrl: null,
+        ...(status ? { deliveryStatus: status } : {}),
+        ...(status === "suppressed"
+          ? { suppressionReason: "cancelled_by_message_sending_hook" as const }
+          : {}),
+        ...(status === "failed" || status === "partial_failed"
+          ? { error: "provider rejected the message" }
+          : {}),
+        ...(status === "partial_failed"
+          ? { sentBeforeError: true as const, result: { channel: "discord", messageId: "part-1" } }
+          : {}),
+      };
+      messageCommandMock.mockResolvedValueOnce({
+        kind: "send",
+        channel: "discord",
+        action: "send",
+        to: "channel:123",
+        handledBy: "core",
+        payload: sendResult,
+        sendResult,
+        dryRun: Boolean(dryRun),
+      });
+      const program = new Command();
+      const message = program.command("message");
+      registerMessageSendCommand(message, createMessageCliHelpers(message, "discord"));
+
+      await expect(
+        program.parseAsync(
+          [
+            "message",
+            "send",
+            "--channel",
+            "discord",
+            "--target",
+            "channel:123",
+            "--message",
+            "hi",
+            ...(dryRun ? ["--dry-run"] : []),
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("exit");
+
+      expect(exitMock).toHaveBeenCalledWith(exitCode);
+    },
+  );
+
+  it.each([
+    ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, 1],
+    ["rejected added reaction", "react", { ok: false, warning: "Unavailable", added: "✅" }, 1],
+    ["rejected delete", "delete", { ok: false, deleted: false, warning: "Not deleted" }, 1],
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, 1],
+    ["rejected send", "send", { ok: false, error: "Message rejected" }, 1],
+    ["successful reaction", "react", { ok: true, added: "✅" }, 0],
+    ["legacy reaction", "react", { added: "✅" }, 0],
+    ["non-boolean outcome", "react", { ok: "false", added: "✅" }, 0],
+    ["dry-run", "react", { ok: false, error: "Not executed" }, 0],
+  ] as const)(
+    "propagates %s through the real CLI parser",
+    async (name, action, payload, exitCode) => {
+      const dryRun = name === "dry-run";
+      const kind = action === "send" || action === "poll" ? action : "action";
+      messageCommandMock.mockResolvedValueOnce({
+        kind,
+        channel: "telegram",
+        action,
+        ...(kind === "action" ? {} : { to: "123" }),
+        handledBy: "plugin",
+        payload,
+        dryRun,
+      });
+      const program = new Command();
+      const message = program.command("message");
+      const helpers = createMessageCliHelpers(message, "telegram");
+      registerMessageSendCommand(message, helpers);
+      registerMessagePollCommand(message, helpers);
+      registerMessageReactionsCommands(message, helpers);
+      registerMessageReadEditDeleteCommands(message, helpers);
+      const args = {
+        react: ["--message-id", "456", "--emoji", "✅"],
+        delete: ["--message-id", "456"],
+        poll: ["--poll-question", "Ready?", "--poll-option", "Yes", "--poll-option", "No"],
+        send: ["--message", "hello"],
+      }[action];
+
+      await expect(
+        program.parseAsync(
+          [
+            "message",
+            action,
+            "--channel",
+            "telegram",
+            "--target",
+            "123",
+            ...args,
+            ...(dryRun ? ["--dry-run"] : []),
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("exit");
+
+      expect(exitMock).toHaveBeenCalledWith(exitCode);
+    },
+  );
 
   it("loads configured channel plugins when no target channel is known yet", async () => {
     await runSendAction({ channel: undefined });
@@ -289,7 +412,7 @@ describe("runMessageAction", () => {
     await runSendAction();
 
     expect(messageCommandMock).not.toHaveBeenCalled();
-    expect(errorMock).toHaveBeenCalledWith("Error: plugin load failed");
+    expect(errorMock).toHaveBeenCalledWith("plugin load failed");
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(1);
     expect(exitMock).not.toHaveBeenCalledWith(0);
@@ -310,7 +433,7 @@ describe("runMessageAction", () => {
     ).rejects.toThrow("exit");
 
     expect(errorMock).toHaveBeenCalledWith(
-      "Error: --poll-anonymous and --poll-public are mutually exclusive.",
+      "--poll-anonymous and --poll-public are mutually exclusive.",
     );
     expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
@@ -377,7 +500,7 @@ describe("runMessageAction", () => {
     await expect(runMessageAction(action, opts)).rejects.toThrow("exit");
 
     const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
-    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(errorMock).toHaveBeenCalledWith(`${flag} must be a ${kind} integer.`);
     expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
@@ -402,7 +525,7 @@ describe("runMessageAction", () => {
     ).rejects.toThrow("exit");
 
     const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
-    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(errorMock).toHaveBeenCalledWith(`${flag} must be a ${kind} integer.`);
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
   });
@@ -496,7 +619,7 @@ describe("runMessageAction", () => {
     messageCommandMock.mockRejectedValueOnce(new Error("send failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenCalledWith("Error: send failed");
+    expect(errorMock).toHaveBeenCalledWith("send failed");
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(1);
   });
@@ -510,12 +633,49 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledWith(1);
   });
 
+  it("runs gateway_stop hooks before exit(1) for a failed broadcast result", async () => {
+    const order: string[] = [];
+    hasHooksMock.mockReturnValueOnce(true);
+    messageCommandMock.mockResolvedValueOnce({
+      kind: "broadcast",
+      channel: "telegram",
+      action: "broadcast",
+      handledBy: "core",
+      payload: {
+        results: [
+          { channel: "telegram", to: "123", ok: true },
+          { channel: "telegram", to: "456", ok: false, error: "delivery failed" },
+        ],
+      },
+      dryRun: false,
+    });
+    runGatewayStopMock.mockImplementationOnce(async () => {
+      order.push("stop");
+    });
+    exitMock.mockImplementationOnce((code: number): never => {
+      order.push(`exit:${code}`);
+      throw new Error("exit");
+    });
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        channel: "telegram",
+        targets: ["123", "456"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(order).toEqual(["stop", "exit:1"]);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
   it("logs gateway_stop failure and still exits with success code", async () => {
     hasHooksMock.mockReturnValueOnce(true);
     runGatewayStopMock.mockRejectedValueOnce(new Error("hook failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenCalledWith("gateway_stop hook failed: Error: hook failed");
+    expect(errorMock).toHaveBeenCalledWith("gateway_stop hook failed: hook failed");
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -525,30 +685,9 @@ describe("runMessageAction", () => {
     runGatewayStopMock.mockRejectedValueOnce(new Error("hook failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenNthCalledWith(1, "Error: send failed");
-    expect(errorMock).toHaveBeenNthCalledWith(2, "gateway_stop hook failed: Error: hook failed");
+    expect(errorMock).toHaveBeenNthCalledWith(1, "send failed");
+    expect(errorMock).toHaveBeenNthCalledWith(2, "gateway_stop hook failed: hook failed");
     expect(exitMock).toHaveBeenCalledWith(1);
-  });
-
-  it("does not call exit(0) when the action throws", async () => {
-    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    await runSendAction();
-
-    // exit should only be called once with code 1, never with 0
-    expect(exitMock).toHaveBeenCalledOnce();
-    expect(exitMock).not.toHaveBeenCalledWith(0);
-  });
-
-  it("does not call exit(0) if the error path returns", async () => {
-    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    exitMock.mockClear().mockImplementation(() => undefined as never);
-    const runMessageAction = createRunMessageAction();
-    await expect(runMessageAction("send", baseSendOptions)).resolves.toBeUndefined();
-
-    expect(errorMock).toHaveBeenCalledWith("Error: boom");
-    expect(exitMock).toHaveBeenCalledOnce();
-    expect(exitMock).toHaveBeenCalledWith(1);
-    expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
   it("passes action and maps account to accountId", async () => {

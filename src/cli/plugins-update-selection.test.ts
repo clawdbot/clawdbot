@@ -227,6 +227,54 @@ describe("resolvePluginUpdateSelection", () => {
 });
 
 describe("resolveHookPackUpdateSelection", () => {
+  it.each([
+    { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks" },
+    { packageName: "openclaw-demo-hooks", requestedSpec: "openclaw-demo-hooks" },
+    { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks@beta" },
+    { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks@1.2.3" },
+  ])(
+    "maps npm package spec $requestedSpec to its tracked hook pack",
+    ({ packageName, requestedSpec }) => {
+      expect(
+        resolveHookPackUpdateSelection({
+          installs: {
+            "demo-hooks": createNpmHookInstall({
+              spec: `${packageName}@1.0.0`,
+              resolvedName: packageName,
+            }),
+          },
+          rawId: requestedSpec,
+        }),
+      ).toEqual({
+        hookIds: ["demo-hooks"],
+        specOverrides: { "demo-hooks": requestedSpec },
+      });
+    },
+  );
+
+  it("preserves the tracked npm spec when updating by exact hook-pack id", () => {
+    expect(
+      resolveHookPackUpdateSelection({
+        installs: {
+          "demo-hooks": createNpmHookInstall({ spec: "@acme/demo-hooks@beta" }),
+        },
+        rawId: "demo-hooks",
+      }),
+    ).toEqual({ hookIds: ["demo-hooks"] });
+  });
+
+  it("does not guess an owner when an npm package maps to multiple tracked hook packs", () => {
+    expect(
+      resolveHookPackUpdateSelection({
+        installs: {
+          alpha: createNpmHookInstall({ spec: "@acme/shared" }),
+          beta: createNpmHookInstall({ spec: "@acme/shared" }),
+        },
+        rawId: "@acme/shared",
+      }),
+    ).toEqual({ hookIds: [] });
+  });
+
   it("does not treat inherited prototype keys as installed hook ids", () => {
     expect(
       resolveHookPackUpdateSelection({

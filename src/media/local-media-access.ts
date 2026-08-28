@@ -16,6 +16,7 @@ export type LocalMediaAccessErrorCode =
   | "invalid-file-url"
   | "network-path-not-allowed"
   | "unsafe-bypass"
+  | "unsupported-media-type"
   | "not-found"
   | "invalid-path"
   | "not-file";
@@ -28,6 +29,16 @@ export class LocalMediaAccessError extends Error {
     super(message, options);
     this.code = code;
     this.name = "LocalMediaAccessError";
+  }
+}
+
+/**
+ * Lets core classify rejected content without changing loadWebMedia's public error code.
+ * Removing this boundary would make detailed reply outcomes break plugin error handling.
+ */
+export class HostReadMediaTypeError extends LocalMediaAccessError {
+  constructor(message: string) {
+    super("path-not-allowed", message);
   }
 }
 
@@ -144,29 +155,32 @@ async function resolveLocalMediaBoundary(
   }
   const roots = localRoots ?? getDefaultLocalRootsCore();
   const resolved = await resolveLocalMediaPathForContainment(mediaPath);
-
-  if (localRoots === undefined) {
-    // Unscoped default roots include workspace, but not sibling workspace-* agent sandboxes.
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
-    if (workspaceRoot) {
-      const stateDir = path.dirname(workspaceRoot);
-      const rel = path.relative(stateDir, resolved);
-      if (rel && isPathInside(stateDir, resolved)) {
-        const firstSegment = rel.split(path.sep)[0] ?? "";
-        if (firstSegment.startsWith("workspace-")) {
-          throw new LocalMediaAccessError(
-            "path-not-allowed",
-            `Local media path is not under an allowed directory: ${mediaPath}`,
-          );
-        }
-      }
-    }
-  }
-
   const resolvedRoots =
     options?.resolvedRoots ??
     (await options?.resolveRoots?.()) ??
     (await resolveLocalMediaRoots(roots));
+  const workspaceRootIndex = roots.findIndex((root) => path.basename(root) === "workspace");
+  const workspaceRoot = roots[workspaceRootIndex];
+  if (workspaceRoot) {
+    const stateDir = await resolveCanonicalBoundaryPath(path.dirname(workspaceRoot));
+    const rel = path.relative(stateDir, resolved);
+    const firstSegment = rel.split(path.sep)[0] ?? "";
+    if (rel && isPathInside(stateDir, resolved) && firstSegment.startsWith("workspace-")) {
+      const agentWorkspace = path.join(stateDir, firstSegment);
+      // Broad roots such as the shared temp directory must not authorize sibling workspaces.
+      const hasScopedWorkspaceRoot =
+        localRoots !== undefined &&
+        resolvedRoots.some(
+          (root) => isPathInside(agentWorkspace, root) && isPathInside(root, resolved),
+        );
+      if (!hasScopedWorkspaceRoot) {
+        throw new LocalMediaAccessError(
+          "path-not-allowed",
+          `Local media path is not under an allowed directory: ${mediaPath}`,
+        );
+      }
+    }
+  }
   for (const [index, resolvedRoot] of resolvedRoots.entries()) {
     const root = roots[index] ?? resolvedRoot;
     if (resolvedRoot === path.parse(resolvedRoot).root) {

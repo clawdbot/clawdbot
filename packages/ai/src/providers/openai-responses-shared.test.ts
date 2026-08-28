@@ -10,6 +10,7 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
+import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -946,6 +947,46 @@ describe("convertResponsesMessages", () => {
 });
 
 describe("processResponsesStream", () => {
+  it.each([
+    {
+      message: "400 The encrypted content could not be verified.",
+      status: undefined,
+      expected: true,
+    },
+    {
+      message: "The encrypted content could not be decrypted or parsed.",
+      status: 400,
+      expected: true,
+    },
+    {
+      message: "400 The encrypted content could not be verified.",
+      status: 500,
+      expected: false,
+    },
+    {
+      message: "Could not decrypt the provided encrypted_content.",
+      status: 400,
+      expected: true,
+    },
+    {
+      message: "Could not decrypt the provided encrypted_content.",
+      status: 500,
+      expected: false,
+    },
+    {
+      message: "Could not decrypt encrypted_content metadata for the OAuth sidecar.",
+      status: 400,
+      expected: false,
+    },
+    { message: "400 The certificate could not be verified.", status: undefined, expected: false },
+    { message: "400 The upload could not be decrypted.", status: undefined, expected: false },
+  ])(
+    "classifies encrypted replay rejection $expected: $message",
+    ({ message, status, expected }) => {
+      expect(isInvalidEncryptedContentError({ message, status })).toBe(expected);
+    },
+  );
+
   it("aborts the Responses request signal when the first SSE event never arrives", async () => {
     vi.useFakeTimers();
     try {
@@ -1051,6 +1092,231 @@ describe("processResponsesStream", () => {
 
     expect(requestMaxRetries).toBe(expected);
     expect(output.stopReason).toBe("stop");
+  });
+
+  it.each([
+    "create",
+    "iterator",
+    "response.failed",
+    "response.failed-status",
+    "error",
+    "nested-error",
+  ] as const)(
+    "recovers code-less encrypted reasoning rejected during %s stream drain",
+    async (failureShape) => {
+      const failureMessage =
+        "400 The encrypted content [REDACTED] could not be verified. " +
+        "Reason: Encrypted content could not be decrypted or parsed.";
+      const requests: ResponseCreateParamsStreaming[] = [];
+      const output = createAssistantOutput();
+      const { stream, events } = createCapturedAssistantMessageEventStream();
+
+      await runResponsesStreamLifecycle({
+        stream,
+        model: nativeOpenAIModel,
+        output,
+        createClient: () => ({
+          responses: {
+            create: (request) => {
+              requests.push(structuredClone(request));
+              const attempt = requests.length;
+              return {
+                withResponse: async () => {
+                  if (attempt === 1 && failureShape === "create") {
+                    throw Object.assign(new Error(failureMessage), { status: 400 });
+                  }
+                  return {
+                    data: (async function* () {
+                      if (attempt === 1) {
+                        yield {
+                          type: "response.created",
+                          sequence_number: 0,
+                          response: { id: "resp_rejected" },
+                        } as ResponseStreamEvent;
+                        if (failureShape === "iterator") {
+                          throw new Error(failureMessage);
+                        }
+                        yield (
+                          failureShape === "response.failed" ||
+                          failureShape === "response.failed-status"
+                            ? {
+                                type: "response.failed",
+                                sequence_number: 1,
+                                response: {
+                                  id: "resp_rejected",
+                                  status: "failed",
+                                  error:
+                                    failureShape === "response.failed-status"
+                                      ? {
+                                          code: null,
+                                          status: 400,
+                                          message: "The encrypted content could not be verified.",
+                                        }
+                                      : { code: null, message: failureMessage },
+                                },
+                              }
+                            : failureShape === "nested-error"
+                              ? {
+                                  type: "error",
+                                  sequence_number: 1,
+                                  error: { code: null, message: failureMessage },
+                                }
+                              : {
+                                  type: "error",
+                                  sequence_number: 1,
+                                  code: null,
+                                  message: failureMessage,
+                                  param: null,
+                                }
+                        ) as ResponseStreamEvent;
+                        return;
+                      }
+                      yield {
+                        type: "response.completed",
+                        sequence_number: 1,
+                        response: { id: "resp_recovered", status: "completed" },
+                      } as ResponseStreamEvent;
+                    })(),
+                    response: new Response(null, { status: 200 }),
+                  };
+                },
+              };
+            },
+          },
+        }),
+        buildParams: () => ({
+          model: nativeOpenAIModel.id,
+          stream: true,
+          input: [
+            {
+              type: "reasoning",
+              id: "rs_replay",
+              encrypted_content: "stale-reasoning",
+              summary: [],
+            },
+            { type: "compaction", id: "cmp_keep", encrypted_content: "valid-compaction" },
+          ],
+        }),
+      });
+
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.input).toEqual(
+        expect.arrayContaining([expect.objectContaining({ encrypted_content: "stale-reasoning" })]),
+      );
+      expect(requests[1]?.input).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "reasoning", id: "rs_replay" }),
+          expect.objectContaining({ type: "compaction", encrypted_content: "valid-compaction" }),
+        ]),
+      );
+      expect(JSON.stringify(requests[1]?.input)).not.toContain("stale-reasoning");
+      expect(events.map((event) => event.type)).toEqual(["start", "done"]);
+      expect(output.stopReason).toBe("stop");
+      expect(output.responseId).toBe("resp_recovered");
+    },
+  );
+
+  it("never retries an encrypted-looking response hook rejection", async () => {
+    let requests = 0;
+    const output = createAssistantOutput();
+    const onResponse = vi.fn(() => {
+      throw new Error("400 The encrypted content could not be verified.");
+    });
+
+    await runResponsesStreamLifecycle({
+      stream: new AssistantMessageEventStream(),
+      model: nativeOpenAIModel,
+      output,
+      options: { onResponse },
+      createClient: () => ({
+        responses: {
+          create: () => {
+            requests += 1;
+            return {
+              withResponse: async () => ({
+                data: streamResponsesEvents([]),
+                response: new Response(null, { status: 200 }),
+              }),
+            };
+          },
+        },
+      }),
+      buildParams: () => ({
+        model: nativeOpenAIModel.id,
+        stream: true,
+        input: [{ type: "reasoning", id: "rs_replay", encrypted_content: "stale", summary: [] }],
+      }),
+    });
+
+    expect(requests).toBe(1);
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(output.errorMessage).toBe("400 The encrypted content could not be verified.");
+  });
+
+  it.each([
+    { name: "thinking", item: { type: "reasoning", id: "rs_started", summary: [] } },
+    {
+      name: "text",
+      item: {
+        type: "message",
+        id: "msg_started",
+        role: "assistant",
+        status: "in_progress",
+        content: [],
+      },
+    },
+    {
+      name: "tool",
+      item: {
+        type: "function_call",
+        id: "fc_started",
+        call_id: "call_started",
+        name: "lookup",
+        arguments: "",
+      },
+    },
+  ])("never retries encrypted replay after $name output starts", async ({ item }) => {
+    const requests: ResponseCreateParamsStreaming[] = [];
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await runResponsesStreamLifecycle({
+      stream,
+      model: nativeOpenAIModel,
+      output,
+      createClient: () => ({
+        responses: {
+          create: (request) => {
+            requests.push(request);
+            return {
+              withResponse: async () => ({
+                data: (async function* () {
+                  yield {
+                    type: "response.output_item.added",
+                    output_index: 0,
+                    sequence_number: 0,
+                    item,
+                  } as ResponseStreamEvent;
+                  throw new Error("400 The encrypted content could not be verified.");
+                })(),
+                response: new Response(null, { status: 200 }),
+              }),
+            };
+          },
+        },
+      }),
+      buildParams: () => ({
+        model: nativeOpenAIModel.id,
+        stream: true,
+        input: [{ type: "reasoning", id: "rs_replay", encrypted_content: "stale", summary: [] }],
+      }),
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(output.content).toHaveLength(1);
+    expect(output.stopReason).toBe("error");
+    expect(events[0]?.type).toBe("start");
+    expect(events.at(-1)?.type).toBe("error");
   });
 
   it("suppresses rejected persisted compaction state on the following turn", async () => {
@@ -1799,10 +2065,12 @@ describe("processResponsesStream", () => {
         responseEvents([
           {
             type: "response.output_item.added",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "" },
           },
           {
             type: "response.output_item.done",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "{}" },
           },
           { type: "response.completed", response: { id: "resp_idless", status: "completed" } },
@@ -2207,7 +2475,7 @@ describe("processResponsesStream", () => {
         stream,
         nativeOpenAIModel,
       ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    ).rejects.toThrow("Responses stream changed output item identity");
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
   });
 

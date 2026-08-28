@@ -39,7 +39,7 @@ async function getContextModule() {
   return await contextModuleLoader.load();
 }
 
-function resolvePositiveInteger(value: number | undefined): number | undefined {
+export function normalizeSessionTokenCount(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
@@ -50,7 +50,6 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   agentDir: string;
-  contextTokensOverride?: number;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -106,7 +105,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
-  const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
+  const runtimeContextTokens = normalizeSessionTokenCount(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
     runtimeContextTokens !== undefined
@@ -115,10 +114,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
           cfg,
           provider: providerUsed,
           model: modelUsed,
-          contextTokensOverride: params.contextTokensOverride,
           fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS);
+  const contextTokensSource = result.meta.agentMeta?.contextTokensSource ?? "resolved";
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
@@ -139,6 +138,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       ? {}
       : {
           contextTokens,
+          contextTokensSource,
         }),
   };
   if (entry.sessionId !== sessionId) {
@@ -177,11 +177,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   if (!preserveUserFacingRunState) {
     if (!preserveRuntimeModel) {
-      if (agentHarnessId) {
-        next.agentHarnessId = agentHarnessId;
-      } else if (result.meta.executionTrace?.runner === "cli") {
-        next.agentHarnessId = undefined;
-      }
+      next.agentHarnessId = agentHarnessId;
     }
     if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
       const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;

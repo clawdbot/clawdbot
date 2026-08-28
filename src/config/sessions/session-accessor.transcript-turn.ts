@@ -5,6 +5,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import {
+  attachSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -20,7 +24,7 @@ import {
   rememberCommittedTranscriptMessageSequences,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
+import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
 import type {
@@ -152,8 +156,8 @@ export async function persistSessionTranscriptTurn(
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
-  if (options.sessionLifecyclePatch) {
-    throw new Error("Cannot patch session lifecycle without an expected session id");
+  if (options.sessionLifecyclePatch || options.sessionTurnMutation || options.initialSessionEntry) {
+    throw new Error("Cannot mutate a session turn without an expected session id");
   }
   const target = await resolveTranscriptTurnTarget(scope, options.config);
   // Route through the guarded SQLite path when the session entry was loaded
@@ -204,6 +208,7 @@ export async function persistSessionTranscriptTurn(
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages,
+    runId: options.runId,
   });
 
   return {
@@ -230,6 +235,7 @@ async function appendTranscriptTurnMessages(
       },
       {
         ...appendOptions,
+        message: attachSessionTranscriptRunId(appendOptions.message, options.runId),
         ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
         ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
       },
@@ -340,14 +346,21 @@ async function persistExpectedSessionTranscriptTurn(
           config: options.config,
           cwd: options.cwd,
           expectedLifecycleRevision:
-            options.expectedLifecycleRevision ?? inheritedWriterFence?.expectedLifecycleRevision,
+            options.expectedLifecycleRevision !== undefined
+              ? options.expectedLifecycleRevision
+              : inheritedWriterFence?.expectedLifecycleRevision,
           expectedWriterRunId:
             options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
+          initialSessionEntry: options.initialSessionEntry,
           atomicGroup: options.atomicGroup,
-          messages: options.messages,
+          messages: options.messages.map((append) => ({
+            ...append,
+            message: attachSessionTranscriptRunId(append.message, options.runId),
+          })),
           sessionLifecyclePatch: options.sessionLifecyclePatch,
+          sessionTurnMutation: options.sessionTurnMutation,
           sessionFile: target.sessionKey!,
           touchSessionEntry: options.touchSessionEntry,
         },
@@ -374,12 +387,14 @@ async function persistExpectedSessionTranscriptTurn(
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages: turn.appendedMessages,
+    runId: options.runId,
   });
 
   if (turn.sessionEntry && scope.sessionStore) {
     scope.sessionStore[resolved.normalizedKey] = turn.sessionEntry;
   }
   return {
+    sessionTurnMutationResult: turn.sessionTurnMutationResult,
     appendedCount: countAppendedTranscriptMessages(turn.appendedMessages),
     messages: turn.appendedMessages,
     sessionEntry: turn.sessionEntry ?? scope.sessionEntry,
@@ -493,6 +508,7 @@ async function publishTranscriptTurnUpdate(params: {
   updateMode: SessionTranscriptTurnUpdateMode;
   publishWhen: "always" | "when-appended";
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
+  runId?: string;
 }): Promise<void> {
   if (params.updateMode === "none") {
     return;
@@ -536,11 +552,13 @@ async function publishTranscriptTurnUpdate(params: {
     return;
   }
   for (const { message, messageSeq } of sequencedMessages) {
+    const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
     emitTranscriptUpdate({
       ...update,
       message: message.message,
       messageId: message.messageId,
       ...(messageSeq !== undefined ? { messageSeq } : {}),
+      ...(runId ? { runId } : {}),
     });
   }
 }

@@ -7,6 +7,8 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
+import { ensureColumn, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -18,20 +20,31 @@ import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 // statements; a bare transaction would open the default state DB while the
 // SQL hits the override, losing atomicity under OPENCLAW_STATE_DIR overrides.
 
-type SessionGroupRecord = { name: string; position: number };
+type SessionGroupRecord = {
+  name: string;
+  position: number;
+};
+
+type SessionGroupDefaultsRecord = {
+  name: string;
+  cwd?: string;
+  worktree?: boolean;
+};
 
 type SessionGroupsDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "session_groups" | "sidebar_sections"
+  "session_groups" | "config_machine_state"
 >;
 
-const ensuredSidebarSectionDatabases = new WeakSet<DatabaseSync>();
-const SIDEBAR_SECTIONS_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS sidebar_sections (
-  section_id TEXT NOT NULL PRIMARY KEY,
-  position INTEGER NOT NULL
-) STRICT;
-`;
+export class SessionGroupNotFoundError extends Error {
+  constructor(name: string) {
+    super(`unknown session group: ${name}`);
+    this.name = "SessionGroupNotFoundError";
+  }
+}
+
+const ensuredSessionGroupDefaultsDatabases = new WeakSet<DatabaseSync>();
+const SIDEBAR_SECTION_ORDER_STATE_KEY = "sidebar.sectionOrder";
 
 function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
   return openOpenClawStateDatabase({ env }).db;
@@ -41,20 +54,49 @@ function kyselyFor(db: DatabaseSync) {
   return getNodeSqliteKysely<SessionGroupsDatabase>(db);
 }
 
-function ensureSidebarSectionsSchema(env: NodeJS.ProcessEnv): void {
-  const database = openOpenClawStateDatabase({ env });
-  if (ensuredSidebarSectionDatabases.has(database.db)) {
+// Config-machine-state helpers open their own transaction; use direct Kysely
+// so sidebar edits stay inside the existing session-group write transaction.
+function updateSidebarSectionOrder(
+  db: DatabaseSync,
+  update: (current: string[] | undefined) => string[] | undefined,
+): void {
+  const kysely = kyselyFor(db);
+  const row = executeSqliteQuerySync(
+    db,
+    kysely
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", SIDEBAR_SECTION_ORDER_STATE_KEY),
+  ).rows[0];
+  // SAFETY: The sidebar owner and v12 migration store this key only as a string array.
+  const next = update(row ? (JSON.parse(row.value_json) as string[]) : undefined);
+  if (!next) {
     return;
   }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; rows use Kysely below.
-      db.exec(SIDEBAR_SECTIONS_SCHEMA_SQL);
-    },
-    { env },
-    { operationLabel: "session-groups.sidebar-sections.schema.ensure" },
+  const valueJson = JSON.stringify(next);
+  const updatedAtMs = Date.now();
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto("config_machine_state")
+      .values({
+        state_key: SIDEBAR_SECTION_ORDER_STATE_KEY,
+        value_json: valueJson,
+        updated_at_ms: updatedAtMs,
+      })
+      .onConflict((conflict) =>
+        conflict.column("state_key").doUpdateSet({
+          value_json: valueJson,
+          updated_at_ms: updatedAtMs,
+        }),
+      ),
   );
-  ensuredSidebarSectionDatabases.add(database.db);
+}
+
+function hasSessionGroupDefaultsSchema(db: DatabaseSync): boolean {
+  return (
+    tableHasColumn(db, "session_groups", "cwd") && tableHasColumn(db, "session_groups", "worktree")
+  );
 }
 
 function normalizeGroupNames(names: readonly string[]): string[] {
@@ -110,23 +152,37 @@ export function listSessionGroups(env: NodeJS.ProcessEnv = process.env): Session
     .select(["name", "position"])
     .orderBy("position", "asc")
     .orderBy("name", "asc");
-  return executeSqliteQuerySync(db, query).rows.map((row) => ({
-    name: row.name,
-    position: row.position,
-  }));
+  return executeSqliteQuerySync(db, query).rows;
 }
 
-export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): string[] {
-  ensureSidebarSectionsSchema(env);
+export function listSessionGroupDefaults(
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupDefaultsRecord[] {
   const db = dbFor(env);
+  if (!hasSessionGroupDefaultsSchema(db)) {
+    return listSessionGroups(env).map(({ name }) => ({ name }));
+  }
   return executeSqliteQuerySync(
     db,
     kyselyFor(db)
-      .selectFrom("sidebar_sections")
-      .select("section_id")
+      .selectFrom("session_groups")
+      .select(["name", "cwd", "worktree"])
       .orderBy("position", "asc")
-      .orderBy("section_id", "asc"),
-  ).rows.map((row) => row.section_id);
+      .orderBy("name", "asc"),
+  ).rows.map((row) => {
+    const group: SessionGroupDefaultsRecord = { name: row.name };
+    if (row.cwd) {
+      group.cwd = row.cwd;
+    }
+    if (row.worktree !== null) {
+      group.worktree = row.worktree === 1;
+    }
+    return group;
+  });
+}
+
+export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): string[] {
+  return readConfigMachineState<string[]>(SIDEBAR_SECTION_ORDER_STATE_KEY, { env }) ?? [];
 }
 
 /** Replaces the ordered catalog. Sessions keep their category even when a name is dropped. */
@@ -138,9 +194,6 @@ export function putSessionGroups(
   const normalized = normalizeGroupNames(names);
   const normalizedSectionOrder =
     sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
-  if (normalizedSectionOrder) {
-    ensureSidebarSectionsSchema(env);
-  }
   const now = Date.now();
   runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -149,34 +202,36 @@ export function putSessionGroups(
         executeSqliteQuerySync(
           db,
           kysely.selectFrom("session_groups").select(["name", "created_at"]),
-        ).rows.map((row) => [row.name, row.created_at]),
+        ).rows.map((row) => [row.name, row]),
       );
-      executeSqliteQuerySync(db, kysely.deleteFrom("session_groups"));
+      executeSqliteQuerySync(
+        db,
+        normalized.length === 0
+          ? kysely.deleteFrom("session_groups")
+          : kysely.deleteFrom("session_groups").where("name", "not in", normalized),
+      );
       normalized.forEach((name, position) => {
+        const prior = existing.get(name);
         executeSqliteQuerySync(
           db,
-          kysely.insertInto("session_groups").values({
-            name,
-            position,
-            created_at: existing.get(name) ?? now,
-          }),
+          prior
+            ? kysely.updateTable("session_groups").set({ position }).where("name", "=", name)
+            : kysely.insertInto("session_groups").values({
+                name,
+                position,
+                created_at: now,
+              }),
         );
       });
       if (normalizedSectionOrder) {
-        executeSqliteQuerySync(db, kysely.deleteFrom("sidebar_sections"));
-        normalizedSectionOrder.forEach((sectionId, position) => {
-          executeSqliteQuerySync(
-            db,
-            kysely.insertInto("sidebar_sections").values({ section_id: sectionId, position }),
-          );
-        });
+        updateSidebarSectionOrder(db, () => normalizedSectionOrder);
         // `names` remains authoritative for group-only surfaces such as the Sessions page.
         // The sidebar stores the caller's cross-section order without silently deriving it.
       }
     },
     { env },
   );
-  return normalized.map((name, position) => ({ name, position }));
+  return listSessionGroups(env);
 }
 
 /**
@@ -222,59 +277,115 @@ export function ensureSessionGroupRegistered(
 }
 
 function renameCatalogEntry(from: string, to: string, env: NodeJS.ProcessEnv): void {
-  ensureSidebarSectionsSchema(env);
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = kyselyFor(db);
+      const hasDefaults = hasSessionGroupDefaultsSchema(db);
       const source = executeSqliteQuerySync(
         db,
-        kysely.selectFrom("session_groups").selectAll().where("name", "=", from).limit(1),
+        hasDefaults
+          ? kysely.selectFrom("session_groups").selectAll().where("name", "=", from).limit(1)
+          : kysely
+              .selectFrom("session_groups")
+              .select(["name", "position", "created_at"])
+              .where("name", "=", from)
+              .limit(1),
       ).rows[0];
+      if (!source) {
+        throw new SessionGroupNotFoundError(from);
+      }
       const targetExists = executeSqliteQuerySync(
         db,
         kysely.selectFrom("session_groups").select("name").where("name", "=", to).limit(1),
       ).rows[0];
       const sourceSectionId = `category:${from}`;
       const targetSectionId = `category:${to}`;
-      const targetSectionExists = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("sidebar_sections")
-          .select("section_id")
-          .where("section_id", "=", targetSectionId)
-          .limit(1),
-      ).rows[0];
       executeSqliteQuerySync(db, kysely.deleteFrom("session_groups").where("name", "=", from));
-      if (targetSectionExists) {
+      updateSidebarSectionOrder(db, (current) => {
+        if (!current?.includes(sourceSectionId)) {
+          return undefined;
+        }
         // A target slot already owns the merged group's position; retire the source slot.
-        executeSqliteQuerySync(
-          db,
-          kysely.deleteFrom("sidebar_sections").where("section_id", "=", sourceSectionId),
-        );
-      } else {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("sidebar_sections")
-            .set({ section_id: targetSectionId })
-            .where("section_id", "=", sourceSectionId),
-        );
-      }
+        return current.includes(targetSectionId)
+          ? current.filter((sectionId) => sectionId !== sourceSectionId)
+          : current.map((sectionId) =>
+              sectionId === sourceSectionId ? targetSectionId : sectionId,
+            );
+      });
       if (targetExists) {
         // Rename into an existing group merges memberships; keep its catalog row.
         return;
       }
+      const base = {
+        name: to,
+        position: source.position,
+        created_at: source.created_at,
+      };
       executeSqliteQuerySync(
         db,
-        kysely.insertInto("session_groups").values({
-          name: to,
-          position: source?.position ?? 0,
-          created_at: source?.created_at ?? Date.now(),
-        }),
+        kysely.insertInto("session_groups").values(
+          hasDefaults
+            ? {
+                ...base,
+                cwd: "cwd" in source && typeof source.cwd === "string" ? source.cwd : null,
+                worktree:
+                  "worktree" in source && typeof source.worktree === "number"
+                    ? source.worktree
+                    : null,
+              }
+            : base,
+        ),
       );
     },
     { env },
   );
+}
+
+export function updateSessionGroupDefaults(
+  name: string,
+  defaults: { cwd: string | null; worktree: boolean },
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupDefaultsRecord[] | null {
+  const normalized = normalizeOptionalString(name);
+  if (!normalized) {
+    throw new Error("group defaults update requires a non-empty name");
+  }
+  const database = openOpenClawStateDatabase({ env });
+  let updated = false;
+  let defaultsSchemaEnsured = false;
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select("name").where("name", "=", normalized).limit(1),
+      ).rows[0];
+      if (!existing) {
+        return;
+      }
+      if (!ensuredSessionGroupDefaultsDatabases.has(db)) {
+        ensureColumn(db, "session_groups", "cwd TEXT");
+        ensureColumn(db, "session_groups", "worktree INTEGER");
+        defaultsSchemaEnsured = true;
+      }
+      const result = executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("session_groups")
+          .set({
+            cwd: normalizeOptionalString(defaults.cwd) ?? null,
+            worktree: defaults.worktree ? 1 : 0,
+          })
+          .where("name", "=", normalized),
+      );
+      updated = result.numAffectedRows === 1n;
+    },
+    { env },
+  );
+  if (defaultsSchemaEnsured) {
+    ensuredSessionGroupDefaultsDatabases.add(database.db);
+  }
+  return updated ? listSessionGroupDefaults(env) : null;
 }
 
 /**
@@ -364,14 +475,15 @@ export async function deleteSessionGroup(params: {
     throw new Error("group delete requires a non-empty name");
   }
   params.assertCurrent?.();
-  ensureSidebarSectionsSchema(env);
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = kyselyFor(db);
       executeSqliteQuerySync(db, kysely.deleteFrom("session_groups").where("name", "=", name));
-      executeSqliteQuerySync(
-        db,
-        kysely.deleteFrom("sidebar_sections").where("section_id", "=", `category:${name}`),
+      const sectionId = `category:${name}`;
+      updateSidebarSectionOrder(db, (current) =>
+        current?.includes(sectionId)
+          ? current.filter((section) => section !== sectionId)
+          : undefined,
       );
     },
     { env },

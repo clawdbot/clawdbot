@@ -65,7 +65,6 @@ function settingsRow(page: Page, title: string): Locator {
 
 async function expectInherited(row: Locator, value: string) {
   await expect.poll(() => row.textContent()).toContain(`Using default: ${value}`);
-  await expect.poll(() => row.getByRole("button", { name: "Reset to default" }).count()).toBe(0);
 }
 
 suite.define(() => {
@@ -88,7 +87,7 @@ suite.define(() => {
           },
           browser: { enabled: false },
           tools: {
-            codeMode: { enabled: false },
+            codeMode: { enabled: "auto" },
             profile: "minimal",
           },
         };
@@ -107,8 +106,8 @@ suite.define(() => {
         const codeModeRow = settingsRow(page, "Code Mode");
         const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
         await codeModeSwitch.waitFor();
-        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("false");
-        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Enabled");
+        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
 
         if (captureUiProofEnabled) {
           await mkdir(uiProofArtifactDir, { recursive: true });
@@ -130,8 +129,8 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBe(configGetsBeforeLabsReset + 1);
-        await expectInherited(codeModeRow, "Enabled");
-        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("true");
+        await expectInherited(codeModeRow, "Disabled");
+        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("false");
 
         if (captureUiProofEnabled) {
           await codeModeRow.screenshot({
@@ -158,8 +157,8 @@ suite.define(() => {
         }
 
         const securitySavesBefore = (await gateway.getRequests("config.set")).length;
-        await browserRow.getByRole("button", { name: "Reset to default" }).click();
-        await profileRow.getByRole("button", { name: "Reset to default" }).click();
+        await browserRow.locator(".settings-row__title").click();
+        await profileRow.getByRole("radio", { name: "Full", exact: true }).click();
         await expectInherited(browserRow, "Enabled");
         await expectInherited(profileRow, "Full");
         await expect
@@ -215,8 +214,8 @@ suite.define(() => {
         }
 
         const modelSavesBefore = (await gateway.getRequests("config.set")).length;
-        await thinkingRow.getByRole("button", { name: "Reset to default" }).click();
-        await fastModeRow.getByRole("button", { name: "Reset to default" }).click();
+        await thinkingRow.getByRole("radio", { name: "Default", exact: true }).click();
+        await fastModeRow.getByRole("radio", { name: "Default", exact: true }).click();
         await expectInherited(thinkingRow, "Model policy");
         await expectInherited(fastModeRow, "Model policy");
         await expect
@@ -262,12 +261,12 @@ suite.define(() => {
 
         expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
         const reloadedCodeModeRow = settingsRow(page, "Code Mode");
-        await expectInherited(reloadedCodeModeRow, "Enabled");
+        await expectInherited(reloadedCodeModeRow, "Disabled");
         expect(
           await reloadedCodeModeRow
             .getByRole("switch", { name: "Code Mode", exact: true })
             .getAttribute("aria-checked"),
-        ).toBe("true");
+        ).toBe("false");
 
         if (captureUiProofEnabled) {
           await page.screenshot({

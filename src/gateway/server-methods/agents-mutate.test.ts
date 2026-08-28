@@ -102,6 +102,7 @@ const mocks = vi.hoisted(() => ({
   })),
   rootWrite: vi.fn(async (_params?: unknown) => {}),
   migrateLegacyMainSessionKeys: vi.fn(),
+  purgeAgentSessionStoreEntries: vi.fn(async () => false),
 }));
 
 const RESERVED_SYSTEM_AGENT_IDS_FOR_TEST = ["openclaw", "crestodian"] as const; // reserved ids
@@ -188,6 +189,11 @@ vi.mock("../../agents/auth-profiles/path-resolve.js", async () => ({
 
 vi.mock("../../config/sessions/legacy-main-session-migration.js", () => ({
   migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
+}));
+
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
+  purgeAgentSessionStoreEntries: mocks.purgeAgentSessionStoreEntries,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -1335,6 +1341,7 @@ describe("agents.delete", () => {
       removedBindings: 2,
     });
     mocks.movePathToTrash.mockReset().mockResolvedValue("/trashed");
+    mocks.purgeAgentSessionStoreEntries.mockReset().mockResolvedValue(false);
   });
 
   it("rejects deleting the auth-inheritance owner before starting cleanup", async () => {
@@ -1646,7 +1653,7 @@ describe("agents.delete", () => {
     expectRespondOk(recreated.respond, { ok: true, agentId: "test-agent" });
   });
 
-  it("preserves a replacement whose identity differs from the journal", async () => {
+  it("sweeps leaked files that appeared at prepared-absent journal paths", async () => {
     const workspaceDir = "/journal/workspace";
     const workspaceAlias = "/journal/workspace-alias";
     const journal = {
@@ -1715,12 +1722,13 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, { failed: [] });
-    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(workspaceDir);
-    const replacementRecord = journal.cleanupPaths.find((entry) => entry.path === workspaceDir);
-    expect(replacementRecord).toMatchObject({
-      done: true,
-      note: "cleanup path appeared after deletion preparation",
-    });
+    // The journal fence blocked legitimate claims while this path was prepared
+    // absent, so the appeared occupant is leaked deleted-agent state: sweep it
+    // instead of preserving it and finishing over a surviving tree.
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(workspaceDir);
+    const appearedRecord = journal.cleanupPaths.find((entry) => entry.path === workspaceDir);
+    expect(appearedRecord).toMatchObject({ done: true });
+    expect(appearedRecord).not.toHaveProperty("note");
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
@@ -2815,6 +2823,7 @@ describe("agents.delete", () => {
       removedBindings: 2,
       failed: [],
     });
+    expect(result).not.toHaveProperty("purgeFailed");
     expect(result.removed).toEqual(
       expect.arrayContaining([
         { path: "/workspace/test-agent", method: "trash" },
@@ -2827,6 +2836,58 @@ describe("agents.delete", () => {
       allowedAgentRosterRemovals: ["test-agent"],
     });
     expect(mocks.movePathToTrash).toHaveBeenCalled();
+  });
+
+  it("reports a session purge failure without failing committed deletion", async () => {
+    mocks.purgeAgentSessionStoreEntries.mockResolvedValueOnce(true);
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+
+    await promise;
+
+    expectRespondOk(respond, { ok: true, purgeFailed: true });
+  });
+
+  it("sweeps WAL sidecars recreated between deletion preparation and cleanup", async () => {
+    const agentDir = "/agents/test-agent";
+    const walPath = `${agentDir}/openclaw-agent.sqlite-wal`;
+    const shmPath = `${agentDir}/openclaw-agent.sqlite-shm`;
+    const presentStats = new Map<string, { dev: number; ino: number; file: boolean }>([
+      [agentDir, { dev: 1, ino: 10, file: false }],
+      ["/workspace/test-agent", { dev: 1, ino: 20, file: false }],
+      ["/transcripts/test-agent", { dev: 1, ino: 30, file: false }],
+    ]);
+    mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
+      const stat = presentStats.get(String(pathname));
+      if (!stat) {
+        throw createEnoentError();
+      }
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        isFile: () => stat.file,
+        isSymbolicLink: () => false,
+        nlink: 1,
+      } as unknown as import("node:fs").Stats;
+    });
+    // The live runtime reopens the agent database while deletion awaits config,
+    // cron, and session-purge work, recreating -wal/-shm after preparation.
+    mocks.cronRemoveAgentJobsTransactional.mockImplementation(
+      async (_agentId: string, commit: () => Promise<unknown>) => {
+        presentStats.set(walPath, { dev: 1, ino: 40, file: true });
+        presentStats.set(shmPath, { dev: 1, ino: 41, file: true });
+        return await commit();
+      },
+    );
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+
+    expectRespondOk(respond, { failed: [] });
+    const trashedPaths = mocks.movePathToTrash.mock.calls.map(([pathname]) => pathname);
+    expect(trashedPaths).toContain(walPath);
+    expect(trashedPaths).toContain(shmPath);
+    expect(trashedPaths).toContain(agentDir);
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
   it("deletes workspace state after removing the last owner's workspace", async () => {
@@ -2979,21 +3040,60 @@ describe("agents.delete", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("deletes main through the normal journal path after shared auth relocation", async () => {
+  it("rejects an unrepresentable id before targeting the main agent", async () => {
     mocks.sharedAuthStoreOwnership = { location: "state-db" };
     mocks.loadConfigReturn = {
       agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
     };
 
     const { respond, promise } = makeCall("agents.delete", {
-      agentId: "main",
+      agentId: "агент✨",
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true, agentId: "main" });
-    expect(mocks.beginAgentDeletionCommit).toHaveBeenCalledOnce();
-    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
-    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+    expectRespondErrorContaining(respond, 'agent "агент✨" not found');
+    expect(mocks.beginAgentDeletionCommit).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "deletes main after shared auth relocation (legacy default: %s)",
+    async (legacyDefault) => {
+      mocks.sharedAuthStoreOwnership = { location: "state-db" };
+      mocks.loadConfigReturn = {
+        agents: {
+          list: [{ id: "main" }, { id: "ops", ...(legacyDefault ? { default: true } : {}) }],
+        },
+      };
+
+      const { respond, promise } = makeCall("agents.delete", {
+        agentId: "main",
+      });
+      await promise;
+
+      expectRespondOk(respond, { ok: true, agentId: "main" });
+      expect(mocks.beginAgentDeletionCommit).toHaveBeenCalledOnce();
+      expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+      expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves an explicit inherited auth owner after shared auth relocation", async () => {
+    mocks.sharedAuthStoreOwnership = { location: "state-db" };
+    mocks.loadConfigReturn = {
+      agents: {
+        defaults: { authInheritance: { agentId: "main" } },
+        list: [{ id: "main" }, { id: "ops" }],
+      },
+    };
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "main" });
+    await promise;
+
+    expectRespondErrorContaining(respond, "owns inherited credentials");
+    expect(mocks.beginAgentDeletionCommit).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 
   it("returns not found when a concurrent delete wins the delete race", async () => {

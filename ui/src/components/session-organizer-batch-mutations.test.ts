@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
@@ -8,7 +9,11 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
+import { t } from "../i18n/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
+import { showToast } from "../lib/toast.ts";
+import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -22,9 +27,13 @@ import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import {
   deleteSession,
+  deleteSessionGroup,
   deleteSessionsBatch,
+  patchSession,
   stopCloudWorker,
 } from "./session-organizer-operations.runtime.ts";
+
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 function sessionRow(index: number): SidebarRecentSession {
   return {
@@ -38,6 +47,7 @@ function sessionRow(index: number): SidebarRecentSession {
 function createHarness(
   params: {
     methods?: string[] | null;
+    capabilities?: string[];
     scopes?: string[];
     current?: boolean;
     staleAfterRequest?: number;
@@ -48,6 +58,10 @@ function createHarness(
 ) {
   let current = params.current ?? true;
   let requestCount = 0;
+  // Mirrors SessionDataController's own controller: retiring the scope aborts
+  // it so a dialog wired to `scope.signal` dismisses itself for real, and
+  // renewing stands in for the next `beginSessionMutation()` after a reconnect.
+  let abortController = new AbortController();
   const request = vi.fn(async (_method: string, rawParams?: unknown, _options?: unknown) => {
     const patchParams = rawParams as SessionsPatchManyParams;
     const requestFailure = params.requestFailure;
@@ -80,25 +94,43 @@ function createHarness(
     phase: params.phase ?? "connected",
     hello: {
       features:
-        params.methods === null ? {} : { methods: params.methods ?? ["sessions.patchMany"] },
+        params.methods === null
+          ? {}
+          : {
+              methods: params.methods ?? [...SESSION_MUTATION_TEST_METHODS],
+              capabilities: params.capabilities ?? [
+                GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+              ],
+            },
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
   } as ApplicationGatewaySnapshot;
+  const patch = vi.fn(async (key: string) => ({ ok: true, key }));
   const refreshReplacement = vi.fn(async () => undefined);
   const refreshTheme = vi.fn();
-  const deleteMany = vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] }));
+  const deleteMany = vi.fn(
+    async (): Promise<SessionDeleteBatchResult> => ({
+      deleted: [],
+      errors: [],
+      preservedWorktrees: [],
+    }),
+  );
   const deleteOne = vi.fn(async () => ({ deleted: true }));
+  const groupsDelete = vi.fn(async () => "completed" as const);
   const scope = {
     epoch: 1,
     context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
     gateway: { snapshot },
     sessions: {
+      patch,
       refreshReplacement,
       delete: deleteOne,
       deleteMany,
+      groupsDelete,
     } as unknown as SessionCapability,
     client,
     selectedAgentId: "main",
+    signal: abortController.signal,
   } as unknown as SidebarSessionMutationScope;
   const publishSessionMutationError = vi.fn();
   const pruneSidebarSessionEntry = vi.fn();
@@ -116,7 +148,9 @@ function createHarness(
   return {
     deleteMany,
     deleteOne,
+    groupsDelete,
     host,
+    patch,
     pruneSidebarSessionEntry,
     publishSessionMutationError,
     refreshReplacement,
@@ -126,12 +160,34 @@ function createHarness(
     // Stands in for a reconnect or agent switch landing while a confirm is open.
     retireScope: () => {
       current = false;
+      abortController.abort();
+    },
+    // Stands in for the next beginSessionMutation() a reconnect issues.
+    renewScope: () => {
+      current = true;
+      abortController = new AbortController();
+      scope.signal = abortController.signal;
     },
     scope,
   };
 }
 
 describe("patchSessionRows", () => {
+  it("binds Mark as read to the current session identity", async () => {
+    const row = sessionRow(0);
+    const harness = createHarness();
+
+    await expect(patchSession(harness.host, row, { unread: false }, harness.scope)).resolves.toBe(
+      "completed",
+    );
+
+    expect(harness.patch).toHaveBeenCalledWith(
+      row.key,
+      { unread: false },
+      { agentId: "main", expectedSessionId: row.sessionId },
+    );
+  });
+
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {
     const harness = createHarness();
     const rows = Array.from({ length: 101 }, (_, index) => sessionRow(index));
@@ -192,6 +248,41 @@ describe("patchSessionRows", () => {
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
   });
 
+  it.each([{ unread: false }, { unread: true }, { category: "Projects" }, { pinned: true }])(
+    "preserves captured identities for metadata patch %j",
+    async (patch) => {
+      const rows = [sessionRow(0), sessionRow(1)];
+      const harness = createHarness();
+
+      await patchSessionRows(harness.host, rows, patch, harness.scope);
+
+      expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+        targets: rows.map((row) => ({
+          key: row.key,
+          agentId: "main",
+          expectedSessionId: row.sessionId,
+        })),
+        patch,
+      });
+    },
+  );
+
+  it("keeps batch read identity independent of the unread acknowledgement capability", async () => {
+    const rows = [sessionRow(0), sessionRow(1)];
+    const harness = createHarness({ capabilities: [] });
+
+    await patchSessionRows(harness.host, rows, { unread: false }, harness.scope);
+
+    expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+      targets: rows.map((row) => ({
+        key: row.key,
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      })),
+      patch: { unread: false },
+    });
+  });
+
   it("sends no requests or refresh when the mutation scope is already stale", async () => {
     const harness = createHarness({ current: false });
 
@@ -249,15 +340,10 @@ describe("patchSessionRows", () => {
   });
 
   it.each([true, false])(
-    "uses the supplied fallback for a metadata-less legacy rejection with archived=%s",
+    "uses the supplied fallback when patchMany is not advertised with archived=%s",
     async (archived) => {
-      const rejection = new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "unknown method: sessions.patchMany",
-      });
       const harness = createHarness({
-        methods: null,
-        requestFailure: { at: 1, error: rejection },
+        methods: ["sessions.patch"],
       });
       const rows = [sessionRow(0)];
       const fallbackRows = [sessionRow(1)];
@@ -267,23 +353,7 @@ describe("patchSessionRows", () => {
         patchSessionRows(harness.host, rows, { archived }, harness.scope, { fallback }),
       ).resolves.toBe(fallbackRows);
 
-      expect(harness.request).toHaveBeenCalledOnce();
-      const requestCall = harness.request.mock.calls[0]!;
-      expect(requestCall.slice(0, 2)).toEqual([
-        "sessions.patchMany",
-        {
-          targets: [
-            {
-              key: rows[0]!.key,
-              agentId: "main",
-              expectedSessionId: rows[0]!.sessionId,
-            },
-          ],
-          patch: { archived },
-        },
-      ]);
-      expect(requestCall).toHaveLength(archived ? 3 : 2);
-      expect(requestCall[2]).toEqual(archived ? { timeoutMs: 10 * 60_000 } : undefined);
+      expect(harness.request).not.toHaveBeenCalled();
       expect(fallback).toHaveBeenCalledOnce();
       expect(harness.refreshReplacement).not.toHaveBeenCalled();
       expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
@@ -296,7 +366,6 @@ describe("patchSessionRows", () => {
       message: "invalid archive request",
     });
     const harness = createHarness({
-      methods: null,
       requestFailure: { at: 1, error: rejection },
     });
     const fallback = vi.fn(async () => [sessionRow(1)]);
@@ -316,7 +385,6 @@ describe("patchSessionRows", () => {
   it("does not fallback for transport unavailability", async () => {
     const rejection = new GatewayRequestError({ code: "UNAVAILABLE", message: "disconnected" });
     const harness = createHarness({
-      methods: null,
       requestFailure: { at: 1, error: rejection },
     });
     const fallback = vi.fn(async () => [sessionRow(1)]);
@@ -347,6 +415,21 @@ describe("patchSessionRows", () => {
       harness.scope,
       "Connect to the Gateway to change sessions.",
     );
+  });
+
+  it("does not fallback when method metadata is missing", async () => {
+    const harness = createHarness({ methods: null });
+    const fallback = vi.fn(async () => [sessionRow(1)]);
+
+    await expect(
+      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope, {
+        fallback,
+      }),
+    ).resolves.toBeNull();
+
+    expect(fallback).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledOnce();
   });
 
   it("does not fallback after an earlier chunk succeeds", async () => {
@@ -394,7 +477,7 @@ describe("patchSessionRows", () => {
 type OperationsHarness = ReturnType<typeof createHarness>;
 
 const destructiveHarness = {
-  methods: ["sessions.delete", "sessions.reclaim"],
+  methods: ["sessions.delete", "sessions.reclaim", "sessions.groups.delete"],
   scopes: ["operator.write", "operator.admin"],
 };
 
@@ -402,7 +485,11 @@ function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
   return {
     ...sessionRow(0),
     hasActiveRun,
-    cloudWorkerStopAction: { method: "sessions.reclaim", requiredScope: "operator.admin" },
+    cloudWorkerStopAction: {
+      method: "sessions.reclaim",
+      requiredScope: "operator.write",
+      blocksActiveRun: true,
+    },
   } as SidebarRecentSession;
 }
 
@@ -412,17 +499,26 @@ const destructiveOperations = [
     run: (harness: OperationsHarness) =>
       deleteSessionsBatch(harness.host, [sessionRow(0), sessionRow(1)], harness.scope),
     mutation: (harness: OperationsHarness) => harness.deleteMany,
+    staleMessage: t("sessionsView.deleteSessionsStale", { count: "2" }),
   },
   {
     name: "session delete",
     run: (harness: OperationsHarness) => deleteSession(harness.host, sessionRow(0), harness.scope),
     mutation: (harness: OperationsHarness) => harness.deleteOne,
+    staleMessage: t("sessionsView.deleteSessionStale", { session: sessionRow(0).label }),
   },
   {
     name: "cloud worker stop",
     run: (harness: OperationsHarness) =>
       stopCloudWorker(harness.host, cloudWorkerRow(false), harness.scope),
     mutation: (harness: OperationsHarness) => harness.request,
+    staleMessage: t("sessionsView.stopCloudWorkerStale", { session: cloudWorkerRow(false).label }),
+  },
+  {
+    name: "session-group delete",
+    run: (harness: OperationsHarness) => deleteSessionGroup(harness.host, "Group A", harness.scope),
+    mutation: (harness: OperationsHarness) => harness.groupsDelete,
+    staleMessage: t("sessionsView.deleteGroupStale", { group: "Group A" }),
   },
 ] as const;
 
@@ -431,6 +527,7 @@ describe("session organizer destructive confirmations", () => {
 
   beforeEach(() => {
     restoreDialogPolyfill = installDialogPolyfill();
+    vi.mocked(showToast).mockClear();
   });
 
   afterEach(() => {
@@ -442,6 +539,20 @@ describe("session organizer destructive confirmations", () => {
   it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {
     const harness = createHarness(destructiveHarness);
     const rows = [sessionRow(0), sessionRow(1)];
+    const retryError = `Session ${rows[0]!.key} changed before deletion. Retry.`;
+    harness.deleteMany.mockResolvedValueOnce({
+      deleted: [rows[1]!.key],
+      errors: [retryError],
+      preservedWorktrees: [
+        {
+          id: "wt-busy",
+          branch: "openclaw/busy",
+          path: "/worktrees/busy",
+          reason: "busy",
+        },
+      ],
+    });
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
 
     const pending = deleteSessionsBatch(harness.host, rows, harness.scope);
     const actions = await waitForConfirmDialogActions();
@@ -452,9 +563,25 @@ describe("session organizer destructive confirmations", () => {
     await pending;
 
     expect(harness.deleteMany).toHaveBeenCalledWith([
-      { key: rows[0]!.key, agentId: "main", deleteTranscript: true },
-      { key: rows[1]!.key, agentId: "main", deleteTranscript: true },
+      {
+        key: rows[0]!.key,
+        agentId: "main",
+        deleteTranscript: true,
+        expectedSessionId: rows[0]!.sessionId,
+      },
+      {
+        key: rows[1]!.key,
+        agentId: "main",
+        deleteTranscript: true,
+        expectedSessionId: rows[1]!.sessionId,
+      },
     ]);
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, retryError);
+    expect(retryError).not.toContain("GatewayRequestError");
+    expect(alertSpy).toHaveBeenCalledWith(
+      "Managed Worktrees:\nopenclaw/busy — live run or cleanup active",
+    );
+    alertSpy.mockRestore();
   });
 
   it.each(destructiveOperations)("sends no $name request when cancelled", async (operation) => {
@@ -466,20 +593,38 @@ describe("session organizer destructive confirmations", () => {
 
     expect(operation.mutation(harness)).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
+    // An ordinary cancel is expected UX and needs no announcement; only a
+    // reconnect-driven abort earns the retry notice below.
+    expect(showToast).not.toHaveBeenCalled();
   });
 
   it.each(destructiveOperations)(
-    "abandons the $name when the connection is replaced while its confirm is open",
+    "aborts the $name confirm and releases the lock for a fresh one when the connection is replaced while it is open",
     async (operation) => {
       const harness = createHarness(destructiveHarness);
 
       const pending = operation.run(harness);
-      const actions = await waitForConfirmDialogActions();
+      await waitForConfirmDialogActions();
       harness.retireScope();
-      answerConfirmDialog(actions, "confirm");
       await pending;
 
       expect(operation.mutation(harness)).not.toHaveBeenCalled();
+      // The stale dialog must dismiss itself, not merely stop sending its request.
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      // The abort resolves the dialog to `false`, same as a user cancel, so the
+      // operator needs a distinct, visible outcome or their lost intent reads
+      // as a click that simply did nothing.
+      expect(showToast).toHaveBeenCalledWith({ message: operation.staleMessage });
+
+      // A fresh confirmation (the reconnect's own retry) must be able to open
+      // immediately; a stale dialog holding the shared lock would block it.
+      harness.renewScope();
+      const reopened = operation.run(harness);
+      const freshActions = await waitForConfirmDialogActions();
+      answerConfirmDialog(freshActions, "confirm");
+      await reopened;
+
+      expect(operation.mutation(harness)).toHaveBeenCalledOnce();
     },
   );
 
@@ -490,7 +635,12 @@ describe("session organizer destructive confirmations", () => {
     });
     harness.deleteOne.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "cleanup-failed",
+      },
     } as never);
     const active = { ...sessionRow(0), active: true } as SidebarRecentSession;
 
@@ -503,6 +653,49 @@ describe("session organizer destructive confirmations", () => {
 
     expect(harness.request).not.toHaveBeenCalled();
     expect(harness.replaceCurrentSession).not.toHaveBeenCalled();
+    // The session delete already landed; the worktree just stays put, same as
+    // the no-access branch, so the operator learns where it went.
+    expect(showToast).toHaveBeenCalledWith({
+      message: "Managed Worktrees:\nfeature — cleanup failed",
+    });
+  });
+
+  it("surfaces a forced worktree removal that could not create a snapshot", async () => {
+    const harness = createHarness({
+      ...destructiveHarness,
+      methods: [...destructiveHarness.methods, "worktrees.remove"],
+    });
+    harness.deleteOne.mockResolvedValueOnce({
+      deleted: true,
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "snapshot-failed",
+      },
+    } as never);
+    harness.request.mockResolvedValueOnce({
+      removed: true,
+      snapshotError: "nested gitlink",
+    } as never);
+
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    const worktreeActions = await waitForConfirmDialogActions();
+    expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      "OpenClaw could not create a safety snapshot",
+    );
+    answerConfirmDialog(worktreeActions, "confirm");
+    await pending;
+
+    expect(harness.request).toHaveBeenCalledWith("worktrees.remove", {
+      id: "wt-1",
+      force: true,
+    });
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      "nested gitlink",
+    );
   });
 
   it("skips the delete confirm entirely once the operator opted out", async () => {
@@ -512,7 +705,11 @@ describe("session organizer destructive confirmations", () => {
     await deleteSession(harness.host, sessionRow(0), harness.scope, { offerSkip: true });
 
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(harness.deleteOne).toHaveBeenCalledOnce();
+    expect(harness.deleteOne).toHaveBeenCalledWith(sessionRow(0).key, {
+      agentId: "main",
+      deleteTranscript: true,
+      expectedSessionId: sessionRow(0).sessionId,
+    });
   });
 
   it("asks again after the preference is reset", async () => {
@@ -540,7 +737,12 @@ describe("session organizer destructive confirmations", () => {
       run: (harness: OperationsHarness) => {
         harness.deleteOne.mockResolvedValueOnce({
           deleted: true,
-          worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+          worktreePreserved: {
+            id: "wt-1",
+            branch: "feature",
+            path: "/tmp/worktree",
+            reason: "foreign-lock",
+          },
         } as never);
         return deleteSession(harness.host, sessionRow(0), harness.scope);
       },

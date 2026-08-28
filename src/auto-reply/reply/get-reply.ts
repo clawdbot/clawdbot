@@ -1,6 +1,7 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
@@ -37,6 +38,7 @@ import {
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   sessionDeliveryChannel,
@@ -50,6 +52,7 @@ import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
+import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
@@ -88,10 +91,7 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
-import {
-  isStaleHeartbeatAutoFallbackOverride,
-  resolveStoredModelOverride,
-} from "./stored-model-override.js";
+import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
@@ -110,10 +110,6 @@ function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number
     shouldClear: stripped.shouldSkip,
     replayText: stripped.didStrip && stripped.text ? stripped.text : text,
   };
-}
-
-function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _agentId: string): number {
-  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
@@ -343,6 +339,16 @@ export async function getReplyFromConfig(
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
+  // Resolve legacy text-slash source lanes before any session-scoped work.
+  // The explicit steer command itself still flows through normal command and
+  // prepared-reply handling; this only gives that path the active owner's key.
+  const explicitSteerTargetSessionKey = resolverTiming.measureSync(
+    "reply.resolve_explicit_steer_target",
+    () => resolveActiveExplicitSteerSessionKey({ cfg, ctx: finalized }),
+  );
+  if (explicitSteerTargetSessionKey) {
+    finalized.CommandTargetSessionKey = explicitSteerTargetSessionKey;
+  }
   const initialAgentScope = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
     const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
     const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;
@@ -436,6 +442,8 @@ export async function getReplyFromConfig(
       "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
+          cfg,
+          agentId,
           raw: heartbeatRaw,
           defaultProvider,
           aliasIndex,
@@ -505,6 +513,23 @@ export async function getReplyFromConfig(
     logResolverTiming("completed", "native_slash_command_fast_path");
     return nativeSlashCommandFastReply.reply;
   }
+  const optsWithCommandQueueOverride = nativeSlashCommandFastReply.queueModeOverride
+    ? { ...optsWithSkillFilter, queueModeOverride: nativeSlashCommandFastReply.queueModeOverride }
+    : optsWithSkillFilter;
+
+  const acpWorkspaceProvisioningInput = isImplicitAcpWorkspaceCandidate(cfg, agentId)
+    ? await traceGetReplyPhase("reply.resolve_acp_workspace_provisioning", async () => {
+        // Implicit ACP agents need the live session's ACP meta (per-session cwd
+        // from /acp spawn --cwd or /acp cwd) before workspace scaffolding runs.
+        const state = resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
+        return {
+          cfg,
+          agentId,
+          sessionKey: state.sessionKey,
+          ...(state.sessionEntry ? { sessionEntry: state.sessionEntry } : {}),
+        };
+      })
+    : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
 
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
     useFastTestBootstrap
@@ -513,6 +538,9 @@ export async function getReplyFromConfig(
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+          provisioning: await (
+            await import("../../agents/acp-workspace-provisioning.js")
+          ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
         }),
   );
   const workspaceDir = workspace.dir;
@@ -606,6 +634,7 @@ export async function getReplyFromConfig(
               : {}),
             pinExpectedExistingSession:
               internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
+            newlyCreatedSessionId: internalOptsWithSkillFilter?.newlyCreatedSessionId,
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
             signal: internalOptsWithSkillFilter?.abortSignal,
@@ -636,6 +665,9 @@ export async function getReplyFromConfig(
       sessionState.sessionEntryHandle.replaceCurrent(baselineEntry);
       sessionState.sessionStore[sessionState.sessionKey] = baselineEntry;
     } catch (error) {
+      if (isSessionWorkStartInvalidatedError(error)) {
+        throw error;
+      }
       logVerbose(
         `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
       );
@@ -671,8 +703,8 @@ export async function getReplyFromConfig(
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
   const optsWithSessionSkillOverrides = sessionEntry.toolOverrides?.skills
-    ? { ...optsWithSkillFilter, skillOverrides: sessionEntry.toolOverrides.skills }
-    : optsWithSkillFilter;
+    ? { ...optsWithCommandQueueOverride, skillOverrides: sessionEntry.toolOverrides.skills }
+    : optsWithCommandQueueOverride;
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
@@ -697,7 +729,7 @@ export async function getReplyFromConfig(
     if (opts?.isHeartbeat) {
       const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
         text,
-        resolveHeartbeatAckMaxChars(cfg, agentId),
+        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
       );
       if (heartbeatPending.shouldClear) {
         Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
@@ -783,6 +815,8 @@ export async function getReplyFromConfig(
   const resolvedChannelModelOverride =
     channelModelOverride && !hasResolvedHeartbeatModelOverride && !sessionModelSelectionLocked
       ? resolveModelRefFromString({
+          cfg,
+          agentId,
           raw: channelModelOverride.model,
           defaultProvider,
           aliasIndex,
@@ -841,13 +875,13 @@ export async function getReplyFromConfig(
         primaryModel,
       })
     : undefined;
-  const hasEffectiveSessionModelOverride =
-    hasSessionModelOverride &&
+  const hasEffectiveStoredModelOverride =
+    Boolean(storedModelOverride || hasSessionModelOverride) &&
     !staleHeartbeatAutoFallbackOverride &&
     !staleLegacyAutoFallbackWithoutOrigin;
   if (
     !hasResolvedHeartbeatModelOverride &&
-    !hasEffectiveSessionModelOverride &&
+    !hasEffectiveStoredModelOverride &&
     resolvedChannelModelOverride
   ) {
     provider = resolvedChannelModelOverride.ref.provider;
@@ -1111,6 +1145,8 @@ export async function getReplyFromConfig(
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
+  const queueModeOverride = inlineActionResult.queueModeOverride;
+  const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
@@ -1274,7 +1310,7 @@ export async function getReplyFromConfig(
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,
-      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+      opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
       defaultModel,
       timeoutMs,
       isNewSession,

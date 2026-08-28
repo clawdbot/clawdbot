@@ -1,6 +1,33 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
+export type UpstreamProviderCatalogModel = Record<string, unknown> & {
+  id: string;
+  limit: Record<string, unknown> & { context: number; output: number };
+};
+
+export type UpstreamProviderCatalog = {
+  id: string;
+  api?: string;
+  npm?: string;
+  models: Record<string, UpstreamProviderCatalogModel>;
+};
+
+export type ProjectedUpstreamProviderCatalogModel = ModelDefinitionConfig & {
+  provider: string;
+  api: NonNullable<ModelDefinitionConfig["api"]>;
+  baseUrl: string;
+  input: Array<"text" | "image">;
+};
+
+export function readLiveModelCatalogId(row: unknown): string | undefined {
+  const record = readLiveModelCatalogRecord(row);
+  if (record?.object !== undefined && record.object !== "model") {
+    return undefined;
+  }
+  return readLiveModelCatalogStringField(record, "id");
+}
+
 export function readLiveModelCatalogRecord(body: unknown): Record<string, unknown> | undefined {
   return asOptionalRecord(body);
 }
@@ -45,6 +72,18 @@ export function readLiveModelCatalogPositiveSafeIntegerField(
     }
   }
   return undefined;
+}
+
+export function isUpstreamProviderCatalogModel(
+  value: unknown,
+): value is UpstreamProviderCatalogModel {
+  const model = readLiveModelCatalogRecord(value);
+  const limits = readLiveModelCatalogRecord(model?.limit);
+  return Boolean(
+    readLiveModelCatalogStringField(model, "id") &&
+    readLiveModelCatalogPositiveSafeIntegerField(limits, "context") &&
+    readLiveModelCatalogPositiveSafeIntegerField(limits, "output"),
+  );
 }
 
 function readLiveModelPositiveIntegerFromRecords(
@@ -182,6 +221,26 @@ function inferLiveModelReasoning(modelId: string): boolean {
   );
 }
 
+function readLiveModelContextWindow(
+  records: readonly (Record<string, unknown> | undefined)[],
+): number | undefined {
+  return readLiveModelPositiveIntegerFromRecords(records, [
+    "context_window",
+    "contextWindow",
+    "context_length",
+    "contextLength",
+    "context_size",
+    "contextSize",
+    "max_context_length",
+    "maxModelLen",
+    "max_model_len",
+    // Anthropic names the context window by its input side. Appended so a
+    // provider already matching an earlier key keeps its current value.
+    "max_input_tokens",
+    "maxInputTokens",
+  ]);
+}
+
 function buildOpenAICompatibleLiveModel(
   row: unknown,
   fallback: ModelProviderConfig,
@@ -214,7 +273,10 @@ function buildOpenAICompatibleLiveModel(
 
   const exact = fallback.models.find((model) => model.id === id);
   if (exact) {
-    return exact;
+    const liveContextWindow = readLiveModelContextWindow([record, ...nestedRecords]);
+    return exact.contextWindow === undefined && liveContextWindow !== undefined
+      ? { ...exact, contextWindow: liveContextWindow }
+      : exact;
   }
   // Manifest-published ids returned above are known-good. Everything past this
   // point is a model the manifest has never described, so an opted-in provider
@@ -229,27 +291,7 @@ function buildOpenAICompatibleLiveModel(
     ["input_modalities", "inputModalities", "input"],
   );
   const contextWindow =
-    readLiveModelPositiveIntegerFromRecords(
-      [record, topProvider, capabilities, modelInfo],
-      [
-        "context_window",
-        "contextWindow",
-        "context_length",
-        "contextLength",
-        "context_size",
-        "contextSize",
-        "max_context_length",
-        "maxModelLen",
-        "max_model_len",
-        // Anthropic names the context window by its input side. Appended so a
-        // provider already matching an earlier key keeps its current value.
-        "max_input_tokens",
-        "maxInputTokens",
-      ],
-    ) ??
-    fallback.contextWindow ??
-    template?.contextWindow ??
-    128_000;
+    readLiveModelContextWindow([record, ...nestedRecords]) ?? template?.contextWindow ?? 128_000;
   const maxTokens =
     readLiveModelPositiveIntegerFromRecords(
       [record, topProvider, capabilities, modelInfo],
@@ -314,4 +356,170 @@ export function buildOpenAICompatibleLiveModels(
   return [...new Map(models.map((model) => [model.id, model])).values()].toSorted((a, b) =>
     a.id.localeCompare(b.id),
   );
+}
+
+function readUpstreamProviderCatalogCostValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function readUpstreamProviderCatalogCost(rawCost: Record<string, unknown> | undefined) {
+  return {
+    input: readUpstreamProviderCatalogCostValue(rawCost?.input),
+    output: readUpstreamProviderCatalogCostValue(rawCost?.output),
+    cacheRead: readUpstreamProviderCatalogCostValue(rawCost?.cache_read),
+    cacheWrite: readUpstreamProviderCatalogCostValue(rawCost?.cache_write),
+  };
+}
+
+function buildUpstreamProviderCatalogCost(value: unknown): ModelDefinitionConfig["cost"] {
+  const rawCost = readLiveModelCatalogRecord(value);
+  const cost = readUpstreamProviderCatalogCost(rawCost);
+  const upstreamTiers = (Array.isArray(rawCost?.tiers) ? rawCost.tiers : [])
+    .flatMap((rawTier) => {
+      const row = readLiveModelCatalogRecord(rawTier);
+      const tier = readLiveModelCatalogRecord(row?.tier);
+      const size = readLiveModelCatalogPositiveSafeIntegerField(tier, "size");
+      return tier?.type === "context" && size
+        ? [{ size, cost: readUpstreamProviderCatalogCost(row) }]
+        : [];
+    })
+    .toSorted((left, right) => left.size - right.size);
+  const legacyCost = readLiveModelCatalogRecord(rawCost?.context_over_200k);
+  if (upstreamTiers.length === 0 && legacyCost) {
+    upstreamTiers.push({ size: 200_000, cost: readUpstreamProviderCatalogCost(legacyCost) });
+  }
+  const firstTier = upstreamTiers[0];
+  if (!firstTier) {
+    return cost;
+  }
+  const tieredPricing: NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]> = [
+    { ...cost, range: [0, firstTier.size] },
+  ];
+  for (const [index, tier] of upstreamTiers.entries()) {
+    const nextThreshold = upstreamTiers[index + 1]?.size;
+    tieredPricing.push({
+      ...tier.cost,
+      range: nextThreshold ? [tier.size, nextThreshold] : [tier.size],
+    });
+  }
+  return { ...cost, tieredPricing };
+}
+
+function parseUpstreamProviderCatalogUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+const UPSTREAM_PROVIDER_API_BY_PACKAGE = new Map<
+  string,
+  ProjectedUpstreamProviderCatalogModel["api"]
+>([
+  ["@ai-sdk/anthropic", "anthropic-messages"],
+  ["@ai-sdk/google", "google-generative-ai"],
+  ["@ai-sdk/openai", "openai-responses"],
+  ["@ai-sdk/openai-compatible", "openai-completions"],
+]);
+
+/** Projects authoritative provider-owned model metadata into its runtime transport and capabilities. */
+export function projectUpstreamProviderCatalogModel(params: {
+  providerId: string;
+  provider: UpstreamProviderCatalog;
+  model: UpstreamProviderCatalogModel | undefined;
+  anthropicBaseUrl?: string;
+  defaultBaseUrl?: string;
+}): ProjectedUpstreamProviderCatalogModel | undefined {
+  const model = readLiveModelCatalogRecord(params.model);
+  const limit = readLiveModelCatalogRecord(model?.limit);
+  const id = readLiveModelCatalogStringField(model, "id");
+  const contextWindow = readLiveModelCatalogPositiveSafeIntegerField(limit, "context");
+  const maxTokens = readLiveModelCatalogPositiveSafeIntegerField(limit, "output");
+  if (!model || !id || !contextWindow || !maxTokens) {
+    return undefined;
+  }
+
+  const modelProvider = readLiveModelCatalogRecord(model.provider);
+  const npm =
+    readLiveModelCatalogStringField(modelProvider, "npm") ??
+    params.provider.npm ??
+    "@ai-sdk/openai-compatible";
+  const api = UPSTREAM_PROVIDER_API_BY_PACKAGE.get(npm);
+  if (!api) {
+    return undefined;
+  }
+  const canonicalBaseUrl = params.defaultBaseUrl ?? params.provider.api;
+  const canonicalOrigin = canonicalBaseUrl
+    ? parseUpstreamProviderCatalogUrl(canonicalBaseUrl)?.origin
+    : undefined;
+  const providerBaseUrl = params.provider.api ?? params.defaultBaseUrl;
+  const modelBaseUrl = readLiveModelCatalogStringField(modelProvider, "api");
+  if (
+    !canonicalOrigin ||
+    (providerBaseUrl &&
+      parseUpstreamProviderCatalogUrl(providerBaseUrl)?.origin !== canonicalOrigin) ||
+    (modelBaseUrl && parseUpstreamProviderCatalogUrl(modelBaseUrl)?.origin !== canonicalOrigin)
+  ) {
+    // Metadata chooses transport, but must never redirect authenticated inference
+    // away from the provider endpoint trusted by its owner plugin.
+    return undefined;
+  }
+  const upstreamBaseUrl = modelBaseUrl ?? providerBaseUrl;
+  const baseUrl =
+    api === "anthropic-messages"
+      ? (params.anthropicBaseUrl ?? upstreamBaseUrl?.replace(/\/v1\/?$/, ""))
+      : upstreamBaseUrl;
+  if (!baseUrl || parseUpstreamProviderCatalogUrl(baseUrl)?.origin !== canonicalOrigin) {
+    return undefined;
+  }
+
+  const modalities = readLiveModelCatalogRecord(model.modalities);
+  const input: ProjectedUpstreamProviderCatalogModel["input"] = ["text"];
+  if (Array.isArray(modalities?.input) && modalities.input.includes("image")) {
+    input.push("image");
+  }
+  const reasoningOptions = Array.isArray(model.reasoning_options) ? model.reasoning_options : [];
+  const reasoningEfforts = [
+    ...new Set(
+      reasoningOptions.flatMap((option) => {
+        const record = readLiveModelCatalogRecord(option);
+        return record?.type === "effort" && Array.isArray(record.values)
+          ? record.values.filter(
+              (value): value is string => typeof value === "string" && Boolean(value),
+            )
+          : [];
+      }),
+    ),
+  ];
+  const contextTokens = readLiveModelCatalogPositiveSafeIntegerField(limit, "input");
+  return {
+    id,
+    name: readLiveModelCatalogStringField(model, "name") ?? id,
+    provider: params.providerId,
+    api,
+    baseUrl,
+    reasoning: readLiveModelCatalogBooleanField(model, "reasoning") ?? false,
+    input,
+    cost: buildUpstreamProviderCatalogCost(model.cost),
+    contextWindow,
+    ...(contextTokens && contextTokens <= contextWindow ? { contextTokens } : {}),
+    maxTokens,
+    ...(api === "openai-responses" &&
+    reasoningEfforts.length > 0 &&
+    !reasoningEfforts.includes("none")
+      ? { thinkingLevelMap: { off: null } }
+      : {}),
+    compat: {
+      supportsUsageInStreaming: true,
+      maxTokensField: "max_tokens",
+      ...(typeof model.tool_call === "boolean" ? { supportsTools: model.tool_call } : {}),
+      ...(reasoningEfforts.length > 0
+        ? { supportsReasoningEffort: true, supportedReasoningEfforts: reasoningEfforts }
+        : {}),
+      ...(api === "openai-completions"
+        ? { supportsDeveloperRole: false, supportsStrictMode: false }
+        : {}),
+    },
+  };
 }

@@ -1,0 +1,587 @@
+/* Queued turns sit behind the composer's rounded top edge. The inset keeps the
+   queue visibly subordinate; only its protected bottom space may underlap. */
+.agent-chat__composer-shell {
+  --chat-queue-divider: color-mix(in srgb, var(--text-strong) 6%, transparent);
+  --chat-stack-icon-size: 14px;
+  --chat-stack-leading-inset: 13px;
+  --chat-stack-trailing-control-size: 24px;
+  --chat-stack-trailing-inset: 8px;
+}
+
+.chat-queue {
+  --chat-queue-underlap: 18px;
+  --chat-queue-row-height: 42px;
+  --chat-queue-hairline: color-mix(in srgb, var(--text-strong) 16%, transparent);
+
+  position: relative;
+  z-index: 0;
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  margin-inline: 0;
+  margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-queue-underlap));
+  padding-bottom: 0;
+  overflow: hidden;
+  border: 1px solid var(--chat-queue-hairline);
+  border-bottom: 0;
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale))
+    calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
+  corner-shape: superellipse(1.5);
+  background: var(--composer-attached-surface, var(--chat-composer-surface));
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.chat-queue + .agent-chat__goal-float .agent-chat__goal {
+  border-top: 1px solid var(--chat-queue-divider);
+  border-radius: 0;
+}
+
+.chat-queue + .agent-chat__goal-float,
+.chat-queue + :is(.agent-chat__composer-errors, .agent-chat__input),
+.agent-chat__progress-float + .chat-queue {
+  position: relative;
+  z-index: 1;
+}
+
+.chat-queue__scroll {
+  box-sizing: border-box;
+  min-width: 0;
+  padding-bottom: var(--chat-queue-underlap);
+  overflow: hidden;
+  scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.chat-queue__global-state {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--chat-queue-divider);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.chat-queue__scroll[data-scrollable="true"] {
+  height: calc(3.55 * var(--chat-queue-row-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-queue__scroll[data-scrollable="true"][data-at-start="true"][data-at-end="false"] {
+  mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0) 0,
+    rgb(0 0 0) calc(100% - 22px),
+    transparent 100%
+  );
+}
+
+.chat-queue__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="true"] {
+  mask-image: linear-gradient(to bottom, transparent 0, rgb(0 0 0) 16px, rgb(0 0 0) 100%);
+}
+
+.chat-queue__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    rgb(0 0 0) 16px,
+    rgb(0 0 0) calc(100% - 22px),
+    transparent 100%
+  );
+}
+
+.chat-queue__scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.chat-queue__scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-queue__scroll::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 34%, transparent);
+}
+
+:root[data-theme-mode="dark"] .chat-queue {
+  --chat-queue-hairline: color-mix(in srgb, var(--text-strong) 9%, transparent);
+}
+
+:root[data-theme-mode="light"] .chat-queue {
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 6%),
+    0 1px 2px -1px rgb(0 0 0 / 6%),
+    0 2px 4px rgb(0 0 0 / 4%);
+}
+
+.chat-queue__item {
+  --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--chat-stack-icon-size) 20px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  min-height: var(--chat-queue-row-height);
+  padding: 6px var(--chat-stack-trailing-inset) 6px var(--chat-stack-leading-inset);
+  border-bottom: 1px solid var(--chat-queue-divider);
+  background: var(--chat-queue-row-surface);
+  color: var(--muted);
+}
+
+.chat-queue__item:last-child {
+  border-bottom: 0;
+}
+
+/* The neighboring layer, not the page, paints the rounded cutout exposed by
+   the next card. The final row carries its state surface into the underlap. */
+.chat-queue__item:last-child::after {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: var(--chat-queue-underlap);
+  background: var(--chat-queue-row-surface);
+  content: "";
+}
+
+.chat-queue__item--no-avatar {
+  grid-template-columns: var(--chat-stack-icon-size) minmax(0, 1fr) auto;
+}
+
+.chat-queue__item--in-thread {
+  --chat-stack-icon-size: 14px;
+  --chat-queue-row-height: 28px;
+  --chat-stack-leading-inset: 0px;
+  --chat-stack-trailing-inset: 0px;
+
+  width: fit-content;
+  max-width: 100%;
+  padding-block: 0;
+  border: 0;
+  background: none;
+}
+
+.chat-queue__item--in-thread::after {
+  display: none;
+}
+
+.chat-queue__item--in-thread .chat-queue__copy {
+  display: flex;
+}
+
+.chat-queue__item--in-thread.chat-queue__item--editing {
+  width: 100%;
+}
+
+.chat-group-messages:has(> .chat-queue__item--editing) > .chat-bubble {
+  display: none;
+}
+
+.chat-queue__item--no-avatar .chat-queue__copy,
+.chat-queue__item--no-avatar .chat-queue__edit-input {
+  grid-column: 2;
+}
+
+.chat-queue__item--no-avatar .chat-queue__error {
+  grid-column: 2 / -1;
+}
+
+.chat-queue__item--no-avatar .chat-queue__actions {
+  grid-column: 3;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chat-queue__item:hover:not(.chat-queue__item--editing) {
+    --chat-queue-row-surface: color-mix(
+      in srgb,
+      var(--text-strong) 3%,
+      var(--composer-attached-surface, var(--chat-composer-surface))
+    );
+  }
+}
+
+.chat-queue__item--steered {
+  --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+}
+
+/* The edited row keeps its slot so the operator can see where the corrected
+   message lands. The input owns focus, so the row itself stays neutral. */
+.chat-queue__item--editing {
+  --chat-queue-row-surface: color-mix(
+    in srgb,
+    var(--text-strong) 4%,
+    var(--composer-attached-surface, var(--chat-composer-surface))
+  );
+}
+
+/* Drop target reads as an insertion edge rather than a selected row, so the
+   dragged message clearly lands at this position. */
+.chat-queue__item--drop-target {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+/* The handle owns reordering for both input methods: drag it, or focus it and
+   press the arrow keys. It stays a real button so keyboards can reach it. */
+.chat-queue__grip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  justify-content: center;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: grab;
+  grid-column: 1;
+}
+
+.chat-queue__grip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* Still occupies the handle column so every row's pill and text share one x,
+   and stays visible but dimmer than a live handle: this row is holding its
+   place, not offering a drag. Hover leaves it alone for the same reason. */
+.chat-queue__grip:disabled {
+  cursor: default;
+}
+
+.chat-queue__grip-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-queue__grip-state--active {
+  display: none;
+}
+
+.chat-queue__item:hover .chat-queue__grip:not(:disabled) .chat-queue__grip-state--idle,
+.chat-queue__grip:is(:focus-visible, :active) .chat-queue__grip-state--idle {
+  display: none;
+}
+
+.chat-queue__item:hover .chat-queue__grip:not(:disabled) .chat-queue__grip-state--active,
+.chat-queue__grip:is(:focus-visible, :active) .chat-queue__grip-state--active {
+  display: inline-flex;
+}
+
+.chat-queue__grip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-queue__grip .chat-queue__grip-state--active svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-queue__item--failed {
+  --chat-queue-row-surface: color-mix(
+    in srgb,
+    var(--danger) 8%,
+    var(--composer-attached-surface, var(--chat-composer-surface))
+  );
+}
+
+.chat-queue__leading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 28px;
+  margin-inline: calc((var(--chat-stack-icon-size) - 24px) / 2);
+  color: var(--muted);
+  grid-column: 1;
+}
+
+.chat-queue__leading svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-queue__item--failed .chat-queue__leading {
+  color: var(--danger);
+}
+
+.chat-queue__item--steered .chat-queue__leading {
+  color: var(--accent);
+}
+
+.chat-queue__item > .chat-author-avatar {
+  grid-column: 2;
+}
+
+.chat-queue__badge {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.chat-queue__badge--steered {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+}
+
+.chat-queue__badge--reconnect {
+  padding: 1px 4px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+  line-height: 1.25;
+}
+
+.chat-queue__state {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.chat-queue__item--failed .chat-queue__badge {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.chat-queue__copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px 6px;
+  grid-column: 3;
+  min-width: 0;
+  padding-block: 3px;
+}
+
+.chat-queue__text {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--chat-text);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.chat-queue__edit-input {
+  box-sizing: border-box;
+  grid-column: 3;
+  min-width: 0;
+  min-height: 26px;
+  max-height: calc(5 * 1.4em + 10px);
+  margin: -1px 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--text-strong) 18%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--chat-text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-y: hidden;
+  resize: none;
+}
+
+.chat-queue__edit-input:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* Wraps onto its own flex line below the row (see renderChatQueueItem). */
+.chat-queue__error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  grid-column: 3 / -1;
+  min-width: 0;
+  padding: 0 0 2px;
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.chat-queue__error-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-queue__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  grid-column: 4;
+  white-space: nowrap;
+}
+
+.chat-queue__action,
+.chat-queue__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 4px 7px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: var(--cursor-action);
+}
+
+.chat-queue__action svg,
+.chat-queue__retry svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-queue__action:hover:not(:disabled),
+.chat-queue__retry:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.chat-queue__steer {
+  border-radius: var(--radius-full);
+}
+
+.chat-queue__steer:hover:not(:disabled) {
+  background: transparent;
+  color: color-mix(in srgb, var(--accent) 84%, var(--text));
+}
+
+.chat-queue__action:disabled {
+  color: color-mix(in srgb, var(--muted) 48%, transparent);
+  cursor: default;
+}
+
+.chat-queue__remove,
+.chat-queue__more,
+.chat-queue__edit-submit,
+.chat-queue__edit-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+/* Inert instead of removed: an open edit keeps every action slot in place so the
+   rows below it never shift while the operator retypes. */
+.chat-queue__remove:disabled,
+.chat-queue__more:disabled,
+.chat-queue__edit-submit:disabled,
+.chat-queue__edit-cancel:disabled {
+  color: color-mix(in srgb, var(--muted) 34%, transparent);
+  cursor: default;
+}
+
+.chat-queue__remove:hover:not(:disabled),
+.chat-queue__more:hover:not(:disabled),
+.chat-queue__edit-submit:hover:not(:disabled),
+.chat-queue__edit-cancel:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.chat-queue__remove svg,
+.chat-queue__edit-submit svg,
+.chat-queue__edit-cancel svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-queue__more svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-queue__overflow::part(panel) {
+  width: 132px;
+  min-width: 132px;
+}
+
+.chat-queue__overflow wa-dropdown-item {
+  width: 100%;
+  font-size: 12px;
+}
+
+.chat-queue__overflow wa-dropdown-item::part(base) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 8px;
+}
+
+.chat-queue__overflow wa-dropdown-item span[slot="icon"] {
+  display: inline-flex;
+}
+
+.chat-queue__overflow wa-dropdown-item svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 560px) {
+  .chat-queue__item {
+    grid-template-columns: var(--chat-stack-icon-size) 18px minmax(0, 1fr) auto;
+    column-gap: 6px;
+    padding-inline: var(--chat-stack-leading-inset) var(--chat-stack-trailing-inset);
+  }
+
+  .chat-queue__item--no-avatar {
+    grid-template-columns: var(--chat-stack-icon-size) minmax(0, 1fr) auto;
+  }
+
+  .chat-queue__retry span {
+    display: none;
+  }
+
+  .chat-queue__text {
+    -webkit-line-clamp: 1;
+  }
+}

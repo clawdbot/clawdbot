@@ -4,12 +4,8 @@ import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearEmbeddingProviders,
-  clearMemoryEmbeddingProviders,
-  getActivePluginRegistry,
   listRegisteredEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
   restoreRegisteredEmbeddingProviders,
-  restoreRegisteredMemoryEmbeddingProviders,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEmbeddingProvider } from "./embeddings.js";
@@ -29,10 +25,6 @@ type TestServer = {
 
 const servers: TestServer[] = [];
 let registeredEmbeddingProvidersSnapshot: ReturnType<typeof listRegisteredEmbeddingProviders>;
-let registeredMemoryEmbeddingProvidersSnapshot: ReturnType<
-  typeof listRegisteredMemoryEmbeddingProviders
->;
-let restoreActiveMemoryEmbeddingProviders: (() => void) | undefined;
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -118,7 +110,7 @@ function createMemoryEmbeddingOptions(overrides?: {
       baseUrl: overrides?.baseUrl,
       apiKey: "fixture-token",
       headers: {
-        Authorization: "Bearer ignored",
+        Authorization: "Bearer destination-header",
         "x-api-key": "hidden",
         "x-deployment": "tenant-a",
       },
@@ -129,35 +121,19 @@ function createMemoryEmbeddingOptions(overrides?: {
 
 beforeEach(() => {
   registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
-  registeredMemoryEmbeddingProvidersSnapshot = listRegisteredMemoryEmbeddingProviders();
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
-
-  const activeRegistry = getActivePluginRegistry();
-  if (activeRegistry) {
-    const memoryEmbeddingProviders = activeRegistry.memoryEmbeddingProviders;
-    activeRegistry.memoryEmbeddingProviders = [];
-    restoreActiveMemoryEmbeddingProviders = () => {
-      activeRegistry.memoryEmbeddingProviders = memoryEmbeddingProviders;
-    };
-  } else {
-    restoreActiveMemoryEmbeddingProviders = undefined;
-  }
 });
 
 afterEach(async () => {
   const pendingServers = servers.splice(0);
   await Promise.all(pendingServers.map((server) => server.close()));
   restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
-  restoreRegisteredMemoryEmbeddingProviders(registeredMemoryEmbeddingProvidersSnapshot);
-  restoreActiveMemoryEmbeddingProviders?.();
 });
 
-describe("memory-core generic embedding provider bridge", () => {
-  it("uses the core OpenAI-compatible provider through the generic registry and memory bridge", async () => {
+describe("memory-core generic embedding provider contract", () => {
+  it("uses the core OpenAI-compatible provider through the generic registry", async () => {
     const server = await startEmbeddingServer();
 
-    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([]);
     expect(listRegisteredEmbeddingProviders()).toMatchObject([
       {
         ownerPluginId: "core",
@@ -191,18 +167,25 @@ describe("memory-core generic embedding provider bridge", () => {
     });
     expect(server.requests).toHaveLength(0);
 
-    await expect(result.provider?.embedQuery("hello")).resolves.toEqual([5, 0.5, 3]);
-    await expect(result.provider?.embedBatch(["a", "abcd"])).resolves.toEqual([
+    await expect(result.provider?.embed("hello", { inputType: "query" })).resolves.toEqual([
+      5, 0.5, 3,
+    ]);
+    await expect(
+      result.provider?.embedBatch(["a", "abcd"], { inputType: "document" }),
+    ).resolves.toEqual([
       [1, 0.5, 3],
       [4, 1.5, 3],
     ]);
     await expect(
-      result.provider?.embedBatchInputs?.([
-        {
-          text: "structured doc",
-          parts: [{ type: "text", text: "structured doc" }],
-        },
-      ]),
+      result.provider?.embedBatch(
+        [
+          {
+            text: "structured doc",
+            parts: [{ type: "text", text: "structured doc" }],
+          },
+        ],
+        { inputType: "document" },
+      ),
     ).resolves.toEqual([[14, 0.5, 3]]);
 
     expect(server.requests).toHaveLength(3);
@@ -217,7 +200,7 @@ describe("memory-core generic embedding provider bridge", () => {
       },
     });
     expect(server.requests[0]?.body).not.toHaveProperty("encoding_format");
-    expect(server.requests[0]?.headers.authorization).toBe("Bearer fixture-token");
+    expect(server.requests[0]?.headers.authorization).toBe("Bearer destination-header");
     expect(server.requests[0]?.headers["x-api-key"]).toBe("hidden");
     expect(server.requests[0]?.headers["x-deployment"]).toBe("tenant-a");
     expect(server.requests[1]?.body).toEqual({

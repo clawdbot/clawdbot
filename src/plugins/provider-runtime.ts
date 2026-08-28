@@ -16,6 +16,7 @@ import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secre
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { providerUsageLabel } from "../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
@@ -27,7 +28,6 @@ import type {
 } from "./plugin-metadata-snapshot.types.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
-  clearProviderRuntimePluginCacheForTest,
   prepareProviderExtraParams,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
@@ -41,10 +41,12 @@ import {
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface,
+} from "./provider-public-artifacts.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
   resolveCatalogHookProviderPluginIds,
   resolveExternalAuthProfileProviderPluginIds,
@@ -63,11 +65,9 @@ import type {
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
   ProviderCacheTtlEligibilityContext,
-  ProviderCreateEmbeddingProviderContext,
   ProviderDeferSyntheticProfileAuthContext,
   ProviderResolveSyntheticAuthContext,
   ProviderCreateStreamFnContext,
-  ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
   ProviderFailoverErrorContext,
   ProviderNormalizeToolSchemasContext,
@@ -75,8 +75,6 @@ import type {
   ProviderNormalizeModelIdContext,
   ProviderReasoningOutputMode,
   ProviderReasoningOutputModeContext,
-  ProviderReplayPolicy,
-  ProviderReplayPolicyContext,
   ProviderNormalizeResolvedModelContext,
   ProviderNormalizeTransportContext,
   ProviderModernModelPolicyContext,
@@ -85,7 +83,6 @@ import type {
   ProviderPlugin,
   ProviderResolveExternalAuthProfilesContext,
   ProviderPrepareRuntimeAuthContext,
-  ProviderApplyConfigDefaultsContext,
   ProviderResolveConfigApiKeyContext,
   ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
@@ -157,10 +154,6 @@ export {
   wrapProviderSimpleCompletionStreamFn,
   wrapProviderStreamFn,
 };
-
-export const testing = {
-  clearProviderRuntimePluginCacheForTest,
-} as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
   config?: OpenClawConfig;
@@ -293,8 +286,8 @@ export async function prepareProviderDynamicModel(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderPrepareDynamicModelContext;
-}): Promise<void> {
-  await resolveProviderRuntimePlugin(params)?.prepareDynamicModel?.(params.context);
+}): Promise<ProviderRuntimeModel | void> {
+  return resolveProviderRuntimePlugin(params)?.prepareDynamicModel?.(params.context);
 }
 
 export function shouldPreferProviderRuntimeResolvedModel(params: {
@@ -470,23 +463,6 @@ export function normalizeProviderConfigWithPlugin(params: {
   return normalizedMatched && hasConfigChange(normalizedMatched) ? normalizedMatched : undefined;
 }
 
-export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderNormalizeConfigContext;
-  allowRuntimePluginLoad?: boolean;
-}): ModelProviderConfig | undefined {
-  if (params.allowRuntimePluginLoad === false) {
-    return undefined;
-  }
-  return (
-    resolveProviderRuntimePlugin(params)?.applyNativeStreamingUsageCompat?.(params.context) ??
-    undefined
-  );
-}
-
 export function resolveProviderConfigApiKeyWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -508,16 +484,6 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   return normalizeOptionalString(
     resolveProviderRuntimePlugin(params)?.resolveConfigApiKey?.(params.context),
   );
-}
-
-export function resolveProviderReplayPolicyWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderReplayPolicyContext;
-}): ProviderReplayPolicy | undefined {
-  return resolveProviderRuntimePlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
 }
 
 export async function sanitizeProviderReplayHistoryWithPlugin(params: {
@@ -638,16 +604,6 @@ export function resolveProviderTransportTurnStateWithPlugin(params: {
   };
 }
 
-export async function createProviderEmbeddingProvider(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderCreateEmbeddingProviderContext;
-}) {
-  return await resolveProviderRuntimePlugin(params)?.createEmbeddingProvider?.(params.context);
-}
-
 export async function prepareProviderRuntimeAuth(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -750,27 +706,19 @@ export function listProviderUsagePluginDescriptors(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderUsagePluginDescriptor[] {
-  const pluginContracts = resolveUsageHookProviderPluginContracts(params);
-  if (pluginContracts.length === 0) {
-    return [];
-  }
+  // Manifest contracts own usage discovery. Materializing plugin runtime here loads
+  // every bundled provider plugin on cold status RPCs; fetch-time resolution stays
+  // the runtime authority for plugins that fail to implement their declared hooks.
   const descriptors = new Map<string, ProviderUsagePluginDescriptor>();
-  for (const contract of pluginContracts) {
-    const declaredProviderIds = new Set(contract.providerIds);
-    for (const plugin of resolveProviderPluginsForHooks({
-      ...params,
-      onlyPluginIds: [contract.pluginId],
-    })) {
-      if (!plugin.resolveUsageAuth || !plugin.fetchUsageSnapshot) {
-        continue;
-      }
-      const provider = normalizeProviderId(plugin.id);
-      if (!provider || !declaredProviderIds.has(provider) || descriptors.has(provider)) {
+  for (const contract of resolveUsageHookProviderPluginContracts(params)) {
+    for (const declaredProviderId of contract.providerIds) {
+      const provider = normalizeProviderId(declaredProviderId);
+      if (!provider || descriptors.has(provider)) {
         continue;
       }
       descriptors.set(provider, {
         provider,
-        displayName: normalizeOptionalString(plugin.label) ?? provider,
+        displayName: providerUsageLabel(provider) ?? provider,
       });
     }
   }
@@ -920,34 +868,6 @@ export function resolveProviderCacheTtlEligibility(params: {
   return resolveProviderRuntimePlugin(params)?.isCacheTtlEligible?.(params.context);
 }
 
-export function resolveRuntimeThinkingProfile(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderDefaultThinkingPolicyContext;
-}): ProviderThinkingProfile | null | undefined {
-  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.resolveThinkingProfile) {
-    return bundledSurface.resolveThinkingProfile(params.context) ?? undefined;
-  }
-  return resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(params.context);
-}
-
-export function applyProviderConfigDefaultsWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderApplyConfigDefaultsContext;
-}) {
-  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.applyConfigDefaults) {
-    return bundledSurface.applyConfigDefaults(params.context) ?? undefined;
-  }
-  return resolveProviderRuntimePlugin(params)?.applyConfigDefaults?.(params.context) ?? undefined;
-}
-
 export function resolveProviderModernModelRef(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -956,6 +876,29 @@ export function resolveProviderModernModelRef(params: {
   context: ProviderModernModelPolicyContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.isModernModelRef?.(params.context);
+}
+
+/** Returns provider-owned profile ids retired from generic credential resolution. */
+export function resolveProviderDeprecatedAuthProfileIds(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): readonly string[] {
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  return (
+    resolveProviderPolicySurface(params.provider, {
+      manifestRegistry: metadataSnapshot?.manifestRegistry,
+    })?.deprecatedProfileIds ??
+    resolveLoadedProviderRuntimePlugin(params)?.deprecatedProfileIds ??
+    []
+  );
 }
 
 export function buildProviderMissingAuthMessageWithPlugin(params: {

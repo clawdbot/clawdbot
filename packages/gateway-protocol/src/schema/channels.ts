@@ -317,6 +317,15 @@ export const TalkSessionCancelOutputParamsSchema = closedObject({
   reason: Type.Optional(Type.String()),
 });
 
+/** Reports whether a Talk output cancellation applied to the requested turn. */
+export const TalkSessionCancelOutputResultSchema = closedObject({
+  ok: Type.Literal(true),
+  status: Type.Optional(
+    Type.Union([Type.Literal("applied"), Type.Literal("stale"), Type.Literal("idle")]),
+  ),
+  turnId: Type.Optional(NonEmptyString),
+});
+
 /** Submits a tool result back to a Talk provider session. */
 export const TalkSessionSubmitToolResultParamsSchema = closedObject({
   sessionId: NonEmptyString,
@@ -741,6 +750,7 @@ export type TalkSessionCreateParams = Static<typeof TalkSessionCreateParamsSchem
 export type TalkSessionCreateResult = Static<typeof TalkSessionCreateResultSchema>;
 export type TalkSessionAppendAudioParams = Static<typeof TalkSessionAppendAudioParamsSchema>;
 export type TalkSessionCancelOutputParams = Static<typeof TalkSessionCancelOutputParamsSchema>;
+export type TalkSessionCancelOutputResult = Static<typeof TalkSessionCancelOutputResultSchema>;
 export type TalkSessionSteerParams = Static<typeof TalkSessionSteerParamsSchema>;
 export type TalkSessionSubmitToolResultParams = Static<
   typeof TalkSessionSubmitToolResultParamsSchema

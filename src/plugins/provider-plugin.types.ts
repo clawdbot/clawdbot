@@ -154,19 +154,21 @@ export type ProviderPlugin = {
    * 3. core fallback heuristics
    * 4. generic provider-config fallback
    *
-   * Keep this hook cheap and deterministic. If you need network I/O first, use
-   * `prepareDynamicModel` to prime state for the async retry path.
+   * Keep this hook cheap and deterministic. Async model discovery belongs in
+   * `prepareDynamicModel`, which can return the prepared model directly.
    */
   resolveDynamicModel?: (
     ctx: ProviderResolveDynamicModelContext,
   ) => ProviderRuntimeModel | null | undefined;
   /**
-   * Optional async prefetch for dynamic model resolution.
+   * Optional async preparation for dynamic model resolution.
    *
-   * OpenClaw calls this only from async model resolution paths. After it
-   * completes, `resolveDynamicModel` is called again.
+   * OpenClaw calls this only from async model resolution paths. Return the
+   * requested model directly, or return nothing to retry `resolveDynamicModel`.
    */
-  prepareDynamicModel?: (ctx: ProviderPrepareDynamicModelContext) => Promise<void>;
+  prepareDynamicModel?: (
+    ctx: ProviderPrepareDynamicModelContext,
+  ) => Promise<ProviderRuntimeModel | void>;
   /**
    * Lets a provider plugin opt exact configured models into a runtime
    * metadata comparison pass before the embedded runner returns the explicit
@@ -551,11 +553,12 @@ export type ProviderPlugin = {
    */
   loginOAuth?: (callbacks: OAuthLoginCallbacks) => Promise<SessionOAuthCredentials>;
   /**
-   * Legacy auth-profile ids that should be retired by `openclaw doctor`.
+   * Legacy auth-profile ids that generic auth must ignore and `openclaw doctor` should remove.
    *
    * Use this when a provider plugin replaces an older core-managed profile id
    * and wants cleanup/migration messaging to live with the provider instead of
-   * in hardcoded doctor tables.
+   * in hardcoded doctor tables. A runtime-only external CLI profile remains usable by its exact
+   * provider when it intentionally reuses a retired id.
    */
   deprecatedProfileIds?: string[];
   /**

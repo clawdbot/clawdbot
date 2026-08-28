@@ -28,7 +28,7 @@ import {
   markAuthProfileSuccess,
 } from "./auth-profiles.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
-import { acceptsClaudeLive } from "./cli-runner/claude-live-session-policy.js";
+import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
   resolveCliSessionId,
   runCliRecovery,
@@ -40,6 +40,7 @@ import {
   buildCliDeliveredFailure,
   buildCliRunResult,
   cliRunSettlementDeps,
+  formatCliTerminalInterruption,
   isClaudeCliBackend,
   resolveCliSourceReplyMirror,
   settleCliBackendOutcome,
@@ -53,6 +54,7 @@ import {
   persistApprovedCliUserTurnTranscript,
   persistCliAssistantTranscript,
   persistCliRunBlock,
+  resolveCliAssistantStopReason,
   runCliAgentEndHook,
 } from "./cli-runner/cli-run-transcript.js";
 import {
@@ -254,7 +256,10 @@ export async function runPreparedCliAgent(
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
   const preparedContextAgentMeta =
     isClaudeCliBackend(params.provider) && context.contextWindowInfo
-      ? { contextTokens: context.contextWindowInfo.tokens }
+      ? {
+          contextTokens: context.contextWindowInfo.tokens,
+          contextTokensSource: "resolved" as const,
+        }
       : {};
   const isolatedCompletion = params.isolatedCompletion === true;
   const controlOperation = params.controlOperation !== undefined;
@@ -397,7 +402,9 @@ export async function runPreparedCliAgent(
     if (
       !assistantText &&
       !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true
+      params.allowEmptyAssistantReplyAsSilent !== true &&
+      // Strict isolated completion owns valid-empty output after reasoning is removed.
+      !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
     ) {
       const process = output.diagnostics?.process;
       if (process) {
@@ -432,6 +439,7 @@ export async function runPreparedCliAgent(
             provider: params.provider,
             model: context.modelId,
             usage: output.usage,
+            stopReason: resolveCliAssistantStopReason(output),
           })
         : undefined;
     if (assistantText.length > 0 && hasLlmOutputHooks) {
@@ -533,7 +541,10 @@ export async function runPreparedCliAgent(
       const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
         result;
       try {
-        await assertCliRuntimeBinding(context);
+        const terminalInterruption = output.terminalInterruption;
+        if (!terminalInterruption) {
+          await assertCliRuntimeBinding(context);
+        }
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
@@ -542,6 +553,7 @@ export async function runPreparedCliAgent(
           text: sourceReplyWasDelivered ? "" : assistantText,
           modelId: context.modelId,
           usage: output.usage,
+          stopReason: resolveCliAssistantStopReason(output),
         });
         await finalizeCliContextEngineTurn({
           context,
@@ -558,12 +570,16 @@ export async function runPreparedCliAgent(
               effectiveCliSessionId,
               params.provider,
               context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: acceptsClaudeLive(context) },
+              { skipTranscriptProbe: acceptsCliLiveSession(context) },
             );
+        const interruptionError = terminalInterruption
+          ? formatCliTerminalInterruption(terminalInterruption)
+          : undefined;
         await runCliAgentEndHook(params, {
           event: {
             messages: buildAgentEndMessages(lastAssistant),
-            success: true,
+            success: interruptionError === undefined,
+            ...(interruptionError ? { error: interruptionError } : {}),
             durationMs: Date.now() - context.started,
           },
           ctx: hookContext,
@@ -575,6 +591,7 @@ export async function runPreparedCliAgent(
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned: assistantTranscript.owned,
+          assistantTranscriptIdempotencyKey: assistantTranscript.idempotencyKey,
           usedHistoryPrompt,
           userTurnHandled,
           sessionBindingDisabled,

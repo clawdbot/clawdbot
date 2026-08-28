@@ -30,6 +30,7 @@ describe("buildDeviceInventory", () => {
           deviceId: "node-1",
           displayName: "megaclaw",
           roles: ["operator", "node"],
+          connected: true,
           lastSeenAtMs: 1_000,
         }),
       ],
@@ -37,12 +38,14 @@ describe("buildDeviceInventory", () => {
         {
           nodeId: "node-1",
           displayName: "megaclaw",
-          connected: true,
+          connected: false,
           paired: true,
           caps: ["screen"],
           commands: ["system.run"],
           version: "2026.6.11",
           coreVersion: "2026.7.2",
+          workerSlots: { total: 2, available: 1 },
+          workerBundle: { status: "installed", version: "2026.8.9" },
           uiVersion: "19.5",
         },
       ],
@@ -52,11 +55,63 @@ describe("buildDeviceInventory", () => {
     const entry = firstGroup(groups).primary;
     expect(entry.id).toBe("node-1");
     expect(entry.connected).toBe(true);
+    expect(entry.node?.connected).toBe(false);
     expect(entry.roles).toEqual(["operator", "node"]);
     expect(entry.version).toBe("2026.6.11");
     expect(entry.node?.caps).toEqual(["screen"]);
     expect(entry.node?.coreVersion).toBe("2026.7.2");
     expect(entry.node?.uiVersion).toBe("19.5");
+    expect(entry.node?.workerSlots).toEqual({ total: 2, available: 1 });
+    expect(entry.node?.workerBundle).toEqual({ status: "installed", version: "2026.8.9" });
+  });
+
+  it("preserves a valid missing worker bundle status", () => {
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [
+        {
+          nodeId: "node-1",
+          connected: true,
+          paired: true,
+          workerBundle: { status: "missing" },
+        },
+      ],
+    });
+
+    expect(firstGroup(groups).primary.node?.workerBundle).toEqual({ status: "missing" });
+  });
+
+  it("drops malformed worker bundle status instead of exposing private fields", () => {
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [
+        {
+          nodeId: "node-1",
+          connected: true,
+          paired: true,
+          workerBundle: {
+            status: "installed",
+            version: "2026.8.9",
+            bundleHash: "a".repeat(64),
+          },
+        },
+      ],
+    });
+
+    expect(firstGroup(groups).primary.node?.workerBundle).toBeUndefined();
+  });
+
+  it.each([
+    { total: 0, available: 0 },
+    { total: 2, available: 3 },
+    { total: 2, available: 1, busy: 1 },
+  ])("drops malformed worker slot summaries: $total/$available", (workerSlots) => {
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [{ nodeId: "node-1", connected: true, paired: true, workerSlots }],
+    });
+
+    expect(firstGroup(groups).primary.node?.workerSlots).toBeUndefined();
   });
 
   it("joins presence case-insensitively and prefers its display metadata", () => {

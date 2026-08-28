@@ -18,6 +18,8 @@ import type {
 } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
+import "../../components/web-awesome-popover.ts";
 import {
   renderSettingsPage,
   renderSettingsSegmented,
@@ -58,6 +60,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
 export type TranscriptSearchState =
   | { status: "idle" }
@@ -90,6 +93,8 @@ export type SessionsProps = {
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
   groupBy: SessionsGroupBy;
+  /** Multi-identity gateways only; hides the Person mode elsewhere. */
+  personGroupingAvailable: boolean;
   knownCategories: string[];
   page: number;
   pageSize: number;
@@ -131,6 +136,7 @@ export type SessionsProps = {
     key: string,
     patch: {
       label?: string | null;
+      icon?: string | null;
       category?: string | null;
       archived?: boolean;
       pinned?: boolean;
@@ -225,6 +231,7 @@ function buildSessionLevelOptions(
 }
 
 const SESSION_RUN_STATUS_LABELS = {
+  queued: "sessionsView.statusQueued",
   running: "sessionsView.statusRunning",
   done: "sessionsView.statusDone",
   failed: "sessionsView.statusFailed",
@@ -239,14 +246,24 @@ function formatSessionRunStatus(status: SessionRunStatus): string {
 function renderSessionStatusBadge(row: GatewaySessionRow) {
   const active = isSessionRunActive(row);
   const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
-  const label = active
-    ? t("sessionsView.statusLive")
-    : idle
-      ? t("sessionsView.statusIdle")
-      : row.status
-        ? formatSessionRunStatus(row.status)
-        : t("sessionsView.statusUnknown");
-  const kind = active || row.status === "done" ? "ok" : idle || !row.status ? "muted" : "danger";
+  const label =
+    row.status === "queued"
+      ? t("sessionsView.statusQueued")
+      : active
+        ? t("sessionsView.statusLive")
+        : idle
+          ? t("sessionsView.statusIdle")
+          : row.status
+            ? formatSessionRunStatus(row.status)
+            : t("sessionsView.statusUnknown");
+  const kind =
+    row.status === "queued"
+      ? "warn"
+      : active || row.status === "done"
+        ? "ok"
+        : idle || !row.status
+          ? "muted"
+          : "danger";
   const title = `${t("sessionsView.status")}: ${label}`;
   return html`
     <openclaw-tooltip .content=${title}>
@@ -283,10 +300,6 @@ function renderSessionAvatar(row: GatewaySessionRow) {
 
 const CONTEXT_METER_WARN_PERCENT = 65;
 const CONTEXT_METER_DANGER_PERCENT = 85;
-
-function hasKnownTokenTotal(row: GatewaySessionRow): boolean {
-  return typeof row.totalTokens === "number" && Number.isFinite(row.totalTokens);
-}
 
 function renderTokensCell(row: GatewaySessionRow) {
   const total = row.totalTokens;
@@ -334,63 +347,37 @@ function renderTokensCell(row: GatewaySessionRow) {
   `;
 }
 
-function renderSessionsOverview(
+function renderSessionsHeadingFacts(
   rows: GatewaySessionRow[],
   liveCount: number,
   statusFilter: SessionArchivedFilter,
 ) {
   const unreadCount = rows.filter((row) => row.unread === true && row.archived !== true).length;
   const archivedCount = rows.filter((row) => row.archived === true).length;
-  // Sum only known token totals; "~" marks the sum as partial/approximate when
-  // rows lack a snapshot or carry a stale one, and no snapshot at all is n/a
-  // rather than a fabricated 0.
-  const rowsWithTokens = rows.filter(hasKnownTokenTotal);
-  const totalTokens = rowsWithTokens.reduce((sum, row) => sum + (row.totalTokens ?? 0), 0);
-  const tokensApproximate =
-    rowsWithTokens.length < rows.length ||
-    rowsWithTokens.some((row) => row.totalTokensFresh === false);
-  const tokensValue =
-    rowsWithTokens.length === 0
-      ? t("common.na")
-      : `${tokensApproximate ? "~" : ""}${formatCompactTokenCount(totalTokens)}`;
-  const tiles: Array<
-    readonly [string, (typeof icons)[keyof typeof icons], string, string, boolean]
-  > = [
-    ["sessions", icons.messageSquare, t("sessionsView.title"), String(rows.length), false],
-    ["live", icons.zap, t("sessionsView.statusLive"), String(liveCount), liveCount > 0],
-    ["unread", icons.eye, t("sessionsView.unread"), String(unreadCount), unreadCount > 0],
-    ["tokens", icons.barChart, t("sessionsView.tokens"), tokensValue, false],
+  const facts: Array<readonly [string, string, boolean]> = [
+    [String(liveCount), t("sessionsView.statusLive"), liveCount > 0],
+    [String(unreadCount), t("sessionsView.unread"), unreadCount > 0],
   ];
   if (statusFilter !== "active") {
-    tiles.push([
-      "archived",
-      icons.archive,
-      t("sessionsView.archived"),
-      String(archivedCount),
-      false,
-    ]);
+    facts.push([String(archivedCount), t("sessionsView.archived"), false]);
   }
   return html`
-    <div class="sessions-overview">
-      ${tiles.map(([id, icon, label, value, active]) => {
-        const tileClass = [
-          "sessions-overview__tile",
-          `sessions-overview__tile--${id}`,
-          active ? "sessions-overview__tile--active" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return html`
-          <div class=${tileClass}>
-            <span class="sessions-overview__icon" aria-hidden="true">${icon}</span>
-            <span class="sessions-overview__meta">
-              <span class="sessions-overview__value">${value}</span>
-              <span class="sessions-overview__label">${label}</span>
-            </span>
-          </div>
-        `;
-      })}
-    </div>
+    <span class="sessions-heading-facts">
+      ${facts.map(
+        ([value, label, active], index) => html`
+          ${index > 0
+            ? html`<span class="sessions-heading-fact__separator" aria-hidden="true">·</span>`
+            : nothing}
+          <span
+            class=${active
+              ? "sessions-heading-fact sessions-heading-fact--active"
+              : "sessions-heading-fact"}
+          >
+            <strong>${value}</strong> ${label}
+          </span>
+        `,
+      )}
+    </span>
   `;
 }
 
@@ -768,6 +755,7 @@ function sessionsTableColumnCount(props: SessionsProps): number {
 const SESSION_GROUP_MODE_LABELS = {
   none: "sessionsView.groupByNone",
   category: "sessionsView.groupByCategory",
+  person: "sessionsView.groupByPerson",
   channel: "sessionsView.groupByChannel",
   kind: "sessionsView.groupByKind",
   agent: "sessionsView.groupByAgent",
@@ -778,7 +766,8 @@ function groupModeLabel(mode: SessionsGroupBy): string {
   return t(SESSION_GROUP_MODE_LABELS[mode] ?? SESSION_GROUP_MODE_LABELS.none);
 }
 
-function sessionGroupLabel(id: string, props: SessionsProps): string {
+function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string {
+  const { id } = group;
   if (props.groupBy === "date") {
     const labels: Record<string, string> = {
       today: "sessionsView.dateToday",
@@ -798,6 +787,9 @@ function sessionGroupLabel(id: string, props: SessionsProps): string {
       const emoji = normalizeOptionalString(identity?.emoji);
       return emoji ? `${emoji} ${name}` : name;
     }
+  }
+  if (props.groupBy === "person") {
+    return group.rows[0]?.owner?.actor.label?.trim() || id;
   }
   return id;
 }
@@ -844,7 +836,7 @@ function categoryDropHandlers(props: SessionsProps, category: string | null) {
 }
 
 function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
-  const label = sessionGroupLabel(group.id, props);
+  const label = sessionGroupLabel(group, props);
   const count =
     group.rows.length === 1
       ? t("sessionsView.groupRowCountOne", { count: "1" })
@@ -980,16 +972,16 @@ export function renderSessions(props: SessionsProps) {
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
-  // Grouping shows all rows in their sections; pagination would split groups confusingly.
-  const groupingActive = props.groupBy !== "none";
-  const groups = groupingActive
-    ? groupSessionRows({
-        rows: sorted,
-        mode: props.groupBy,
-        knownCategories: props.knownCategories,
-      })
-    : null;
-  const paginated = groupingActive ? sorted : paginateRows(sorted, page, props.pageSize);
+  const groups =
+    props.groupBy !== "none"
+      ? groupSessionRows({
+          rows: sorted,
+          mode: props.groupBy,
+          knownCategories: props.knownCategories,
+        })
+      : null;
+  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
+  const paginated = paginateRows(displayRows, page, props.pageSize);
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
@@ -1033,6 +1025,7 @@ export function renderSessions(props: SessionsProps) {
           </openclaw-tooltip>
         `
       : nothing}
+    ${props.result ? renderSessionsHeadingFacts(rawRows, liveCount, props.statusFilter) : nothing}
   `;
   const refreshAction = html`
     ${props.statusFilter === "archived"
@@ -1055,28 +1048,22 @@ export function renderSessions(props: SessionsProps) {
   `;
   const children = [
     props.error ? html`<div class="sessions-error" role="alert">${props.error}</div>` : nothing,
-    props.result
-      ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount, props.statusFilter))
-      : nothing,
     // When the gateway lacks sessions.search the section still renders: the
     // form disables itself and shows the unavailable notice (shipped behavior).
     renderSettingsSection(
       {
         title: t("sessionsView.transcriptSearchTitle"),
-        description: t("sessionsView.transcriptSearchDescription"),
       },
       renderTranscriptSearch(props, rawRows),
     ),
     renderSettingsSection(
       {
         title: sessionsTitle,
-        description: t("sessionsView.subtitle"),
         actions: refreshAction,
       },
       renderSessionsTable(props, {
         paginated,
         groups,
-        groupingActive,
         emptyBecauseFiltered,
         emptyMessage,
         totalRows,
@@ -1092,7 +1079,6 @@ export function renderSessions(props: SessionsProps) {
 type SessionsTableContext = {
   paginated: GatewaySessionRow[];
   groups: SessionRowGroup[] | null;
-  groupingActive: boolean;
   emptyBecauseFiltered: boolean;
   emptyMessage: string;
   totalRows: number;
@@ -1105,21 +1091,13 @@ type SessionsTableContext = {
   ) => unknown;
 };
 
-function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
-  const {
-    paginated,
-    groups,
-    groupingActive,
-    emptyBecauseFiltered,
-    emptyMessage,
-    totalRows,
-    totalPages,
-    page,
-  } = ctx;
-  const sortHeader = ctx.sortHeader;
-  const emptyStateMessage = emptyBecauseFiltered
-    ? t("sessionsView.noSessionsMatchFilters")
-    : emptyMessage;
+function setPreviousSiblingExpanded(event: Event, expanded: boolean) {
+  if (event.currentTarget instanceof Element) {
+    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
+  }
+}
+
+function renderSessionsAdvancedFilters(props: SessionsProps) {
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
     [
@@ -1141,6 +1119,110 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
     key: keyof Parameters<SessionsProps["onFiltersChange"]>[0],
     value: string | boolean,
   ) => props.onFiltersChange({ activeMinutes, limit, includeGlobal, includeUnknown, [key]: value });
+  const active =
+    activeMinutes.trim() !== "" ||
+    limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
+    !includeGlobal ||
+    includeUnknown ||
+    props.groupBy !== "none";
+  return html`
+    <button
+      id="sessions-filter-popover-trigger"
+      type="button"
+      class="btn btn--sm sessions-filter-popover__trigger ${active ? "active" : ""}"
+      title=${t("sessionsView.filters")}
+      aria-label=${t("sessionsView.filters")}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+    >
+      ${icons.listFilter}
+    </button>
+    <wa-popover
+      class="sessions-filter-popover"
+      for="sessions-filter-popover-trigger"
+      placement="bottom-end"
+      without-arrow
+      @wa-show=${(event: Event) => setPreviousSiblingExpanded(event, true)}
+      @wa-hide=${(event: Event) => setPreviousSiblingExpanded(event, false)}
+    >
+      <div class="sessions-filter-popover__panel">
+        <div class="sessions-filter-popover__fields">
+          ${filterInputs.map(
+            ([key, suffix, label, tooltip, placeholder, disabled]) => html`
+              <openclaw-tooltip .content=${tooltip}>
+                <label class="session-filter-field">
+                  <span class="session-filter-label">${label}</span>
+                  <input
+                    class="session-filter-input session-filter-input--${suffix}"
+                    placeholder=${placeholder}
+                    .value=${props[key]}
+                    ?disabled=${disabled}
+                    @input=${(event: Event) =>
+                      updateFilter(key, (event.target as HTMLInputElement).value)}
+                  />
+                </label>
+              </openclaw-tooltip>
+            `,
+          )}
+        </div>
+        <div
+          class="session-filter-toggle-group"
+          role="group"
+          aria-label=${t("sessionsView.sourceFilters")}
+        >
+          ${sourceFilters.map(([key, label, tooltip]) =>
+            renderFilterToggle({
+              name: key,
+              checked: props[key],
+              label,
+              title: tooltip,
+              onChange: (checked) => updateFilter(key, checked),
+            }),
+          )}
+        </div>
+        <label class="session-groupby">
+          <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
+          <select
+            class="session-groupby__select"
+            @change=${(event: Event) =>
+              props.onGroupByChange((event.target as HTMLSelectElement).value as SessionsGroupBy)}
+          >
+            ${SESSION_GROUP_MODES.filter(
+              (mode) => mode !== "person" || props.personGroupingAvailable,
+            ).map(
+              (mode) => html`
+                <option value=${mode} ?selected=${props.groupBy === mode}>
+                  ${groupModeLabel(mode)}
+                </option>
+              `,
+            )}
+          </select>
+        </label>
+        ${props.groupBy === "category"
+          ? html`
+              <button
+                class="btn btn--sm"
+                ?disabled=${Boolean(props.groupWriteDisabledReason)}
+                title=${props.groupWriteDisabledReason ?? nothing}
+                @click=${() => props.onRequestNewCategory()}
+              >
+                ${icons.plus} ${t("sessionsView.newGroup")}
+              </button>
+            `
+          : nothing}
+      </div>
+    </wa-popover>
+  `;
+}
+
+function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
+  const { paginated, groups, emptyBecauseFiltered, emptyMessage, totalRows, totalPages, page } =
+    ctx;
+  const sortHeader = ctx.sortHeader;
+  const emptyStateMessage = emptyBecauseFiltered
+    ? t("sessionsView.noSessionsMatchFilters")
+    : emptyMessage;
+  const paginatedKeys = groups ? new Set(paginated.map((row) => row.key)) : null;
   return html`
     <div
       class="sessions-toolbar sessions-filter-bar"
@@ -1155,83 +1237,22 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
           @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
         />
       </div>
-      <div class="session-filter-primary-row">
-        ${filterInputs.map(
-          ([key, suffix, label, tooltip, placeholder, disabled]) => html`
-            <openclaw-tooltip .content=${tooltip}>
-              <label class="session-filter-field">
-                <span class="session-filter-label">${label}</span>
-                <input
-                  class="session-filter-input session-filter-input--${suffix}"
-                  placeholder=${placeholder}
-                  .value=${props[key]}
-                  ?disabled=${disabled}
-                  @input=${(event: Event) =>
-                    updateFilter(key, (event.target as HTMLInputElement).value)}
-                />
-              </label>
-            </openclaw-tooltip>
-          `,
-        )}
-      </div>
-      <div
-        class="session-filter-toggle-group"
-        role="group"
-        aria-label=${t("sessionsView.sourceFilters")}
-      >
-        ${sourceFilters.map(([key, label, tooltip]) =>
-          renderFilterToggle({
-            name: key,
-            checked: props[key],
-            label,
-            title: tooltip,
-            onChange: (checked) => updateFilter(key, checked),
-          }),
-        )}
-        ${renderSettingsSegmented<SessionArchivedFilter>({
-          value: props.statusFilter,
-          ariaLabel: t("sessionsView.sessionState"),
-          className: "sessions-view-segment",
-          options: [
-            { value: "active", label: t("common.active") },
-            {
-              value: "archived",
-              label: t("sessionsView.archived"),
-              title: t("sessionsView.archivedOnlyTooltip"),
-            },
-            { value: "all", label: t("sessionsView.all") },
-          ],
-          onChange: (value) => props.onStatusFilterChange(value),
-        })}
-      </div>
-      <span class="sessions-toolbar__divider" aria-hidden="true"></span>
-      <label class="session-groupby">
-        <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
-        <select
-          class="session-groupby__select"
-          @change=${(e: Event) =>
-            props.onGroupByChange((e.target as HTMLSelectElement).value as SessionsGroupBy)}
-        >
-          ${SESSION_GROUP_MODES.map(
-            (mode) =>
-              html`<option value=${mode} ?selected=${props.groupBy === mode}>
-                ${groupModeLabel(mode)}
-              </option>`,
-          )}
-        </select>
-      </label>
-      ${props.groupBy === "category"
-        ? html`
-            <button
-              class="btn btn--sm"
-              ?disabled=${Boolean(props.groupWriteDisabledReason)}
-              title=${props.groupWriteDisabledReason ?? nothing}
-              @click=${() => props.onRequestNewCategory()}
-            >
-              ${icons.plus} ${t("sessionsView.newGroup")}
-            </button>
-          `
-        : nothing}
+      ${renderSettingsSegmented<SessionArchivedFilter>({
+        value: props.statusFilter,
+        ariaLabel: t("sessionsView.sessionState"),
+        className: "sessions-view-segment",
+        options: [
+          { value: "active", label: t("common.active") },
+          {
+            value: "archived",
+            label: t("sessionsView.archived"),
+            title: t("sessionsView.archivedOnlyTooltip"),
+          },
+          { value: "all", label: t("sessionsView.all") },
+        ],
+        onChange: (value) => props.onStatusFilterChange(value),
+      })}
+      ${renderSessionsAdvancedFilters(props)}
     </div>
 
     ${props.selectedKeys.size > 0
@@ -1313,7 +1334,11 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
                 `
               : groups
                 ? groups.flatMap((group) => {
-                    const section = group.rows.flatMap((row) => renderRows(row, props));
+                    const visibleRows = group.rows.filter((row) => paginatedKeys?.has(row.key));
+                    if (visibleRows.length === 0 && group.rows.length > 0) {
+                      return [];
+                    }
+                    const section = visibleRows.flatMap((row) => renderRows(row, props));
                     section.unshift(renderGroupHeaderRow(group, props));
                     return section;
                   })
@@ -1322,7 +1347,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
       </table>
     </div>
 
-    ${totalRows > 0 && !groupingActive
+    ${totalRows > 0
       ? html`
           <div class="data-table-pagination">
             <div class="data-table-pagination__info">
@@ -1455,7 +1480,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         props.onToggleDetails(row.key);
       }}
       @keydown=${(e: KeyboardEvent) => {
-        if (openMenuFromEvent(e)) {
+        openMenuFromEvent(e);
+        if (e.defaultPrevented) {
           return;
         }
         if (isRowControlTarget(e.target)) {

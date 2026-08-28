@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import type {
   ChannelResolveKind,
   ChannelResolveResult,
@@ -12,14 +13,14 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
-import { getRuntimeConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
-import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
 
 export type ChannelsResolveOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   kind?: "auto" | "user" | "group" | "channel";
@@ -117,16 +118,6 @@ function formatResolveResult(result: ResolveResult): string {
 
 /** Resolve user/group/channel labels into plugin-specific stable target ids. */
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
-  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const loadedRaw = getRuntimeConfig();
-  let { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
-    config: loadedRaw,
-    commandName: "channels resolve",
-    targetIds: getChannelsCommandSecretTargetIds(),
-    mode: "read_only_operational",
-    runtime,
-    autoEnable: true,
-  });
   const entries = normalizeStringEntries(opts.entries);
   if (entries.length === 0) {
     throw new Error(
@@ -134,11 +125,28 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     );
   }
 
+  const loadedRaw = getRuntimeConfig();
+  const requestedAgent = opts.agent?.trim();
+  if (opts.agent !== undefined && !requestedAgent) {
+    throw new Error("--agent must not be blank");
+  }
+  const agentId = requestedAgent ? resolveConfiguredAgentId(loadedRaw, requestedAgent) : undefined;
+  const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
+    config: loadedRaw,
+    commandName: "channels resolve",
+    targetIds: getChannelsCommandSecretTargetIds(),
+    agentId,
+    mode: "read_only_operational",
+    runtime,
+    autoEnable: true,
+  });
+
   const explicitChannel = opts.channel?.trim();
   const resolvedExplicit = explicitChannel
     ? await resolveInstallableChannelPlugin({
         cfg,
         runtime,
+        agentId,
         rawChannel: explicitChannel,
         allowInstall: false,
         supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
@@ -149,14 +157,6 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run ${formatCliCommand(`openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}`)} first.`,
     );
   }
-  if (resolvedExplicit?.configChanged) {
-    cfg = await persistResolvedChannelPluginConfig({
-      resolved: resolvedExplicit,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-      runtime,
-    });
-  }
-
   const selection = explicitChannel
     ? {
         channel: resolvedExplicit?.channelId,
@@ -165,6 +165,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     : await resolveMessageChannelSelection({
         cfg,
         channel: opts.channel ?? null,
+        agentId,
       });
   const plugin = selection.plugin;
   if (!plugin?.resolver?.resolveTargets) {

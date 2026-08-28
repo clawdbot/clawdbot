@@ -1,8 +1,15 @@
 // Unmocked auth-policy coverage for the shared Gateway client bootstrap owner.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createConfigIoContext } from "../config/io.context.js";
+import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import type { GatewayRemoteConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function remoteGatewayConfig(remote?: GatewayRemoteConfig): OpenClawConfig {
   return {
@@ -30,6 +37,69 @@ async function expectInteractiveAuth(
 }
 
 describe("resolveGatewayClientBootstrap interactive auth policy", () => {
+  it("preserves an escaped literal credential from config load through client bootstrap", async () => {
+    const root = tempDirs.make("openclaw-client-bootstrap-env-facts-");
+    const configPath = path.join(root, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      VITEST: "true",
+    };
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", auth: { mode: "token", token: "$${LITERAL_TOKEN}" } },
+      }),
+      "utf8",
+    );
+    const context = createConfigIoContext({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+    });
+
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    const result = await resolveGatewayClientBootstrap({ config: snapshot.config, env });
+
+    expect(result.auth).toEqual({ token: "${LITERAL_TOKEN}", password: undefined });
+  });
+
+  it("preserves a substituted template-looking literal through interactive client auth", async () => {
+    const root = tempDirs.make("openclaw-client-bootstrap-resolved-literal-");
+    const configPath = path.join(root, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      SOURCE: "${OTHER}",
+      VITEST: "true",
+    };
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", auth: { mode: "token", token: "${SOURCE}" } },
+      }),
+      "utf8",
+    );
+    const context = createConfigIoContext({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+    });
+
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    const result = await resolveGatewayClientBootstrap({ config: snapshot.config, env: {} });
+
+    expect(result.auth).toEqual({ token: "${OTHER}", password: undefined });
+  });
+
   it("keeps configured local password ahead of OPENCLAW_GATEWAY_PASSWORD", async () => {
     await expectInteractiveAuth(
       {
@@ -81,16 +151,17 @@ describe("resolveGatewayClientBootstrap interactive auth policy", () => {
     );
   });
 
-  it("falls back to OPENCLAW_GATEWAY_TOKEN when the remote token ref is unresolved", async () => {
-    await expectInteractiveAuth(
-      {
-        config: remoteGatewayConfig({
-          token: { source: "env", provider: "default", id: "ABSENT_BOOTSTRAP_REMOTE_TOKEN" },
-        }),
-        env: { OPENCLAW_GATEWAY_TOKEN: "shell-token-value" },
-      },
-      { token: "shell-token-value", password: undefined },
-    );
+  it("reports an unresolved remote token ref instead of substituting ambient auth", async () => {
+    const result = await resolveGatewayClientBootstrap({
+      config: remoteGatewayConfig({
+        token: { source: "env", provider: "default", id: "ABSENT_BOOTSTRAP_REMOTE_TOKEN" },
+      }),
+      env: { OPENCLAW_GATEWAY_TOKEN: "shell-token-value" },
+      authPolicy: "interactive",
+    });
+
+    expect(result.auth).toEqual({ token: undefined, password: undefined });
+    expect(result.authFailureReason).toContain("gateway.remote.token SecretRef is unresolved");
   });
 
   it("never reuses config or env credentials for a CLI URL override", async () => {

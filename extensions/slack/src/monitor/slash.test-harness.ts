@@ -24,13 +24,15 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./slash-dispatch.runtime.js", () => {
+vi.mock("./slash-dispatch.runtime.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./slash-dispatch.runtime.js")>()),
     deliverSlackSlashReplies: (params: unknown) => mocks.deliverSlackSlashRepliesMock(params),
     dispatchChannelInboundTurn: async (plan: {
       cfg: unknown;
       ctxPayload: unknown;
       route: { sessionKey: string };
+      dispatchReplyFromConfig?: unknown;
       dispatcherOptions?: { onSettled?: () => unknown };
       delivery: { deliver?: unknown; onError?: unknown };
       replyOptions?: unknown;

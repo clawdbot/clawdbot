@@ -121,6 +121,68 @@ describe("chat attachment read failures", () => {
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
 
+  it("rejects a zero-byte file instead of silently dropping it after send", async () => {
+    const onAttachmentsChange = vi.fn();
+    handleChatAttachmentPaste(
+      pasteEventWithFiles([new File([], "empty.png", { type: "image/png" })]),
+      { attachments: [], onAttachmentsChange },
+    );
+    await toastHost.updateComplete;
+    await vi.waitFor(() => {
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("empty.png");
+    });
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
+  it("blocks a large text paste that exceeds the non-image ceiling", async () => {
+    const onAttachmentsChange = vi.fn();
+    const text = "x".repeat(2048);
+    handleChatAttachmentPaste(
+      {
+        preventDefault: () => {},
+        clipboardData: {
+          items: [],
+          getData: (type: string) => (type === "text/plain" ? text : ""),
+        },
+      } as unknown as ClipboardEvent,
+      {
+        attachmentLimits: { maxBytes: 1024, maxImageBytes: 1024 },
+        attachments: [],
+        onAttachmentsChange,
+      },
+    );
+    await toastHost.updateComplete;
+    await vi.waitFor(() => {
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("pasted-text");
+    });
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
+  it("blocks a pasted data-URL image that exceeds the image ceiling", async () => {
+    const onAttachmentsChange = vi.fn();
+    const bigBase64 = btoa("p".repeat(64));
+    handleChatAttachmentPaste(
+      {
+        preventDefault: () => {},
+        clipboardData: {
+          items: [],
+          getData: (type: string) =>
+            type === "text/plain" ? `data:image/png;base64,${bigBase64}` : "",
+        },
+      } as unknown as ClipboardEvent,
+      {
+        attachmentLimits: { maxBytes: 1024, maxImageBytes: 16 },
+        attachments: [],
+        onAttachmentsChange,
+      },
+    );
+    await toastHost.updateComplete;
+    await vi.waitFor(() => {
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("pasted-image");
+    });
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
   it("does not toast when every read succeeds", async () => {
     const onAttachmentsChange = vi.fn();
     handleChatAttachmentPaste(

@@ -6,20 +6,17 @@ import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
-import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
-import type { PlanStatus } from "../tool-stream.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
-import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import { shouldToggleSelectableDisclosure } from "./chat-tool-cards.ts";
+import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
 export type StreamGroupPart = Extract<
   ChatItem,
-  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
+  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }
 >;
 
 type StreamMessageOptions = Pick<
@@ -30,15 +27,17 @@ type StreamMessageOptions = Pick<
   | "runActive"
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
-  | "basePath"
+  | "resourceBasePath"
   | "localMediaPreviewRoots"
+  | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
-  | "onAssistantAttachmentLoaded"
   | "onRequestOpenImage"
   | "onOpenImage"
+  | "onAssistantAttachmentLoaded"
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
+  | "fetchLinkFavicon"
   | "onOpenWorkspaceFile"
 >;
 
@@ -46,9 +45,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   showAssistantAvatar?: boolean;
-  planStatus?: PlanStatus | null;
-  planActive?: boolean;
-  startupPhase?: ChatRunStartupPhase;
+  startupLabel?: string;
   waitingApproval?: boolean;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
@@ -71,46 +68,43 @@ export function renderStreamGroupParts(
     part.kind === "reading-indicator"
       ? renderChatWorkingIndicator(part, {
           waitingApproval: opts.waitingApproval === true,
-          startupPhase: opts.startupPhase,
+          startupLabel: opts.startupLabel,
           outputTokens: opts.runOutputTokens,
           presentation,
         })
       : part.kind === "question"
         ? renderQuestionStreamPart(part, opts)
-        : part.kind === "plan"
-          ? renderChatPlanChecklist(opts.planStatus, {
-              active: opts.planActive === true,
-              variant: "card",
-            })
-          : renderGroupedMessage(
-              {
-                role: "assistant",
-                content: [{ type: "text", text: part.text }],
-                timestamp: part.startedAt,
-              },
-              part.key,
-              {
-                isStreaming: part.isStreaming,
-                showReasoning: false,
-                sessionKey: opts.sessionKey,
-                boardProvider: opts.boardProvider,
-                agentId: opts.agentId,
-                runActive: opts.runActive,
-                onRequestUpdate: opts.onRequestUpdate,
-                canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                basePath: opts.basePath,
-                localMediaPreviewRoots: opts.localMediaPreviewRoots,
-                assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-                resolveArtifactDownload: opts.resolveArtifactDownload,
-                onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
-                onRequestOpenImage: opts.onRequestOpenImage,
-                onOpenImage: opts.onOpenImage,
-                embedSandboxMode: opts.embedSandboxMode,
-                allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-                onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-              },
-              opts.onOpenSidebar,
-            ),
+        : renderGroupedMessage(
+            {
+              role: "assistant",
+              content: [{ type: "text", text: part.text }],
+              timestamp: part.startedAt,
+            },
+            part.key,
+            {
+              isStreaming: part.isStreaming,
+              showReasoning: false,
+              sessionKey: opts.sessionKey,
+              boardProvider: opts.boardProvider,
+              agentId: opts.agentId,
+              runActive: opts.runActive,
+              onRequestUpdate: opts.onRequestUpdate,
+              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+              resourceBasePath: opts.resourceBasePath,
+              localMediaPreviewRoots: opts.localMediaPreviewRoots,
+              connectionEpoch: opts.connectionEpoch,
+              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+              resolveArtifactDownload: opts.resolveArtifactDownload,
+              onRequestOpenImage: opts.onRequestOpenImage,
+              onOpenImage: opts.onOpenImage,
+              onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
+              embedSandboxMode: opts.embedSandboxMode,
+              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+              fetchLinkFavicon: opts.fetchLinkFavicon,
+              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
+            },
+            opts.onOpenSidebar,
+          ),
   );
 }
 
@@ -118,12 +112,15 @@ export function renderStreamGroupParts(
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, basePath, assistantAttachmentAuthToken } = opts;
+  const { assistant, resourceBasePath, assistantAttachmentAuthToken } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
+  const active = parts.some(
+    (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
+  );
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part unless the presentation opts out.
@@ -131,14 +128,20 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
-      : renderChatAvatar("assistant", assistant, undefined, basePath, assistantAttachmentAuthToken);
+      : renderChatAvatar(
+          "assistant",
+          assistant,
+          undefined,
+          resourceBasePath,
+          assistantAttachmentAuthToken,
+        );
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">${renderStreamGroupParts(parts, opts, "standalone")}</div>
-      ${footerStartedAt !== null
+      ${footerStartedAt !== null && !active
         ? html`
             <div class="chat-group-footer">
               <div class="chat-group-footer__meta">
@@ -159,35 +162,43 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
  */
 export function renderWorkGroupSummary(
   item: { key: string; durationMs: number | null },
-  opts: { expanded: boolean; onToggle: () => void },
+  opts: {
+    expanded: boolean;
+    onToggle: () => void;
+    presentation?: "standalone" | "continuation";
+    browserTabPreviews?: unknown;
+  },
 ) {
   const duration = formatDurationCompact(item.durationMs);
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
-  return html`
-    <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
-      <span class="chat-work-group__gutter" aria-hidden="true"></span>
-      <div class="chat-group-messages">
-        <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
-          <button
-            class="chat-activity-group__summary"
-            type="button"
-            aria-expanded=${String(opts.expanded)}
-            @click=${(event: MouseEvent) => {
-              if (shouldToggleSelectableDisclosure(event)) {
-                opts.onToggle();
-              }
-            }}
-          >
-            <span class="chat-activity-group__icon">${icons.check}</span>
-            <span class="chat-activity-group__label" title=${label}>${label}</span>
-            <span
-              class="collapse-chevron ${opts.expanded ? "" : "collapse-chevron--collapsed"}"
-              aria-hidden="true"
-              >${icons.chevronDown}</span
-            >
-          </button>
-        </div>
-      </div>
+  const content = html`
+    <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
+      <button
+        class="chat-inline-disclosure chat-activity-group__summary"
+        type="button"
+        aria-expanded=${String(opts.expanded)}
+        @pointerenter=${syncToolDisclosureOverflow}
+        @focus=${syncToolDisclosureOverflow}
+        @click=${(event: MouseEvent) => {
+          if (shouldToggleSelectableDisclosure(event)) {
+            opts.onToggle();
+          }
+        }}
+      >
+        <span class="chat-tool-disclosure__content">
+          <span class="chat-activity-group__label" title=${label}>${label}</span>
+        </span>
+        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </button>
+      <div class="chat-work-group__separator" aria-hidden="true"></div>
+      ${opts.expanded ? nothing : (opts.browserTabPreviews ?? nothing)}
     </div>
   `;
+  return opts.presentation === "continuation"
+    ? content
+    : html`
+        <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
+          <div class="chat-group-messages">${content}</div>
+        </div>
+      `;
 }

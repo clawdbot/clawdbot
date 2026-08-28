@@ -4,6 +4,7 @@ import {
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
   getAgentHarnessHookRunner,
+  isHostScopedAgentToolActive,
   resolveContextEngineOwnerPluginId,
   runHarnessContextEngineMaintenance,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -18,9 +19,12 @@ import {
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
+  resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
   buildDeveloperInstructions,
@@ -140,16 +144,29 @@ export async function prepareCodexAttemptContext(
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
-    resolvedWorkspace,
+    resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
+    executionWorkspace: resolvedWorkspace,
     effectiveWorkspace,
     sessionKey: contextSessionKey,
     sessionAgentId,
     memoryToolNames,
+    ringZeroActive:
+      isHostScopedAgentToolActive("openclaw") &&
+      isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
     sandboxed: sandbox?.enabled === true,
   });
-  const baseDeveloperInstructions = buildDeveloperInstructions(runtimeParams, {
-    dynamicTools: toolBridge.availableSpecs,
-  });
+  // A thread keeps the bounded agent-workspace snapshot captured at creation.
+  // Workspace edits take effect only in the next session.
+  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions
+    ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
+      workspaceBootstrapContext.threadDeveloperInstructions)
+    : undefined;
+  const baseDeveloperInstructions = joinPresentSections(
+    buildDeveloperInstructions(runtimeParams, {
+      dynamicTools: toolBridge.availableSpecs,
+    }),
+    agentWorkspaceDeveloperInstructions,
+  );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params: runtimeParams,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -172,12 +189,20 @@ export async function prepareCodexAttemptContext(
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
     precomputedStaleBindingContinuityProjectionApplied: false,
     staleBindingContinuityForcedFreshStart: false,
+    // Set by the no-engine continuity appliers; gates calibration recording so a
+    // dense direct or active-engine prompt can never persist a density sample
+    // that later shrinks continuity history it did not measure.
+    noEngineContinuityProjectionApplied: false,
     inactiveThreadBootstrapBindingForcedFreshStart:
       initialInactiveThreadBootstrapBindingForcedFreshStart,
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
     reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
+  });
+  const codexContinuityProjectionMaxChars = resolveCodexContinuityProjectionMaxChars({
+    contextTokenBudget: effectiveContextTokenBudget,
+    calibration: connection.mutable.continuityCalibration,
   });
   return {
     runtime,
@@ -189,11 +214,13 @@ export async function prepareCodexAttemptContext(
     hookRunner,
     buildActiveContextEngineRuntimeContext,
     workspaceBootstrapContext,
+    agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
     openClawPromptContext,
     skillsCollaborationInstructions,
     promptState,
     codexContextProjectionMaxChars,
+    codexContinuityProjectionMaxChars,
   };
 }
 

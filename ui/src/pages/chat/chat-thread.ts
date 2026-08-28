@@ -1,10 +1,9 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
-import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
-  streamSegmentHasItemId,
-  streamSegmentUsesAccumulatedText,
+  accumulatedStreamText,
   trimAccumulatedStreamPrefix,
-  type ChatStreamSegment,
+  type ChatItem,
+  type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
@@ -20,13 +19,18 @@ import {
   setSessionCacheValue,
 } from "./session-cache.ts";
 
-export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
+export {
+  isPendingSendMessage,
+  persistedMessageEntryId,
+  readPendingSendFailure,
+} from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
+export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
@@ -74,9 +78,10 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
-    senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
-    senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
+    JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
+    JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
+    previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
       const candidate = next.messages[index];
@@ -126,18 +131,23 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.kind === "stream" &&
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
-        previous.isStreaming === next.isStreaming
+        previous.isStreaming === next.isStreaming &&
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
       );
     case "reading-indicator":
-      return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
+      return (
+        previous.kind === "reading-indicator" &&
+        previous.startedAt === next.startedAt &&
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
+      );
     case "question":
       return (
         previous.kind === "question" &&
         previous.questionId === next.questionId &&
         previous.startedAt === next.startedAt
       );
-    case "plan":
-      return previous.kind === "plan";
   }
   return false;
 }
@@ -183,6 +193,7 @@ function stabilizeChatItems(
         !prior ||
         claimedGroupKeys.has(prior.key) ||
         prior.role !== item.role ||
+        prior.runId !== item.runId ||
         prior.senderLabel !== item.senderLabel ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
@@ -230,10 +241,13 @@ function sameChatItemsStructuralInput(
 ): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.archiveNotice?.key === next.archiveNotice?.key &&
+    previous.archiveNotice?.label === next.archiveNotice?.label &&
     previous.runId === next.runId &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
+    previous.guardianNotices === next.guardianNotices &&
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
@@ -242,7 +256,6 @@ function sameChatItemsStructuralInput(
     previous.runWorking === next.runWorking &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
-    Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery
@@ -260,20 +273,6 @@ function sameChatItemsInputExceptStream(
   return (
     previous.stream !== null && next.stream !== null && sameChatItemsStructuralInput(previous, next)
   );
-}
-
-function accumulatedIndexedStreamText(segments: readonly ChatStreamSegment[]): string | null {
-  let accumulated: string | null = null;
-  for (const segment of segments) {
-    if (streamSegmentHasItemId(segment) || !streamSegmentUsesAccumulatedText(segment)) {
-      continue;
-    }
-    const text = sanitizeStreamText(segment.text);
-    if (text.length > 0) {
-      accumulated = text;
-    }
-  }
-  return accumulated;
 }
 
 function liveStreamIdentity(input: BuildChatItemsProps): string {
@@ -348,7 +347,7 @@ export function buildCachedChatItems(
   cached.items = items;
   cached.liveStreamIndex = findLiveStreamIndex(items);
   cached.liveStreamIdentity = cached.liveStreamIndex === -1 ? null : liveStreamIdentity(input);
-  cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
+  cached.liveStreamPrefix = accumulatedStreamText(input.streamSegments, sanitizeStreamText);
   return items;
 }
 
@@ -390,7 +389,7 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
 export type AssistantMessageExpansionState =
   | { status: "loading"; revision: number }
   | { status: "error"; revision: number }
-  | { status: "loaded"; expanded: boolean; markdown: string; revision: number };
+  | { status: "loaded"; markdown: string; revision: number };
 
 export function getExpandedAssistantMessages(
   sessionKey: string,

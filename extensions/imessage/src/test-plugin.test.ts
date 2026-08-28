@@ -95,6 +95,34 @@ function requireMessageSendMedia(
 }
 
 describe("imessagePlugin contracts", () => {
+  it("rejects unqualified provider identifiers and exposes qualification guidance", async () => {
+    const targetResolver = imessagePlugin.messaging?.targetResolver;
+    const resolveTarget = targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error("Expected iMessage target resolver");
+    }
+
+    expect(targetResolver.hint).toBe(
+      "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
+    );
+
+    await expect(
+      resolveTarget({
+        cfg: {} as OpenClawConfig,
+        input: "C0AG22RN7L3",
+        normalized: "+02273",
+      }),
+    ).resolves.toBeNull();
+
+    await expect(
+      resolveTarget({
+        cfg: {} as OpenClawConfig,
+        input: "auto:Alice Smith",
+        normalized: "auto:AliceSmith",
+      }),
+    ).resolves.toMatchObject({ kind: "user", to: "auto:AliceSmith" });
+  });
+
   it("declares durable final delivery capabilities", () => {
     expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
       text: true,
@@ -434,34 +462,39 @@ describe("imessagePlugin contracts", () => {
       filename: "../outside.png",
       contents: IMESSAGE_WORKSPACE_PNG,
       readerCalls: 0,
+      expectedCode: "path-not-allowed",
     },
     {
       name: "private log document",
       filename: "debug.log",
       contents: Buffer.from("private operator logs"),
       readerCalls: 1,
+      expectedCode: "path-not-allowed",
     },
     {
       name: "untrusted HTML before the host reader",
       filename: "report.html",
       contents: Buffer.from("<!doctype html><h1>untrusted</h1>"),
       readerCalls: 0,
+      expectedCode: "path-not-allowed",
     },
     {
       name: "plain text disguised as a PDF",
       filename: "report.pdf",
       contents: Buffer.from("private text without a PDF signature"),
       readerCalls: 1,
+      expectedCode: "path-not-allowed",
     },
     {
       name: "binary data disguised as plain text",
       filename: "report.txt",
       contents: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
       readerCalls: 1,
+      expectedCode: "path-not-allowed",
     },
   ])(
     "rejects $name before native iMessage delivery",
-    async ({ filename, contents, readerCalls }) => {
+    async ({ filename, contents, readerCalls, expectedCode }) => {
       await withStateDirEnv("openclaw-imessage-media-policy-", async ({ stateDir }) => {
         const stateRoot = fs.realpathSync(stateDir);
         const workspaceDir = path.join(stateRoot, "workspace");
@@ -487,7 +520,7 @@ describe("imessagePlugin contracts", () => {
           } as Parameters<typeof sendMedia>[0] & {
             deps: { imessage: typeof nativeSend };
           }),
-        ).rejects.toMatchObject({ code: "path-not-allowed" });
+        ).rejects.toMatchObject({ code: expectedCode });
 
         expect(readFile).toHaveBeenCalledTimes(readerCalls);
         expect(conflictingReader).not.toHaveBeenCalled();

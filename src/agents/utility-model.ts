@@ -38,7 +38,7 @@ export function readUtilityModelSetting(cfg: OpenClawConfig, agentId: string): U
 function resolveProviderDefaultUtilityModelRef(params: {
   cfg: OpenClawConfig;
   provider: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | undefined {
   const provider = params.provider.trim().toLowerCase();
   if (!provider) {
@@ -76,7 +76,7 @@ export function resolveUtilityModelRefForAgent(params: {
   primaryProvider?: string;
   /** Pass with primaryProvider to carry a session-specific auth profile. */
   primaryModelRef?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | undefined {
   const setting = readUtilityModelSetting(params.cfg, params.agentId);
   if (setting.kind === "explicit") {

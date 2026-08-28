@@ -1,16 +1,21 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
   TARGET_REPO,
   WORKSPACE,
   captureUiProof,
+  captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
-  expectPendingCloudStartupBeforeRuntime,
+  expectPendingSessionPlacementStartupBeforeRuntime,
   installMockGateway,
   pastePng,
   pollLocatorText,
@@ -19,20 +24,95 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const CLOUD_STARTUP_RUNTIME_REQUEST =
-  /\/assets\/cloud-session-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
+  /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const cloudProfileRefreshProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "cloud-profile-refresh-retention",
+);
 
 suite.define(() => {
+  it("dispatches an optionless cloud profile without a machine override", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:optionless-cloud";
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        workspaceGit: true,
+        deferredMethods: ["sessions.dispatch"],
+        methodResponses: {
+          "agents.list": {
+            agents: [{ id: "main", workspace: WORKSPACE, workspaceGit: true }],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          "environments.list": {
+            environments: [],
+            profiles: [
+              {
+                id: "aws",
+                providerId: "crabbox",
+                machines: [{ id: "fast", label: "Fast" }],
+              },
+              { id: "machine0", providerId: "crabbox" },
+            ],
+          },
+          "worktrees.branches": {
+            branches: [{ kind: "local", name: "main" }],
+            defaultBranch: "main",
+            repositoryStatus: "git",
+          },
+          "sessions.create": { key: sessionKey },
+          "sessions.list": createdSessionListResult(sessionKey),
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      const trigger = page.locator("#new-session-where-trigger");
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await trigger.click();
+      await place.getByRole("button", { name: "Fast", exact: true }).click();
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
+      await place.getByRole("button", { name: "Cloud · machine0" }).click();
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("machine0");
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBeNull();
+      await trigger.click();
+      await expect
+        .poll(() => place.getByRole("button", { name: "Cloud · machine0" }).isDisabled())
+        .toBe(false);
+      expect(await place.getByText("Machine", { exact: true }).count()).toBe(0);
+      expect(await place.locator('[data-value^="machine:"]').count()).toBe(0);
+      await captureUiProof(page, "optionless-cloud-profile.png");
+      await page.keyboard.press("Escape");
+
+      await page.locator(".new-session-page__message").fill("Use the configured machine size");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const dispatch = await gateway.waitForRequest("sessions.dispatch");
+      expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "machine0" });
+    });
+  });
+
   it("dispatches a cloud target before sending its first turn and shows placement", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(cloudProfileRefreshProofDir, { recursive: true });
+    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: cloudProfileRefreshProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     const runtimeLoad = createDeferred();
     let runtimeRequested = false;
-    await page.route(CLOUD_STARTUP_RUNTIME_REQUEST, async (route) => {
+    await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
       runtimeRequested = true;
       await runtimeLoad.promise;
       await route.continue();
@@ -40,10 +120,12 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      operatorScopes: ["operator.admin", "operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "projects.list",
         "sessions.create",
         "sessions.dispatch",
         "sessions.reclaim",
@@ -65,9 +147,34 @@ suite.define(() => {
           mainKey: "main",
           scope: "agent",
         },
+        "projects.list": {
+          projects: [
+            {
+              id: "openclaw",
+              displayName: "OpenClaw",
+              repoRoot: TARGET_REPO,
+              source: "registered",
+            },
+          ],
+        },
         "environments.list": {
           environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              machines: [
+                {
+                  id: "standard",
+                  label: "Standard",
+                  cpu: 32,
+                  memoryGb: 64,
+                  default: true,
+                },
+                { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
+              ],
+            },
+          ],
         },
         "fs.listDir": {
           path: WORKSPACE,
@@ -118,6 +225,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
       expect(
         await page.evaluate(() => ({
           hasSubtleCrypto: Boolean(globalThis.crypto.subtle),
@@ -130,12 +238,13 @@ suite.define(() => {
       await place.getByRole("button", { name: "Cloud · aws" }).click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      const detailTrigger = page.locator("#new-session-detail-trigger");
-      await detailTrigger.click();
-      const detail = page.locator("wa-popover.new-session-page__detail-popover");
-      expect(await detail.getByRole("button", { name: "Worktree" }).isDisabled()).toBe(true);
-      await detail.getByText("Cloud workers require a managed worktree", { exact: true }).waitFor();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
+      await trigger.click();
+      await place.getByText("Machine", { exact: true }).waitFor();
+      await place.getByRole("button", { name: /Fast/ }).click();
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await page.keyboard.press("Escape");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
 
       const effortSelect = page.locator(
         '.new-session-page__composer [data-chat-thinking-select="true"]',
@@ -162,8 +271,7 @@ suite.define(() => {
         .poll(() => effortSelect.evaluate((element) => element.closest("details")?.open ?? false))
         .toBe(false);
 
-      // Picking a Gateway repo keeps the cloud selection: that folder is what
-      // the managed worktree checks out and dispatch syncs to the worker.
+      // Both Gateway folders and registered projects remain eligible cloud sources.
       const projectTrigger = page.locator("#new-session-project-trigger");
       const project = page.locator("wa-popover.new-session-page__project-popover");
       await projectTrigger.click();
@@ -171,10 +279,46 @@ suite.define(() => {
       await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
-      await detailTrigger.click();
-      await pollLocatorText(detail.locator(".new-session-page__menu-note").last()).toContain(
-        "Syncs target-repo to the cloud worker",
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await projectTrigger.click();
+      await project.getByText("Advanced", { exact: true }).click();
+      await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("main");
+      await project.getByLabel("Base branch").fill("release");
+      await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("release");
+      await project.getByLabel("Base branch").fill("main");
+      await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
+        "Syncs target-repo to the selected runner",
+      );
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() =>
+          project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(false);
+
+      await projectTrigger.click();
+      await expect
+        .poll(() =>
+          project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(true);
+      await project.getByRole("button", { name: "OpenClaw", exact: true }).click();
+      await expect.poll(() => projectTrigger.getAttribute("data-project-id")).toBe("openclaw");
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await projectTrigger.click();
+      await expect
+        .poll(() =>
+          project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(true);
+      const checkoutName = project.getByLabel("Checkout name");
+      if (!(await checkoutName.isVisible())) {
+        await project.getByText("Advanced", { exact: true }).click();
+      }
+      await checkoutName.fill("cloud-e2e");
+      await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
+        "Syncs OpenClaw to the selected runner",
       );
       await captureUiProof(page, "01-cloud-worker-target.png");
       await page.keyboard.press("Escape");
@@ -183,7 +327,7 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
       await pastePng(composer);
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
       const startButton = page.getByRole("button", { name: "Start session" });
       await gateway.deferNext("environments.list");
       const profileRequests = (await gateway.getRequests("environments.list")).length;
@@ -205,22 +349,104 @@ suite.define(() => {
         .toBeGreaterThan(failedProfileRequests);
       await expect.poll(() => startButton.isDisabled()).toBe(false);
 
+      if (captureUiProofEnabled) {
+        await trigger.click();
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cloudProfileRefreshProofDir, "01-before-refresh.png"),
+        });
+        await page.keyboard.press("Escape");
+      }
+
+      await page.clock.install();
+      await gateway.setMethodResponse("environments.list", {
+        __mockError: { code: "UNAVAILABLE", message: "profile catalog remains unavailable" },
+      });
+      await gateway.deferNext("environments.list");
+      const requestsBeforePersistentFailure = (await gateway.getRequests("environments.list"))
+        .length;
+      await gateway.emitGatewayEvent("node.runnerInventory.changed");
+      await gateway.waitForRequest("environments.list", {
+        after: requestsBeforePersistentFailure,
+      });
+      await expect.poll(() => startButton.isDisabled()).toBe(true);
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cloudProfileRefreshProofDir, "02-refresh-pending.png"),
+        });
+      }
+      await gateway.rejectDeferred("environments.list", {
+        code: "UNAVAILABLE",
+        message: "profile catalog remains unavailable",
+      });
+
+      for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
+        const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
+        await page.clock.runFor(delayMs + 1);
+        await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
+      }
+      await page.clock.resume();
+      expect(await gateway.getRequests("environments.list")).toHaveLength(
+        requestsBeforePersistentFailure + 1 + CLOUD_PROFILE_RETRY_DELAYS_MS.length,
+      );
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
+      await trigger.click();
+      const retainedCloudProfile = place.getByRole("button", { name: "Cloud · aws" });
+      await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
+      await expect
+        .poll(() => tooltipTitleText(retainedCloudProfile))
+        .toBe("Cloud worker provider: crabbox");
+      await expect.poll(() => place.getByRole("button", { name: /Fast/ }).isVisible()).toBe(true);
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cloudProfileRefreshProofDir, "03-after-retry-exhaustion.png"),
+        });
+      }
+      await page.keyboard.press("Escape");
+
       await startButton.click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "cloud",
         message: "",
+        projectId: "openclaw",
         worktree: true,
         worktreeBaseRef: "main",
-        cwd: TARGET_REPO,
+        worktreeName: "cloud-e2e",
         thinkingLevel: "high",
       });
       expect(create.params).not.toHaveProperty("attachments");
+      expect(create.params).not.toHaveProperty("cwd");
       await expect.poll(() => runtimeRequested).toBe(true);
-      const startupStatus = await expectPendingCloudStartupBeforeRuntime(page, gateway, sessionKey);
+      const startupStatus = await expectPendingSessionPlacementStartupBeforeRuntime(
+        page,
+        gateway,
+        sessionKey,
+      );
       runtimeLoad.resolve();
-      await gateway.waitForRequest("sessions.dispatch");
+      const dispatch = await gateway.waitForRequest("sessions.dispatch");
+      expect(dispatch.params).toMatchObject({
+        key: sessionKey,
+        agentId: "cloud",
+        profileId: "aws",
+        machineClass: "fast",
+      });
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cloudProfileRefreshProofDir, "04-session-dispatch.png"),
+        });
+      }
       const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
         .length;
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
@@ -230,6 +456,7 @@ suite.define(() => {
       const publishPlacement = async (
         state: "requested" | "provisioning" | "syncing" | "starting",
         generation: number,
+        label: string,
         includeNeutral = false,
       ) => {
         await gateway.setMethodResponse("sessions.list", {
@@ -265,16 +492,16 @@ suite.define(() => {
           ts: Date.now(),
         });
         await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-        await pollLocatorText(startupStatus).toContain(`Cloud worker: ${state}`);
+        await pollLocatorText(startupStatus).toContain(label);
       };
 
-      for (const [state, generation] of [
-        ["requested", 1],
-        ["provisioning", 2],
-        ["syncing", 3],
-        ["starting", 4],
+      for (const [state, generation, label] of [
+        ["requested", 1, "Provisioning environment…"],
+        ["provisioning", 2, "Provisioning environment…"],
+        ["syncing", 3, "Preparing workspace…"],
+        ["starting", 4, "Starting…"],
       ] as const) {
-        await publishPlacement(state, generation, state === "starting");
+        await publishPlacement(state, generation, label, state === "starting");
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
       expect(await gateway.getRequests("sessions.describe")).toHaveLength(
@@ -295,7 +522,7 @@ suite.define(() => {
         app.runtime?.context.navigate("chat", { pathname });
       }, controlUiSessionPath(sessionKey));
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
-      await pollLocatorText(startupStatus).toContain("Cloud worker: starting");
+      await pollLocatorText(startupStatus).toContain("Starting…");
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
@@ -395,6 +622,7 @@ suite.define(() => {
       await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key: managedSessionKey, agentId: "cloud" });
+      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
     } finally {
       await context.close();
     }

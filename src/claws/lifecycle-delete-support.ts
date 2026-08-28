@@ -20,11 +20,12 @@ import {
   resolveWorkspaceBootstrapStatus,
 } from "../agents/workspace.js";
 import { pruneAgentConfig } from "../commands/agents.config.js";
-import { moveToTrash } from "../commands/onboard-helpers.js";
+import { moveToTrash } from "../commands/cleanup-utils.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -492,6 +493,10 @@ export function releaseClawRemoveRows(
   complete: boolean,
   options: OpenClawStateDatabaseOptions,
 ): void {
+  if (complete) {
+    // Keep the install record as the retry owner until database discovery is released.
+    unregisterOpenClawAgentDatabases({ agentId, env: options.env });
+  }
   runOpenClawStateWriteTransaction(({ db }) => {
     if (clawStateTableExists(db, "claw_workspace_files")) {
       for (const file of files.filter((candidate) => candidate.action !== "error")) {

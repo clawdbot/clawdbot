@@ -1,7 +1,11 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { extractToolCardsCached as extractToolCards } from "../../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached as extractToolCards,
+  isToolCardError,
+  resolveToolCardOutcome,
+} from "../../../lib/chat/tool-cards.ts";
 import * as toolDisplay from "../../../lib/chat/tool-display.ts";
 
 function resolveToolDisplay({ name = "" }: Parameters<typeof toolDisplay.resolveToolDisplay>[0]) {
@@ -31,6 +35,77 @@ afterEach(() => {
 });
 
 describe("tool-card extraction", () => {
+  it.each(["standalone", "block", "live"])("extracts browser tabs from %s results", (shape) => {
+    const details = {
+      browserTab: {
+        targetId: "tab-1",
+        url: "https://example.com",
+        title: "Example",
+        extra: "drop",
+      },
+    };
+    const result = { type: "toolresult", id: "call-browser", name: "browser", text: "ok" };
+    const message =
+      shape === "standalone"
+        ? { role: "toolResult", toolName: "browser", details, content: "ok" }
+        : {
+            role: "assistant",
+            details,
+            ...(shape === "live"
+              ? {
+                  __openclawToolStreamLive: true,
+                  __openclawToolStreamResultReceived: true,
+                }
+              : {}),
+            content: [
+              { type: "toolcall", id: "call-browser", name: "browser", arguments: {} },
+              { ...result, ...(shape === "block" ? { details } : {}) },
+            ],
+          };
+    const [card] = extractToolCards(message);
+    expect(card?.preview).toEqual({
+      kind: "browser-tab",
+      targetId: "tab-1",
+      url: "https://example.com",
+      title: "Example",
+    });
+    expect(card?.completed).toBe(true);
+  });
+
+  it.each([null, [], "tab", {}, { targetId: 3 }, { targetId: " " }])(
+    "ignores malformed browser tabs (%j)",
+    (browserTab) => {
+      expect(
+        extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview,
+      ).toBeUndefined();
+    },
+  );
+
+  it("drops non-string browser metadata and gives canvas previews precedence", () => {
+    const browserTab = { targetId: "tab-1", url: 42, title: [] };
+    expect(extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview).toEqual({
+      kind: "browser-tab",
+      targetId: "tab-1",
+    });
+    const canvas = {
+      kind: "canvas",
+      view: { id: "cv_app" },
+      presentation: { target: "assistant_message" },
+      mcpApp: { viewId: "cv_app" },
+    };
+    for (const message of [
+      { role: "tool", details: { browserTab, mcpAppPreview: canvas } },
+      {
+        role: "tool",
+        toolName: "canvas_render",
+        details: { browserTab },
+        content: JSON.stringify(canvas),
+      },
+    ]) {
+      expect(extractToolCards(message)[0]?.preview?.kind).toBe("canvas");
+    }
+  });
+
   it("pretty-prints structured args and pairs tool output onto the same card", () => {
     const cards = extractToolCards(
       {
@@ -429,14 +504,16 @@ describe("tool-card extraction", () => {
       "msg:view:1",
     );
 
-    expect(card?.preview?.kind).toBe("canvas");
-    expect(card?.preview?.surface).toBe("assistant_message");
-    expect(card?.preview?.render).toBe("url");
-    expect(card?.preview?.viewId).toBe("cv_inline");
-    expect(card?.preview?.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
-    expect(card?.preview?.title).toBe("Inline demo");
-    expect(card?.preview?.preferredHeight).toBe(420);
-    expect(card?.preview?.sandbox).toBe("scripts");
+    expect(card?.preview).toMatchObject({
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_inline",
+      url: "/__openclaw__/canvas/documents/cv_inline/index.html",
+      title: "Inline demo",
+      preferredHeight: 420,
+      sandbox: "scripts",
+    });
   });
 
   it("uses transcript metadata ids for history-backed tool messages", () => {
@@ -484,6 +561,21 @@ describe("tool-card extraction", () => {
 
   it("does not create previews for non-assistant canvas or generic outputs", () => {
     const cases = [
+      {
+        name: "node-panel target",
+        toolName: "show_widget",
+        content: JSON.stringify({
+          kind: "canvas",
+          view: {
+            id: "cv_node_panel",
+            url: "/__openclaw__/canvas/documents/cv_node_panel/index.html",
+          },
+          presentation: {
+            target: "node_panel",
+            title: "Device panel demo",
+          },
+        }),
+      },
       {
         name: "tool-card target",
         toolName: "canvas_render",
@@ -595,8 +687,7 @@ describe("isRunningToolCard", () => {
     expect(isRunningToolCard(liveCard, false)).toBe(false);
   });
 
-  it("derives a closed outcome from result presence and error state", async () => {
-    const { resolveToolCardOutcome } = await import("../../../lib/chat/tool-cards.ts");
+  it("derives a closed outcome from result presence and error state", () => {
     const call = { id: "t:call", name: "edit" } as const;
 
     expect(resolveToolCardOutcome(call, false)).toBe("unknown");
@@ -630,34 +721,41 @@ describe("isRunningToolCard", () => {
     expect(finished[0]).toMatchObject({ live: true, completed: true });
   });
 
-  it("keeps a live card running when partial update output emits a result block", () => {
-    // The stream emits toolresult blocks for partial `update` output; only
-    // resultReceived may complete a live card, or a running tool flips to
-    // "succeeded" (or "failed", if the partial text looks like an error).
-    const partial = extractToolCards({
-      role: "assistant",
-      toolCallId: "call-live",
-      __openclawToolStreamLive: true,
-      __openclawToolStreamResultReceived: false,
-      content: [
-        { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
-        { type: "toolresult", name: "bash", text: '{"error": "partial text"}' },
-      ],
-    });
-    expect(partial).toHaveLength(1);
-    expect(partial[0]).toMatchObject({ live: true, completed: false });
-    expect(partial[0]?.outputText).toContain("partial text");
+  it.each(['{"error": "partial text"}', '{"status":"failed"}', "Tool not found", "partial text"])(
+    "keeps partial output %s nonterminal until the live result arrives",
+    (text) => {
+      // The stream emits toolresult blocks for partial `update` output; only
+      // resultReceived may complete a live card, or a running tool flips to
+      // "succeeded" (or "failed", if the partial text looks like an error).
+      const partial = extractToolCards({
+        role: "assistant",
+        toolCallId: "call-live",
+        __openclawToolStreamLive: true,
+        __openclawToolStreamResultReceived: false,
+        content: [
+          { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
+          { type: "toolresult", name: "bash", text },
+        ],
+      });
+      expect(partial).toHaveLength(1);
+      expect(partial[0]).toMatchObject({ live: true, completed: false });
+      expect(partial[0]?.outputText).toBe(text);
+      expect(partial.map(isToolCardError)).toEqual([false]);
+      expect(partial.map((card) => resolveToolCardOutcome(card, true))).toEqual(["running"]);
+      expect(partial.map((card) => resolveToolCardOutcome(card, false))).toEqual(["unknown"]);
 
-    const done = extractToolCards({
-      role: "assistant",
-      toolCallId: "call-live",
-      __openclawToolStreamLive: true,
-      __openclawToolStreamResultReceived: true,
-      content: [
-        { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
-        { type: "toolresult", name: "bash", text: "ok" },
-      ],
-    });
-    expect(done[0]).toMatchObject({ live: true, completed: true });
-  });
+      const done = extractToolCards({
+        role: "assistant",
+        toolCallId: "call-live",
+        __openclawToolStreamLive: true,
+        __openclawToolStreamResultReceived: true,
+        content: [
+          { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
+          { type: "toolresult", name: "bash", text: "ok" },
+        ],
+      });
+      expect(done[0]).toMatchObject({ live: true, completed: true });
+      expect(done.map((card) => resolveToolCardOutcome(card, true))).toEqual(["succeeded"]);
+    },
+  );
 });

@@ -1,5 +1,9 @@
-// @vitest-environment node
-import { describe, expect, it } from "vitest";
+/* @vitest-environment jsdom */
+
+import { describe, expect, it, vi } from "vitest";
+import * as chatThread from "./chat-thread.ts";
+import { projectChatTranscript } from "./components/chat-transcript-projection.ts";
+import { threadProps } from "./components/chat-transcript.test-support.ts";
 import { resolveChatProjectionRunId } from "./tool-stream.ts";
 
 describe("resolveChatProjectionRunId", () => {
@@ -31,5 +35,38 @@ describe("resolveChatProjectionRunId", () => {
         queue: [reconnecting],
       }),
     ).toBe("run-local");
+  });
+});
+
+describe("transcript run identity", () => {
+  it("does not project a session row's first active run without an explicit run id", () => {
+    const build = vi.spyOn(chatThread, "buildCachedChatItems").mockReturnValue([]);
+
+    projectChatTranscript(
+      {
+        ...threadProps("run-id-projection"),
+        sessions: {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+          sessions: [
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              activeRunIds: ["arbitrary-first", "other-run"],
+            },
+          ],
+        },
+      },
+      {
+        setContentReady: vi.fn(),
+        syncMessageRows: vi.fn(),
+      } as unknown as Parameters<typeof projectChatTranscript>[1],
+    );
+
+    expect(build).toHaveBeenCalledWith(expect.objectContaining({ runId: null }));
   });
 });

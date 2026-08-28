@@ -16,8 +16,8 @@ import {
 } from "../../config/sessions.js";
 import {
   applySessionPatchProjection,
-  loadTranscriptEvents,
   preflightSessionTranscriptForManualCompact,
+  readTranscriptStatsSync,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -149,13 +149,13 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         return;
       }
     } else {
-      const transcriptEvents = await loadTranscriptEvents({
+      const transcriptStats = readTranscriptStatsSync({
         agentId: target.agentId,
         sessionId,
         sessionKey: compactTarget.primaryKey,
         storePath,
-      }).catch(() => []);
-      if (transcriptEvents.length === 0) {
+      });
+      if (transcriptStats.eventCount === 0) {
         respond(
           true,
           {
@@ -326,7 +326,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 key: target.canonicalKey,
                 compacted: trimResult.compacted,
                 ...(trimResult.compacted
-                  ? { archived: trimResult.archived, kept: trimResult.kept }
+                  ? { kept: trimResult.kept }
                   : "kept" in trimResult
                     ? { kept: trimResult.kept }
                     : { reason: "no transcript" }),
@@ -350,13 +350,13 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          const transcriptEvents = await loadTranscriptEvents({
+          const transcriptStats = readTranscriptStatsSync({
             agentId: target.agentId,
             sessionId,
             sessionKey: compactTarget.primaryKey,
             storePath,
-          }).catch(() => []);
-          if (transcriptEvents.length === 0) {
+          });
+          if (transcriptStats.eventCount === 0) {
             respond(
               true,
               {

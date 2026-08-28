@@ -1,16 +1,15 @@
 // Doctor plugin registry tests cover plugin registry checks and repair diagnostics.
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
-  writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
@@ -298,14 +297,32 @@ function expectedPluginIndexRecord(params: {
 }
 
 describe("maybeRepairPluginRegistryState", () => {
-  it("maps missing plugin registry state to a structured finding and dry-run effect", async () => {
+  it("distinguishes uninitialized registry state from retired config migration", async () => {
     const stateDir = makeTempDir();
-    const registryPath = resolveInstalledPluginIndexStorePath({ stateDir });
+    await expect(
+      detectPluginRegistryHealthIssues({
+        stateDir,
+        env: hermeticEnv(),
+        config: {},
+        prompter: { shouldRepair: false },
+      }),
+    ).resolves.toEqual([]);
 
+    const migrationStateDir = makeTempDir();
+    const registryPath = resolveInstalledPluginIndexStorePath({ stateDir: migrationStateDir });
     const [issue] = await detectPluginRegistryHealthIssues({
-      stateDir,
+      stateDir: migrationStateDir,
       env: hermeticEnv(),
-      config: {},
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "path",
+              installPath: migrationStateDir,
+            },
+          },
+        },
+      },
       prompter: { shouldRepair: false },
     });
 
@@ -313,22 +330,6 @@ describe("maybeRepairPluginRegistryState", () => {
       kind: "registry-missing-or-stale",
       path: registryPath,
     });
-    expect(
-      pluginRegistryIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
-    ).toMatchObject({
-      checkId: "core/doctor/plugin-registry",
-      severity: "warning",
-      path: registryPath,
-      fixHint: "Run `openclaw doctor --fix` to rebuild the plugin registry from enabled plugins.",
-    });
-    expect(pluginRegistryIssueToRepairEffect(expectDefined(issue, "issue test invariant"))).toEqual(
-      {
-        kind: "state",
-        action: "would-rebuild-plugin-registry",
-        target: registryPath,
-        dryRunSafe: false,
-      },
-    );
   });
 
   it("maps stale managed npm bundled plugin shadows to structured findings", async () => {
@@ -572,19 +573,19 @@ describe("maybeRepairPluginRegistryState", () => {
     const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
     runOpenClawStateWriteTransaction(
       ({ db }) => {
+        // Build the JSON text manually so the __proto__ key stays an own property.
+        const valueJson =
+          '{"revision":123,"index":{"version":1,"hostContractVersion":"test",' +
+          '"compatRegistryVersion":"test","migrationVersion":1,"policyHash":"test",' +
+          '"generatedAtMs":1,"installRecords":' +
+          installRecordsJson +
+          ',"plugins":[],"diagnostics":[]}}';
         db.prepare(
           `
-            INSERT OR REPLACE INTO installed_plugin_index (
-              index_key, version, host_contract_version, compat_registry_version,
-              migration_version, policy_hash, generated_at_ms, refresh_reason,
-              install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-            ) VALUES (
-              'installed-plugin-index', 1, 'test', 'test',
-              1, 'test', 1, NULL,
-              ?, '[]', '[]', NULL, 123
-            )
+            INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms)
+            VALUES ('plugins.installedIndex', ?, 123)
           `,
-        ).run(installRecordsJson);
+        ).run(valueJson);
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
     );
@@ -601,21 +602,22 @@ describe("maybeRepairPluginRegistryState", () => {
     const notes = vi.mocked(note).mock.calls.join("\n");
     expect(notes).toContain("Stop the Gateway");
     expect(notes).toContain(
-      "delete only the installed_plugin_index row with index_key='installed-plugin-index'",
+      "delete only the config_machine_state row with state_key='plugins.installedIndex'",
     );
     expect(notes).toContain("rerun `openclaw doctor --fix`");
     const row = runOpenClawStateWriteTransaction(
       ({ db }) =>
         db
           .prepare(
-            `SELECT install_records_json, updated_at_ms
-               FROM installed_plugin_index
-              WHERE index_key = 'installed-plugin-index'`,
+            `SELECT value_json, updated_at_ms
+               FROM config_machine_state
+              WHERE state_key = 'plugins.installedIndex'`,
           )
-          .get() as { install_records_json: string; updated_at_ms: number | bigint },
+          .get() as { value_json: string; updated_at_ms: number | bigint },
       { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
     );
-    expect(row).toEqual({ install_records_json: installRecordsJson, updated_at_ms: 123 });
+    expect(row.updated_at_ms).toBe(123);
+    expect(row.value_json).toContain(installRecordsJson);
   });
 
   it("removes stale managed npm packages that shadow bundled plugins during repair", async () => {

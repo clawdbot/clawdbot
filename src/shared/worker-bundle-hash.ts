@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 
 export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
+export const WORKER_BUNDLE_ARTIFACT_MODE = 0o700;
+export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";
+export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";
 
-type WorkerBundleHashEntry = {
+export function compareWorkerBundlePaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export type WorkerBundleHashEntry = {
   path: string;
   mode: number;
   size: number;

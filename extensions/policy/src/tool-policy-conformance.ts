@@ -23,7 +23,7 @@ const POLICY_TOOL_GROUPS: Record<string, readonly string[]> = {
     "computer",
     "mobile_ui",
     "agents_list",
-    "update_plan",
+    "progress_card",
     "image",
     "image_generate",
     "music_generate",
@@ -47,7 +47,7 @@ const POLICY_TOOL_GROUPS: Record<string, readonly string[]> = {
   "group:messaging": ["message"],
   "group:automation": ["heartbeat_respond", "cron", "gateway"],
   "group:nodes": ["nodes", "computer", "mobile_ui"],
-  "group:agents": ["agents_list", "update_plan"],
+  "group:agents": ["agents_list", "progress_card"],
   "group:media": ["image", "image_generate", "music_generate", "video_generate", "tts"],
 } as const;
 

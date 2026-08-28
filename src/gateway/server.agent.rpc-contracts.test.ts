@@ -4,7 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import type { RawData, WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { agentCommandMock, installGatewayTestHooks, onceMessage } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -32,8 +37,9 @@ beforeAll(async () => {
   harness = await startGatewayServerHarness();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.mocked(agentCommandMock).mockReset();
+  await prepareGatewayReplyRuntimeForTest();
 });
 
 afterAll(async () => {

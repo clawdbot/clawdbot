@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
-import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
+import type { CodexSessionCatalogControlFactory } from "../session-catalog-types.js";
 import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
 import type { CodexThread, CodexThreadForkResponse } from "./protocol.js";
@@ -39,14 +39,29 @@ export async function forkCodexUpstreamSession(
   params: AgentHarnessSessionForkParams,
   options: {
     bindingStore: CodexAppServerBindingStore;
-    control: CodexSessionCatalogControl;
+    controlFactory: CodexSessionCatalogControlFactory;
     harnessRuntimeId: string;
     resolveConfig?: () => OpenClawConfig | undefined;
     runtime: PluginRuntime;
   },
 ): Promise<AgentHarnessSessionForkResult> {
   try {
-    return await options.control.withPinnedConnection(async (control) => {
+    const sourceFingerprint =
+      params.upstream.kind === "codex-app-server"
+        ? readConnectionFingerprint(params.upstream.ref)
+        : undefined;
+    const requestControl = sourceFingerprint
+      ? options.controlFactory.forUpstream(params.source.agentId, sourceFingerprint)
+      : undefined;
+    if (!sourceFingerprint || !requestControl) {
+      return {
+        status: "failed",
+        code: "upstream-unavailable",
+        message:
+          "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
+      };
+    }
+    return await requestControl.withPinnedConnection(async (control) => {
       const incognito = isIncognitoSessionKey(params.targetKey);
       const clientId = control.clientId?.trim();
       if (incognito && !clientId) {
@@ -65,12 +80,7 @@ export async function forkCodexUpstreamSession(
         }
         await control.archiveThread(forkedThreadId).catch(() => undefined);
       };
-      const sourceFingerprint = readConnectionFingerprint(params.upstream.ref);
-      if (
-        params.upstream.kind !== "codex-app-server" ||
-        !sourceFingerprint ||
-        sourceFingerprint !== control.connectionFingerprint
-      ) {
+      if (sourceFingerprint !== control.connectionFingerprint) {
         return {
           status: "failed",
           code: "upstream-unavailable",
@@ -98,6 +108,7 @@ export async function forkCodexUpstreamSession(
       const rawResponse = await control.forkThread({
         threadId: params.upstream.threadId,
         beforeTurnId: resolved.boundary.beforeTurnId,
+        ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
         ...(incognito ? { ephemeral: true } : {}),
         excludeTurns: !incognito,
       });

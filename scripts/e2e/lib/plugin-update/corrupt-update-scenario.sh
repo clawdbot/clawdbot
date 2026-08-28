@@ -106,7 +106,7 @@ if [ "$update_status" -ne 0 ]; then
     exit "$post_core_status"
   fi
   node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-plugin-result /tmp/openclaw-update-corrupt-plugin-post-core.json demo-corrupt-plugin
-  node scripts/e2e/lib/plugin-update/probe.mjs assert-disabled-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
+  node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
   exit 0
 fi
 
@@ -117,4 +117,4 @@ if ! node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-update /tmp/ope
   openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.err >&2
   exit 1
 fi
-node scripts/e2e/lib/plugin-update/probe.mjs assert-disabled-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
+node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin

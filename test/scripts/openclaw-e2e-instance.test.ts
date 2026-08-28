@@ -118,9 +118,15 @@ function createPackageInstallFixture(tempDir: string) {
     npmArgsPath: path.join(tempDir, "npm-args.txt"),
     packagePath: path.join(tempDir, "openclaw.tgz"),
     prefixPath: path.join(tempDir, "prefix"),
+    redactorPath: path.join(tempDir, "redactor.mjs"),
     timeoutArgsPath: path.join(tempDir, "timeout-args.txt"),
   };
   writePackageFixture(fixture.packagePath);
+  fs.writeFileSync(
+    fixture.redactorPath,
+    "export const redactSensitiveText = (value) => value;\n",
+    "utf8",
+  );
   return fixture;
 }
 
@@ -132,7 +138,7 @@ function runPackageInstall(
     [
       `openclaw_e2e_install_package ${shellQuote(fixture.logPath)} ${shellQuote("fixture package")} ${shellQuote(fixture.prefixPath)}`,
     ],
-    env,
+    { ...env, OPENCLAW_E2E_REDACTOR_MODULE: fixture.redactorPath },
     undefined,
     "; ",
   );
@@ -526,6 +532,51 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
+  it("preserves child stdin, arguments, and exit status through the Node watchdog", () => {
+    withTempDir("openclaw-e2e-instance-node-watchdog-stdin-", (tempDir) => {
+      writeNodeShim(tempDir);
+      const payload = "harmless watchdog stdin\nsecond line\n";
+      const args = ["two words", "--literal", "quote'arg"];
+      const child =
+        'const fs = require("node:fs"); process.stdout.write(JSON.stringify({ stdin: fs.readFileSync(0, "utf8"), args: process.argv.slice(1) })); process.exit(37);';
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_maybe_timeout 5s node -e ${shellQuote(child)} -- ${args.map(shellQuote).join(" ")}`,
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({ PATH: tempDir }),
+          input: payload,
+          timeout: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(37);
+      expect(result.stderr).toContain("using Node watchdog");
+      expect(JSON.parse(result.stdout)).toEqual({ stdin: payload, args });
+    });
+  });
+
+  it("treats Node-watchdog timeout values as data, not Node options", () => {
+    withTempDir("openclaw-e2e-instance-node-watchdog-option-", (tempDir) => {
+      writeNodeShim(tempDir);
+      const result = runBashWithHelper(
+        ["openclaw_e2e_maybe_timeout --version node --version"],
+        { PATH: tempDir },
+        5_000,
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("unsupported timeout value: --version");
+      expect(result.stdout).toBe("");
+    });
+  });
+
   for (const [shellSignal, expectedStatus] of [
     ["TERM", "143"],
     ["HUP", "129"],
@@ -878,6 +929,12 @@ exit 1
       const logLabel = path.basename(tempDir);
       const logDir = path.join(tempDir, "logs");
       const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
+      const redactorPath = path.join(tempDir, "redactor.mjs");
+      fs.writeFileSync(
+        redactorPath,
+        "export const redactSensitiveText = (value) => value;\n",
+        "utf8",
+      );
       writeFakeTimeout(path.join(tempDir, "timeout"), true);
       writeBashExecutable(path.join(tempDir, "fixture-command"), [
         'printf "DO_NOT_PRINT_OLD_COMMAND_LOG\\n"',
@@ -893,6 +950,7 @@ exit 1
           OPENCLAW_E2E_COMMAND_TIMEOUT: "17s",
           OPENCLAW_E2E_LOG_DIR: logDir,
           OPENCLAW_E2E_LOG_TAIL_BYTES: "80",
+          OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
           OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
         },
         undefined,
@@ -906,6 +964,38 @@ exit 1
       expect(fs.readFileSync(path.join(logDir, logFile), "utf8")).toContain(
         "DO_NOT_PRINT_OLD_COMMAND_LOG",
       );
+    });
+  });
+
+  it("redacts logged command failures before replay", () => {
+    withTempDir("openclaw-e2e-instance-run-log-redact-", (tempDir) => {
+      const redactorPath = path.join(tempDir, "redactor.mjs");
+      fs.writeFileSync(
+        redactorPath,
+        'export const redactSensitiveText = (value) => value.replaceAll("fixture-secret", "***");\n',
+        "utf8",
+      );
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeBashExecutable(path.join(tempDir, "fixture-command"), [
+        'printf "actionable failure fixture-secret\\n"',
+        "exit 23",
+      ]);
+
+      const result = runBashWithHelper(
+        ["openclaw_e2e_run_logged redacted-failure fixture-command"],
+        {
+          PATH: `${tempDir}${path.delimiter}${hostPath}`,
+          OPENCLAW_E2E_LOG_DIR: path.join(tempDir, "logs"),
+          OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
+          OPENCLAW_TEST_TIMEOUT_ARGS: path.join(tempDir, "timeout-args.txt"),
+        },
+        undefined,
+        "; ",
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("actionable failure ***");
+      expect(result.stdout).not.toContain("fixture-secret");
     });
   });
 

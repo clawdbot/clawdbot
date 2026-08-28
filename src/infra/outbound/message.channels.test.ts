@@ -1,13 +1,17 @@
 // Covers channel-specific outbound adapter behavior for message sends,
 // structured payloads, and channel capability interactions.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { pinRuntimePaths } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
 
 const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
   setActivePluginRegistry(registry);
@@ -22,6 +26,7 @@ vi.mock("../../gateway/call.js", () => ({
 
 let sendMessage: typeof import("./message.js").sendMessage;
 let sendPoll: typeof import("./message.js").sendPoll;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeAll(async () => {
   ({ sendMessage, sendPoll } = await import("./message.js"));
@@ -57,6 +62,61 @@ function gatewayCall(): {
     params?: Record<string, unknown>;
   };
 }
+
+describe("sendMessage live-only delivery", () => {
+  it("keeps ephemeral-authority sends out of recovery after revocation", async () => {
+    const stateDir = tempDirs.make("openclaw-live-only-delivery-");
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        pinRuntimePaths();
+        let authorityActive = true;
+        const sendText = vi.fn(async (ctx: { onPlatformSendDispatch?: () => Promise<void> }) => {
+          await ctx.onPlatformSendDispatch?.();
+          return { channel: "threadchat", messageId: "live-only-1" };
+        });
+        const plugin: ChannelPlugin = {
+          ...createChannelTestPluginBase({ id: "threadchat" }),
+          outbound: { deliveryMode: "direct", sendText },
+        };
+        setRegistry(createTestRegistry([{ pluginId: "threadchat", source: "test", plugin }]));
+        const onDeliveryIntent = vi.fn(() => {
+          throw new Error("simulated crash after queue persistence");
+        });
+
+        await sendMessage({
+          cfg: {},
+          to: "channel:town-square",
+          content: "live only",
+          channel: "threadchat",
+          skipQueue: true,
+          onDeliveryIntent,
+          onPlatformSendDispatch: async () => {
+            if (!authorityActive) {
+              throw new Error("delivery authority revoked");
+            }
+          },
+        });
+        expect(onDeliveryIntent).not.toHaveBeenCalled();
+        expect(sendText).toHaveBeenCalledOnce();
+
+        authorityActive = false;
+        const recoveredDelivery = vi.fn(async () => []);
+        await drainPendingDeliveriesCore({
+          drainKey: `live-only-${stateDir}`,
+          logLabel: "Live-only delivery test",
+          cfg: {},
+          stateDir,
+          deliver: recoveredDelivery,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          selectEntry: () => ({ match: true, bypassBackoff: true }),
+        });
+        expect(recoveredDelivery).not.toHaveBeenCalled();
+      });
+    } finally {
+      pinRuntimePaths();
+    }
+  });
+});
 
 describe("sendMessage channel normalization", () => {
   it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {
@@ -251,7 +311,7 @@ function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasO
 
 describe("sendPoll channel normalization", () => {
   it("normalizes plugin aliases for gateway polls", async () => {
-    callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
+    callGatewayMock.mockResolvedValueOnce({ messageId: "p1", channelId: "channel-1" });
     setDemoPollRegistry({ deliveryMode: "gateway" });
 
     const result = await sendPoll({
@@ -267,11 +327,15 @@ describe("sendPoll channel normalization", () => {
     expect(gatewayCall()?.params?.idempotencyKey).toBe("stable-poll-key");
     expect(result.channel).toBe("demo-alias-channel");
     expect(result.via).toBe("gateway");
+    expect(result.result).toEqual({
+      messageId: "p1",
+      target: { kind: "channel", id: "channel-1" },
+    });
   });
 
   it("uses direct poll fallback for direct channel plugins", async () => {
     const cfg = { channels: {} };
-    const sendPollMock = vi.fn(async () => ({ messageId: "p1" }));
+    const sendPollMock = vi.fn(async () => ({ messageId: "p1", conversationId: "conv-1" }));
     setDemoPollRegistry({ supportsAnonymousPolls: true, sendPoll: sendPollMock });
 
     const result = await sendPoll({
@@ -291,7 +355,10 @@ describe("sendPoll channel normalization", () => {
       channel: "demo-alias-channel",
       to: "conversation:demo-target",
       via: "direct",
-      result: { messageId: "p1" },
+      result: {
+        messageId: "p1",
+        target: { kind: "conversation", id: "conv-1" },
+      },
     });
     expect(sendPollMock).toHaveBeenCalledWith({
       cfg,
@@ -473,6 +540,61 @@ describe("gateway url override hardening", () => {
       filename: "delivery.txt",
       contentType: "text/plain",
     });
+  });
+
+  it("rejects revoked authority before a gateway send RPC", async () => {
+    setThreadChatGatewayRegistry();
+    const onPlatformSendDispatch = vi.fn(async () => {
+      throw new Error("delivery authority revoked");
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        to: "channel:town-square",
+        content: "hi",
+        channel: "threadchat",
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toThrow("delivery authority revoked");
+
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("carries live authority across a gateway send RPC", async () => {
+    setThreadChatGatewayRegistry();
+    let authorityActive = true;
+    const queueDelivery = vi.fn();
+    const platformSend = vi.fn();
+    callGatewayMock.mockImplementationOnce(async (call: { agentRuntimeIdentityToken?: string }) => {
+      if (call.agentRuntimeIdentityToken && !authorityActive) {
+        throw new Error("agent runtime authority is no longer active");
+      }
+      queueDelivery();
+      platformSend();
+      return { messageId: "must-not-send" };
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        to: "channel:town-square",
+        content: "must not escape",
+        channel: "threadchat",
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          resolveAgentRuntimeIdentityToken: async () => "runtime-identity",
+        },
+        onPlatformSendDispatch: async () => {
+          authorityActive = false;
+        },
+      }),
+    ).rejects.toThrow("agent runtime authority is no longer active");
+
+    expect(queueDelivery).not.toHaveBeenCalled();
+    expect(platformSend).not.toHaveBeenCalled();
   });
 
   it("drops unused buffer metadata when explicit gateway media is present", async () => {

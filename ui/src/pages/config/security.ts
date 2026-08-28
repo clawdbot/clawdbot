@@ -4,8 +4,7 @@
 import { html, type TemplateResult } from "lit";
 import { icons } from "../../components/icons.ts";
 import {
-  renderDocsLink,
-  renderSettingsDefaultState,
+  renderSettingsDefaultDescription,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -16,12 +15,9 @@ import {
 import { t } from "../../i18n/index.ts";
 import { PROFILE_OPTIONS } from "../../lib/agents/display.ts";
 
-const SECURITY_DOCS_URL = "https://docs.openclaw.ai/gateway/security";
-
 export type SecurityOverview = {
   gatewayAuth: string;
   execPolicy: string;
-  deviceAuth: boolean;
   browserEnabled: boolean;
   browserEnabledOverridden: boolean;
   toolProfile: string;
@@ -34,9 +30,7 @@ type SecurityViewProps = {
   canPairDevice: boolean;
   onPairMobile?: () => void;
   onBrowserEnabledToggle?: (enabled: boolean) => void;
-  onBrowserEnabledReset?: () => void;
   onToolProfileChange?: (profile: string) => void;
-  onToolProfileReset?: () => void;
   /** Embedded schema editor; it owns autosave status and the restart banner. */
   editor: TemplateResult;
 };
@@ -45,25 +39,12 @@ function renderSecurityOverview(props: SecurityViewProps) {
   const {
     gatewayAuth,
     execPolicy,
-    deviceAuth,
     browserEnabled,
     browserEnabledOverridden,
     toolProfile,
     toolProfileOverridden,
   } = props.security;
   const normalizedToolProfile = toolProfile.trim() || "full";
-  const browserDefaultState = renderSettingsDefaultState({
-    value: t("common.enabled"),
-    overridden: browserEnabledOverridden,
-    disabled: props.configBusy,
-    onReset: () => props.onBrowserEnabledReset?.(),
-  });
-  const toolProfileDefaultState = renderSettingsDefaultState({
-    value: t("agents.toolCatalog.profiles.full"),
-    overridden: toolProfileOverridden,
-    disabled: props.configBusy,
-    onReset: () => props.onToolProfileReset?.(),
-  });
   const profileOptions = PROFILE_OPTIONS.map((profile) => ({
     value: profile.id as string,
     label: t(profile.labelKey),
@@ -86,31 +67,23 @@ function renderSecurityOverview(props: SecurityViewProps) {
     }),
     renderSettingsToggleRow({
       title: t("quickSettings.security.browserEnabled"),
-      description: browserDefaultState.description,
+      description: renderSettingsDefaultDescription(t("common.enabled"), browserEnabledOverridden),
       checked: browserEnabled,
       disabled: props.configBusy,
-      actions: browserDefaultState.action,
       onChange: (enabled) => props.onBrowserEnabledToggle?.(enabled),
     }),
     renderSettingsRow({
       title: t("quickSettings.security.toolProfile"),
-      description: toolProfileDefaultState.description,
+      description: renderSettingsDefaultDescription(
+        t("agents.toolCatalog.profiles.full"),
+        toolProfileOverridden,
+      ),
       stacked: true,
-      control: html`
-        ${toolProfileDefaultState.action}
-        ${renderSettingsSegmented({
-          value: normalizedToolProfile,
-          options: profileOptions,
-          disabled: props.configBusy,
-          onChange: (profile) => props.onToolProfileChange?.(profile),
-        })}
-      `,
-    }),
-    renderSettingsRow({
-      title: t("quickSettings.security.deviceAuth"),
-      control: renderSettingsStatus({
-        kind: deviceAuth ? "ok" : "warn",
-        label: deviceAuth ? t("common.enabled") : t("common.disabled"),
+      control: renderSettingsSegmented({
+        value: normalizedToolProfile,
+        options: profileOptions,
+        disabled: props.configBusy,
+        onChange: (profile) => props.onToolProfileChange?.(profile),
       }),
     }),
     renderSettingsRow({
@@ -132,13 +105,7 @@ function renderSecurityOverview(props: SecurityViewProps) {
 export function renderSecurity(props: SecurityViewProps) {
   return html`
     <section class="security-page">
-      <div class="settings-page">
-        <p class="settings-page__intro">
-          ${t("quickSettings.security.intro")}
-          ${renderDocsLink(SECURITY_DOCS_URL, t("common.learnMore"))}
-        </p>
-        ${renderSecurityOverview(props)}
-      </div>
+      <div class="settings-page">${renderSecurityOverview(props)}</div>
       ${props.editor}
     </section>
   `;

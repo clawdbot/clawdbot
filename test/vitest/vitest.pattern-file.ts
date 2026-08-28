@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+const repoRoot = path.resolve(import.meta.dirname, "../..");
+
 const VITEST_OPTION_VALUE_FLAGS = new Set([
   "-c",
   "-r",
@@ -132,13 +134,23 @@ function narrowIncludePatterns(
     return null;
   }
 
-  return [
-    ...new Set(
-      candidatePatterns.filter((value) =>
-        includePatterns.some((pattern) => patternsCouldOverlap(value, pattern)),
-      ),
-    ),
-  ];
+  // Narrowing must intersect the CLI selection with the lane's own scope. When the lane is
+  // rooted deeper than the CLI selection, keep the lane: returning the caller's broader
+  // directory pattern re-admits files the lane never owns — `unit-fast` picks up the stateful
+  // files it excludes, and `contracts-*` picks up every sibling test outside `contracts/`.
+  // Both run `isolate: false`, so those extra files share a worker and pollute unrelated ones.
+  const narrowed = new Set<string>();
+  for (const candidate of candidatePatterns) {
+    const candidatePrefix = literalPrefixForGlobPattern(candidate);
+    for (const laneScope of includePatterns) {
+      if (!patternsCouldOverlap(candidate, laneScope)) {
+        continue;
+      }
+      const laneScopePrefix = literalPrefixForGlobPattern(laneScope);
+      narrowed.add(laneScopePrefix.length > candidatePrefix.length ? laneScope : candidate);
+    }
+  }
+  return [...narrowed];
 }
 
 function isPlainRepoRelativePath(value: string): boolean {
@@ -209,6 +221,9 @@ export function intersectIncludePatterns(
     return null;
   }
 
+  const literalIncludes = includePatterns.every(isPlainRepoRelativePath)
+    ? new Set(includePatterns)
+    : null;
   const result: string[] = [];
   for (const candidate of candidatePatterns) {
     if (!isPlainRepoRelativePath(candidate)) {
@@ -221,7 +236,11 @@ export function intersectIncludePatterns(
       result.push(...intersection);
       continue;
     }
-    if (includePatterns.some((include) => path.matchesGlob(candidate, include))) {
+    if (
+      literalIncludes
+        ? literalIncludes.has(candidate)
+        : includePatterns.some((include) => path.matchesGlob(candidate, include))
+    ) {
       result.push(candidate);
     }
   }
@@ -248,13 +267,10 @@ export function loadPatternListFromEnv(
   return loadPatternListFile(filePath, envKey);
 }
 
-function loadPatternListFromArgvForScope(
-  argv: string[] = process.argv,
-  options: { scopedDir?: string } = {},
-): string[] | null {
+function collectVitestFileFilters(args: string[]): string[] {
   const values: string[] = [];
   let skipNext = false;
-  for (const value of argv.slice(2)) {
+  for (const value of args) {
     if (skipNext) {
       skipNext = false;
       continue;
@@ -271,9 +287,26 @@ function loadPatternListFromArgvForScope(
     }
     values.push(value);
   }
+  return values;
+}
 
+export function collectVitestExcludePatterns(args: string[]): string[] {
+  return args
+    .flatMap((arg, index) => {
+      if (arg === "--exclude") {
+        return args[index + 1] ? [args[index + 1]!] : [];
+      }
+      return arg.startsWith("--exclude=") ? [arg.slice("--exclude=".length)] : [];
+    })
+    .filter(Boolean);
+}
+
+function loadPatternListFromArgvForScope(
+  argv: string[] = process.argv,
+  options: { scopedDir?: string } = {},
+): string[] | null {
   const scopedDir = normalizeScopedDir(options.scopedDir);
-  const patterns = values
+  const patterns = collectVitestFileFilters(argv.slice(2))
     .map((value) => applyScopedDir(value, scopedDir))
     .filter(looksLikeCliIncludePattern)
     .map(normalizeCliPattern);
@@ -292,4 +325,61 @@ export function narrowIncludePatternsForCli(
   }
 
   return narrowIncludePatterns(includePatterns, cliPatterns);
+}
+
+export function relativizeScopedPatterns(values: string[], dir = ""): string[] {
+  const normalizedDir = dir.replaceAll("\\", "/").replace(/\/+$/u, "");
+  return values.map((value) => {
+    const normalized = value.replaceAll("\\", "/");
+    if (!normalizedDir) return normalized;
+    if (normalized === normalizedDir) return ".";
+    const prefix = `${normalizedDir}/`;
+    return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+  });
+}
+
+/** Project one candidate through the same scoped include and CLI file filters as Vitest. */
+export function matchesVitestCliSelection(
+  file: string,
+  include: string[],
+  args: string[],
+  scopedDir: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const patterns =
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
+    narrowIncludePatternsForCli(include, ["node", "vitest", ...args], { scopedDir }) ??
+    include;
+  const relativeFile = path.posix.relative(scopedDir, file);
+  const absoluteFile = path.resolve(repoRoot, file);
+  if (
+    !relativizeScopedPatterns(patterns, scopedDir).some((pattern) =>
+      path.matchesGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
+    ) ||
+    collectVitestExcludePatterns(args).some((pattern) =>
+      path.matchesGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
+    )
+  ) {
+    return false;
+  }
+  const filters = collectVitestFileFilters(args).map((filter) =>
+    process.platform === "win32" ? filter.replaceAll("\\", "/") : filter,
+  );
+  const dir = path.resolve(repoRoot, scopedDir);
+  // Vitest filterFiles uses OR/substring matching, not glob matching, after discovery.
+  return (
+    filters.length === 0 ||
+    filters.some((filter) => {
+      if (path.isAbsolute(filter) && absoluteFile.startsWith(filter)) {
+        return true;
+      }
+      const relativeFilter = filter.endsWith("/")
+        ? path.join(path.relative(dir, filter), "/")
+        : path.relative(dir, filter);
+      return (
+        relativeFile.toLocaleLowerCase().includes(filter.toLocaleLowerCase()) ||
+        relativeFile.toLocaleLowerCase().includes(relativeFilter.toLocaleLowerCase())
+      );
+    })
+  );
 }

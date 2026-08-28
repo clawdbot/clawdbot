@@ -37,6 +37,7 @@ import {
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
+  resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
@@ -44,6 +45,8 @@ import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-man
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
@@ -85,7 +88,7 @@ import {
   type ManagedServiceRootRedirect,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
-export { updateFinalizeCommand } from "./update-command-post-core.js";
+export { updateFinalizeCommand } from "./update-command-finalize.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
@@ -165,6 +168,12 @@ async function updateCommandInternal(
     defaultRuntime.exit(1);
     return;
   }
+  if (opts.dryRun !== true) {
+    await assertOpenClawStateWriteAllowedAtPath({
+      databasePath: resolveOpenClawStateSqlitePath(process.env),
+      recoverOrphanedSidecars: false,
+    });
+  }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const discoveredRoot = await resolveUpdateRoot();
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
@@ -219,7 +228,7 @@ async function updateCommandInternal(
 
   let configSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: true,
-    ...(opts.dryRun === true ? { observe: false } : {}),
+    observe: false,
   });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
@@ -239,7 +248,7 @@ async function updateCommandInternal(
   }
 
   const installKind = updateStatus.installKind;
-  const selectedChannel =
+  const channel =
     requestedChannel ??
     storedChannel ??
     (installKind === "git"
@@ -248,7 +257,7 @@ async function updateCommandInternal(
           currentVersion: VERSION,
           installKind,
         }).channel);
-  if (selectedChannel === "extended-stable" && installKind === "git") {
+  if (channel === "extended-stable" && installKind === "git") {
     await reportPreMutationUpdateFailure({
       root,
       installKind,
@@ -258,19 +267,17 @@ async function updateCommandInternal(
     });
     return;
   }
-  const switchToGit = requestedChannel === "dev" && installKind !== "git";
+  // An effective dev channel (stored or explicit) selects the git flow — the
+  // documented dev contract is a git checkout. Exception: --tag is a one-run
+  // package-target override, so it keeps a stored-dev package install on the
+  // package path; only an explicitly requested dev channel outranks it.
+  const explicitTag = normalizeTag(opts.tag);
+  const switchToGit =
+    installKind !== "git" &&
+    (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
-  const channel =
-    requestedChannel ??
-    storedChannel ??
-    (updateInstallKind === "git"
-      ? DEFAULT_GIT_CHANNEL
-      : resolveEffectiveUpdateChannel({
-          currentVersion: VERSION,
-          installKind: updateInstallKind,
-        }).channel);
   if (channel === "dev" && requestedChannel !== "dev") {
     const resolvedDevTarget = readDevUpdateTargetOrExit();
     if (!resolvedDevTarget.ok) {
@@ -279,12 +286,17 @@ async function updateCommandInternal(
     devTarget = resolvedDevTarget.target;
   }
 
-  const explicitTag = normalizeTag(opts.tag);
-  if (channel === "extended-stable" && explicitTag) {
+  const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
+  if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
     await reportPreMutationUpdateFailure({
       root,
       installKind: updateInstallKind,
-      reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      reason: unsupportedMainTag
+        ? "unsupported-package-target"
+        : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      message: unsupportedMainTag
+        ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
+        : undefined,
       opts,
       controlPlaneUpdateSentinelMeta,
     });
@@ -375,6 +387,18 @@ async function updateCommandInternal(
           managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
         packageName: installedPackageName,
       });
+      const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
+      if (npmLifecycleGate.error) {
+        await reportPreMutationUpdateFailure({
+          root,
+          installKind: updateInstallKind,
+          reason: "npm lifecycle policy preflight",
+          message: npmLifecycleGate.error,
+          opts,
+          controlPlaneUpdateSentinelMeta,
+        });
+        return;
+      }
     }
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
@@ -582,6 +606,11 @@ async function updateCommandInternal(
     }
   }
 
+  // Startup migrations belong to the freshly installed Doctor. Admit shared-state
+  // mutation only after every pre-install refusal has passed.
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
   await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
 
   const showProgress = !opts.json && process.stdout.isTTY;
@@ -631,6 +660,7 @@ async function updateCommandInternal(
   await finishUpdate({
     result,
     root,
+    previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
     configSnapshot: finalizationConfigSnapshot,
     requestedChannel,

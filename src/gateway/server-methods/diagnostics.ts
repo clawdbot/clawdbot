@@ -5,10 +5,14 @@ import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
+import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /** Gateway handler for payload-free stability diagnostics. */
 export const diagnosticsHandlers: GatewayRequestHandlers = {
+  "diagnostics.lanes": ({ respond }) => {
+    respond(true, { ts: Date.now(), ...getCommandLaneDiagnostics() }, undefined);
+  },
   "diagnostics.stability": async ({ params, respond }) => {
     try {
       // Normalization owns parameter bounds so malformed diagnostic requests

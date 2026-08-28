@@ -318,9 +318,47 @@ describe("pw-tools-core", () => {
     expect(harness.activeHandlerCount()).toBe(0);
   });
 
+  it("releases a cancelled waiter before the next download", async () => {
+    const harness = createDownloadEventHarness();
+    const state = sessionMocks.ensurePageState();
+    const controller = new AbortController();
+    const cancelled = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+      signal: controller.signal,
+    });
+
+    await Promise.resolve();
+    expect(state.downloadWaiterDepth).toBe(1);
+    controller.abort(new Error("request aborted"));
+    await expect(cancelled).rejects.toThrow("request aborted");
+    expect(state.downloadWaiterDepth).toBe(0);
+    expect(harness.activeHandlerCount()).toBe(0);
+
+    const successor = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "successor-content", "utf8");
+    });
+    await Promise.resolve();
+    harness.trigger({
+      url: () => "https://example.com/successor.bin",
+      suggestedFilename: () => "successor.bin",
+      saveAs,
+    });
+
+    await expect(successor).resolves.toMatchObject({ suggestedFilename: "successor.bin" });
+    expect(saveAs).toHaveBeenCalledOnce();
+  });
+
   it("lets only the latest overlapping explicit waiter save the download", async () => {
     const harness = createDownloadEventHarness();
     const state = sessionMocks.ensurePageState();
+    const cancel = vi.fn(async () => {});
     const saveAs = vi.fn(async (outPath: string) => {
       await fs.writeFile(outPath, "latest-content", "utf8");
     });
@@ -343,10 +381,12 @@ describe("pw-tools-core", () => {
       url: () => "https://example.com/latest.bin",
       suggestedFilename: () => "latest.bin",
       saveAs,
+      cancel,
     });
 
     await expect(first).rejects.toThrow("superseded by another waiter");
     await expect(latest).resolves.toMatchObject({ suggestedFilename: "latest.bin" });
+    expect(cancel).not.toHaveBeenCalled();
     expect(saveAs).toHaveBeenCalledOnce();
     expect(state.downloadWaiterDepth).toBe(0);
     expect(harness.activeHandlerCount()).toBe(0);

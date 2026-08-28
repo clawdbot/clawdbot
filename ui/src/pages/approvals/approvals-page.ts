@@ -18,14 +18,53 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { renderDocsLink, renderSettingsPage } from "../../components/settings-ui.ts";
+import {
+  renderLearnMoreLink,
+  renderSettingsPage,
+  renderSettingsPageHeader,
+} from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
+
+type StandingGrantRow = {
+  grantId: string;
+  agentId: string;
+  cronJobId: string;
+  cronJobName: string | null;
+  command: string;
+  cwd: string | null;
+  createdAtMs: number;
+  expiresAtMs: number | null;
+  revokedAtMs: number | null;
+  revokedBy: string | null;
+  lastUsedAtMs: number | null;
+  useCount: number;
+};
+
+function grantStateLabel(grant: StandingGrantRow, nowMs: number): string {
+  if (grant.revokedAtMs !== null) {
+    return t("standingGrants.stateRevoked");
+  }
+  if (grant.expiresAtMs !== null && grant.expiresAtMs <= nowMs) {
+    return t("standingGrants.stateExpired");
+  }
+  if (grant.expiresAtMs !== null) {
+    const days = Math.max(1, Math.ceil((grant.expiresAtMs - nowMs) / 86_400_000));
+    return t("standingGrants.stateExpiresIn", { count: String(days) });
+  }
+  return t("standingGrants.stateUntilRevoked");
+}
+
+function grantIsActive(grant: StandingGrantRow, nowMs: number): boolean {
+  return grant.revokedAtMs === null && (grant.expiresAtMs === null || grant.expiresAtMs > nowMs);
+}
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 
@@ -121,6 +160,9 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @state() private items: TerminalApprovalSnapshot[] = [];
+  @state() private grants: StandingGrantRow[] = [];
+  @state() private grantsError: string | null = null;
+  @state() private revokingGrantId: string | null = null;
   @state() private nextCursor: string | null = null;
   @state() private loading = false;
   @state() private loadingMore = false;
@@ -132,6 +174,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private requestGeneration = 0;
   private hasLoaded = false;
+  private historyRefreshPending = false;
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
     (gateway) => {
@@ -140,29 +183,55 @@ class ApprovalsPage extends OpenClawLightDomElement {
       // gateway's rows/cursor/error so stale history is not shown and "Load more"
       // cannot append across sources. Mirrors the client-change reset below.
       if (this.gatewaySource !== gateway) {
-        this.requestGeneration += 1;
-        this.loading = false;
-        this.loadingMore = false;
-        this.hasLoaded = false;
-        this.items = [];
-        this.nextCursor = null;
-        this.error = null;
+        this.resetHistory(true);
       }
       this.gatewaySource = gateway;
       this.applyGatewaySnapshot(gateway.snapshot);
-      return gateway.subscribe((snapshot) => {
+      const stopSnapshots = gateway.subscribe((snapshot) => {
         if (this.gatewaySource === gateway && this.context.gateway === gateway) {
           this.applyGatewaySnapshot(snapshot);
         }
       });
+      const stopEvents = gateway.subscribeEvents((event) => {
+        if (
+          this.gatewaySource !== gateway ||
+          this.context.gateway !== gateway ||
+          !this.approvalsAccess ||
+          !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
+          !parseApprovalResolvedEvent(event.event, event.payload)
+        ) {
+          return;
+        }
+        this.historyRefreshPending = true;
+        if (!this.loading && !this.loadingMore) {
+          void this.loadPage(true);
+        }
+      });
+      return () => {
+        stopSnapshots();
+        stopEvents();
+      };
     },
   );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.requestGeneration += 1;
+    this.resetHistory(false);
     this.gatewaySource = null;
     super.disconnectedCallback();
+  }
+
+  private resetHistory(clearData: boolean) {
+    this.requestGeneration += 1;
+    this.loading = false;
+    this.loadingMore = false;
+    this.historyRefreshPending = false;
+    if (clearData) {
+      this.hasLoaded = false;
+      this.items = [];
+      this.nextCursor = null;
+      this.error = null;
+    }
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
@@ -174,17 +243,9 @@ class ApprovalsPage extends OpenClawLightDomElement {
     this.approvalsAccess = nextApprovalsAccess;
     if (clientChanged || approvalAccessChanged) {
       this.client = snapshot.client;
-      this.requestGeneration += 1;
-      this.items = [];
-      this.nextCursor = null;
-      this.error = null;
-      this.hasLoaded = false;
-      this.loading = false;
-      this.loadingMore = false;
+      this.resetHistory(true);
     } else if (connectionChanged) {
-      this.requestGeneration += 1;
-      this.loading = false;
-      this.loadingMore = false;
+      this.resetHistory(false);
       if (snapshot.phase === "connected") {
         this.hasLoaded = false;
       }
@@ -220,6 +281,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       return;
     }
     if (reset) {
+      this.historyRefreshPending = false;
       this.loading = true;
     } else {
       this.loadingMore = true;
@@ -249,17 +311,120 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.items = reset ? result.items : [...this.items, ...result.items];
       this.nextCursor = result.nextCursor ?? null;
       this.hasLoaded = true;
+      if (reset) {
+        void this.loadGrants(client, isCurrent);
+      }
     } catch (error) {
       if (isCurrent()) {
-        this.error = String(error);
+        this.error = formatUiError(error);
         this.hasLoaded = true;
       }
     } finally {
       if (isCurrent()) {
         this.loading = false;
         this.loadingMore = false;
+        if (this.historyRefreshPending) {
+          void this.loadPage(true);
+        }
       }
     }
+  }
+
+  private async loadGrants(client: GatewayBrowserClient, isCurrent: () => boolean): Promise<void> {
+    try {
+      const result = await client.request<{ grants: StandingGrantRow[] }>(
+        "exec.approval.grants.list",
+        {},
+      );
+      if (!isCurrent()) {
+        return;
+      }
+      this.grants = Array.isArray(result.grants) ? result.grants : [];
+      this.grantsError = null;
+    } catch (error) {
+      if (isCurrent()) {
+        this.grantsError = formatUiError(error);
+      }
+    }
+  }
+
+  private async revokeGrant(grantId: string): Promise<void> {
+    const client = this.client;
+    if (!client || this.revokingGrantId !== null) {
+      return;
+    }
+    this.revokingGrantId = grantId;
+    try {
+      await client.request("exec.approval.grants.revoke", { grantId });
+      const nowMs = Date.now();
+      this.grants = this.grants.map((grant) =>
+        grant.grantId === grantId ? { ...grant, revokedAtMs: nowMs } : grant,
+      );
+      this.grantsError = null;
+    } catch (error) {
+      this.grantsError = formatUiError(error);
+    } finally {
+      this.revokingGrantId = null;
+    }
+  }
+
+  private renderGrants() {
+    const nowMs = Date.now();
+    return html`
+      <h2 class="settings-section-title">${t("standingGrants.title")}</h2>
+      <p class="settings-section-subtitle">${t("standingGrants.description")}</p>
+      ${this.grantsError ? html`<div class="callout danger">${this.grantsError}</div>` : nothing}
+      <div class="data-table-container">
+        <table class="data-table standing-grants-table">
+          <thead>
+            <tr>
+              <th>${t("standingGrants.columns.automation")}</th>
+              <th>${t("standingGrants.columns.command")}</th>
+              <th>${t("standingGrants.columns.uses")}</th>
+              <th>${t("standingGrants.columns.state")}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${this.grants.length === 0
+              ? html`
+                  <tr>
+                    <td colspan="5" class="data-table-empty-cell">
+                      <div class="data-table-empty-state" role="status" aria-live="polite">
+                        ${t("standingGrants.empty")}
+                      </div>
+                    </td>
+                  </tr>
+                `
+              : this.grants.map(
+                  (grant) => html`
+                    <tr>
+                      <td>${grant.cronJobName ?? grant.cronJobId}</td>
+                      <td class="mono">${grant.command}</td>
+                      <td>${grant.useCount}</td>
+                      <td>${grantStateLabel(grant, nowMs)}</td>
+                      <td>
+                        ${grantIsActive(grant, nowMs)
+                          ? html`
+                              <button
+                                class="btn btn--sm"
+                                ?disabled=${this.revokingGrantId !== null}
+                                @click=${() => void this.revokeGrant(grant.grantId)}
+                              >
+                                ${this.revokingGrantId === grant.grantId
+                                  ? t("standingGrants.revoking")
+                                  : t("standingGrants.revoke")}
+                              </button>
+                            `
+                          : nothing}
+                      </td>
+                    </tr>
+                  `,
+                )}
+          </tbody>
+        </table>
+      </div>
+    `;
   }
 
   private renderTable() {
@@ -331,10 +496,6 @@ class ApprovalsPage extends OpenClawLightDomElement {
   override render() {
     const body = renderSettingsPage(
       html`
-        <p class="settings-page__intro">
-          ${t("approvalHistory.description")}
-          ${renderDocsLink(APPROVALS_DOCS_URL, t("common.learnMore"))}
-        </p>
         ${!this.connected
           ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
           : nothing}
@@ -355,14 +516,20 @@ class ApprovalsPage extends OpenClawLightDomElement {
               </div>
             `
           : nothing}
+        ${this.approvalsAccess ? this.renderGrants() : nothing}
+        ${this.approvalsAccess
+          ? html`<h2 class="settings-section-title">${t("standingGrants.historyTitle")}</h2>`
+          : nothing}
         ${this.approvalsAccess ? this.renderTable() : nothing}
       `,
       { wide: true },
     );
     return html`
-      <section class="content-header">
-        <div><div class="page-title">${titleForRoute("approvals")}</div></div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("approvals"),
+        subtitle: html`${t("approvalHistory.description")}
+        ${renderLearnMoreLink(APPROVALS_DOCS_URL)}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

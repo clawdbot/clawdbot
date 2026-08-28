@@ -3,7 +3,6 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import {
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
@@ -87,7 +86,7 @@ function hasNonEmptyValue(value: unknown): boolean {
   if (!value || typeof value !== "object") {
     return value != null;
   }
-  return Object.values(value as Record<string, unknown>).some(hasNonEmptyValue);
+  return Object.values(value).some(hasNonEmptyValue);
 }
 
 function hasExplicitMessageToolRoute(args: Record<string, unknown>): boolean {
@@ -118,7 +117,7 @@ function readMessageToolVisibleText(args: Record<string, unknown>): string | und
   for (const field of ["message", "text", "content", "body", "caption"] as const) {
     const value = args[field];
     if (typeof value === "string" && value.trim()) {
-      return stripInlineDirectiveTagsForDisplay(value).text;
+      return value;
     }
   }
   return undefined;
@@ -366,9 +365,15 @@ function buildMessageToolVisibleReplyMirror(
   pending: PendingMessageToolVisibleReply,
 ): Record<string, unknown> {
   const sourceMessageSeq = asPositiveSafeInteger(readRecord(pending.anchor["__openclaw"])?.seq);
+  const deliveryMirror = [pending.deliveryMirrorAnchor, pending.completionAnchor].find((message) =>
+    isOpenClawDeliveryMirrorAssistantMessage(message),
+  );
+  const content = Array.isArray(deliveryMirror?.content)
+    ? deliveryMirror.content
+    : [{ type: "text", text: pending.text }];
   const mirror: Record<string, unknown> = {
     role: "assistant",
-    content: [{ type: "text", text: pending.text }],
+    content,
     openclawMessageToolMirror: {
       toolName: "message",
       ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
@@ -396,6 +401,13 @@ function readMessageToolDeliveryMirrorText(message: Record<string, unknown>): st
     return undefined;
   }
   return displayTextForDuplicateCheck(message);
+}
+
+function readMessageToolDeliveryMirrorCallId(message: Record<string, unknown>): string | undefined {
+  if (!isOpenClawDeliveryMirrorAssistantMessage(message)) {
+    return undefined;
+  }
+  return normalizeOptionalString(readRecord(message.openclawDeliveryMirror)?.toolCallId);
 }
 
 export function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
@@ -467,9 +479,20 @@ export function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] 
 
     const flushAfterCurrentMessage: PendingMessageToolVisibleReply[] = [];
     const deliveryMirrorText = readMessageToolDeliveryMirrorText(record);
-    const matchingDeliveryMirrorPending = deliveryMirrorText
+    const deliveryMirrorCallId = readMessageToolDeliveryMirrorCallId(record);
+    const exactDeliveryMirrorPending = deliveryMirrorCallId
+      ? pending.filter((item) => item.toolCallId === deliveryMirrorCallId)
+      : [];
+    const textMatchingDeliveryMirrorPending = deliveryMirrorText
       ? pending.filter((item) => item.text.trim() === deliveryMirrorText)
       : [];
+    const matchingDeliveryMirrorPending = deliveryMirrorCallId
+      ? exactDeliveryMirrorPending.length === 1
+        ? exactDeliveryMirrorPending
+        : []
+      : textMatchingDeliveryMirrorPending.length === 1
+        ? textMatchingDeliveryMirrorPending
+        : [];
     const duplicateDeliveryMirror = matchingDeliveryMirrorPending.some((item) => item.succeeded);
     const visibleReplies = extractMessageToolVisibleReplies(record);
     if (visibleReplies.length > 0) {
@@ -480,10 +503,7 @@ export function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] 
           succeeded: false,
         });
       }
-    } else if (
-      matchingDeliveryMirrorPending.length === 0 &&
-      isRenderableAssistantDisplayMessage(record)
-    ) {
+    } else if (deliveryMirrorText === undefined && isRenderableAssistantDisplayMessage(record)) {
       clearPending();
     }
 

@@ -34,6 +34,7 @@ import {
   detectAndLoadPromptImages,
   detectImageReferences,
 } from "../embedded-agent-runner/run/images.js";
+import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
@@ -72,16 +73,15 @@ export function resolveCliRunQueueKey(params: {
   cliSessionId?: string;
   ownerKey?: string;
 }): string {
-  const requiresLiveSessionSerialization =
-    isClaudeCliBackendId(params.backendId) && params.liveSession === "claude-stdio";
+  const requiresLiveSessionSerialization = params.liveSession !== undefined;
   if (params.serialize === false && !requiresLiveSessionSerialization) {
     return `${params.backendId}:${params.runId}`;
   }
+  const ownerKey = params.ownerKey?.trim();
+  if (requiresLiveSessionSerialization && ownerKey) {
+    return `${params.backendId}:owner:${ownerKey}`;
+  }
   if (isClaudeCliBackendId(params.backendId)) {
-    const ownerKey = params.ownerKey?.trim();
-    if (requiresLiveSessionSerialization && ownerKey) {
-      return `${params.backendId}:owner:${ownerKey}`;
-    }
     const sessionId = params.cliSessionId?.trim();
     if (sessionId) {
       return `${params.backendId}:session:${sessionId}`;
@@ -111,12 +111,12 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
   ownerNumbers?: string[];
-  heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -160,7 +160,6 @@ export function buildCliAgentSystemPrompt(params: {
     silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
-    heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
@@ -175,6 +174,7 @@ export function buildCliAgentSystemPrompt(params: {
     userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
 
@@ -391,6 +391,7 @@ export async function prepareCliPromptImagePayload(params: {
   localRoots?: readonly string[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
 }): Promise<{
   prompt: string;
@@ -402,6 +403,7 @@ export async function prepareCliPromptImagePayload(params: {
   const needsHydration =
     params.imagePrompt !== undefined ||
     Boolean(params.media?.length) ||
+    Boolean(params.mediaImageLayout) ||
     (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
   const imageResult = needsHydration
     ? await detectAndLoadPromptImages({
@@ -411,6 +413,7 @@ export async function prepareCliPromptImagePayload(params: {
         model: { input: ["text", "image"] },
         existingImages: params.images,
         imageOrder: params.imageOrder,
+        mediaImageLayout: params.mediaImageLayout,
         maxBytes: MAX_IMAGE_BYTES,
         localRoots: params.localRoots,
       })

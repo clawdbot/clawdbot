@@ -16,9 +16,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Hold the release scope once a release branch or Code SHA exists. Validate and
   ship that exact release; do not turn moving `main` into a second work queue.
 - Record every active validation run as the immutable tuple **Validation SHA +
-  Tooling SHA**. Validation SHA maps to the Code SHA for product validation or
+  Tooling SHA + rerun group**. Validation SHA maps to the Code SHA for product validation or
   the Release SHA for changelog-only validation; it is not a third release
   identity. A branch or temporary ref is context and transport.
+- Freeze the candidate SHA/ref and Tooling SHA/ref once. Main lineage authorizes
+  the initial Tooling SHA selection; it does not authorize replacing that
+  tooling after `main` advances.
 - Apply a release firebreak after the Code SHA is frozen. Admit only confirmed
   product defects, package/provenance defects in the bytes to publish, security
   defects, or failures that make publication impossible. Queue other findings
@@ -26,6 +29,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Use trusted `main` workflow revisions as immutable dispatch sources. Do not
   adopt newer main code, repair unrelated main CI, wait for broad main health,
   or expand a release fix because the workflow source lives on `main`.
+- Once publication binds the Tooling SHA to an exact protected lightweight
+  `release-publish/<12sha>-<provenance-run>` tag, that live tag-to-SHA mapping
+  remains authoritative when `main` advances. The suffix records tag-creation
+  provenance; it is not the current parent run id.
 - Touch `main` only for an operator-requested change or the smallest critical
   main-owned blocker that prevents this release and cannot be handled from the
   release branch. If the required main landing policy is blocked by unrelated
@@ -41,9 +48,51 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   entitlement. Mandatory live providers must pass a real completion probe
   before release dispatch. Fix the credential first; do not add an alternate
   auth path merely to bypass a failed release credential.
-- Full Release Validation collects independent child failures to terminal
-  completion by default. Pass `fail_fast=true` only when the shorter
-  first-failure cancellation path is preferable.
+- Full Release Validation separates exact-child dispatch, Release Decision,
+  and Diagnostic Drain. With `fail_fast=false`, it makes zero child
+  cancellation calls; Diagnostic Drain follows every selected child to
+  terminal unless the collector itself is cancelled or loses GitHub API
+  access. With
+  `fail_fast=true`, Release Decision may cancel only the exact still-active
+  child that owns a blocking failure.
+- Same-parent continuation requires the original root to have been dispatched
+  with `fail_fast=false`. The controller verifies that exact logged input
+  before any rerun mutation.
+- After dispatch, one immutable execution-plan artifact records the original
+  parent attempt, exact child tuples and titles, selected coverage, gates, and
+  reuse identity. The same bytes are saved under an exact run-ID cache key.
+  Decision, Drain, manifest writing, evidence validation, and final verification
+  consume the artifact for their current attempt. A collector retry restores
+  the cached plan, validates it, re-uploads its artifact, and adopts the same
+  children; missing plan state is an orchestration failure, not permission to
+  reconstruct the plan or redispatch.
+- Reused evidence is not trusted merely because plan sealing found it. Release
+  Decision repeats the sealed target SHA, evidence SHA, policy, changed paths,
+  selected run, root run, source manifest, trusted tooling identity, and
+  exact-child checks before returning `passed`.
+- Parent retries select the newest Decision and Drain artifacts independently;
+  both must bind the same immutable plan even when their source attempts differ.
+- Child retries are part of the same immutable plan only when the child run ID,
+  workflow path, ref, Tooling SHA, dispatch title, event, target, candidate, and
+  validation inputs remain exact. Newer child attempts replace matching jobs;
+  jobs absent from a newer attempt carry forward. A duplicate job identity,
+  missing attempt, regressed attempt, or changed tuple fails closed.
+- Use `pnpm frv status|continue --failed|verify` for attempt-aware recovery.
+  The controller is stateless: the immutable execution plan, exact GitHub run
+  attempts, Diagnostic Drain, and final manifest are the only authorities. It
+  never writes a tag, package, registry entry, release candidate, or
+  publication.
+- Post-merge controller proof must use the reviewed landed SHA on protected
+  `main` through the non-release `FRV Proof Broker` and `FRV Proof Fixture`.
+  Require the exact fixed no-op fixture run to advance from its intentional
+  attempt-one failure to an attempt-two pass. The broker must emit its receipt
+  without creating a release candidate, release artifact, publication,
+  repository ref, replacement parent, or other workflow mutation. This is the
+  hosted GitHub failed-job rerun proof; focused controller tests own immutable
+  plan eligibility, green-attempt preservation, same-parent collection, and
+  strict-verifier invocation. Never use a real Full Release Validation run for
+  this proof. See
+  [Full Release Validation](/reference/full-release-validation#post-merge-continuation-proof).
 - Use one release operator, one transition-only watcher, and at most one
   investigator for the current failed surface. Do not build audit-review-plan
   trees around a single workflow transition.
@@ -79,9 +128,18 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 
 ## Run identity and retry budget
 
-Record Validation SHA, Tooling SHA, target context ref, parent run id, attempt,
-and phase before watching or recovering Full Release Validation. Keep Code SHA
-and Release SHA separately in the lifecycle ledger.
+Record Validation SHA, Tooling SHA/ref, target context ref, parent run id,
+attempt, and phase before watching or recovering Full Release Validation. Keep
+Code SHA and Release SHA separately in the lifecycle ledger. Record the
+immutable Release Publish parent receipt separately from tag provenance.
+
+For the core and plugin npm mutations enforced by this foundation, re-read the
+exact protected lightweight tag and revalidate the exact parent run tuple
+immediately before each publish or dist-tag mutation. Reject a missing, moved,
+annotated, or wrong-SHA tag; a repository, workflow, run id, attempt, tooling
+identity, or parent-state mismatch; and any same-name branch. Never refresh
+either identity from current `main`. Treat other privileged writers as blocked
+until their dependent enforcement changes land.
 
 - Conceptual phases map to current inputs as follows:
   - `beta-publish`: `release_profile=beta`, `run_release_soak=false`
@@ -90,12 +148,35 @@ and Release SHA separately in the lifecycle ledger.
   - `stable-publish`: `release_profile=stable`
 - Keep at most one active parent for the same Validation SHA + Tooling SHA + rerun
   group. Concurrency does not cancel an older exact child automatically.
-- Parent cancellation or timeout leaves an adopted identity-checked child
-  running. The operator must cancel that exact child explicitly when it is no
-  longer useful.
+- Parent cancellation or timeout leaves adopted identity-checked children
+  running. The operator must cancel an exact child explicitly when it is no
+  longer useful. Do not infer a child identity from branch, title prefix, or
+  latest-run order.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
+- For a supported parent, `pnpm frv continue --failed --run <parent-run-id>`
+  adopts any active newer child attempt, reruns failed child jobs in parallel,
+  leaves green children untouched, then reruns the parent once to restore the
+  immutable plan and seal a trusted all-group manifest. It does not start a
+  second child retry while an attempt is active.
+- Inspect without mutation:
+
+  ```bash
+  pnpm frv status --run <parent-run-id>
+  pnpm frv verify --run <successful-parent-run-id>
+  ```
+
+- Parents whose immutable plan predates attempt-aware evidence cannot be
+  continued. Start a fresh all-group Full Release Validation; never reconstruct
+  old state or dispatch a replacement parent.
+
+- Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
+  `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,
+  or `performance`. Never use the removed `release-checks` handle. `qa` is
+  only a direct-child manual aggregate, not a controller retry API.
+- Filtered retries fail closed unless the filter belongs to the selected group.
+  Never turn an empty derived filter into an unfiltered broad run.
 - A new all-group parent is justified only when shared orchestration changed,
   earlier evidence is invalid for the selected tuple, or the operator explicitly
   requests it. Record the invalidating event.
@@ -127,6 +208,8 @@ Start product performance evidence as early as the Code SHA exists, in
 parallel with other release work:
 
 ```bash
+# Full Release Validation profile gate: true for stable, false for beta.
+fail_on_regression=true
 gh workflow run openclaw-performance.yml \
   --repo openclaw/openclaw \
   --ref main \
@@ -135,7 +218,7 @@ gh workflow run openclaw-performance.yml \
   -f repeat=3 \
   -f deep_profile=false \
   -f live_openai_candidate=false \
-  -f fail_on_regression=true
+  -f fail_on_regression="$fail_on_regression"
 ```
 
 - Do not wait for full release validation to start this early perf signal.
@@ -159,14 +242,35 @@ Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
   satisfy a newer `main`-only check.
 
 ```bash
+TOOLING_SHA="<exact-main-ancestor-sha>"
 node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
+
+For regular `release/*` validation, never raw-dispatch the workflow without
+`target_context_ref` (the helper's `--target-ref` records it). Canonical
+`release/*` and `extended-stable/*` workflow refs remain supported routes, but
+their Telegram child must retain the exact parent workflow ref and SHA through
+OIDC and attestation. Trusted-workflow release-branch CI passes `target_ref` +
+`release_candidate_ref`; never `release_gate` there — it requires workflow head
+== target. (The PR-head ci.yml fallback below is a different dispatch and does
+use `release_gate=true`.)
+
+The release branch may advance after the Code SHA is frozen. The helper accepts
+that frozen SHA only while it remains an ancestor of the canonical release
+branch and its package version is either the branch's final version or a
+matching beta prerelease. Alpha remains on the Tideclaw path with a matching
+alpha branch and exact alpha tag. Extended-stable branches and all tags require
+an exact package-version match.
+Always pass the previously recorded full Tooling SHA for release-branch runs.
+Never replace it with a fresh `main` lookup. The Tooling SHA must declare the
+current release-isolation contract; older workflow revisions fail closed.
 
 For immutable workflow proof on a moving `main`, use
 `pnpm ci:full-release --sha <code-sha> --target-ref
-release/YYYY.M.PATCH`. Its canonical `release-ci/*` ref keeps evidence reuse
+release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Its canonical `release-ci/*` ref keeps evidence reuse
 enabled after proving the workflow commit is still on trusted `main` lineage.
 Pass `-f reuse_evidence=false` only when the operator intentionally needs a
 fresh full run.
@@ -178,20 +282,22 @@ against the Release SHA. The parent must report
 dispatching child lanes. Npm preflight and package/install acceptance still run
 against the exact Release SHA and its new tarball bytes.
 
-The SHA-pinned helper infers `beta` for alpha/beta package versions and `stable`
-for stable/correction versions and passes the Validation SHA + Tooling SHA run
-identity. `beta` without soak is the bounded beta-publish gate. Run broad live
-QA and E2E as postpublish confidence with `run_release_soak=true` or explicit
-groups. Stable and full profiles force the release soak. Use a narrow
-`rerun_group` after focused fixes; never widen automatically.
+The SHA-pinned helper infers `beta` for matching beta release candidates and
+exact alpha tags, and `stable` for stable/correction versions, then passes the
+Validation SHA + Tooling SHA run identity. `beta` without soak is the bounded
+beta-publish gate. Run broad live QA and E2E as postpublish confidence with
+`run_release_soak=true` or explicit groups. Stable and full profiles force the
+release soak. Use a narrow `rerun_group` after focused fixes; never widen
+automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
 
 ### Extended-stable validation
 
-For `.33+`, dispatch from and target the canonical branch; the regular
-SHA-pinned helper would produce a rejected `release-ci/*` identity:
+For `.33+`, dispatch from and target the canonical branch. This direct route is
+intentional: downstream extended-stable evidence requires the canonical branch
+identity, while Telegram still authenticates the exact branch SHA:
 
 ```bash
 RELEASE_SHA="$(git rev-parse HEAD)"
@@ -221,13 +327,44 @@ Use the transition-only summary watcher instead of repeated raw polling:
 node scripts/release-ci-summary.mjs <full-release-run-id> --watch
 ```
 
+Do not start this watcher when the SHA-pinned helper is still the foreground
+owner. The helper reads the exact Release Decision artifact itself. On
+`blocked_diagnostics_running`, it exits nonzero immediately, keeps the temporary
+refs, and leaves Diagnostic Drain collecting the remaining terminal evidence.
+The watcher behaves the same way for separately dispatched parents: it reports
+the Release Decision blocker once and exits while the drain continues.
+
 For a one-shot snapshot:
 
 ```bash
 node scripts/release-ci-summary.mjs <full-release-run-id>
 ```
 
+`release-ci-summary` accepts Full Release Validation parent runs only.
+Diverged release-branch logs: `--first-parent` plus a bounded count.
 Stop watchers before ending the turn or switching strategy.
+
+Interpret state precisely:
+
+- `qualifying`: no decisive blocker yet; selected children are still active.
+- `blocked_diagnostics_running`: publication is blocked; Diagnostic Drain is
+  still collecting independent failures. Diagnose now, but do not retry until
+  the drain is terminal.
+- `passed`: all required policy and exact-child evidence passed.
+- `blocked_complete`: publication is blocked and all selected diagnostics are
+  terminal.
+- `orchestration_error`: GitHub API or collector failure prevented a verdict.
+  This is not a provenance mismatch. Recover the collector against the same
+  exact children; never redispatch tests to repair collection.
+- `cancelled_with_children`: the collector was cancelled while exact children
+  remained active.
+
+The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
+failure and timing manifest. Use it after an early blocker instead of
+restarting `all` merely to discover what the still-running children found.
+The stable `full-release-execution-plan-<run-id>` artifact is the identity
+source within each collector attempt; retry attempts restore its immutable
+run-ID-cached bytes first.
 
 ## Failure Triage
 

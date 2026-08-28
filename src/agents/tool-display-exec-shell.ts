@@ -318,42 +318,70 @@ function findHeredocBodyEnd(
   return undefined;
 }
 
+function findArithmeticSecondParen(command: string, firstParenIndex: number): number | undefined {
+  let index = firstParenIndex + 1;
+  // Bash removes unquoted backslash-newline pairs before recognizing the `((` token.
+  while (command[index] === "\\" && command[index + 1] === "\n") {
+    index += 2;
+  }
+  return command[index] === "(" ? index : undefined;
+}
+
 export function scanTopLevelChars(
   command: string,
   visit: (char: string, index: number) => boolean | void,
   visitHeredocBody?: (operatorIndex: number, start: number, end: number) => void,
 ): void {
-  let quote: '"' | "'" | undefined;
+  let quote: '"' | "'" | "ansi-c" | undefined;
   let escaped = false;
   let atWordStart = true;
   let arithmeticDepth = 0;
   let plainSubshellDepth = 0;
   let pendingHeredocs: HeredocMarker[] = [];
+  let previousUnquotedDollar = false;
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command.charAt(i);
+    const previousWasUnquotedDollar: boolean = previousUnquotedDollar;
+    previousUnquotedDollar = false;
 
     if (escaped) {
       escaped = false;
-      if (char !== "\n") {
+      if (char === "\n") {
+        // A line continuation disappears before tokenization; keep both code units absent.
+        previousUnquotedDollar = previousWasUnquotedDollar;
+        if (visit("", i - 1) === false || visit("", i) === false) {
+          return;
+        }
+      } else {
         atWordStart = false;
       }
       continue;
     }
+
+    if (quote === "'") {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
     if (char === "\\") {
+      // Defer adjacency until the escaped character reveals whether this is a continuation.
+      previousUnquotedDollar = previousWasUnquotedDollar;
       escaped = true;
       continue;
     }
 
     if (quote) {
-      if (char === quote) {
+      const terminator = quote === "ansi-c" ? "'" : quote;
+      if (char === terminator) {
         quote = undefined;
       }
       continue;
     }
 
     if (char === '"' || char === "'") {
-      quote = char;
+      quote = char === "'" && previousWasUnquotedDollar ? "ansi-c" : char;
       atWordStart = false;
       continue;
     }
@@ -367,11 +395,11 @@ export function scanTopLevelChars(
       continue;
     }
 
-    const startsArithmetic =
-      arithmeticDepth === 0 &&
-      char === "(" &&
-      command[i + 1] === "(" &&
-      (command[i - 1] === "$" || atWordStart);
+    const arithmeticSecondParenIndex =
+      arithmeticDepth === 0 && char === "(" && (previousWasUnquotedDollar || atWordStart)
+        ? findArithmeticSecondParen(command, i)
+        : undefined;
+    const startsArithmetic = arithmeticSecondParenIndex !== undefined;
     const inArithmetic = arithmeticDepth > 0 || startsArithmetic;
 
     if (!inArithmetic) {
@@ -403,7 +431,15 @@ export function scanTopLevelChars(
       }
     }
 
-    if (!inArithmetic && visit(char, i) === false) {
+    if (arithmeticSecondParenIndex !== undefined) {
+      // Expose only the `((` opener; separators inside the arithmetic body stay protected.
+      if (
+        visit(char, i) === false ||
+        visit(command.charAt(arithmeticSecondParenIndex), arithmeticSecondParenIndex) === false
+      ) {
+        return;
+      }
+    } else if (!inArithmetic && visit(char, i) === false) {
       return;
     }
 
@@ -444,6 +480,7 @@ export function scanTopLevelChars(
     } else {
       atWordStart = false;
     }
+    previousUnquotedDollar = char === "$";
   }
 }
 
@@ -481,8 +518,68 @@ function splitTopLevel(
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+// `&` and `|` start commands unless they belong to redirects such as `>&`, `&>`, or `>|`.
+// Bash pipeline prefixes remain part of the command start that follows them.
+const SHELL_COMMAND_START_PATTERN = String.raw`(?:^|;|\n|(?<!>)\||(?<![<>])&(?![>&]))\s*(?:(?:time(?:\s+-p)?(?:\s+--)?|!)(?:\s+|(?=\()))*`;
+const SHELL_TOKEN_END_PATTERN = String.raw`(?=$|[\s;&|()<>])`;
+const SHELL_NAMED_COMPOUND_START_PATTERN =
+  `(?:(?:for|while|until|if|case|select|coproc)${SHELL_TOKEN_END_PATTERN}|` +
+  `(?:\\[\\[|\\{)${SHELL_TOKEN_END_PATTERN})`;
+const SHELL_COMPOUND_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\((?!\\())`;
+const SHELL_FUNCTION_BODY_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\()`;
+const SHELL_COMPOUND_AT_COMMAND_START_RE = new RegExp(
+  `${SHELL_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
+  "u",
+);
+const SHELL_FUNCTION_NAME_PATTERN = `[^\\s;&|()<>]+`;
+const SHELL_FUNCTION_AT_COMMAND_START_RE = new RegExp(
+  `${SHELL_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
+  "u",
+);
+const SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE = new RegExp(
+  `${SHELL_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
+  "u",
+);
+const SHELL_SUBSTITUTION_COMMAND_START_PATTERN = String.raw`(?:\$\((?!\()|[<>]\()\s*(?:(?:time(?:\s+-p)?(?:\s+--)?|!)(?:\s+|(?=\()))*`;
+const SHELL_COMPOUND_AT_SUBSTITUTION_START_RE = new RegExp(
+  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
+  "u",
+);
+const SHELL_FUNCTION_AT_SUBSTITUTION_START_RE = new RegExp(
+  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
+  "u",
+);
+const SHELL_PAREN_FUNCTION_AT_SUBSTITUTION_START_RE = new RegExp(
+  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
+  "u",
+);
+
+/** Returns whether unquoted shell syntax contains a compound-command introducer. */
+export function hasShellCompoundCommand(command: string): boolean {
+  // Keep quoted and escaped fragments token-occupying so `"x"select` cannot become `select`.
+  const syntaxChars = Array.from({ length: command.length }, () => "\0");
+  scanTopLevelChars(command, (char, index) => {
+    syntaxChars[index] = char;
+    return true;
+  });
+  const syntax = syntaxChars.join("");
+  return (
+    SHELL_COMPOUND_AT_COMMAND_START_RE.test(syntax) ||
+    SHELL_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
+    SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
+    SHELL_COMPOUND_AT_SUBSTITUTION_START_RE.test(syntax) ||
+    SHELL_FUNCTION_AT_SUBSTITUTION_START_RE.test(syntax) ||
+    SHELL_PAREN_FUNCTION_AT_SUBSTITUTION_START_RE.test(syntax)
+  );
+}
+
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
 export function splitTopLevelStages(command: string): string[] {
+  // Shell keywords delimit compound commands, not standalone executables. This lightweight
+  // display parser cannot safely distinguish their internal separators from outer stages.
+  if (hasShellCompoundCommand(command)) {
+    return command.trim() ? [command.trim()] : [];
+  }
   return splitTopLevel(command, (char, index) => {
     if (char === ";") {
       return 1;

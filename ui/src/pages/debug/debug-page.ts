@@ -8,11 +8,18 @@ import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import {
+  type CommandLaneDynamicSummary,
+  type CommandLaneSnapshot,
+  loadGatewayDiagnostics,
+} from "../../lib/gateway-diagnostics.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/debug.css";
+import { requestDebugOverlayToggle } from "./debug-overlay-contract.ts";
 import { renderDebug } from "./view.ts";
 
 const DEBUG_POLL_INTERVAL_MS = 3000;
@@ -25,6 +32,8 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugHealth: HealthSnapshot | null = null;
   @state() private debugModels: unknown[] = [];
   @state() private debugHeartbeat: unknown = null;
+  @state() private debugLanes: CommandLaneSnapshot[] = [];
+  @state() private debugDynamic: CommandLaneDynamicSummary | null = null;
   @state() private debugCallMethod = "";
   @state() private debugCallParams = "{}";
   @state() private debugCallResult: string | null = null;
@@ -59,10 +68,12 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugHealth = result.health;
       this.debugModels = result.models;
       this.debugHeartbeat = result.heartbeat;
+      this.debugLanes = result.lanes;
+      this.debugDynamic = result.dynamic;
     },
     onError: (error) => {
       this.diagnosticsTaskActiveClient = null;
-      this.debugDiagnosticsError = String(error);
+      this.debugDiagnosticsError = formatUiError(error);
     },
   });
   private readonly gateway = new GatewayPageController(this, {
@@ -72,6 +83,8 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugHealth = null;
       this.debugModels = [];
       this.debugHeartbeat = null;
+      this.debugLanes = [];
+      this.debugDynamic = null;
       this.debugCallResult = null;
       this.debugCallError = null;
       this.debugDiagnosticsError = null;
@@ -173,7 +186,7 @@ class DebugPage extends OpenClawLightDomElement {
       }
     } catch (err) {
       if (isCurrent()) {
-        this.debugCallError = String(err);
+        this.debugCallError = formatUiError(err);
       }
     }
   }
@@ -185,6 +198,8 @@ class DebugPage extends OpenClawLightDomElement {
       health: this.debugHealth,
       models: this.debugModels,
       heartbeat: this.debugHeartbeat,
+      lanes: this.debugLanes,
+      dynamic: this.debugDynamic,
       diagnosticsError: this.debugDiagnosticsError,
       eventLog: this.eventLog,
       methods: (this.context.gateway.snapshot.hello?.features?.methods ?? []).toSorted(),
@@ -195,6 +210,7 @@ class DebugPage extends OpenClawLightDomElement {
       onCallMethodChange: (next) => (this.debugCallMethod = next),
       onCallParamsChange: (next) => (this.debugCallParams = next),
       onRefresh: () => void this.loadDiagnostics(),
+      onOpenOverlay: requestDebugOverlayToggle,
       onCall: () => void this.callDebugMethod(),
     });
     return html`

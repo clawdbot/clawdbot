@@ -441,7 +441,7 @@ export async function buildClawAddPlan(params: {
     );
   }
 
-  for (const pkg of params.manifest.packages) {
+  for (const [index, pkg] of params.manifest.packages.entries()) {
     const preflight: ClawPackagePreflightResult = context.packagePreflight
       ? await context.packagePreflight(pkg, workspace)
       : {
@@ -453,7 +453,7 @@ export async function buildClawAddPlan(params: {
       ? undefined
       : blocker(
           preflight.code ?? "package_install_unavailable",
-          "$.packages",
+          `$.packages[${index}]`,
           preflight.message ?? "Package preflight failed.",
         );
     if (diagnostic) {

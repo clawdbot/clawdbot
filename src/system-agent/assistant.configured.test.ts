@@ -355,7 +355,11 @@ describe("OpenClaw configured-model planner", () => {
       },
     };
     const runEmbeddedAgent = vi.fn(async () => ({
-      payloads: [{ text: '{"reply":"Ready.","command":"gateway status"}' }],
+      payloads: [
+        { text: "Considering the gateway", isReasoning: true },
+        { text: "Checking the gateway", isCommentary: true },
+        { text: '{"reply":"Ready.","command":"gateway status"}' },
+      ],
     }));
     const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
     useFastVerifiedInference(binding);

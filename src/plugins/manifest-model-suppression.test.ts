@@ -1,4 +1,9 @@
 // Verifies manifest-driven model suppression behavior.
+import fs from "node:fs";
+import {
+  normalizeModelCatalog,
+  normalizeModelCatalogProviderRows,
+} from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +17,7 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
 }));
 
 import { buildManifestBuiltInModelSuppressionResolver } from "./manifest-model-suppression.js";
+import { createPluginCache, getPluginCache, withPluginCache } from "./plugin-cache.js";
 
 function createMetadataSnapshot(plugins: Record<string, unknown>[]) {
   return {
@@ -54,6 +60,34 @@ describe("manifest model suppression", () => {
       (params?: Parameters<typeof mocks.loadPluginMetadataSnapshot>[0]) =>
         mocks.loadPluginMetadataSnapshot(params),
     );
+  });
+
+  it("retains each exact snapshot's compiled rules across operation A/B/A interleaving", () => {
+    const config = {};
+    const ownerA = createPluginCache();
+    const ownerB = createPluginCache();
+    const snapshots = ["first rules", "second rules"].map((reason) =>
+      createMetadataSnapshot([
+        {
+          id: "fixture",
+          providers: ["fixture"],
+          modelCatalog: { suppressions: [{ provider: "fixture", model: "model", reason }] },
+        },
+      ]),
+    );
+    mocks.loadPluginMetadataSnapshot.mockImplementation(() =>
+      getPluginCache() === ownerA ? snapshots[0] : snapshots[1],
+    );
+    const build = () => buildManifestBuiltInModelSuppressionResolver({ config, env: process.env });
+    const first = withPluginCache(ownerA, build);
+    const second = withPluginCache(ownerB, build);
+    expect(first({ provider: "fixture", id: "model" })?.errorMessage).toBe(
+      "Unknown model: fixture/model. first rules",
+    );
+    expect(second({ provider: "fixture", id: "model" })?.errorMessage).toBe(
+      "Unknown model: fixture/model. second rules",
+    );
+    expect(withPluginCache(ownerA, build)).toBe(first);
   });
 
   describe("buildManifestBuiltInModelSuppressionResolver", () => {
@@ -270,5 +304,56 @@ describe("manifest model suppression", () => {
         id: "qwen3.6-plus",
       }),
     ).toBeUndefined();
+  });
+
+  describe.each(["qwen", "modelstudio"])("%s plan availability", (provider) => {
+    describe.each(["openai-completions", undefined] as const)("api=%s", (api) => {
+      it.each([
+        ["https://coding.dashscope.aliyuncs.com/v1", true],
+        ["https://coding-intl.dashscope.aliyuncs.com/v1", true],
+        ["https://dashscope.aliyuncs.com/compatible-mode/v1", false],
+        ["https://dashscope-intl.aliyuncs.com/compatible-mode/v1", false],
+        ["https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", false],
+        ["https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", false],
+        ["https://proxy.example/v1", false],
+      ] as const)("matches the plan at %s", (baseUrl, suppressed) => {
+        // Public metadata is fixture data; core's type graph must not compile plugin files.
+        const qwenManifest: Record<string, unknown> = JSON.parse(
+          fs.readFileSync(
+            new URL("../../extensions/qwen/openclaw.plugin.json", import.meta.url),
+            "utf8",
+          ),
+        );
+        mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([qwenManifest]));
+        const providerCatalog = normalizeModelCatalog(qwenManifest.modelCatalog, {
+          ownedProviders: new Set(["qwen"]),
+        })?.providers?.qwen;
+        if (!providerCatalog) {
+          throw new Error("Qwen manifest catalog is missing");
+        }
+        const rows = normalizeModelCatalogProviderRows({
+          provider,
+          providerCatalog,
+          source: "manifest",
+        });
+        const resolver = buildManifestBuiltInModelSuppressionResolver({
+          config: {
+            models: {
+              providers: { [provider]: { baseUrl, ...(api ? { api } : {}), models: [] } },
+            },
+          },
+          env: process.env,
+        });
+
+        for (const id of ["qwen3.6-flash", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash"]) {
+          const row = rows.find((entry) => entry.id === id);
+          expect(row, id).toBeDefined();
+          expect(Boolean(resolver({ provider, id, baseUrl: row?.baseUrl })?.suppress), id).toBe(
+            suppressed,
+          );
+        }
+        expect(resolver({ provider, id: "qwen3.7-plus" })).toBeUndefined();
+      });
+    });
   });
 });

@@ -31,14 +31,14 @@ import {
 } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
-import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
-import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -141,8 +141,11 @@ export const systemHandlers: GatewayRequestHandlers = {
     setHeartbeatsEnabled(enabled);
     respond(true, { ok: true, enabled }, undefined);
   },
-  "system-presence": ({ respond }) => {
-    const presence = listSystemPresence();
+  "system-presence": ({ respond, client, context }) => {
+    const presence = createPresenceRecipientProjection({
+      cfg: context.getRuntimeConfig(),
+      presence: listSystemPresence(),
+    })(client);
     respond(true, presence, undefined);
   },
   "system.info": async ({ params, respond, context }) => {
@@ -324,7 +327,7 @@ export const systemHandlers: GatewayRequestHandlers = {
           source: "notifications-event",
           intent: "immediate",
           // The dispatcher recognizes "wake" as a payload-bearing run, so an
-          // empty HEARTBEAT.md cannot suppress this queued system event.
+          // empty monitor scratch cannot suppress this queued system event.
           reason: "wake",
           ...(!requestedSessionKey && eventOwnerAgentId ? { agentId: eventOwnerAgentId } : {}),
           sessionKey,

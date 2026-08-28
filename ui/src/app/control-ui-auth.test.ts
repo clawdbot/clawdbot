@@ -1,19 +1,17 @@
-// Candidate ordering is a product contract: shared secrets first, because
-// several gateway byte routes (plugin/catalog/workspace icons) reject device
-// tokens, and each rejected attempt pays the shared-secret brute-force
-// penalty on the gateway (delay escalation, remote IP lockout).
+// Candidate ordering follows the live Control UI credential while retaining
+// saved-secret fallbacks for stale sessions.
 import { describe, expect, it } from "vitest";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
 describe("resolveControlUiAuthCandidates", () => {
-  it("orders shared secrets before the hello device token", () => {
+  it("orders the hello device token before saved shared secrets", () => {
     expect(
       resolveControlUiAuthCandidates({
         hello: { auth: { deviceToken: "device-token" } } as never,
         settings: { token: "shared-token" },
         password: "shared-password",
       }),
-    ).toEqual(["shared-token", "shared-password", "device-token"]);
+    ).toEqual(["device-token", "shared-token", "shared-password"]);
   });
 
   it("keeps the device token for pairing-only browsers", () => {

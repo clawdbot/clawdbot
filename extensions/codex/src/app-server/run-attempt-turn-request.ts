@@ -133,7 +133,7 @@ export async function prepareCodexAttemptTurnRequest(
       data: {
         phase: "turn_starting",
         threadId: resourceState.thread.threadId,
-        model: turnStartParams.model,
+        model: params.modelId,
         effort: turnStartParams.effort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
         serviceTier: turnStartParams.serviceTier,

@@ -2,8 +2,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap from "p-map";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
@@ -110,14 +111,6 @@ async function collectUnsafeLocalArtifacts(
     deduped.set(artifact.syncKey, artifact);
   }
   return { artifacts: [...deduped.values()], unavailableConfiguredPaths };
-}
-
-function isSourceWithinConfiguredPath(sourcePath: string, configuredPath: string): boolean {
-  const relative = path.relative(configuredPath, sourcePath);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-  );
 }
 
 function resolveUnsafeLocalPagePath(params: { configuredPath: string; absolutePath: string }): {
@@ -240,7 +233,7 @@ export async function syncMemoryWikiUnsafeLocalSources(
     if (
       entry.group === "unsafe-local" &&
       unavailableConfiguredPaths.some((configuredPath) =>
-        isSourceWithinConfiguredPath(entry.sourcePath, configuredPath),
+        isPathInside(configuredPath, entry.sourcePath),
       )
     ) {
       // A configured source scope remains authoritative until it is readable again or removed
@@ -253,9 +246,8 @@ export async function syncMemoryWikiUnsafeLocalSources(
     group: "unsafe-local",
     incomingCount: new Set([...artifacts.map((artifact) => artifact.syncKey), ...activeKeys]).size,
   });
-  const results = await pMap(
-    artifacts,
-    async (artifact) => {
+  const { results } = await runTasksWithConcurrency({
+    tasks: artifacts.map((artifact) => async () => {
       const stats = await fs.stat(artifact.absolutePath);
       activeKeys.add(artifact.syncKey);
       return await writeUnsafeLocalSourcePage({
@@ -265,9 +257,11 @@ export async function syncMemoryWikiUnsafeLocalSources(
         sourceSize: stats.size,
         state,
       });
-    },
-    { concurrency: UNSAFE_LOCAL_SYNC_CONCURRENCY, stopOnError: true },
-  );
+    }),
+    limit: UNSAFE_LOCAL_SYNC_CONCURRENCY,
+    errorMode: "stop",
+    throwOnError: true,
+  });
 
   const removedCount = await pruneImportedSourceEntries({
     vaultRoot: config.vault.path,

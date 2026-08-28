@@ -14,7 +14,14 @@ import {
   type MainSessionRecoveryPendingTarget,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  loadPublishedGatewayReplyDispatchRuntime,
+  type PreparedModelRuntimeLease,
+  type PreparedReplyDispatchRuntime,
+} from "../../agents/prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   resolveExactSubagentCompletionEvent,
   type TrustedSubagentCompletionHandoff,
@@ -26,7 +33,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import type { ChatImageContent, OffloadedRef } from "../chat-attachments.js";
+import { errorShapeFromError } from "../error-shape.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import {
   isConfirmedAcpManualSpawnTaskOwner,
@@ -38,16 +48,23 @@ import {
   resolveGatewayCronCreatorAuthorityAdmission,
   type GatewayCronCreatorAuthorityAdmission,
 } from "../server-methods/cron-creator-authority-admission.js";
+import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { formatForLog } from "../ws-log.js";
 import {
   isPreRegistrationAbortedAgentDedupeEntryForSession,
   readGatewayDedupeEntry,
+  setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
+import {
+  prepareAgentRunUserTurn,
+  releasePreparedAgentRunUserTurn,
+  type PreparedAgentRunUserTurn,
+} from "./agent-run-user-turn.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type PreparedAgentRunDispatch = {
@@ -64,17 +81,24 @@ export type PreparedAgentRunDispatch = {
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
   dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  preparedModelRuntimeLease: PreparedModelRuntimeLease;
+  replyDispatchRuntime: PreparedReplyDispatchRuntime;
+  unpersistedOffloadedRefs: OffloadedRef[];
+  userTurn: PreparedAgentRunUserTurn;
+  workspaceOverride?: string;
   restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
     MainSessionRecoveryPendingTarget | undefined
   >;
 };
 
 export async function prepareAgentRunDispatch(params: {
+  promptedAt: number;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
   sessionEntry?: SessionEntry;
   resolvedSessionKey?: string;
+  requestedSessionKeyRaw?: string;
   requestedSessionKey?: string;
   preAcceptedReservedSessionKey?: string;
   activeSessionAgentId: string;
@@ -96,6 +120,14 @@ export async function prepareAgentRunDispatch(params: {
   inputProvenance?: InputProvenance;
   isOneShotModelRun: boolean;
   isRestartRecoveryResumeRun: boolean;
+  canUseInternalRuntimeHandoff: boolean;
+  execApprovalFollowupApprovalId?: string;
+  message: string;
+  effectiveTranscriptInputText: string;
+  images: ChatImageContent[];
+  offloadedRefs: OffloadedRef[];
+  onUserTurnMediaPersisted: () => void;
+  requestedPromptPersistenceSuppression: boolean;
   runId: string;
   agentDedupeKeys: readonly string[];
   context: AgentTurnContext;
@@ -288,13 +320,96 @@ export async function prepareAgentRunDispatch(params: {
       claimAgentRunContext(
         params.runId,
         params.suppressVisibleSessionEffects
-          ? { isControlUiVisible: false, lifecycleGeneration: params.lifecycleGeneration }
+          ? {
+              isControlUiVisible: false,
+              lifecycleGeneration: params.lifecycleGeneration,
+              mainSessionRestartRecovery: params.isRestartRecoveryResumeRun ? true : undefined,
+            }
           : {
               sessionKey: params.resolvedSessionKey,
               lifecycleGeneration: params.lifecycleGeneration,
+              mainSessionRestartRecovery: params.isRestartRecoveryResumeRun ? true : undefined,
             },
       );
     }
+  }
+
+  const workspaceOverride = resolveIngressWorkspaceOverrideForSessionRun({
+    spawnedBy: params.sessionEntry?.spawnedBy,
+    workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
+    cwd: params.sessionEntry?.spawnedCwd,
+  });
+  let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
+  const cleanupPreaccept = (admissionReleased = false) => {
+    preparedModelRuntimeLease?.release();
+    preparedModelRuntimeLease = undefined;
+    activeRunAbort.cleanup({ force: true });
+    if (!admissionReleased) {
+      activeGatewayWorkAdmission.release();
+    }
+  };
+  const rejectPreaccept = (error: ReturnType<typeof errorShape>) => {
+    cleanupPreaccept();
+    params.io.emitAcceptance([false, undefined, error]);
+    return undefined;
+  };
+  const revalidateAdmission = () => {
+    if (activeRunAbort.controller.signal.aborted) {
+      setAbortedAgentDedupeEntries({
+        dedupe: params.context.dedupe,
+        keys: params.agentDedupeKeys,
+        agentId: params.admissionAgentId(),
+        runId: params.runId,
+        stopReason: activeRunAbort.entry?.abortStopReason ?? "rpc",
+      });
+    }
+    try {
+      params.assertGatewayWorkAdmissionAllowed();
+    } catch (err) {
+      rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
+      return false;
+    }
+    if (!params.respondToGatewayAdmissionOutcome()) {
+      return true;
+    }
+    cleanupPreaccept(true);
+    return false;
+  };
+  let replyDispatchRuntime: PreparedReplyDispatchRuntime;
+  try {
+    const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+      agentId: params.activeSessionAgentId,
+      abortSignal: activeRunAbort.controller.signal,
+    });
+    if (!revalidateAdmission()) {
+      return undefined;
+    }
+    if (!publishedRuntime) {
+      throw new Error(`published reply runtime missing for ${params.activeSessionAgentId}`);
+    }
+    replyDispatchRuntime = publishedRuntime;
+    preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config: replyDispatchRuntime.config,
+        agentId: replyDispatchRuntime.agentId,
+        agentDir: replyDispatchRuntime.agentDir,
+        allowGatewaySubagentBinding: true,
+        workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
+      },
+      {
+        catalogMode: "static",
+        pluginGeneration: replyDispatchRuntime.pluginGeneration,
+        abortSignal: activeRunAbort.controller.signal,
+      },
+    );
+    if (!revalidateAdmission()) {
+      return undefined;
+    }
+  } catch (err) {
+    if (!revalidateAdmission()) {
+      return undefined;
+    }
+    return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
   }
 
   const resolvedThreadId =
@@ -342,22 +457,23 @@ export async function prepareAgentRunDispatch(params: {
         task: params.request.message.trim(),
         requester: params.client?.internal?.pluginSubagentRequester,
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
+        gatewayContextResolver: params.context.resolveGatewayContext,
       });
+      if (!revalidateAdmission()) {
+        return undefined;
+      }
     } catch (err) {
       params.context.logGateway.warn(
         `failed to register plugin subagent run ${params.runId}; rejecting untracked dispatch: ${formatForLog(err)}`,
       );
-      activeRunAbort.cleanup({ force: true });
-      activeGatewayWorkAdmission.release();
-      params.io.emitAcceptance([
-        false,
-        undefined,
-        errorShape(
+      return rejectPreaccept(
+        errorShapeFromError(
           ErrorCodes.UNAVAILABLE,
-          `plugin subagent registry persistence failed; run was not started: ${formatForLog(err)}`,
+          new Error("plugin subagent registry persistence failed; run was not started", {
+            cause: err,
+          }),
         ),
-      ]);
-      return undefined;
+      );
     }
   }
   let restoreAdmittedRestartRecoveryInterrupted:
@@ -366,14 +482,9 @@ export async function prepareAgentRunDispatch(params: {
   if (params.isRestartRecoveryResumeRun) {
     const recoverySessionKey = params.resolvedSessionKey;
     if (!recoverySessionKey) {
-      activeRunAbort.cleanup({ force: true });
-      activeGatewayWorkAdmission.release();
-      params.io.emitAcceptance([
-        false,
-        undefined,
+      return rejectPreaccept(
         errorShape(ErrorCodes.UNAVAILABLE, "restart recovery session target is unavailable"),
-      ]);
-      return undefined;
+      );
     }
     try {
       const recoveryAdmission = await commitMainSessionRecovery({
@@ -387,6 +498,9 @@ export async function prepareAgentRunDispatch(params: {
         requireWriteSuccess: true,
         target: { sessionKey: recoverySessionKey, storePath: lifecycleStorePath },
       });
+      if (!revalidateAdmission()) {
+        return undefined;
+      }
       if (recoveryAdmission.transition.kind !== "admitted_recovery") {
         throw new Error(
           `Session "${recoverySessionKey}" restart recovery reservation is stale; recovery was skipped.`,
@@ -423,15 +537,46 @@ export async function prepareAgentRunDispatch(params: {
           : undefined;
       };
     } catch (err) {
-      activeRunAbort.cleanup({ force: true });
-      activeGatewayWorkAdmission.release();
-      params.io.emitAcceptance([
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-      ]);
-      return undefined;
+      return rejectPreaccept(errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
+  }
+  let userTurn: PreparedAgentRunUserTurn;
+  try {
+    userTurn = await prepareAgentRunUserTurn({
+      request: params.request,
+      cfg: params.cfg,
+      cfgForAgent: params.cfgForAgent,
+      sessionEntry: params.sessionEntry,
+      resolvedSessionKey: params.resolvedSessionKey,
+      requestedSessionKeyRaw: params.requestedSessionKeyRaw,
+      admittedSessionId: params.getAdmittedSessionId(),
+      activeSessionAgentId: params.activeSessionAgentId,
+      resolvedThreadId,
+      suppressVisibleSessionEffects: params.suppressVisibleSessionEffects,
+      requestedPromptPersistenceSuppression: params.requestedPromptPersistenceSuppression,
+      restoredCronContinuation: params.restoredCronContinuation,
+      canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
+      execApprovalFollowupApprovalId: params.execApprovalFollowupApprovalId,
+      message: params.message,
+      effectiveTranscriptInputText: params.effectiveTranscriptInputText,
+      images: params.images,
+      offloadedRefs: params.offloadedRefs,
+      inputProvenance: params.inputProvenance,
+      runId: params.runId,
+      client: params.client,
+      context: params.context,
+    });
+    if (userTurn.recorder) {
+      // The recorder already persisted the media references, so later admission
+      // rejection must preserve the files now owned by durable history.
+      params.onUserTurnMediaPersisted();
+    }
+  } catch (err) {
+    return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
+  }
+  if (!revalidateAdmission()) {
+    releasePreparedAgentRunUserTurn(userTurn);
+    return undefined;
   }
   const accepted = {
     runId: params.runId,
@@ -458,6 +603,25 @@ export async function prepareAgentRunDispatch(params: {
     },
   });
   params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
+  const participant = resolveGatewayInputParticipant(params.client, params.inputProvenance);
+  if (
+    participant &&
+    params.resolvedSessionKey &&
+    !params.suppressVisibleSessionEffects &&
+    !userTurn.suppressPromptPersistence
+  ) {
+    recordSessionParticipantBestEffort({
+      identity: participant,
+      promptedAt: params.promptedAt,
+      agentId: params.activeSessionAgentId,
+      sessionKey: params.resolvedSessionKey,
+      storePath: lifecycleStorePath,
+      onError: (error) =>
+        params.context.logGateway.warn(
+          `agent participant persistence failed: ${formatForLog(error)}`,
+        ),
+    });
+  }
   const cronCreatorAuthority = resolveGatewayCronCreatorAuthorityAdmission({
     runId: params.runId,
     resolvedSessionKey: params.resolvedSessionKey,
@@ -483,6 +647,11 @@ export async function prepareAgentRunDispatch(params: {
     lifecycleStorePath,
     resolvedThreadId,
     dispatchTaskTrackingMode,
+    preparedModelRuntimeLease,
+    replyDispatchRuntime,
+    unpersistedOffloadedRefs: userTurn.recorder ? [] : params.offloadedRefs,
+    userTurn,
+    workspaceOverride,
     restoreAdmittedRestartRecoveryInterrupted,
   };
 }

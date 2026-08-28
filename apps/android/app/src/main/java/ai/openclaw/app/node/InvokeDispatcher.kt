@@ -4,8 +4,6 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
-import ai.openclaw.app.protocol.OpenClawCanvasA2UICommand
-import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
@@ -15,8 +13,6 @@ import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 /** Runtime state for SMS search, split so permission prompts are not reported as hard unavailability. */
 internal enum class SmsSearchAvailabilityReason {
@@ -64,7 +60,6 @@ internal fun smsSearchAvailabilityError(
  * Gateway node.invoke command router for Android-owned capabilities.
  */
 class InvokeDispatcher(
-  private val canvas: CanvasController,
   private val cameraHandler: CameraHandler,
   private val locationHandler: LocationHandler,
   private val deviceHandler: DeviceHandler,
@@ -76,7 +71,6 @@ class InvokeDispatcher(
   private val calendarHandler: CalendarHandler,
   private val motionHandler: MotionHandler,
   private val smsHandler: SmsHandler,
-  private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
   private val callLogHandler: CallLogHandler,
   private val mobileUiHandler: MobileUiHandler,
@@ -91,14 +85,10 @@ class InvokeDispatcher(
   private val photosAvailable: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
   private val debugBuild: () -> Boolean,
-  private val onCanvasA2uiPush: () -> Unit,
-  private val onCanvasA2uiReset: () -> Unit,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
   private val mobileUiAvailable: () -> Boolean,
 ) {
-  private val canvasCommandMutex = Mutex()
-
   /** Dispatches one gateway node.invoke command after foreground and availability gates pass. */
   suspend fun handleInvoke(
     command: String,
@@ -119,11 +109,6 @@ class InvokeDispatcher(
     }
     availabilityError(spec.availability)?.let { return it }
 
-    if (command.startsWith(OpenClawCanvasCommand.NamespacePrefix)) {
-      // GatewaySession may deliver invokes concurrently. Canvas presentation, navigation, and
-      // A2UI evaluation share one WebView and must observe command arrival order.
-      return canvasCommandMutex.withLock { dispatchInvoke(command, paramsJson) }
-    }
     return dispatchInvoke(command, paramsJson)
   }
 
@@ -133,81 +118,6 @@ class InvokeDispatcher(
   ): GatewaySession.InvokeResult {
     // Command strings come from OpenClawProtocolConstants; the registry above owns advertised availability.
     return when (command) {
-      // Canvas commands
-      OpenClawCanvasCommand.Present.rawValue -> {
-        val url = CanvasController.parseNavigateUrl(paramsJson)
-        withCanvasAvailable {
-          check(canvas.showAndAwaitHost()) { "canvas host unavailable" }
-          canvas.navigate(url)
-          GatewaySession.InvokeResult.ok(null)
-        }
-      }
-      OpenClawCanvasCommand.Hide.rawValue -> {
-        canvas.hide()
-        GatewaySession.InvokeResult.ok(null)
-      }
-      OpenClawCanvasCommand.Navigate.rawValue -> {
-        val url = CanvasController.parseNavigateUrl(paramsJson)
-        withCanvasAvailable {
-          check(canvas.showAndAwaitHost()) { "canvas host unavailable" }
-          canvas.navigate(url)
-          GatewaySession.InvokeResult.ok(null)
-        }
-      }
-      OpenClawCanvasCommand.Eval.rawValue -> {
-        val js =
-          CanvasController.parseEvalJs(paramsJson)
-            ?: return GatewaySession.InvokeResult.error(
-              code = "INVALID_REQUEST",
-              message = "INVALID_REQUEST: javaScript required",
-            )
-        withCanvasAvailable {
-          val result = canvas.eval(js)
-          GatewaySession.InvokeResult.ok("""{"result":${result.toJsonString()}}""")
-        }
-      }
-      OpenClawCanvasCommand.Snapshot.rawValue -> {
-        val snapshotParams = CanvasController.parseSnapshotParams(paramsJson)
-        withCanvasAvailable {
-          val base64 =
-            canvas.snapshotBase64(
-              format = snapshotParams.format,
-              quality = snapshotParams.quality,
-              maxWidth = snapshotParams.maxWidth,
-            )
-          GatewaySession.InvokeResult.ok("""{"format":"${snapshotParams.format.rawValue}","base64":"$base64"}""")
-        }
-      }
-
-      // A2UI commands
-      OpenClawCanvasA2UICommand.Reset.rawValue ->
-        withReadyA2ui {
-          withCanvasAvailable {
-            val res = canvas.eval(A2UIHandler.a2uiResetJS)
-            onCanvasA2uiReset()
-            GatewaySession.InvokeResult.ok(res)
-          }
-        }
-      OpenClawCanvasA2UICommand.Push.rawValue, OpenClawCanvasA2UICommand.PushJSONL.rawValue -> {
-        val messages =
-          try {
-            a2uiHandler.decodeA2uiMessages(command, paramsJson)
-          } catch (err: Throwable) {
-            return GatewaySession.InvokeResult.error(
-              code = "INVALID_REQUEST",
-              message = err.message ?: "invalid A2UI payload",
-            )
-          }
-        withReadyA2ui {
-          withCanvasAvailable {
-            val js = A2UIHandler.a2uiApplyMessagesJS(messages)
-            val res = canvas.eval(js)
-            onCanvasA2uiPush()
-            GatewaySession.InvokeResult.ok(res)
-          }
-        }
-      }
-
       // Camera commands
       OpenClawCameraCommand.List.rawValue -> cameraHandler.handleList(paramsJson)
       OpenClawCameraCommand.Snap.rawValue -> cameraHandler.handleSnap(paramsJson)
@@ -271,27 +181,6 @@ class InvokeDispatcher(
       else -> GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = "INVALID_REQUEST: unknown command")
     }
   }
-
-  private suspend fun withReadyA2ui(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult {
-    if (!a2uiHandler.ensureA2uiReady()) {
-      return GatewaySession.InvokeResult.error(
-        code = "A2UI_HOST_UNAVAILABLE",
-        message = "A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable",
-      )
-    }
-    return block()
-  }
-
-  private suspend fun withCanvasAvailable(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
-    try {
-      block()
-    } catch (_: Throwable) {
-      // WebView calls throw when the Activity is backgrounded between the foreground check and execution.
-      GatewaySession.InvokeResult.error(
-        code = "NODE_BACKGROUND_UNAVAILABLE",
-        message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
-      )
-    }
 
   private fun availabilityError(availability: InvokeCommandAvailability): GatewaySession.InvokeResult? =
     when (availability) {

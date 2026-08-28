@@ -1,5 +1,8 @@
+import { formatUiError } from "../../lib/format-error.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
+import { loadChatBranches, retireChatBranchRequests } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import {
   consumePaneSessionHandoff,
@@ -11,12 +14,13 @@ import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 
-/** Owns the resources and composer state that follow one retained presentation. */
+/** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected abstract clearComposerPrefillAttention(): void;
   protected abstract settleResetConfirmation(confirmed: boolean): void;
@@ -42,16 +46,35 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     if (presented) {
-      this.boardProviderLifecycleConnected = true;
       this.minutePoll.start();
       this.consumeSessionHandoff(this.sessionKey);
       this.syncActiveBindings();
+      const state = this.state;
+      if (state) {
+        this.unreadPatchGuard.beginActivation(state.sessionKey);
+      }
+      const deferredHydrationActive = this.resumeDeferredSessionHydration();
+      if (state && !deferredHydrationActive) {
+        this.markSessionRead(selectedChatSessionRow(state));
+      }
+      if (
+        state &&
+        !deferredHydrationActive &&
+        (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey) ||
+          state.chatBranchesConnectionEpoch !== state.connectionEpoch)
+      ) {
+        void loadChatBranches(state);
+      }
+      this.refreshSwarmRoster();
       void this.refreshSessionPullRequests();
       return;
     }
-    this.boardProviderLifecycleConnected = false;
-    this.releaseBoardProviderLease();
     this.minutePoll.stop();
+    if (this.state) {
+      retireChatBranchRequests(this.state);
+    }
+    this.swarmHydrator?.dispose();
+    this.swarmHydrator = null;
     this.clearHistoryObserver();
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.syncActiveBindings();
@@ -68,6 +91,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       // so the transcript loader's timer/fetch loop must be stopped here.
       resetTaskDetail(state);
       state.sidebarContent = null;
+      state.attachmentSidebarContent = null;
       state.requestUpdate?.();
     }
     this.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");
@@ -84,6 +108,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       if (scope) {
         storeChatComposerMemoryFallback(state, scope, {
           message: state.chatMessage,
+          goalMode: state.chatGoalDraftMode,
           attachments: state.chatAttachments,
           draftRetry: persistResult,
         });
@@ -94,6 +119,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       // fallbacks. This transfer carries only composer metadata and the draft.
       attachments: [],
       draft: state.chatMessage,
+      ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
       restore: true,
       storageFailed: persistResult.status === "storage-failed",
     });
@@ -128,6 +154,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       }
       state.chatAttachments = [...handoff.attachments];
     }
+    state.chatGoalDraftMode = handoff.goalMode ?? null;
     if (notifyDraftChange) {
       state.handleChatDraftChange(handoff.draft);
     } else {
@@ -150,7 +177,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         }
         void state.handleSendChat().catch((error: unknown) => {
           if (this.state === state && state.sessionKey === sessionKey) {
-            setChatError(state, error instanceof Error ? error.message : String(error));
+            setChatError(state, formatUiError(error));
             state.requestUpdate?.();
           }
         });

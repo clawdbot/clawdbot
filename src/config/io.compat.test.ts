@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.factory.js";
@@ -13,26 +14,8 @@ vi.mock("../commands/doctor/shared/legacy-config-compat.js", () => ({
   },
 }));
 
-vi.mock("../plugins/gateway-startup-plugin-ids.js", () => ({
-  createConfigValidationMetadataPluginIdScope: (params: {
-    config: { plugins?: { entries?: Record<string, unknown> } };
-  }) => {
-    const configuredPluginIds = Object.keys(params.config.plugins?.entries ?? {}).toSorted();
-    const removedPluginIds = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
-    if (configuredPluginIds.some((pluginId) => !removedPluginIds.has(pluginId))) {
-      throw new Error("config IO compatibility tests require real metadata for active plugins");
-    }
-    return {
-      key: `io-compat:${configuredPluginIds.join(",")}`,
-      resolve: () => [],
-    };
-  },
-}));
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  rebasePluginMetadataSnapshotManifestRegistry: () => {
-    throw new Error("config IO compatibility tests must not materialize metadata snapshots");
-  },
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: () => ({
     manifestRegistry: { plugins: [], diagnostics: [] },
   }),
@@ -120,6 +103,72 @@ describe("config io paths", () => {
     });
   });
 
+  it("loads retired context-budget shapes and surfaces migration guidance without rewriting", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const authored = {
+        models: {
+          providers: {
+            openai: {
+              contextTokens: 64_000,
+              contextWindow: 128_000,
+              models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+            },
+          },
+        },
+        agents: {
+          defaults: { contextTokens: 48_000 },
+          entries: { ops: { contextTokens: 32_000 } },
+        },
+      };
+      const raw = `${JSON.stringify(authored, null, 2)}\n`;
+      await fs.writeFile(configPath, raw, "utf-8");
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      const io = createConfigIO({
+        configPath,
+        env: { HOME: home } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+        pluginValidation: "core-only",
+      });
+
+      const config = io.loadConfig();
+      const snapshot = await io.readConfigFileSnapshot();
+      const provider = config.models?.providers?.openai;
+      const resolvedBudget = resolveContextTokensForModelFromCache({
+        cfg: config,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+
+      expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
+      expect(provider).not.toHaveProperty("contextTokens");
+      expect(provider).not.toHaveProperty("contextWindow");
+      expect(provider?.models?.[0]).toMatchObject({
+        contextTokens: 64_000,
+        contextWindow: 128_000,
+      });
+      expect(config.agents?.defaults).not.toHaveProperty("contextTokens");
+      expect(config.agents?.entries?.ops).not.toHaveProperty("contextTokens");
+      expect(resolvedBudget).toBe(64_000);
+      expect(snapshot.sourceConfigBeforeMigrations).toMatchObject(authored);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
+      );
+      expect(snapshot.warnings).toContainEqual({
+        path: "agents.defaults.contextTokens",
+        message: "Removed agents.defaults.contextTokens.",
+      });
+      expect(snapshot.warnings).toContainEqual({
+        path: "agents.defaults.contextTokens",
+        message: expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
+      });
+      expect(snapshot.warnings).not.toContainEqual(expect.objectContaining({ path: "" }));
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
+    });
+  });
+
   it("logs each warning payload once until warnings clear", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -147,7 +196,7 @@ describe("config io paths", () => {
       load();
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(logger.warn).toHaveBeenCalledWith(
-        "Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+        "Config warnings: plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
       );
 
       createConfigIO({
@@ -182,11 +231,13 @@ describe("config io paths", () => {
       load();
       expect(logger.warn).toHaveBeenCalledTimes(3);
 
+      // A null root is invalid config (throws) and, like the invalid-port
+      // step above, preserves the logged-warning fingerprint.
       await fs.writeFile(configPath, "null");
-      load();
+      expect(load).toThrow();
       await writeRemovedPlugin("google-gemini-cli-auth");
       load();
-      expect(logger.warn).toHaveBeenCalledTimes(4);
+      expect(logger.warn).toHaveBeenCalledTimes(3);
     });
   });
 

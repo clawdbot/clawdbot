@@ -13,6 +13,7 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
@@ -135,6 +136,9 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     if (typeof testState.cronEnabled === "boolean") {
       fileCron.enabled = testState.cronEnabled;
     }
+    if (typeof testState.cronTriggersEnabled === "boolean") {
+      fileCron.triggers = { enabled: testState.cronTriggersEnabled };
+    }
     if (typeof testState.cronStorePath === "string") {
       writeConfigMachineState("cron.store", testState.cronStorePath);
     }
@@ -214,9 +218,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
 
   const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
     const configPath = resolveConfigPath();
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
-    await fs.writeFile(configPath, raw, "utf-8");
+    await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
     actual.resetConfigRuntimeState();
     return {
       persistedHash: "test-config-hash",

@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
+import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   countActiveDescendantRuns,
@@ -21,10 +23,12 @@ import {
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  resolveProjectedSessionContextTokens,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
+import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
@@ -33,18 +37,22 @@ import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
+import {
+  hasSessionCreatorProfileProvenance,
+  projectSessionActor,
+  projectSessionOwner,
+  projectSessionParticipants,
+} from "./session-identity-projection.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
-import type {
-  SessionActorProfileIdentity,
-  SessionListRowContext,
-} from "./session-utils-contracts.js";
+import type { SessionListRowContext } from "./session-utils-contracts.js";
 import {
   buildCompactionCheckpointPreview,
   deriveSessionTitle,
@@ -66,33 +74,13 @@ import {
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
-/** Adds current durable human profile display data without persisting rename-prone metadata. */
-export function projectSessionActor(
-  actor: SessionEntry["createdActor"],
-  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
-): SessionCreatedActor | undefined {
-  if (!actor) {
-    return undefined;
-  }
-  const id = normalizeOptionalString(actor.id);
-  if (actor.type !== "human" || !id) {
-    return { type: actor.type, ...(id ? { id } : {}) };
-  }
-  let identity = userProfileIdentityById.get(id);
-  if (!userProfileIdentityById.has(id)) {
-    const display = resolveCurrentUserProfileDisplay(id);
-    identity =
-      display.kind === "unresolved"
-        ? undefined
-        : {
-            ...(display.label ? { label: display.label } : {}),
-            ...(display.hasUploadedAvatar ? { avatarUrl: display.avatarUrl } : {}),
-          };
-    userProfileIdentityById.set(id, identity);
-  }
-  return { type: actor.type, id, ...identity };
+/** Adds current actor display data without persisting rename-prone metadata. */
+/** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
+function channelAvatarRevision(reference: string): string {
+  return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
 }
 
 export function buildGatewaySessionRow(params: {
@@ -100,14 +88,15 @@ export function buildGatewaySessionRow(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   key: string;
-  entry?: SessionEntry;
-  modelCatalog?: ModelCatalogEntry[];
+  entry?: InternalSessionEntry;
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   transcriptUsageMaxBytes?: number;
   storeChildSessionsByKey?: Map<string, string[]>;
   rowContext?: SessionListRowContext;
+  configuredAgentIds?: ReadonlySet<string>;
   agentId?: string;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
@@ -116,6 +105,20 @@ export function buildGatewaySessionRow(params: {
   const lightweight = params.lightweightListRow === true;
   const now = params.now ?? Date.now();
   const agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
+  const owner = projectSessionOwner(
+    entry,
+    params.rowContext?.userProfileIdentityById,
+    cfg,
+    params.configuredAgentIds,
+  );
+  const participants = projectSessionParticipants(
+    entry,
+    params.rowContext?.userProfileIdentityById,
+    cfg,
+  );
+  if (owner?.actor.identity) {
+    participants.delete(JSON.stringify(owner.actor.identity));
+  }
   const observerDigest =
     entry?.observerDigest &&
     // Strictly newer: a run end and restart can share a millisecond, and the
@@ -135,8 +138,16 @@ export function buildGatewaySessionRow(params: {
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
   const id = parsed?.id;
-  const origin = deliveryFields.origin;
+  const storedOrigin = deliveryFields.origin;
+  const avatar = normalizeOptionalString(storedOrigin?.avatar);
+  const origin = storedOrigin
+    ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
+    : undefined;
   const originLabel = origin?.label;
+  const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
+  const channelAvatarUrl = avatar
+    ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
+    : undefined;
   const parsedAgent = parseAgentSessionKey(key);
   const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
@@ -236,7 +247,6 @@ export function buildGatewaySessionRow(params: {
   );
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     !skipTranscriptUsage &&
     resolveEstimatedSessionCostUsd({
@@ -247,8 +257,7 @@ export function buildGatewaySessionRow(params: {
       rowContext,
     }) === undefined;
   const transcriptUsage =
-    !skipTranscriptUsage &&
-    (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
+    !skipTranscriptUsage && (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
@@ -322,27 +331,6 @@ export function buildGatewaySessionRow(params: {
         entry,
         rowContext: params.rowContext,
       }) ?? asNonNegativeFiniteNumber(transcriptUsage?.estimatedCostUsd));
-  const contextTokens = lightweight
-    ? (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ))
-    : (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(transcriptUsage?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ));
-
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
@@ -363,10 +351,16 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  // A per-agent catalog map keeps unscoped listings owner-scoped: each row uses
+  // its own agent's completed catalog instead of a shared default-agent catalog.
+  const rowModelCatalog =
+    params.modelCatalog instanceof Map
+      ? params.modelCatalog.get(sessionAgentId)
+      : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
-  const thinkingModelCatalog = params.modelCatalog ?? (lightweight ? [] : undefined);
+  const thinkingModelCatalog = rowModelCatalog ?? (lightweight ? [] : undefined);
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
@@ -377,6 +371,48 @@ export function buildGatewaySessionRow(params: {
     modelCatalog: thinkingModelCatalog,
     rowContext,
     providerPolicySource: lightweight ? "active" : undefined,
+  });
+  const catalogEntry =
+    rowModelCatalog && rowModelProvider && rowModel
+      ? findModelCatalogEntry(rowModelCatalog, {
+          provider: rowModelProvider,
+          modelId: rowModel,
+        })
+      : undefined;
+  const contextWindowProfile = resolveModelContextWindowProfile({
+    catalogEntry,
+    selected: entry?.contextWindow,
+  });
+  const resolvedModelContextTokens = resolvePositiveNumber(
+    resolveContextTokensForModel({
+      cfg,
+      provider: rowModelProvider,
+      model: rowModel,
+      modelContextTokens: catalogEntry?.contextTokens,
+      modelContextWindow: contextWindowProfile.contextTokens,
+      allowAsyncLoad: false,
+    }),
+  );
+  const resolvedCurrentContextTokens = contextWindowProfile.contextTokens
+    ? Math.min(
+        resolvedModelContextTokens ?? contextWindowProfile.contextTokens,
+        contextWindowProfile.contextTokens,
+      )
+    : resolvedModelContextTokens;
+  const authoredContextTokens = resolvePositiveNumber(
+    resolveAuthoredModelContextTokens({
+      cfg,
+      provider: rowModelProvider,
+      model: rowModel,
+    }),
+  );
+  const contextTokens = resolveProjectedSessionContextTokens({
+    entry,
+    provider: rowModelProvider,
+    model: rowModel,
+    agentHarnessId: thinkingProjection.agentRuntime.id,
+    resolvedContextTokens: resolvedCurrentContextTokens,
+    authoredContextTokens,
   });
   const fastModeState = resolveFastModeState({
     cfg,
@@ -403,6 +439,10 @@ export function buildGatewaySessionRow(params: {
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
+    permissionMode: entry?.permissionMode,
+    ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
+      ? { sessionRoot: entry.sessionRoot }
+      : {}),
     worktree: entry?.worktree,
     execNode: entry?.execNode,
     execCwd: entry?.execCwd,
@@ -411,12 +451,22 @@ export function buildGatewaySessionRow(params: {
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileIdentityById),
+    createdActor: projectSessionActor(
+      entry?.createdActor,
+      rowContext?.userProfileIdentityById,
+      cfg,
+      hasSessionCreatorProfileProvenance(entry),
+    ),
+    owner,
+    participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,
+    participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
     kind: gatewayKind,
     label: entry?.label,
+    icon: entry?.icon,
+    channelAvatarUrl,
     category: entry?.category,
     boardFace: entry?.boardFace,
     ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
@@ -432,11 +482,12 @@ export function buildGatewaySessionRow(params: {
     updatedAt,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
-    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
+    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
+    markedUnreadAt: entry?.markedUnreadAt,
     agentStatus,
     observerDigest: observerDigest
       ? {
@@ -458,6 +509,9 @@ export function buildGatewaySessionRow(params: {
       ? "tombstoned"
       : undefined,
     thinkingLevel: thinkingProjection.thinkingLevel,
+    contextWindow: contextWindowProfile.contextWindow,
+    contextWindows: contextWindowProfile.contextWindows,
+    contextWindowDefault: contextWindowProfile.contextWindowDefault,
     thinkingLevels: thinkingProjection.thinkingLevels,
     thinkingOptions: thinkingProjection.thinkingOptions,
     thinkingDefault: thinkingProjection.thinkingDefault,
@@ -479,6 +533,7 @@ export function buildGatewaySessionRow(params: {
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     lastRunError: entry?.lastRunError,
+    lastRunId: entry?.lastRunId,
     hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
@@ -502,8 +557,9 @@ export function buildGatewaySessionRow(params: {
     }).mode,
     modelProvider: rowModelProvider,
     model: rowModel,
+    modelOverrideSource: resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
-    agentRuntime: thinkingProjection.agentRuntime,
+    agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,
     deliveryContext: deliveryFields.deliveryContext,

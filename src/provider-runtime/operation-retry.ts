@@ -264,11 +264,11 @@ export async function executeProviderOperationWithRetry<T>(params: {
   let lastError: unknown;
 
   for (let attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber += 1) {
-    params.signal?.throwIfAborted();
+    retrySignal?.throwIfAborted();
     try {
       return await params.operation();
     } catch (error) {
-      params.signal?.throwIfAborted();
+      retrySignal?.throwIfAborted();
       lastError = error;
       const message = formatErrorMessage(error);
       if (

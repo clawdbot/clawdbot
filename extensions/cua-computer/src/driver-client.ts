@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 type DriverClickButton = import("@trycua/cua-driver").ClickButton;
-type DriverCaptureScope = import("@trycua/cua-driver").CaptureScope;
 type DriverEscalationReason = import("@trycua/cua-driver").EscalationReason;
 type CuaDriverLike = import("@trycua/cua-driver").CuaDriverLike;
 type CuaDriverSessionLike = import("@trycua/cua-driver").CuaDriverSessionLike;
@@ -9,9 +9,8 @@ type DriverScrollDirection = import("@trycua/cua-driver").ScrollDirection;
 type CuaSessionState = import("@trycua/cua-driver").SessionStateOutput;
 type CuaDriverSdk = Pick<
   typeof import("@trycua/cua-driver"),
-  | "CaptureScope"
+  | "ActionTarget"
   | "CuaDriver"
-  | "DesktopScope"
   | "EscalationReason"
   | "ScrollBy"
   | "SessionPermissionMode"
@@ -29,7 +28,7 @@ export const EscalationReason = {
 } as const;
 export type EscalationReason = (typeof EscalationReason)[keyof typeof EscalationReason];
 
-// These numeric values are part of the pinned 0.19.3 SDK contract. Keeping
+// These numeric values are part of the pinned 0.21.0 SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
 // registering the bundled plugin.
 export const ClickButton = {
@@ -56,6 +55,7 @@ export interface CuaDriverSession {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<CuaToolResult>;
+  getCursorPosition(signal?: AbortSignal): Promise<CuaToolResult>;
   escalateScope(reason: EscalationReason, signal?: AbortSignal): Promise<CuaSessionState>;
   getDesktopState(signal?: AbortSignal): Promise<CuaToolResult>;
   getScreenSize(signal?: AbortSignal): Promise<CuaToolResult>;
@@ -89,9 +89,8 @@ class DirectCuaDriverSession implements CuaDriverSession {
   private readonly runtime: CuaDriverLike;
   private readonly session: CuaDriverSessionLike;
   private readonly publicSession = `openclaw-${randomUUID()}`;
+  private readonly desktopTarget: import("@trycua/cua-driver").ActionTarget;
   private startPromise: Promise<void> | undefined;
-  private desktopEscalationPromise: Promise<void> | undefined;
-  private captureScope: DriverCaptureScope | undefined;
   private started = false;
   private disposed = false;
 
@@ -107,30 +106,29 @@ class DirectCuaDriverSession implements CuaDriverSession {
       maxIdleTtlSeconds: 300n,
     };
     // Never use CuaDriver.create(): configured creation fixes the authorization
-    // ceiling before a single trusted OpenClaw session is admitted.
+    // ceiling before the lifecycle session is admitted.
     this.runtime = sdk.CuaDriver.createConfigured({
       claudeCodeCompatibility: false,
       authorization,
     });
     this.session = sdk.createTrustedSession(this.runtime, {
-      publicSession: this.publicSession,
       mode: unrestricted,
       ttlSeconds: authorization.maxSessionTtlSeconds,
       idleTtlSeconds: authorization.maxIdleTtlSeconds,
+      publicSession: this.publicSession,
     });
+    // CUA 0.20 moves modality from session state to each action. Keep one
+    // lifecycle/authority owner and make the desktop target explicit per call.
+    this.desktopTarget = sdk.ActionTarget.Desktop.new({ displayId: "primary" });
   }
 
-  private async ensureStarted(
-    captureScope: DriverCaptureScope,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  private async ensureSessionStarted(signal?: AbortSignal): Promise<void> {
     if (this.disposed) {
       throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
     }
     if (!this.startPromise) {
-      this.captureScope = captureScope;
       const start = this.session
-        .startSession({ session: this.publicSession, captureScope }, asyncOptions(signal))
+        .startSession({ session: this.publicSession }, asyncOptions(signal))
         .then(() => {
           this.started = true;
         });
@@ -146,38 +144,13 @@ class DirectCuaDriverSession implements CuaDriverSession {
       return;
     }
     await this.startPromise;
-    if (
-      captureScope === this.sdk.CaptureScope.Desktop &&
-      this.captureScope !== this.sdk.CaptureScope.Desktop
-    ) {
-      await this.ensureDesktopScope(signal);
-    }
-  }
-
-  private async ensureDesktopScope(signal?: AbortSignal): Promise<void> {
-    if (!this.desktopEscalationPromise) {
-      this.desktopEscalationPromise = this.session
-        .escalateSession(
-          {
-            session: this.publicSession,
-            reason: this.sdk.EscalationReason.Other,
-            detail: "explicit desktop-scope OpenClaw action",
-          },
-          asyncOptions(signal),
-        )
-        .then(() => {
-          this.captureScope = this.sdk.CaptureScope.Desktop;
-        });
-    }
-    await this.desktopEscalationPromise;
   }
 
   private async invoke<T>(
-    captureScope: DriverCaptureScope,
     signal: AbortSignal | undefined,
     operation: () => Promise<T>,
   ): Promise<T> {
-    await this.ensureStarted(captureScope, signal);
+    await this.ensureSessionStarted(signal);
     return await operation();
   }
 
@@ -186,7 +159,7 @@ class DirectCuaDriverSession implements CuaDriverSession {
   }
   resetAvailabilityCache(): void {}
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await this.invoke(this.sdk.CaptureScope.Window, signal, () =>
+    return await this.invoke(signal, () =>
       this.session.callTool(
         name,
         JSON.stringify({ ...args, session: this.publicSession }),
@@ -194,58 +167,54 @@ class DirectCuaDriverSession implements CuaDriverSession {
       ),
     );
   }
-  async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
-    await this.ensureStarted(this.sdk.CaptureScope.Window, signal);
-    const state = await this.session.escalateSession(
-      { session: this.publicSession, reason },
+  async getCursorPosition(signal?: AbortSignal) {
+    return await this.invoke(signal, () =>
+      this.session.getCursorPosition({ session: this.publicSession }, asyncOptions(signal)),
+    );
+  }
+  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
+    await this.ensureSessionStarted(signal);
+    return await this.session.getSessionState(
+      { session: this.publicSession },
       asyncOptions(signal),
     );
-    this.captureScope = this.sdk.CaptureScope.Desktop;
-    return state;
   }
   async getDesktopState(signal?: AbortSignal) {
-    return await this.invoke(this.sdk.CaptureScope.Desktop, signal, () =>
-      this.session.getDesktopState({}, asyncOptions(signal)),
-    );
+    return await this.invoke(signal, () => this.session.getDesktopState({}, asyncOptions(signal)));
   }
   async getScreenSize(signal?: AbortSignal) {
-    return await this.invoke(this.sdk.CaptureScope.Desktop, signal, () =>
-      this.session.getScreenSize({}, asyncOptions(signal)),
-    );
+    return await this.invoke(signal, () => this.session.getScreenSize({}, asyncOptions(signal)));
   }
   async click(
     input: { x: number; y: number; button: ClickButton; count: number },
     signal?: AbortSignal,
   ) {
-    return await this.invoke(this.sdk.CaptureScope.Desktop, signal, () =>
-      this.session.click({ ...input, scope: this.sdk.DesktopScope.Desktop }, asyncOptions(signal)),
+    return await this.invoke(signal, () =>
+      this.session.click({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
   async drag(
     input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ) {
-    return await this.invoke(this.sdk.CaptureScope.Desktop, signal, () =>
-      this.session.drag({ ...input, scope: this.sdk.DesktopScope.Desktop }, asyncOptions(signal)),
+    return await this.invoke(signal, () =>
+      this.session.drag({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
   async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
-    return await this.invoke(this.sdk.CaptureScope.Desktop, signal, () =>
-      this.session.moveCursor(
-        { ...input, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal),
-      ),
+    return await this.invoke(signal, () =>
+      this.session.moveCursor({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
   async scroll(
     input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
     signal?: AbortSignal,
   ) {
-    return await this.invoke(this.sdk.CaptureScope.Desktop, signal, () =>
+    return await this.invoke(signal, () =>
       this.session.scroll(
         {
           ...input,
-          scope: this.sdk.DesktopScope.Desktop,
+          target: this.desktopTarget,
           by: this.sdk.ScrollBy.Line,
         },
         asyncOptions(signal),
@@ -253,16 +222,13 @@ class DirectCuaDriverSession implements CuaDriverSession {
     );
   }
   async typeText(text: string, signal?: AbortSignal) {
-    return await this.invoke(this.sdk.CaptureScope.Desktop, signal, () =>
-      this.session.typeText({ text, scope: this.sdk.DesktopScope.Desktop }, asyncOptions(signal)),
+    return await this.invoke(signal, () =>
+      this.session.typeText({ text, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
   async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
-    return await this.invoke(this.sdk.CaptureScope.Desktop, signal, () =>
-      this.session.pressKey(
-        { ...input, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal),
-      ),
+    return await this.invoke(signal, () =>
+      this.session.pressKey({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
 
@@ -279,8 +245,6 @@ class DirectCuaDriverSession implements CuaDriverSession {
     }
     if (this.started) {
       try {
-        // End the native desktop session before revoking its trusted handle.
-        // Closing only the handle can leave the started session behind on stop.
         await this.session.endSession({ session: this.publicSession });
       } catch (error) {
         failure ??= error;
@@ -289,7 +253,7 @@ class DirectCuaDriverSession implements CuaDriverSession {
     try {
       this.session.close();
     } catch (error) {
-      failure = error;
+      failure ??= error;
     }
     try {
       await this.runtime.shutdown();
@@ -310,10 +274,17 @@ class DirectCuaDriverSession implements CuaDriverSession {
 }
 
 async function loadCuaDriverSdk(): Promise<CuaDriverSdk> {
+  const artifactVerification = verifyInstalledCuaDriverArtifacts();
+  if (!artifactVerification.ok) {
+    throw new Error(artifactVerification.diagnostic);
+  }
   return (await import("@trycua/cua-driver")) as CuaDriverSdk;
 }
 
 function unavailableError(failure: unknown): Error {
+  if (failure instanceof Error && /^COMPUTER_DRIVER_[A-Z_]+:/u.test(failure.message)) {
+    return failure;
+  }
   const detail = failure instanceof Error ? failure.message : String(failure);
   return new Error(`COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: ${detail}`, {
     cause: failure,
@@ -415,6 +386,9 @@ class LazyCuaDriverSession implements CuaDriverSession {
   }
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
     return await (await this.requireRuntime()).callTool(name, args, signal);
+  }
+  async getCursorPosition(signal?: AbortSignal) {
+    return await (await this.requireRuntime()).getCursorPosition(signal);
   }
   async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
     return await (await this.requireRuntime()).escalateScope(reason, signal);

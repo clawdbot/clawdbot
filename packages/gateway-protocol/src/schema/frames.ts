@@ -7,13 +7,7 @@ import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
-export const GATEWAY_SERVER_CAPS = {
-  BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
-  CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
-  SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
-  SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
-  TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
-} as const;
+export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
 
 /**
  * Top-level gateway frame schemas.
@@ -40,9 +34,12 @@ export const ConnectParamsSchema = closedObject({
     id: GatewayClientIdSchema,
     displayName: Type.Optional(NonEmptyString),
     version: NonEmptyString,
+    buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
     platform: NonEmptyString,
     deviceFamily: Type.Optional(NonEmptyString),
     modelIdentifier: Type.Optional(NonEmptyString),
+    /** Self-reported IANA zone. Bounded because the longest real name is well under this cap. */
+    timeZone: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
     mode: GatewayClientModeSchema,
     instanceId: Type.Optional(NonEmptyString),
   }),
@@ -50,7 +47,7 @@ export const ConnectParamsSchema = closedObject({
   commands: Type.Optional(Type.Array(NonEmptyString)),
   /** Additive Computer Use declaration; the owning core contract validates its bounded shape. */
   computerUse: Type.Optional(Type.Unknown()),
-  /** Additive node-local worker build identity; presence advertises session hosting. */
+  /** @deprecated Accepted for the shipped v1 node-host envelope; current hosts use runner inventory. */
   workerRuns: Type.Optional(WorkerAdmissionHandshakeSchema),
   permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
   pathEnv: Type.Optional(Type.String()),
@@ -85,6 +82,11 @@ export const HelloOkSchema = closedObject({
   protocol: Type.Integer({ minimum: 1 }),
   server: closedObject({
     version: NonEmptyString,
+    buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+    bootId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+    controlUiBuildSource: Type.Optional(
+      Type.Union([Type.Literal("bundled"), Type.Literal("configured")]),
+    ),
     connId: NonEmptyString,
   }),
   features: closedObject({
@@ -103,6 +105,7 @@ export const HelloOkSchema = closedObject({
         description: Type.Optional(Type.String()),
         icon: Type.Optional(Type.String()),
         path: Type.Optional(Type.String()),
+        placement: Type.Optional(Type.String()),
         requiresGatewayAuth: Type.Optional(Type.Boolean()),
         group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
         order: Type.Optional(Type.Number()),
@@ -120,11 +123,6 @@ export const HelloOkSchema = closedObject({
     ),
   ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
-  deviceAuthMigration: Type.Optional(
-    closedObject({
-      pending: Type.Literal(true),
-    }),
-  ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
     recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),

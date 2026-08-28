@@ -4,6 +4,11 @@ import {
   deferOpenClawAgentPostCommitPublication,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
+import {
+  projectSqliteSessionParticipants,
+  projectSqliteSessionParticipantsBatch,
+} from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
@@ -163,21 +168,39 @@ function createLazyListProjections(
 
 function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSessionEntrySnapshot {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["session_key", "entry_json", "updated_at"])
-      .orderBy("session_key"),
-  ).rows;
-  const entries = new Map<string, SessionEntry>();
+  const rows = hasSqliteSessionOwnerColumns(database.db)
+    ? executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select([
+            "session_key",
+            "entry_json",
+            "updated_at",
+            "owner_actor_type",
+            "owner_actor_id",
+            "owner_assigned_by_type",
+            "owner_assigned_by_id",
+            "owner_assigned_at",
+          ])
+          .orderBy("session_key"),
+      ).rows
+    : executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["session_key", "entry_json", "updated_at"])
+          .orderBy("session_key"),
+      ).rows;
+  const parsedEntries = new Map<string, SessionEntry>();
   for (const row of rows) {
     const entry = parseSessionEntryJson(row);
     if (!entry) {
       continue;
     }
-    entries.set(row.session_key, entry);
+    parsedEntries.set(row.session_key, entry);
   }
+  const entries = projectSqliteSessionParticipantsBatch(database.db, parsedEntries);
   const listProjections = new Map<string, SessionEntry>();
   return {
     entries,
@@ -223,17 +246,36 @@ function incrementallyRevalidateSessionEntrySnapshot(
     listProjections.delete(sessionKey);
   }
   if (changedKeys.length > 0) {
-    const changedRows = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_nodes")
-        .select(["session_key", "entry_json"])
-        .where("session_key", "in", changedKeys),
-    ).rows;
+    const changedRows = hasSqliteSessionOwnerColumns(database.db)
+      ? executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select([
+              "session_key",
+              "entry_json",
+              "owner_actor_type",
+              "owner_actor_id",
+              "owner_assigned_by_type",
+              "owner_assigned_by_id",
+              "owner_assigned_at",
+            ])
+            .where("session_key", "in", changedKeys),
+        ).rows
+      : executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select(["session_key", "entry_json"])
+            .where("session_key", "in", changedKeys),
+        ).rows;
     for (const row of changedRows) {
       const entry = parseSessionEntryJson(row);
       if (entry) {
-        entries.set(row.session_key, entry);
+        entries.set(
+          row.session_key,
+          projectSqliteSessionParticipants(database.db, row.session_key, entry),
+        );
       }
     }
   }
@@ -324,15 +366,33 @@ function publishSqliteSessionEntryCacheUpsert(
   },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
-  const entry = parseSessionEntryJson({
+  const ownerRow = hasSqliteSessionOwnerColumns(database.db)
+    ? executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .selectFrom("session_nodes")
+          .select([
+            "owner_actor_type",
+            "owner_actor_id",
+            "owner_assigned_by_type",
+            "owner_assigned_by_id",
+            "owner_assigned_at",
+          ])
+          .where("session_key", "=", row.session_key)
+          .limit(1),
+      ).rows[0]
+    : undefined;
+  const parsedEntry = parseSessionEntryJson({
     current_session_id: row.current_session_id,
     entry_json: row.entry_json,
     updated_at: row.updated_at,
+    ...ownerRow,
   });
-  if (!entry) {
+  if (!parsedEntry) {
     invalidateTrackedCache(database);
     return;
   }
+  const entry = projectSqliteSessionParticipants(database.db, row.session_key, parsedEntry);
   if (!writeGeneration) {
     invalidateTrackedCache(database);
     return;
@@ -344,28 +404,23 @@ function publishSqliteSessionEntryCacheUpsert(
     }
     const generationIsContinuous =
       cached.validityToken.sessionNodesGeneration === writeGeneration.before;
-    const entries = new Map(cached.entries);
-    entries.set(row.session_key, entry);
-    const listProjections = new Map(cached.listProjections);
-    listProjections.delete(row.session_key);
-    const updatedAtByKey = new Map(cached.updatedAtByKey);
-    const knownKey = updatedAtByKey.has(row.session_key);
-    updatedAtByKey.set(row.session_key, row.updated_at);
+    // Borrowed cache views are synchronous, so the commit owner can update one
+    // row in place without cloning every session map on each active-run write.
+    cached.entries.set(row.session_key, entry);
+    cached.listProjections.delete(row.session_key);
+    const knownKey = cached.updatedAtByKey.has(row.session_key);
+    cached.updatedAtByKey.set(row.session_key, row.updated_at);
+    if (!knownKey) {
+      cached.keys = [...cached.keys, row.session_key].toSorted();
+    }
     // Advance only across the bracketed row write. A raw write before/after this bracket leaves
     // a generation gap, while the retained data_version still exposes external commits.
-    sessionEntryCaches.set(database.db, {
-      entries,
-      keys: knownKey ? cached.keys : [...cached.keys, row.session_key].toSorted(),
-      listEntries: createLazyListProjections(entries, listProjections),
-      listProjections,
-      updatedAtByKey,
-      validityToken: generationIsContinuous
-        ? {
-            ...cached.validityToken,
-            sessionNodesGeneration: writeGeneration.after,
-          }
-        : cached.validityToken,
-    });
+    if (generationIsContinuous) {
+      cached.validityToken = {
+        ...cached.validityToken,
+        sessionNodesGeneration: writeGeneration.after,
+      };
+    }
   });
 }
 

@@ -983,7 +983,7 @@ describe("renderModelSetup", () => {
 
     const feedback = copied ? "Copied!" : "Copy failed";
     await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
-    expect(copy?.getAttribute("aria-label")).toBe(feedback);
+    expect(copy?.getAttribute("aria-label")).toBeNull();
     expect(execCommand).toHaveBeenCalledWith("copy");
     expect(writeText).toHaveBeenCalledTimes(copied ? 0 : 1);
     expect(document.querySelector("textarea")).toBeNull();

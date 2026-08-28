@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveControlUiDistIndexHealth } from "./control-ui-assets.js";
+import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
   managerInstallArgs,
+  managerInstallIgnoreScriptsArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
@@ -11,8 +12,7 @@ import { runStep } from "./update-runner-command.js";
 import {
   resolveBuildEnv,
   resolveInstallEnv,
-  resolveRetryInstallArgs,
-  shouldRetryWindowsInstallIgnoringScripts,
+  shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
 import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
 
@@ -81,7 +81,13 @@ export async function rebuildRolledBackGitRuntime(params: {
     return appendFailure("manager-unavailable", manager.reason);
   }
   try {
-    const installEnv = resolveInstallEnv(manager.manager, manager.env);
+    const installEnv = await resolveInstallEnv(
+      manager.manager,
+      manager.env ?? params.defaultCommandEnv,
+      params.gitRoot,
+      params.runCommand,
+      params.timeoutMs,
+    );
     let installed = await appendStep(
       "git rollback deps install",
       managerInstallArgs(manager.manager, {
@@ -89,8 +95,8 @@ export async function rebuildRolledBackGitRuntime(params: {
       }),
       installEnv,
     );
-    if (!installed && shouldRetryWindowsInstallIgnoringScripts(manager.manager)) {
-      const retryArgv = resolveRetryInstallArgs(manager.manager);
+    if (!installed && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
+      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
       installed = retryArgv
         ? await appendStep("git rollback deps install (ignore scripts)", retryArgv, installEnv)
         : false;
@@ -102,7 +108,7 @@ export async function rebuildRolledBackGitRuntime(params: {
       "git rollback build",
       managerScriptArgs(manager.manager, "build"),
       resolveBuildEnv(
-        manager.env,
+        manager.env ?? params.defaultCommandEnv,
         params.channel === "dev"
           ? path.join(params.gitRoot, ".artifacts", "build-all-cache")
           : undefined,
@@ -124,14 +130,14 @@ export async function rebuildRolledBackGitRuntime(params: {
         () => true,
         () => false,
       ),
-      resolveControlUiDistIndexHealth({ root: params.gitRoot }),
+      resolveControlUiAssetHealth({ root: params.gitRoot }),
     ]);
     const verified =
       commit === params.expectedSha &&
       buildHead === params.expectedSha &&
       runtimeHead === params.expectedSha &&
       entryExists &&
-      uiHealth.exists;
+      uiHealth.kind === "ready";
     params.steps.push({
       name: "git rollback runtime verify",
       command: `verify rollback runtime ${params.expectedSha}`,
@@ -141,7 +147,7 @@ export async function rebuildRolledBackGitRuntime(params: {
       ...(verified
         ? {}
         : {
-            stderrTail: `rollback runtime mismatch (build=${commit ?? "missing"}, buildStamp=${buildHead ?? "missing"}, runtimeStamp=${runtimeHead ?? "missing"}, entry=${entryExists}, ui=${uiHealth.exists})`,
+            stderrTail: `rollback runtime mismatch (build=${commit ?? "missing"}, buildStamp=${buildHead ?? "missing"}, runtimeStamp=${runtimeHead ?? "missing"}, entry=${entryExists}, ui=${uiHealth.kind})`,
           }),
     });
     return verified

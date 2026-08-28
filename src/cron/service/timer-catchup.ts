@@ -1,9 +1,10 @@
-import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import {
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import type { CronJob } from "../types.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   isJobEnabled,
@@ -31,9 +32,9 @@ import {
   type StartupDeferredJob,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
+import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import { createCompletedCronRunOutcomeDrain } from "./timer-outcome-finalization.js";
 import { collectRunnableJobs, hasMissedCronSlotSinceLastRun } from "./timer-runnable.js";
-import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-scheduler.js";
 import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 
 function deferPendingBackoffMissedCronSlots(
@@ -135,7 +136,11 @@ function commitStartupCatchupRows(params: {
           job.state.nextRunAtMs === deferred.nextRunAtMs &&
           job.state.lastRunAtMs === deferred.lastRunAtMs &&
           job.state.lastRunStatus === deferred.lastRunStatus &&
-          resolveCronJobConfigRevision(job) === deferred.configRevision &&
+          job.state.scheduleActivatedAtMs === deferred.scheduleActivatedAtMs &&
+          job.createdAtMs === deferred.createdAtMs &&
+          job.payload.kind === deferred.payloadKind &&
+          deferred.scheduleIdentity !== undefined &&
+          tryCronScheduleIdentity(job) === deferred.scheduleIdentity &&
           !findActiveCronRunReceiptInDatabase({
             database,
             storePath: params.state.deps.storePath,
@@ -199,46 +204,55 @@ export async function runMissedJobs(
   if (state.stopped) {
     return;
   }
-  const plan = await planStartupCatchup(state, opts);
-  if (plan.candidates.length === 0 && plan.deferredJobs.length === 0) {
-    return;
-  }
-
-  const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state, {
-    discardWhenStopped: true,
-    repairFutureCronNextRunAtMs: false,
-  });
-  const execution = await executeStartupCatchupPlan(state, plan, completedOutcomeDrain);
-  let finalizedOutcomes: TimedCronRunOutcome[];
+  const catchup = {};
+  state.startupCatchup = catchup;
   try {
-    let completedOutcomes: TimedCronRunOutcome[];
-    try {
-      completedOutcomes = await completedOutcomeDrain.flush();
-    } catch (drainError) {
-      // Preserve overflow wake times and release every unstarted reservation
-      // even when a completed sibling's terminal store write has failed.
-      await applyStartupCatchupOutcomes(state, plan, execution.outcomes);
-      throw drainError;
+    const plan = await planStartupCatchup(state, opts);
+    if (plan.candidates.length === 0 && plan.deferredJobs.length === 0) {
+      return;
     }
-    finalizedOutcomes = await applyStartupCatchupOutcomes(state, plan, completedOutcomes);
-  } catch (finalizationError) {
+
+    const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state, {
+      discardWhenStopped: true,
+      repairFutureCronNextRunAtMs: false,
+    });
+    const execution = await executeStartupCatchupPlan(state, plan, completedOutcomeDrain);
+    let finalizedOutcomes: TimedCronRunOutcome[];
     try {
-      await releaseStartupCatchupReservationsAfterFailure(state, plan, execution.outcomes);
-    } catch (cleanupError) {
-      state.deps.log.warn(
-        { err: String(cleanupError) },
-        execution.ok
-          ? "cron: failed to release startup catch-up reservations after finalization error"
-          : "cron: failed to release startup catch-up reservations after execution error",
-      );
+      let completedOutcomes: TimedCronRunOutcome[];
+      try {
+        completedOutcomes = await completedOutcomeDrain.flush();
+      } catch (drainError) {
+        // Preserve overflow wake times and release every unstarted reservation
+        // even when a completed sibling's terminal store write has failed.
+        await applyStartupCatchupOutcomes(state, plan, execution.outcomes);
+        throw drainError;
+      }
+      finalizedOutcomes = await applyStartupCatchupOutcomes(state, plan, completedOutcomes);
+    } catch (finalizationError) {
+      try {
+        await releaseStartupCatchupReservationsAfterFailure(state, plan, execution.outcomes);
+      } catch (cleanupError) {
+        state.deps.log.warn(
+          { err: String(cleanupError) },
+          execution.ok
+            ? "cron: failed to release startup catch-up reservations after finalization error"
+            : "cron: failed to release startup catch-up reservations after execution error",
+        );
+      }
+      throw execution.ok ? finalizationError : execution.error;
     }
-    throw execution.ok ? finalizationError : execution.error;
-  }
-  for (const outcome of finalizedOutcomes) {
-    maybeNotifyIsolatedAgentSetupTimeout(state, outcome);
-  }
-  if (!execution.ok) {
-    throw execution.error;
+    for (const outcome of finalizedOutcomes) {
+      maybeNotifyIsolatedAgentSetupTimeout(state, outcome);
+    }
+    if (!execution.ok) {
+      throw execution.error;
+    }
+  } finally {
+    // A stopped/replaced startup cannot release a newer catch-up's timer fence.
+    if (state.startupCatchup === catchup) {
+      state.startupCatchup = undefined;
+    }
   }
 }
 
@@ -289,7 +303,12 @@ async function planStartupCatchup(
     const deferredJob = (job: CronJob, delayMs?: number): StartupDeferredJob => ({
       jobId: job.id,
       ...(delayMs === undefined ? {} : { delayMs }),
-      configRevision: resolveCronJobConfigRevision(job),
+      // Pacing belongs to this schedule occurrence, not its label or payload
+      // contents. Declarative reconciliation must not erase the deferral.
+      scheduleIdentity: tryCronScheduleIdentity(job),
+      createdAtMs: job.createdAtMs,
+      payloadKind: job.payload.kind,
+      scheduleActivatedAtMs: job.state.scheduleActivatedAtMs,
       nextRunAtMs: job.state.nextRunAtMs,
       lastRunAtMs: job.state.lastRunAtMs,
       lastRunStatus: job.state.lastRunStatus,
@@ -419,4 +438,3 @@ async function applyStartupCatchupOutcomes(
   });
   return outcomes;
 }
-import type { CronJob } from "../types.js";

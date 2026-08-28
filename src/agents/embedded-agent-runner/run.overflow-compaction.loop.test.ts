@@ -74,7 +74,13 @@ function makeDispatchInput(
       fallbackActive: false,
       fallbackReason: null,
       agentHarnessId: "codex",
-      runtimePlan: {},
+      runtimePlan: {
+        resolvedRef: { provider: "openai", modelId: "gpt-5.6-luna" },
+        auth: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+        },
+      },
       model: {
         id: "gpt-5.6-luna",
         provider: "openai",
@@ -151,6 +157,49 @@ describe("embedded run retry dispatch", () => {
     expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
+
+  it("forwards effective and authored context facts without a context engine (#124702)", async () => {
+    const cappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    cappedInput.runtime.contextTokenBudget = 272_000;
+    cappedInput.runtime.authoredContextTokenCap = 32_000;
+    const capped = await dispatchEmbeddedRunAttempt(cappedInput);
+
+    expect(capped.preparedAttempt.contextTokenBudget).toBe(272_000);
+    expect(capped.preparedAttempt.authoredContextTokenCap).toBe(32_000);
+
+    const uncappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    uncappedInput.runtime.contextTokenBudget = 272_000;
+    const uncapped = await dispatchEmbeddedRunAttempt(uncappedInput);
+
+    expect(uncapped.preparedAttempt.contextTokenBudget).toBe(272_000);
+    expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
+  });
+
+  it.each([undefined, false, true])(
+    "preserves prepared GitHub publication capability (%s)",
+    async (githubPublicationAvailable) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.githubPublicationAvailable = githubPublicationAvailable;
+
+      const result = await dispatchEmbeddedRunAttempt(input);
+
+      expect(result.preparedAttempt.githubPublicationAvailable).toBe(githubPublicationAvailable);
+    },
+  );
+
+  it.each([undefined, "current-turn-tool-policy"])(
+    "preserves the supplied turn tool authority at dispatch (%s)",
+    async (toolAuthorityFingerprint) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.toolAuthorityFingerprint = toolAuthorityFingerprint;
+
+      await dispatchEmbeddedRunAttempt(input);
+
+      expect(mocks.runAttempt.mock.calls[0]?.[0].toolAuthorityFingerprint).toBe(
+        toolAuthorityFingerprint,
+      );
+    },
+  );
 
   it.each([true, false])(
     "settles accepted spawns before a late post-compaction abort (yielded: %s)",

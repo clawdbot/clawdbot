@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  close: vi.fn(),
   callTool: vi.fn(async () => ({})),
+  click: vi.fn(async () => ({})),
+  close: vi.fn(),
   create: vi.fn(),
   createConfigured: vi.fn(),
+  createDesktopTarget: vi.fn(({ displayId }: { displayId: string }) => ({
+    tag: "Desktop",
+    inner: { displayId },
+  })),
   createTrustedSession: vi.fn(),
+  drag: vi.fn(async () => ({})),
   endSession: vi.fn(async () => ({})),
   escalateSession: vi.fn(async () => ({
     session: "openclaw-test",
@@ -13,17 +19,27 @@ const mocks = vi.hoisted(() => ({
     effectiveScope: "desktop",
     desktopUnlocked: true,
   })),
+  getCursorPosition: vi.fn(async () => ({})),
   getDesktopState: vi.fn(async () => ({})),
+  getSessionState: vi.fn(async () => ({
+    session: "openclaw-test",
+    captureScope: "desktop",
+    effectiveScope: "desktop",
+    desktopUnlocked: true,
+  })),
   isAvailable: vi.fn(() => true),
+  moveCursor: vi.fn(async () => ({})),
+  pressKey: vi.fn(async () => ({})),
+  scroll: vi.fn(async () => ({})),
   startSession: vi.fn(async () => ({})),
   shutdown: vi.fn(async () => {}),
+  typeText: vi.fn(async () => ({})),
 }));
 
 const sdk = {
-  CaptureScope: { Window: "window", Desktop: "desktop" },
+  ActionTarget: { Desktop: { new: mocks.createDesktopTarget } },
   ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
-  DesktopScope: { Desktop: 0 },
   EscalationReason: { Other: "other" },
   ScrollBy: { Line: 0 },
   ScrollDirection: { Up: 0, Down: 1, Left: 2, Right: 3 },
@@ -31,7 +47,12 @@ const sdk = {
   createTrustedSession: mocks.createTrustedSession,
 };
 
-import { ClickButton, createCuaDriver, ScrollDirection } from "./driver-client.js";
+import {
+  ClickButton,
+  createCuaDriver,
+  EscalationReason,
+  ScrollDirection,
+} from "./driver-client.js";
 
 const authorization = {
   allowedModes: ["unrestricted"],
@@ -49,12 +70,20 @@ describe("CUA Driver direct session", () => {
       shutdown: mocks.shutdown,
     });
     mocks.createTrustedSession.mockReturnValue({
-      close: mocks.close,
       callTool: mocks.callTool,
+      click: mocks.click,
+      close: mocks.close,
+      drag: mocks.drag,
       endSession: mocks.endSession,
       escalateSession: mocks.escalateSession,
+      getCursorPosition: mocks.getCursorPosition,
       getDesktopState: mocks.getDesktopState,
+      getSessionState: mocks.getSessionState,
+      moveCursor: mocks.moveCursor,
+      pressKey: mocks.pressKey,
+      scroll: mocks.scroll,
       startSession: mocks.startSession,
+      typeText: mocks.typeText,
     });
   });
 
@@ -74,7 +103,7 @@ describe("CUA Driver direct session", () => {
     });
   });
 
-  it("uses configured creation and one fixed trusted OpenClaw session", async () => {
+  it("uses configured creation with one trusted lifecycle session", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
     expect(driver.isAvailable()).toBe(true);
@@ -83,6 +112,7 @@ describe("CUA Driver direct session", () => {
       claudeCodeCompatibility: false,
       authorization,
     });
+    expect(mocks.createTrustedSession).toHaveBeenCalledOnce();
     expect(mocks.createTrustedSession).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -99,50 +129,80 @@ describe("CUA Driver direct session", () => {
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
 
-  it("starts the fixed desktop capture session once before using driver tools", async () => {
+  it("starts the shared lifecycle session once before using driver tools", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
-    await Promise.all([driver.getDesktopState(), driver.getDesktopState()]);
+    await Promise.all([driver.getDesktopState(), driver.callTool("list_windows", {})]);
     const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
 
     expect(mocks.startSession).toHaveBeenCalledOnce();
     expect(mocks.startSession).toHaveBeenCalledWith(
-      {
-        session: sessionOptions.publicSession,
-        captureScope: "desktop",
-      },
+      { session: sessionOptions.publicSession },
       undefined,
     );
-    expect(mocks.getDesktopState).toHaveBeenCalledTimes(2);
-
-    await driver.dispose();
-    expect(mocks.endSession).toHaveBeenCalledWith({ session: sessionOptions.publicSession });
-  });
-
-  it("starts window-scoped generic tools and widens only for an explicit desktop call", async () => {
-    const driver = createCuaDriver({ loadSdk: () => sdk as never });
-
-    await driver.callTool("list_windows", {});
-    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
-    expect(mocks.startSession).toHaveBeenCalledWith(
-      { session: sessionOptions.publicSession, captureScope: "window" },
-      undefined,
-    );
+    expect(mocks.getDesktopState).toHaveBeenCalledOnce();
     expect(mocks.callTool).toHaveBeenCalledWith(
       "list_windows",
       JSON.stringify({ session: sessionOptions.publicSession }),
       undefined,
     );
 
-    await driver.getDesktopState();
-    expect(mocks.escalateSession).toHaveBeenCalledWith(
+    await driver.dispose();
+    expect(mocks.endSession).toHaveBeenCalledOnce();
+    expect(mocks.endSession).toHaveBeenCalledWith({ session: sessionOptions.publicSession });
+  });
+
+  it("targets desktop input while keeping the global cursor read untargeted", async () => {
+    const driver = createCuaDriver({ loadSdk: () => sdk as never });
+
+    await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
+    await driver.drag({ fromX: 1, fromY: 2, toX: 3, toY: 4, durationMs: 5n });
+    await driver.moveCursor({ x: 6, y: 7 });
+    await driver.scroll({ x: 8, y: 9, direction: ScrollDirection.Down, amount: 3n });
+    await driver.typeText("hello");
+    await driver.pressKey({ key: "a", modifiers: ["cmd"] });
+    await driver.getCursorPosition();
+    await driver.escalateScope(EscalationReason.Other);
+
+    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
+    const target = { tag: "Desktop", inner: { displayId: "primary" } };
+    expect(mocks.createDesktopTarget).toHaveBeenCalledOnce();
+    expect(mocks.createDesktopTarget).toHaveBeenCalledWith({ displayId: "primary" });
+    expect(mocks.click).toHaveBeenCalledWith(
+      { x: 20, y: 30, button: ClickButton.Left, count: 1, target },
+      undefined,
+    );
+    expect(mocks.drag).toHaveBeenCalledWith(
+      { fromX: 1, fromY: 2, toX: 3, toY: 4, durationMs: 5n, target },
+      undefined,
+    );
+    expect(mocks.moveCursor).toHaveBeenCalledWith({ x: 6, y: 7, target }, undefined);
+    expect(mocks.scroll).toHaveBeenCalledWith(
       {
-        session: sessionOptions.publicSession,
-        reason: "other",
-        detail: "explicit desktop-scope OpenClaw action",
+        x: 8,
+        y: 9,
+        direction: ScrollDirection.Down,
+        amount: 3n,
+        by: 0,
+        target,
       },
       undefined,
     );
+    expect(mocks.typeText).toHaveBeenCalledWith({ text: "hello", target }, undefined);
+    expect(mocks.pressKey).toHaveBeenCalledWith(
+      { key: "a", modifiers: ["cmd"], target },
+      undefined,
+    );
+    expect(mocks.getCursorPosition).toHaveBeenCalledWith(
+      { session: sessionOptions.publicSession },
+      undefined,
+    );
+    expect(mocks.getSessionState).toHaveBeenCalledWith(
+      { session: sessionOptions.publicSession },
+      undefined,
+    );
+    expect(mocks.escalateSession).not.toHaveBeenCalled();
+
     await driver.dispose();
   });
 

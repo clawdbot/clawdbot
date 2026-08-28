@@ -566,7 +566,6 @@ describe("redactConfigSnapshot", () => {
             maxTokens: 8192,
             maxOutputTokens: 4096,
             maxCompletionTokens: 2048,
-            contextTokens: 128000,
             tokenCount: 500,
             tokenLimit: 100000,
             tokenBudget: 50000,
@@ -600,9 +599,6 @@ describe("redactConfigSnapshot", () => {
     expect(
       expectDefined(providers.openai, "providers.openai test invariant").maxCompletionTokens,
     ).toBe(2048);
-    expect(expectDefined(providers.openai, "providers.openai test invariant").contextTokens).toBe(
-      128000,
-    );
     expect(expectDefined(providers.openai, "providers.openai test invariant").tokenCount).toBe(500);
     expect(expectDefined(providers.openai, "providers.openai test invariant").tokenLimit).toBe(
       100000,
@@ -662,7 +658,7 @@ describe("redactConfigSnapshot", () => {
       },
     } satisfies OpenClawConfig;
     const raw = JSON.stringify(sourceConfig);
-    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig), "snapshot");
+    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig));
     const snapshot = {
       ...makeSnapshot(sourceConfig, raw),
       config: runtimeConfig,

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import { resetPluginCache } from "./plugin-cache.js";
 
 const tempDirs = createTempDirTracker();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -23,6 +24,7 @@ function captureThrownError(run: () => unknown): Error {
   throw new Error("Expected function to throw");
 }
 afterEach(() => {
+  resetPluginCache();
   tempDirs.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
@@ -68,7 +70,8 @@ describe("bundled plugin public surface loader", () => {
         resolveBundledPluginPublicSurfacePath,
       };
     });
-    vi.doMock("./native-module-require.js", () => ({
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: (target: string) => ({
         ok: true,
         moduleExport: { marker: path.basename(path.dirname(target)) },
@@ -98,7 +101,8 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
-    vi.doMock("./native-module-require.js", () => ({
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: () => ({
         ok: true,
         moduleExport: { marker: "windows-dist-ok" },
@@ -173,7 +177,8 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
-    vi.doMock("./native-module-require.js", () => ({
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: (modulePath: string) => ({
         ok: true,
         moduleExport: { marker: path.basename(path.dirname(modulePath)) },
@@ -217,7 +222,8 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
-    vi.doMock("./native-module-require.js", () => ({
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: (modulePath: string) => ({
         ok: true,
         moduleExport: {
@@ -301,10 +307,44 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
+  it("reloads a replaced installed public artifact and its dependencies after plugin metadata changes", async () => {
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=installed-artifact-replacement");
+    const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
+    const tempRoot = fs.realpathSync(tempDirs.make("openclaw-public-surface-replacement-"));
+    const pluginRoot = path.join(tempRoot, "installed-plugin");
+    const modulePath = path.join(pluginRoot, "api.js");
+    const dependencyPath = path.join(pluginRoot, "dependency.js");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+
+    const writeArtifact = (marker: string) => {
+      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
+      fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
+    };
+    const loadArtifact = () =>
+      publicSurfaceLoader.loadPluginPublicArtifactModuleSync<{ marker: string }>({
+        pluginRoot,
+        artifactBasename: "api.js",
+      }).marker;
+
+    writeArtifact("retired");
+    expect(loadArtifact()).toBe("retired");
+
+    writeArtifact("replacement");
+    expect(loadArtifact()).toBe("retired");
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(loadArtifact()).toBe("replacement");
+  });
+
   it.runIf(process.platform !== "win32")(
     "allows hardlinked bundled public artifacts under the trusted bundled root",
     async () => {
-      vi.doMock("./native-module-require.js", () => ({
+      vi.doMock("./native-module-require.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("./native-module-require.js")>()),
         tryNativeRequireJavaScriptModule: (modulePath: string) => ({
           ok: true,
           moduleExport: { marker: path.basename(path.dirname(modulePath)) },
@@ -330,6 +370,12 @@ describe("bundled plugin public surface loader", () => {
           artifactBasename: "api.js",
         }).marker,
       ).toBe("demo");
+      expect(() =>
+        publicSurfaceLoader.loadPluginPublicArtifactModuleSync({
+          pluginRoot: bundledPluginsDir,
+          artifactBasename: "demo/api.js",
+        }),
+      ).toThrow("Unable to open plugin public surface demo/api.js");
     },
   );
 
@@ -362,8 +408,9 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
-  it("does not cache missing public artifact locations", async () => {
-    vi.doMock("./native-module-require.js", () => ({
+  it("retains missing public artifacts until the plugin cache generation changes", async () => {
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: (modulePath: string) => ({
         ok: true,
         moduleExport: { marker: path.basename(path.dirname(modulePath)) },
@@ -393,12 +440,52 @@ describe("bundled plugin public surface loader", () => {
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, 'export const marker = "demo";\n', "utf8");
 
+    expect(() =>
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toThrow("Unable to resolve bundled plugin public surface demo/api.js");
+
+    const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
+    clearPluginMetadataLifecycleCaches();
     expect(
       publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
         dirName: "demo",
         artifactBasename: "api.js",
       }).marker,
     ).toBe("demo");
+  });
+
+  it("shares installed artifact exports with SDK facades without warm filesystem probes", async () => {
+    const { loadPluginPublicArtifactModuleSync } = await import("./public-surface-loader.js");
+    const { loadFacadeModuleAtLocationSync } = await import("../plugin-sdk/facade-loader.js");
+    const pluginRoot = fs.realpathSync(tempDirs.make("openclaw-shared-plugin-artifact-"));
+    const modulePath = path.join(pluginRoot, "api.cjs");
+    fs.writeFileSync(modulePath, 'module.exports = { marker: "shared-artifact" };\n');
+    const loadArtifact = () =>
+      loadPluginPublicArtifactModuleSync<{ marker: string }>({
+        pluginRoot,
+        artifactBasename: "api.cjs",
+      });
+    const first = loadArtifact();
+    const exists = vi.spyOn(fs, "existsSync");
+    const realpath = vi.spyOn(fs, "realpathSync");
+    const stat = vi.spyOn(fs, "statSync");
+    const open = vi.spyOn(fs, "openSync");
+
+    expect(loadArtifact()).toBe(first);
+    expect(
+      loadFacadeModuleAtLocationSync({
+        location: { modulePath, boundaryRoot: pluginRoot },
+        trackedPluginId: "shared-artifact",
+      }),
+    ).toBe(first);
+    expect(first.marker).toBe("shared-artifact");
+    expect(exists).not.toHaveBeenCalled();
+    expect(realpath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("rejects public artifacts that change after boundary validation", async () => {
@@ -519,7 +606,8 @@ describe("bundled plugin public surface loader", () => {
 
   it("re-throws typed missing errors raised while loading a resolved candidate", async () => {
     const nestedError = new MissingPublicSurfaceError("nested public surface is missing");
-    vi.doMock("./native-module-require.js", () => ({
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: () => {
         throw nestedError;
       },

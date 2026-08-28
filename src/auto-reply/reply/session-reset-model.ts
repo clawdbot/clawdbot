@@ -4,11 +4,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
-  buildAllowedModelSetWithFallbacks,
+  buildAllowedModelSet,
   isModelKeyAllowedBySet,
 } from "../../agents/model-selection-shared.js";
-import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -59,31 +58,14 @@ async function loadResetModelCatalog(params: {
   });
 }
 
-async function resolveResetFallbackModels(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-}): Promise<string[]> {
-  if (params.agentId) {
-    const { resolveAgentModelFallbacksOverride } = await import("../../agents/agent-scope.js");
-    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-    if (override !== undefined) {
-      return override;
-    }
-  }
-  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
-
-async function buildResetAllowedModelKeys(params: {
+function buildResetAllowedModelKeys(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
   defaultModel?: string;
-  fallbackModels: readonly string[];
   agentId?: string;
-}): Promise<Set<string>> {
-  const allowed = buildAllowedModelSetWithFallbacks(params);
+}): Set<string> {
+  const allowed = buildAllowedModelSet(params);
   const defaultModel = params.defaultModel?.trim();
   if (allowed.allowAny && defaultModel) {
     allowed.allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
@@ -221,15 +203,11 @@ export async function applyResetModelOverride(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     }));
-  const allowedModelKeys = await buildResetAllowedModelKeys({
+  const allowedModelKeys = buildResetAllowedModelKeys({
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
-    fallbackModels: await resolveResetFallbackModels({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }),
     agentId: params.agentId,
   });
   if (allowedModelKeys.size === 0) {

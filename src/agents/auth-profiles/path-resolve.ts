@@ -1,19 +1,30 @@
 /**
  * Auth profile path resolution.
- * Centralizes canonical SQLite display paths and cross-agent OAuth refresh lock paths.
+ * Centralizes canonical shared SQLite and cross-agent OAuth refresh lock paths.
  */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { resolveUserPath } from "../../utils.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 
 export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
 const SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT = 256;
 
 export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
+
+/** Pure producer facts; capturing a supplied runtime snapshot must not open SQLite. */
+export type AuthProfileOwnerScope = { stateDir: string; sharedMainDir: string };
+
+export function captureAuthProfileOwnerScope(
+  env: NodeJS.ProcessEnv = process.env,
+): AuthProfileOwnerScope {
+  return {
+    stateDir: path.resolve(resolveStateDir(env)),
+    sharedMainDir: path.resolve(resolveSharedMainAuthAgentDir(env)),
+  };
+}
 
 // Explicit env callers can address another state root in the same process.
 // Pin each root once so later row changes require an owner-controlled restart.
@@ -82,22 +93,6 @@ export function resolveSharedAuthStorePath(env: NodeJS.ProcessEnv = process.env)
     return resolveOpenClawStateSqlitePath(env);
   }
   return path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
-}
-
-/** Resolve the user-facing auth profile database path. */
-export function resolveAuthStorePathForDisplay(agentDir?: string): string {
-  const pathname = agentDir
-    ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
-    : resolveSharedAuthStorePath();
-  return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
-}
-
-/** Resolve the user-facing auth state database path. */
-export function resolveAuthStatePathForDisplay(agentDir?: string): string {
-  const pathname = agentDir
-    ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
-    : resolveSharedAuthStorePath();
-  return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
 /**

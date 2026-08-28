@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
@@ -369,6 +370,34 @@ describe("plugin-sdk facade loader", () => {
     expect(first.marker).toBe("identity-check");
     expect(listImportedBundledPluginFacadeIds()).toEqual([fixture.pluginId]);
     expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
+  });
+
+  it("reloads replaced facade artifacts and dependencies without erasing imported-plugin history", () => {
+    const pluginRoot = fs.realpathSync(createTempDirSync("openclaw-facade-replacement-"));
+    const modulePath = path.join(pluginRoot, "api.js");
+    const dependencyPath = path.join(pluginRoot, "dependency.js");
+    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+
+    const writeArtifact = (marker: string) => {
+      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
+      fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
+    };
+    const loadArtifact = () =>
+      loadFacadeModuleAtLocationSync<{ marker: string }>({
+        location: { modulePath, boundaryRoot: pluginRoot },
+        trackedPluginId: "replacement-plugin",
+      }).marker;
+
+    writeArtifact("retired");
+    expect(loadArtifact()).toBe("retired");
+
+    writeArtifact("replacement");
+    expect(loadArtifact()).toBe("retired");
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(listImportedBundledPluginFacadeIds()).toContain("replacement-plugin");
+    expect(loadArtifact()).toBe("replacement");
   });
 
   it("uses native require for Windows dist facade loads", () => {

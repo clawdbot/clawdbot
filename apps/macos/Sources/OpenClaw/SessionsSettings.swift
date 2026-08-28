@@ -121,8 +121,7 @@ struct SessionsSettings: View {
                 }
                 ContextUsageBar(
                     usedTokens: row.tokens.total,
-                    contextTokens: row.tokens.contextTokens,
-                    width: nil)
+                    contextTokens: row.tokens.contextTokens)
             }
 
             HStack(spacing: 10) {

@@ -1,6 +1,8 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import androidx.room.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -53,6 +55,7 @@ class ChatControllerBranchCoordinationTest {
   private fun controller(
     gateway: ScriptedGateway,
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
   ): ChatController {
     val controllerScope = CoroutineScope(SupervisorJob() + dispatcher)
     controllerScopes += controllerScope
@@ -61,6 +64,7 @@ class ChatControllerBranchCoordinationTest {
       json = json,
       requestGateway = gateway::request,
       cacheScope = { ChatCacheScope("gateway-a", 1) },
+      gatewayAdvertisesMethod = gatewayAdvertisesMethod,
       commandOutbox = outbox,
     )
   }
@@ -259,6 +263,47 @@ class ChatControllerBranchCoordinationTest {
 
       assertTrue(listCalls.get() >= 2)
       assertFalse(outbox.branchState("gateway-a", ChatOutboxScope("main", "main"))?.needsReconciliation == true)
+    }
+
+  @Test
+  fun gatewayWithoutBranchListingDispatchesQueuedInputWithoutRequestingBranches() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", historyResponse(sessionId = "main", messages = emptyList()))
+      gateway.respond("sessions.branches.list") {
+        throw GatewayRequestRejected(
+          GatewaySession.ErrorShape(
+            code = "INVALID_REQUEST",
+            message = "missing scope: operator.admin",
+          ),
+        )
+      }
+      gateway.respondChatSend("started")
+      val controller =
+        controller(
+          gateway,
+          StandardTestDispatcher(testScheduler),
+          gatewayAdvertisesMethod = { method -> method != "sessions.branches.list" },
+        )
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.handleGatewayEvent("health", null)
+      runCurrent()
+      assertTrue(controller.healthOk.value)
+
+      assertTrue(controller.sendMessageAwaitAcceptance("dispatch without branches", "off", emptyList()))
+      withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeout(5_000) {
+          while (gateway.callCount("chat.send") == 0 && gateway.callCount("sessions.branches.list") == 0) {
+            runCurrent()
+            kotlinx.coroutines.delay(10)
+          }
+        }
+      }
+
+      assertEquals(0, gateway.callCount("sessions.branches.list"))
+      assertEquals(1, gateway.callCount("chat.send"))
+      assertFalse(outbox.load("gateway-a").single().status == ChatOutboxStatus.Queued)
     }
 
   @Test

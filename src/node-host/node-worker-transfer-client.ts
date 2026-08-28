@@ -2,22 +2,25 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import http, { type ClientRequest, type IncomingMessage } from "node:http";
-import https from "node:https";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
-import type { TLSSocket } from "node:tls";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import type { WorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
-import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
+import {
+  parseWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifestEntry,
+} from "../gateway/worker-environments/workspace-manifest.js";
+import { absoluteEntryMatches } from "../gateway/worker-environments/workspace-reconcile-fs.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { runExec } from "../process/exec.js";
 import {
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
@@ -26,132 +29,26 @@ import {
   nodeWorkspaceTransferReconcilePath,
   type NodeWorkerWorkspaceTransferInput,
 } from "../worker/node-workspace-transfer-protocol.js";
+import {
+  NodeWorkerTransferHttpError,
+  openNodeWorkerTransferHttpRequest,
+  type NodeWorkerTransferHttpRequest,
+} from "./node-worker-transfer-http.js";
+import {
+  captureManifest,
+  runWorkspaceCommand,
+  TRANSFER_TIMEOUT_MS,
+  workspaceCommandEnv,
+} from "./node-worker-workspace-commands.js";
 
-const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
-const validatedTlsSocketPins = new WeakMap<TLSSocket, string>();
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
 
-function transferUrl(gatewayUrl: string, routePath: string): URL {
-  const gateway = new URL(gatewayUrl);
-  if (gateway.protocol !== "ws:" && gateway.protocol !== "wss:") {
-    throw new Error("workspace transfer gateway must use WebSocket transport");
-  }
-  const url = new URL(gateway.toString());
-  url.protocol = gateway.protocol === "wss:" ? "https:" : "http:";
-  const basePath = gateway.pathname.replace(/\/$/u, "");
-  url.pathname = `${basePath}${routePath}`;
-  url.search = "";
-  url.hash = "";
-  if (url.host !== gateway.host) {
-    throw new Error("workspace transfer endpoint must stay on the connected gateway host");
-  }
-  return url;
-}
-
-function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<void> {
-  if (!expectedRaw?.trim()) {
-    return Promise.resolve();
-  }
-  const expected = normalizeFingerprint(expectedRaw);
-  if (!expected) {
-    return Promise.reject(
-      new NodeWorkerWorkspaceTransferError(
-        "workspace-transfer-failed: gateway TLS fingerprint is invalid",
-      ),
-    );
-  }
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let tlsSocket: TLSSocket | undefined;
-    let fail: (error: Error) => void = () => {};
-    let verify: () => void = () => {};
-    let bindSocket: (socket: import("node:net").Socket) => void = () => {};
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      request.off("error", fail);
-      request.off("socket", bindSocket);
-      tlsSocket?.off("secureConnect", verify);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    fail = (error: Error) => finish(error);
-    request.once("error", fail);
-    bindSocket = (socket) => {
-      tlsSocket = socket as TLSSocket;
-      const validated = validatedTlsSocketPins.get(tlsSocket);
-      if (validated) {
-        finish(
-          validated === expected
-            ? undefined
-            : new NodeWorkerWorkspaceTransferError(
-                "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-              ),
-        );
-        return;
-      }
-      verify = () => {
-        const actual = normalizeFingerprint(tlsSocket!.getPeerCertificate().fingerprint256 ?? "");
-        if (!actual || expected !== actual) {
-          finish(
-            new NodeWorkerWorkspaceTransferError(
-              "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-            ),
-          );
-          return;
-        }
-        validatedTlsSocketPins.set(tlsSocket!, actual);
-        finish();
-      };
-      // A pooled socket was verified when its secureConnect event completed.
-      const peerFingerprint = tlsSocket.getPeerCertificate().fingerprint256;
-      if (request.reusedSocket || peerFingerprint) {
-        verify();
-      } else {
-        tlsSocket.once("secureConnect", verify);
-      }
-    };
-    request.once("socket", bindSocket);
-  });
-}
-
-async function openRequest(params: {
-  gatewayUrl: string;
+export type NodeWorkerTransferGateway = {
+  url: string;
   tlsFingerprint?: string;
-  routePath: string;
-  method: "GET" | "POST";
-  token: string;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-  writeBody?: (request: ClientRequest) => Promise<void>;
-}): Promise<IncomingMessage> {
-  const url = transferUrl(params.gatewayUrl, params.routePath);
-  const transport = url.protocol === "https:" ? https : http;
-  const request = transport.request(url, {
-    method: params.method,
-    headers: { authorization: `Bearer ${params.token}`, ...params.headers },
-    signal: params.signal,
-    ...(url.protocol === "https:" && params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
-  });
-  const response = once(request, "response").then(([message]) => message as IncomingMessage);
-  const send = async () => {
-    if (url.protocol === "https:") {
-      await waitForTlsPin(request, params.tlsFingerprint);
-    }
-    await params.writeBody?.(request);
-    request.end();
-  };
-  void send().catch((error: unknown) =>
-    request.destroy(error instanceof Error ? error : new Error(String(error))),
-  );
-  return await response;
-}
+  cloudflareAccess?: CloudflareAccessCredentials;
+};
 
 async function readResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -183,21 +80,24 @@ async function requireOk(response: IncomingMessage): Promise<void> {
   );
 }
 
-async function downloadBuffer(params: Parameters<typeof openRequest>[0], maxBytes: number) {
-  const response = await openRequest(params);
+async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
+  const response = await openNodeWorkerTransferHttpRequest(params);
   await requireOk(response);
   return await readResponseBody(response, maxBytes);
 }
 
 async function downloadFile(params: {
-  request: Parameters<typeof openRequest>[0];
+  request: NodeWorkerTransferHttpRequest;
   destination: string;
   expectedBytes?: number;
   expectedSha256?: string;
 }): Promise<void> {
-  const response = await openRequest(params.request);
+  const response = await openNodeWorkerTransferHttpRequest(params.request);
   await requireOk(response);
-  const output = fs.createWriteStream(params.destination, { flags: "wx", mode: 0o600 });
+  const output = fs.createWriteStream(params.destination, {
+    flags: "wx",
+    mode: 0o600,
+  });
   const hash = createHash("sha256");
   let bytes = 0;
   try {
@@ -240,72 +140,12 @@ function workspacePath(root: string, relative: string): string {
   return candidate;
 }
 
-function workspaceCommandEnv(homeDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    HOME: homeDir,
-    ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
-    GCM_INTERACTIVE: "Never",
-    GIT_ASKPASS: "",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    SSH_ASKPASS: "",
-  };
-}
-
-async function runWorkspaceCommand(params: {
-  workspaceDir: string;
-  homeDir: string;
-  argv: string[];
-  input?: string | Uint8Array;
-  signal?: AbortSignal;
-  maxOutputBytes?: number;
-}): Promise<string> {
-  const maxOutputBytes = params.maxOutputBytes ?? 128 * 1024;
-  const result = await runCommandWithTimeout(params.argv, {
-    cwd: params.workspaceDir,
-    baseEnv: workspaceCommandEnv(params.homeDir),
-    ...(params.input === undefined ? {} : { input: params.input }),
-    timeoutMs: TRANSFER_TIMEOUT_MS,
-    signal: params.signal,
-    maxOutputBytes,
-    maxCombinedOutputBytes: maxOutputBytes + 128 * 1024,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error(`workspace transfer apply failed: ${(result.stderr || result.stdout).trim()}`);
-  }
-  return result.stdout;
-}
-
-async function captureManifest(params: {
-  workspaceDir: string;
-  manifestHome: string;
-  baseCommit: string | null;
-  signal?: AbortSignal;
-}): Promise<string> {
-  return (
-    await runWorkspaceCommand({
-      workspaceDir: params.workspaceDir,
-      homeDir: params.manifestHome,
-      argv: [
-        "node",
-        "-e",
-        REMOTE_WORKSPACE_MANIFEST_JS,
-        params.workspaceDir,
-        params.baseCommit ?? "",
-        ...(params.baseCommit ? ["eligible"] : []),
-      ],
-      signal: params.signal,
-    })
-  ).trim();
-}
-
 async function initializeGitWorkspace(params: {
   workspaceDir: string;
   manifestHome: string;
   packPath: string;
   baseCommit: string;
+  entries: WorkerWorkspaceManifestEntry[];
   signal?: AbortSignal;
 }): Promise<void> {
   const objectFormat = params.baseCommit.length === 40 ? "sha1" : "sha256";
@@ -347,16 +187,31 @@ async function initializeGitWorkspace(params: {
   const index = await git(["ls-files", "--stage", "-z"], {
     maxOutputBytes: MAX_WORKSPACE_MANIFEST_BYTES,
   });
-  const gitlinks = index
-    .split("\0")
-    .filter(Boolean)
-    .flatMap((record) => {
-      const separator = record.indexOf("\t");
-      return separator >= 0 && record.startsWith("160000 ") ? [record.slice(separator + 1)] : [];
-    });
+  const gitlinks: string[] = [];
+  const basePaths = new Set<string>();
+  for (const record of index.split("\0").filter(Boolean)) {
+    const separator = record.indexOf("\t");
+    if (separator < 0) {
+      continue;
+    }
+    const indexedPath = record.slice(separator + 1);
+    if (record.startsWith("160000 ")) {
+      gitlinks.push(indexedPath);
+    } else {
+      basePaths.add(indexedPath);
+    }
+  }
   if (gitlinks.length > 0) {
     await git(["update-index", "--skip-worktree", "-z", "--stdin"], {
       input: `${gitlinks.join("\0")}\0`,
+    });
+  }
+  const checkoutPaths = params.entries
+    .map((entry) => entry.path)
+    .filter((entryPath) => basePaths.has(entryPath));
+  if (checkoutPaths.length > 0) {
+    await git(["checkout-index", "-z", "--stdin"], {
+      input: `${checkoutPaths.join("\0")}\0`,
     });
   }
   await fsp.rm(params.packPath, { force: true });
@@ -464,7 +319,9 @@ async function replaceWorkspace(workspaceDir: string, staging: string): Promise<
         const recoveryError = new Error(`workspace transfer rollback failed; recover ${backup}`, {
           cause: error,
         });
-        Object.defineProperty(recoveryError, "rollbackError", { value: rollbackError });
+        Object.defineProperty(recoveryError, "rollbackError", {
+          value: rollbackError,
+        });
         throw recoveryError;
       }
     }
@@ -479,10 +336,12 @@ async function replaceWorkspace(workspaceDir: string, staging: string): Promise<
 async function downloadWorkspace(params: {
   gatewayUrl: string;
   tlsFingerprint?: string;
+  cloudflareAccess?: CloudflareAccessCredentials;
   environmentId: string;
   workspaceDir: string;
   manifestHome: string;
   transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: "download" }>;
+  hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
   const startedAt = performance.now();
@@ -491,6 +350,7 @@ async function downloadWorkspace(params: {
     {
       gatewayUrl: params.gatewayUrl,
       tlsFingerprint: params.tlsFingerprint,
+      cloudflareAccess: params.cloudflareAccess,
       routePath: nodeWorkspaceTransferManifestPath(
         params.environmentId,
         params.transfer.manifestRef,
@@ -502,14 +362,32 @@ async function downloadWorkspace(params: {
     MAX_WORKSPACE_MANIFEST_BYTES,
   );
   const manifest = parseWorkerWorkspaceManifest(raw.toString("utf8"), params.transfer.manifestRef);
-  const parent = path.dirname(params.workspaceDir);
-  const workspaceName = path.basename(params.workspaceDir);
   const stagingWorkspace = await tempWorkspace({
-    rootDir: parent,
-    prefix: `.${workspaceName}.workspace-transfer-`,
+    rootDir: path.dirname(params.workspaceDir),
+    prefix: `.${path.basename(params.workspaceDir)}.workspace-transfer-`,
   });
   const staging = stagingWorkspace.dir;
   try {
+    if (process.platform === "win32") {
+      const published = await runWorkspaceCommand({
+        workspaceDir: staging,
+        homeDir: params.manifestHome,
+        argv: [
+          "node",
+          "-e",
+          REMOTE_WORKSPACE_MANIFEST_JS,
+          staging,
+          manifest.baseCommit ?? "",
+          "publish",
+          params.transfer.manifestRef.slice("sha256:".length),
+        ],
+        input: raw,
+        signal: params.signal,
+      });
+      if (published.trim() !== params.transfer.manifestRef) {
+        throw new Error("workspace transfer manifest publication acknowledgement is invalid");
+      }
+    }
     if (manifest.baseCommit) {
       const packPath = path.join(staging, ".openclaw-base.pack");
       const packStartedAt = performance.now();
@@ -517,6 +395,7 @@ async function downloadWorkspace(params: {
         request: {
           gatewayUrl: params.gatewayUrl,
           tlsFingerprint: params.tlsFingerprint,
+          cloudflareAccess: params.cloudflareAccess,
           routePath: nodeWorkspaceTransferPackPath(
             params.environmentId,
             params.transfer.manifestRef,
@@ -533,16 +412,30 @@ async function downloadWorkspace(params: {
         manifestHome: params.manifestHome,
         packPath,
         baseCommit: manifest.baseCommit,
+        entries: manifest.entries,
         signal: params.signal,
       });
     }
     const blobApplyStartedAt = performance.now();
     for (const directory of manifest.directories ?? []) {
-      await fsp.mkdir(workspacePath(staging, directory), { recursive: true, mode: 0o700 });
+      await fsp.mkdir(workspacePath(staging, directory), {
+        recursive: true,
+        mode: 0o700,
+      });
     }
     for (const entry of manifest.entries) {
       const destination = workspacePath(staging, entry.path);
-      await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      const materializedEntry =
+        process.platform === "win32" && entry.type === "file" && entry.mode === 0o755
+          ? { ...entry, mode: 0o644 }
+          : entry;
+      if (manifest.baseCommit && (await absoluteEntryMatches(destination, materializedEntry))) {
+        continue;
+      }
+      await fsp.mkdir(path.dirname(destination), {
+        recursive: true,
+        mode: 0o700,
+      });
       await fsp.rm(destination, { recursive: true, force: true });
       if (entry.type === "symlink") {
         await fsp.symlink(entry.target, destination);
@@ -552,6 +445,7 @@ async function downloadWorkspace(params: {
         request: {
           gatewayUrl: params.gatewayUrl,
           tlsFingerprint: params.tlsFingerprint,
+          cloudflareAccess: params.cloudflareAccess,
           routePath: nodeWorkspaceTransferBlobPath(params.environmentId, entry.sha256),
           method: "GET",
           token: params.transfer.token,
@@ -564,10 +458,14 @@ async function downloadWorkspace(params: {
       await fsp.chmod(destination, entry.mode);
     }
     const blobApplyMs = performance.now() - blobApplyStartedAt;
+    // Staging identities are fresh, so this capture re-hashes; its memo output
+    // survives the rename into workspaceDir and seeds the next upload capture.
     const observed = await captureManifest({
       workspaceDir: staging,
       manifestHome: params.manifestHome,
       baseCommit: manifest.baseCommit,
+      referenceManifestRef: params.transfer.manifestRef,
+      ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
       signal: params.signal,
     });
     if (observed !== params.transfer.manifestRef) {
@@ -606,10 +504,12 @@ async function uploadFile(request: ClientRequest, filePath: string): Promise<voi
 async function uploadWorkspace(params: {
   gatewayUrl: string;
   tlsFingerprint?: string;
+  cloudflareAccess?: CloudflareAccessCredentials;
   environmentId: string;
   workspaceDir: string;
   manifestHome: string;
   transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: "upload" }>;
+  hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
   const baseRaw = await fsp.readFile(
@@ -626,6 +526,8 @@ async function uploadWorkspace(params: {
     workspaceDir: params.workspaceDir,
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,
+    referenceManifestRef: params.transfer.baseManifestRef,
+    ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
     signal: params.signal,
   });
   const currentRaw = await fsp.readFile(
@@ -650,9 +552,10 @@ async function uploadWorkspace(params: {
     baseBytes.byteLength +
     manifestBytes.byteLength +
     files.reduce((total, entry) => total + 8 + entry.size, 0);
-  const response = await openRequest({
+  const response = await openNodeWorkerTransferHttpRequest({
     gatewayUrl: params.gatewayUrl,
     tlsFingerprint: params.tlsFingerprint,
+    cloudflareAccess: params.cloudflareAccess,
     routePath: nodeWorkspaceTransferReconcilePath(
       params.environmentId,
       params.transfer.baseManifestRef,
@@ -692,30 +595,52 @@ async function uploadWorkspace(params: {
 export async function runNodeWorkerWorkspaceTransfer(params: {
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   environmentId: string;
   workspaceDir: string;
   manifestHome: string;
   transfer: NodeWorkerWorkspaceTransferInput;
+  hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
   try {
-    return await serializeNodeWorkerWorkspace(params.workspaceDir, async () => {
-      await recoverWorkspaceReplacement(params.workspaceDir);
-      return params.transfer.direction === "download"
-        ? await downloadWorkspace({
-            ...params,
-            tlsFingerprint: params.gatewayTlsFingerprint,
-            transfer: params.transfer,
-          })
-        : await uploadWorkspace({
-            ...params,
-            tlsFingerprint: params.gatewayTlsFingerprint,
-            transfer: params.transfer,
-          });
-    });
+    await recoverWorkspaceReplacement(params.workspaceDir);
+    return params.transfer.direction === "download"
+      ? await downloadWorkspace({
+          ...params,
+          tlsFingerprint: params.gatewayTlsFingerprint,
+          cloudflareAccess: params.gatewayCloudflareAccess,
+          transfer: params.transfer,
+        })
+      : await uploadWorkspace({
+          ...params,
+          tlsFingerprint: params.gatewayTlsFingerprint,
+          cloudflareAccess: params.gatewayCloudflareAccess,
+          transfer: params.transfer,
+        });
   } catch (error) {
     if (error instanceof NodeWorkerWorkspaceTransferError) {
       throw error;
+    }
+    if (error instanceof NodeWorkerTransferHttpError) {
+      if (error.reason === "cloudflare-access-requires-tls") {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: Cloudflare Access credentials require HTTPS",
+          { cause: error },
+        );
+      }
+      if (error.reason === "tls-fingerprint-mismatch") {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+          { cause: error },
+        );
+      }
+      if (error.reason === "invalid-tls-fingerprint") {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: gateway TLS fingerprint is invalid",
+          { cause: error },
+        );
+      }
     }
     throw new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: transfer did not complete",

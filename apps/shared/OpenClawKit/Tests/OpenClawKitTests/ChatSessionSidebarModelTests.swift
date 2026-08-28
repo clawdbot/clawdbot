@@ -307,7 +307,7 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
-    @Test(arguments: ["holiday", "KYOTO", "session-123", "  HoLiDaY  "])
+    @Test(arguments: ["holiday", "KYOTO", "session-123", "team planning", "  HoLiDaY  "])
     func `sidebar search matches every canonical gateway session field`(_ query: String) {
         let matching = self.entry(
             key: "agent:main:roadmap",
@@ -315,7 +315,8 @@ struct ChatSessionSidebarModelTests {
             label: "Summer holiday",
             subject: "Kyoto itinerary",
             sessionId: "session-123",
-            updatedAt: 200)
+            updatedAt: 200,
+            category: "Team Planning")
         let other = self.entry(
             key: "agent:main:other",
             displayName: "Unrelated",
@@ -467,6 +468,15 @@ struct ChatSessionSidebarModelTests {
         #expect(details.worktreeBranch == "feature/review")
     }
 
+    @Test func `queued sessions keep their distinct inspector and sidebar state`() {
+        let session = self.entry(key: "queued", status: "queued", hasActiveRun: true)
+
+        #expect(ChatSessionInspectorDetails(session: session).runState == "Queued")
+        #expect(
+            ChatSessionSidebarModel.subtitle(for: session, workSubtitle: "Work") ==
+                "Waiting for a concurrency slot")
+    }
+
     @Test func `tree nests children and bubbles run failure and unread badges`() {
         let nodes = ChatSessionSidebarModel.tree(from: [
             self.entry(key: "parent", childSessions: ["child"]),
@@ -481,8 +491,26 @@ struct ChatSessionSidebarModelTests {
         #expect(nodes.map(\.id) == ["parent"])
         #expect(nodes[0].children.map(\.id) == ["child"])
         #expect(nodes[0].children[0].children.map(\.id) == ["grandchild"])
-        #expect(nodes[0].badges == .init(runningCount: 1, failedCount: 1, hasUnread: true))
+        #expect(nodes[0].badges == .init(queuedCount: 0, runningCount: 1, failedCount: 1, hasUnread: true))
         #expect(nodes[0].children.contains { $0.badges.hasUnread })
+    }
+
+    @Test func `tree keeps queued work separate from running work`() {
+        let nodes = ChatSessionSidebarModel.tree(from: [
+            self.entry(key: "parent", childSessions: ["queued", "running"]),
+            self.entry(
+                key: "queued",
+                parentSessionKey: "parent",
+                status: "queued",
+                hasActiveRun: true),
+            self.entry(
+                key: "running",
+                parentSessionKey: "parent",
+                status: "running",
+                hasActiveRun: true),
+        ])
+
+        #expect(nodes[0].badges == .init(queuedCount: 1, runningCount: 1, failedCount: 0, hasUnread: false))
     }
 
     @Test func `tree breaks cycles without dropping or duplicating sessions`() {
@@ -654,6 +682,39 @@ struct ChatSessionSidebarModelTests {
         #expect(replayed[0].observerDigest?.revision == 4)
     }
 
+    @Test func `global observer events require the active agent owner`() {
+        let running = self.entry(
+            key: "global",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])
+        let accepted = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "work",
+                runid: "run-work",
+                revision: 1,
+                updatedat: 100,
+                headline: "Work status",
+                health: .onTrack),
+            to: [running],
+            activeAgentId: "work")
+        let rejected = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "main",
+                runid: "run-work",
+                revision: 2,
+                updatedat: 200,
+                headline: "Foreign status",
+                health: .stuck),
+            to: accepted,
+            activeAgentId: "work")
+
+        #expect(accepted[0].observerDigest?.headline == "Work status")
+        #expect(rejected[0].observerDigest?.headline == "Work status")
+    }
+
     @Test func `run rollover clears a stale digest before the replacement event`() throws {
         let existing = self.entry(
             key: "agent:main:work",
@@ -747,6 +808,32 @@ struct ChatSessionSidebarModelTests {
         #expect(cleared.observerDigest == nil)
         #expect(cleared.status == nil)
         #expect(cleared.lastRunError == nil)
+    }
+
+    @Test func `active run id tombstone clears exact ids while omission is inert`() throws {
+        let existing = self.entry(
+            key: "agent:main:work",
+            updatedAt: 100,
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-exact"])
+        let decoder = JSONDecoder()
+
+        let omitted = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#.utf8))
+        let retained = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: omitted,
+            to: [existing]))
+        #expect(retained[0].activeRunIds == ["run-exact"])
+
+        let tombstoned = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#.utf8))
+        let cleared = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: tombstoned,
+            to: retained))
+        #expect(cleared[0].activeRunIds == nil)
     }
 
     @Test func `subtitle precedence keeps attention and status above observer digest`() {

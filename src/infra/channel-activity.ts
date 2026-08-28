@@ -58,8 +58,3 @@ export function getChannelActivity(params: {
     }
   );
 }
-
-/** Clears all tracked channel activity; test-only helper. */
-export function resetChannelActivityForTest() {
-  activity.clear();
-}

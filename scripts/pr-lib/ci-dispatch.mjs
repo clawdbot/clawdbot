@@ -2,19 +2,27 @@
 
 import { spawnSync } from "node:child_process";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { execGhJson, execGhRead, execPlainGh } from "../lib/plain-gh.mjs";
+import { execGhJson, execGhRead, execPlainGh, workflowRunsApiArgs } from "../lib/plain-gh.mjs";
+import {
+  isProtectedMainWorkflowPath,
+  parseCrabboxGateCheckSummary,
+} from "./crabbox-gate-contract.mjs";
 
-const SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+const REPOSITORY = "openclaw/openclaw";
+const CRABBOX_WORKFLOW = ".github/workflows/pr-crabbox-gate-publisher.yml";
+const CRABBOX_CHECK = "openclaw/crabbox-gate";
+const CRABBOX_CHECK_APP_ID = 15368;
+const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 
-function requirePrRecord({ pr, headRefName, headRefOid, isCrossRepository }) {
+function requirePrRecord({ baseRefOid, pr, headRefName, headRefOid, isCrossRepository }) {
   if (!Number.isSafeInteger(pr) || pr <= 0) {
     throw new Error("Expected a positive PR number.");
   }
   if (typeof headRefName !== "string" || headRefName.length === 0 || headRefName.startsWith("-")) {
     throw new Error("Expected a non-empty PR headRefName.");
   }
-  if (!SHA_PATTERN.test(headRefOid)) {
-    throw new Error("Expected a full PR headRefOid.");
+  if (!SHA_PATTERN.test(headRefOid) || !SHA_PATTERN.test(baseRefOid)) {
+    throw new Error("Expected full PR baseRefOid and headRefOid values.");
   }
   if (isCrossRepository === true) {
     throw new Error(
@@ -23,8 +31,23 @@ function requirePrRecord({ pr, headRefName, headRefOid, isCrossRepository }) {
   }
 }
 
-function buildCiDispatchArgs(record) {
+function buildCiDispatchArgs(record, backend) {
   requirePrRecord(record);
+  if (backend.name === "crabbox") {
+    return [
+      "workflow",
+      "run",
+      "pr-crabbox-gate-publisher.yml",
+      "--ref",
+      "main",
+      "-f",
+      `pr_number=${record.pr}`,
+      "-f",
+      `head_sha=${record.headRefOid}`,
+      "-f",
+      `base_sha=${record.baseRefOid}`,
+    ];
+  }
   return [
     "workflow",
     "run",
@@ -40,24 +63,23 @@ function buildCiDispatchArgs(record) {
   ];
 }
 
-function listCiRuns(headRefOid) {
-  return execGhJson(
-    [
-      "run",
-      "list",
-      "--commit",
-      headRefOid,
-      "--workflow",
-      "ci.yml",
-      "--event",
-      "workflow_dispatch",
-      "--limit",
-      "20",
-      "--json",
-      "databaseId,url,headSha,createdAt,status",
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
+function listCiRuns(headRefOid, backend) {
+  const args =
+    backend.name === "crabbox"
+      ? [
+          "api",
+          "--method",
+          "GET",
+          `repos/${REPOSITORY}/actions/workflows/pr-crabbox-gate-publisher.yml/runs`,
+          "-f",
+          "event=workflow_dispatch",
+          "-f",
+          "branch=main",
+          "-f",
+          "per_page=20",
+        ]
+      : workflowRunsApiArgs(REPOSITORY, headRefOid, "workflow_dispatch", 20);
+  return execGhJson(args, { stdio: ["ignore", "pipe", "pipe"] }).workflow_runs;
 }
 
 function readCurrentPrHeadOid(pr) {
@@ -67,68 +89,165 @@ function readCurrentPrHeadOid(pr) {
   }).trim();
 }
 
+function readWorkflowRun(runId) {
+  return execGhJson(["api", "--method", "GET", `repos/${REPOSITORY}/actions/runs/${runId}`], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function readExactHeadChecks(headSha) {
+  const endpoint = `repos/${REPOSITORY}/commits/${headSha}/check-runs?filter=latest&per_page=100`;
+  const pages = execGhJson(["api", "--paginate", "--slurp", endpoint], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page?.check_runs))) {
+    throw new Error("Exact-head check-run pages are malformed.");
+  }
+  return pages.flatMap(({ check_runs }) => check_runs);
+}
+
 function delay(milliseconds) {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
   });
 }
 
+function requireUnchangedHead(record, phase, readHeadOid) {
+  const current = readHeadOid(record.pr);
+  if (current !== record.headRefOid) {
+    throw new Error(
+      `PR #${record.pr} head changed ${phase} (expected ${record.headRefOid}, got ${current}).`,
+    );
+  }
+}
+
+async function waitForCrabboxResult(
+  record,
+  observedRun,
+  {
+    readChecks = readExactHeadChecks,
+    readRun = readWorkflowRun,
+    readHeadOid = readCurrentPrHeadOid,
+    terminalPollAttempts = 1080,
+    terminalPollIntervalMs = 15_000,
+    wait = delay,
+  },
+) {
+  let run;
+  for (let attempt = 1; attempt <= terminalPollAttempts; attempt += 1) {
+    run = readRun(observedRun.id);
+    if (run.status === "completed") {
+      break;
+    }
+    if (attempt < terminalPollAttempts) {
+      await wait(terminalPollIntervalMs);
+    }
+  }
+  if (run?.status !== "completed" || run.conclusion !== "success") {
+    throw new Error(
+      `Protected-main Crabbox publisher did not complete successfully (${run?.status ?? "missing"}/${run?.conclusion ?? "missing"}).`,
+    );
+  }
+  if (
+    run.event !== "workflow_dispatch" ||
+    run.head_branch !== "main" ||
+    !SHA_PATTERN.test(run.head_sha) ||
+    !isProtectedMainWorkflowPath(run.path, CRABBOX_WORKFLOW)
+  ) {
+    throw new Error("Protected-main Crabbox publisher run identity is invalid.");
+  }
+  requireUnchangedHead(record, "before exact-head check observation", readHeadOid);
+  const check = readChecks(record.headRefOid)
+    .filter(
+      (candidate) =>
+        candidate.name === CRABBOX_CHECK &&
+        candidate.head_sha === record.headRefOid &&
+        candidate.status === "completed" &&
+        candidate.conclusion === "success" &&
+        candidate.app?.id === CRABBOX_CHECK_APP_ID &&
+        candidate.details_url === run.html_url,
+    )
+    .toSorted((a, b) => b.id - a.id)[0];
+  if (!check) {
+    throw new Error("Protected publisher succeeded without the exact-head GitHub Actions check.");
+  }
+  const binding = parseCrabboxGateCheckSummary(check.output?.summary);
+  if (
+    binding.baseSha !== record.baseRefOid ||
+    binding.headSha !== record.headRefOid ||
+    binding.workflowSha !== run.head_sha
+  ) {
+    throw new Error(
+      "Crabbox check summary does not bind the dispatched PR base, head, and workflow.",
+    );
+  }
+  requireUnchangedHead(record, "before returning Crabbox proof", readHeadOid);
+  return {
+    actionsRunId: run.id,
+    actionsRunUrl: run.html_url,
+    backend: "crabbox",
+    checkId: check.id,
+    provider: "aws",
+    target: "linux",
+    ...binding,
+  };
+}
+
 async function dispatchCiForPr(
   record,
+  backend,
   {
+    listRuns = listCiRuns,
     pollAttempts = 10,
     pollIntervalMs = 1500,
-    listRuns = listCiRuns,
+    readHeadOid = readCurrentPrHeadOid,
     runDispatch = (args) =>
       execPlainGh(args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
-    readHeadOid = readCurrentPrHeadOid,
     wait = delay,
+    waitForCrabbox = waitForCrabboxResult,
   } = {},
 ) {
   requirePrRecord(record);
-  const priorRunIds = new Set(listRuns(record.headRefOid).map((run) => run.databaseId));
-  const headBeforeDispatch = readHeadOid(record.pr);
-  if (headBeforeDispatch !== record.headRefOid) {
-    throw new Error(
-      `PR #${record.pr} head changed before CI dispatch (expected ${record.headRefOid}, got ${headBeforeDispatch}).`,
-    );
-  }
-  runDispatch(buildCiDispatchArgs(record));
+  const priorRunIds = new Set(listRuns(record.headRefOid, backend).map((run) => run.id));
+  requireUnchangedHead(record, "before CI dispatch", readHeadOid);
+  runDispatch(buildCiDispatchArgs(record, backend));
 
   for (let attempt = 1; attempt <= pollAttempts; attempt += 1) {
-    const run = listRuns(record.headRefOid).find(
-      (candidate) =>
-        candidate.headSha === record.headRefOid &&
-        !priorRunIds.has(candidate.databaseId) &&
-        typeof candidate.url === "string" &&
-        candidate.url.length > 0,
-    );
+    const run = listRuns(record.headRefOid, backend).find((candidate) => {
+      const identityMatches =
+        backend.name === "crabbox"
+          ? candidate.head_branch === "main" &&
+            candidate.display_title === `PR Crabbox gate #${record.pr} / ${record.headRefOid}`
+          : candidate.head_sha === record.headRefOid;
+      return (
+        identityMatches &&
+        !priorRunIds.has(candidate.id) &&
+        typeof candidate.html_url === "string" &&
+        candidate.html_url.length > 0
+      );
+    });
     if (run) {
-      const headAtObservation = readHeadOid(record.pr);
-      if (headAtObservation !== record.headRefOid) {
-        throw new Error(
-          `PR #${record.pr} head changed before an exact-SHA CI run became visible (expected ${record.headRefOid}, got ${headAtObservation}); verify the run before retrying.`,
-        );
-      }
-      return run;
+      requireUnchangedHead(record, "before an exact-SHA CI run became visible", readHeadOid);
+      return backend.name === "crabbox" ? waitForCrabbox(record, run, { readHeadOid, wait }) : run;
     }
     if (attempt < pollAttempts) {
       await wait(pollIntervalMs);
     }
   }
-  const headAfterDispatch = readHeadOid(record.pr);
-  if (headAfterDispatch !== record.headRefOid) {
-    throw new Error(
-      `PR #${record.pr} head changed while CI dispatch was being indexed (expected ${record.headRefOid}, got ${headAfterDispatch}); verify the run before retrying.`,
-    );
-  }
+  requireUnchangedHead(record, "while CI dispatch was being indexed", readHeadOid);
   return undefined;
 }
 
-// Dispatch always targets the REMOTE head; unpushed local work silently gets
-// no CI. Warn (never block) when a same-named local branch points elsewhere,
-// so an operator who meant to test local changes pushes first. Best-effort:
-// any git failure (no repo, no branch) skips the check.
+function parseBackendArgs(argv) {
+  if (argv.length === 0) {
+    return { name: "ci" };
+  }
+  if (argv.length === 2 && argv[0] === "--backend" && argv[1] === "crabbox") {
+    return { name: "crabbox" };
+  }
+  throw new Error("Expected only --backend crabbox.");
+}
+
 function warnOnLocalHeadDrift(record) {
   const probe = spawnSync(
     "git",
@@ -147,39 +266,37 @@ function warnOnLocalHeadDrift(record) {
 }
 
 async function main(argv = process.argv.slice(2)) {
-  if (argv.length !== 4 || !["true", "false"].includes(argv[3])) {
-    console.error("Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <isCrossRepository>");
+  if (argv.length < 5 || !["true", "false"].includes(argv[4])) {
+    console.error(
+      "Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <baseRefOid> <isCrossRepository> [--backend crabbox]",
+    );
     process.exitCode = 2;
     return;
   }
   const record = {
+    baseRefOid: argv[3],
     pr: Number(argv[0]),
     headRefName: argv[1],
     headRefOid: argv[2],
-    isCrossRepository: argv[3] === "true",
+    isCrossRepository: argv[4] === "true",
   };
+  const backend = parseBackendArgs(argv.slice(5));
   requirePrRecord(record);
   warnOnLocalHeadDrift(record);
-  const run = await dispatchCiForPr(record);
-  if (run) {
+  const result = await dispatchCiForPr(record, backend);
+  if (result) {
     console.log(
-      `GitHub accepted CI dispatch for PR #${record.pr} at unchanged remote head ${record.headRefOid} (${record.headRefName}).`,
+      `GitHub accepted ${backend.name} dispatch for PR #${record.pr} at unchanged remote head ${record.headRefOid} (${record.headRefName}).`,
     );
     console.log(
-      "Observed a new exact-SHA manual run after dispatch; GitHub does not expose a dispatch correlation ID, so concurrent requests cannot be distinguished.",
+      backend.name === "crabbox" ? JSON.stringify(result) : `observed_run_url=${result.html_url}`,
     );
-    console.log(`observed_run_url=${run.url}`);
-  } else {
-    console.log(
-      `Requested CI for PR #${record.pr} at unchanged remote head ${record.headRefOid} (${record.headRefName}).`,
-    );
-    console.log(
-      "run_url=pending (GitHub accepted the dispatch, but Actions has not indexed it yet)",
-    );
-    console.log(
-      `inspect_with=gh run list --commit ${record.headRefOid} --workflow ci.yml --event workflow_dispatch`,
-    );
+    return;
   }
+  console.log(
+    `Requested ${backend.name} CI for PR #${record.pr} at unchanged remote head ${record.headRefOid} (${record.headRefName}).`,
+  );
+  console.log("run_url=pending (GitHub accepted the dispatch, but Actions has not indexed it yet)");
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

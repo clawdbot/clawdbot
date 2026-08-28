@@ -669,20 +669,9 @@ describe("handleCompactCommand", () => {
 
   it.each([
     {
-      owner: "Codex",
+      owner: "native harness",
       compactionKind: "native-harness" as const,
-      details: {
-        backend: "codex-app-server",
-        threadId: "thread-1",
-        signal: "thread/compact/start",
-        pending: false,
-        completed: true,
-      },
-    },
-    {
-      owner: "Copilot",
-      compactionKind: "native-harness" as const,
-      details: { success: true, tokensRemoved: 45, messagesRemoved: 2 },
+      details: { completed: true },
     },
     {
       owner: "context engine",

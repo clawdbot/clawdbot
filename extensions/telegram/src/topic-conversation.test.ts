@@ -10,7 +10,7 @@ describe("parseTelegramTopicConversation", () => {
       }),
     ).toEqual({
       chatId: "-1001234567890",
-      topicId: "42",
+      thread: { id: 42, scope: "forum" },
       canonicalConversationId: "-1001234567890:topic:42",
     });
   });
@@ -23,8 +23,20 @@ describe("parseTelegramTopicConversation", () => {
       }),
     ).toEqual({
       chatId: "-1001234567890",
-      topicId: "42",
+      thread: { id: 42, scope: "forum" },
       canonicalConversationId: "-1001234567890:topic:42",
+    });
+  });
+
+  it("keeps direct-message and forum topics with the same numeric id distinct", () => {
+    expect(
+      parseTelegramTopicConversation({
+        conversationId: "-1001234567890:direct-topic:42",
+      }),
+    ).toEqual({
+      chatId: "-1001234567890",
+      thread: { id: 42, scope: "direct-messages" },
+      canonicalConversationId: "-1001234567890:direct-topic:42",
     });
   });
 

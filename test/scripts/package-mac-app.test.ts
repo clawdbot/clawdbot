@@ -47,6 +47,17 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getMergeFrameworkMachOsBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("merge_framework_machos()");
+  const end = script.indexOf('PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"');
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 function getSwiftToolchainBlock(): string {
   const script = readFileSync("scripts/lib/swift-toolchain.sh", "utf8");
   const start = script.indexOf("REQUIRED_SWIFT_TOOLS_MAJOR=");
@@ -62,6 +73,7 @@ function runSwiftToolchainHarness(options: {
   swiftVersion: string;
   selectedDeveloperDir: "command-line-tools" | "custom-xcode" | "invalid" | "xcode";
   developerDirOverride?: "custom-xcode" | "invalid" | "xcode";
+  xcodeVersion?: string;
   xcodebuildFailure?: string;
 }) {
   const root = tempDirs.make("openclaw-package-swift-root-");
@@ -90,7 +102,7 @@ function runSwiftToolchainHarness(options: {
         '[[ "$*" == "-version" ]] || exit 2',
         ...(options.xcodebuildFailure
           ? [`printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2`, "exit 1"]
-          : ["echo 'Xcode 26.0'"]),
+          : [`echo ${JSON.stringify(`Xcode ${options.xcodeVersion ?? "26.4"}`)}`]),
         "",
       ].join("\n"),
       "utf8",
@@ -161,7 +173,7 @@ function getPeekabooSourceCommitHelperBlock(): string {
   return script.slice(start, end);
 }
 
-function runPeekabooSourceCommitHarness(packageResolved: string) {
+function runPeekabooSourceCommitHarness(packageResolved: string, expectedRevision?: string) {
   const root = tempDirs.make("openclaw-package-peekaboo-source-");
   const resolvedFile = path.join(root, "apps", "macos", "Package.resolved");
   mkdirSync(path.dirname(resolvedFile), { recursive: true });
@@ -170,6 +182,7 @@ function runPeekabooSourceCommitHarness(packageResolved: string) {
   return runHelper(`
     set -euo pipefail
     ROOT_DIR=${JSON.stringify(root)}
+    ${expectedRevision ? `export OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT=${JSON.stringify(expectedRevision)}` : "unset OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT"}
     ${getPeekabooSourceCommitHelperBlock()}
     resolve_peekaboo_source_commit
   `);
@@ -251,6 +264,167 @@ function getSwiftPackageResolutionBlock(): string {
   return script.slice(start, end);
 }
 
+function getCompiledPeekabooHelperBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("compiled_peekaboo_commit() {");
+  const end = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()", start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return script.slice(start, end);
+}
+
+function runRealCompiledPeekabooHarness(
+  mutation:
+    | "assume-unchanged"
+    | "corrupt-object"
+    | "dirty-gitlink"
+    | "export-subst"
+    | "gitlink-sibling"
+    | "ignored"
+    | "nested-gitlink"
+    | "none"
+    | "replacement-ref"
+    | "untracked",
+  expectedOverride?: string,
+) {
+  const root = tempDirs.make(`openclaw-compiled-peekaboo-real-${mutation}-`);
+  const buildPath = path.join(root, "build");
+  const checkout = path.join(buildPath, "checkouts", "Peekaboo");
+  const sourcePath = path.join(checkout, "Core", "Sources", "Fixture.swift");
+  mkdirSync(path.dirname(sourcePath), { recursive: true });
+  writeFileSync(path.join(checkout, "Package.swift"), "// swift-tools-version: 6.2\n", "utf8");
+  writeFileSync(sourcePath, 'let fixture = "$Format:%H$"\n', "utf8");
+  writeFileSync(path.join(checkout, ".gitattributes"), "Core/Sources/Fixture.swift export-subst\n");
+  for (const args of [
+    ["init", "-q"],
+    ["config", "user.name", "Fixture"],
+    ["config", "user.email", "fixture@example.invalid"],
+    ["add", "."],
+    ["commit", "-qm", "fixture"],
+  ]) {
+    const result = spawnSync("git", args, { cwd: checkout, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+  }
+  let head = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: checkout,
+    encoding: "utf8",
+  }).stdout.trim();
+
+  if (
+    mutation === "dirty-gitlink" ||
+    mutation === "gitlink-sibling" ||
+    mutation === "nested-gitlink"
+  ) {
+    const gitlinkPath = mutation === "gitlink-sibling" ? "Vendor" : "Dependencies/Vendor";
+    const gitlinkCheckout = path.join(checkout, gitlinkPath);
+    mkdirSync(gitlinkCheckout, { recursive: true });
+    writeFileSync(path.join(gitlinkCheckout, "README.md"), "initialized submodule\n");
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.name", "Fixture"],
+      ["config", "user.email", "fixture@example.invalid"],
+      ["add", "."],
+      ["commit", "-qm", "submodule fixture"],
+    ]) {
+      const result = spawnSync("git", args, { cwd: gitlinkCheckout, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    const gitlinkHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: gitlinkCheckout,
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      path.join(checkout, ".gitmodules"),
+      `[submodule "fixture"]\n\tpath = ${gitlinkPath}\n\turl = https://example.invalid/vendor.git\n`,
+      "utf8",
+    );
+    const stagedModules = spawnSync("git", ["add", ".gitmodules"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(stagedModules.status, stagedModules.stderr).toBe(0);
+    const added = spawnSync(
+      "git",
+      ["update-index", "--add", "--cacheinfo", `160000,${gitlinkHead},${gitlinkPath}`],
+      { cwd: checkout, encoding: "utf8" },
+    );
+    expect(added.status, added.stderr).toBe(0);
+    const committed = spawnSync("git", ["commit", "-qm", "gitlink"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(committed.status, committed.stderr).toBe(0);
+    head = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: checkout,
+      encoding: "utf8",
+    }).stdout.trim();
+  }
+
+  if (mutation === "assume-unchanged") {
+    const hidden = spawnSync(
+      "git",
+      ["update-index", "--assume-unchanged", path.relative(checkout, sourcePath)],
+      {
+        cwd: checkout,
+        encoding: "utf8",
+      },
+    );
+    expect(hidden.status, hidden.stderr).toBe(0);
+    writeFileSync(sourcePath, "let fixture = 2\n", "utf8");
+  } else if (mutation === "corrupt-object") {
+    const treeId = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: checkout,
+      encoding: "utf8",
+    }).stdout.trim();
+    const objectPath = path.join(checkout, ".git", "objects", treeId.slice(0, 2), treeId.slice(2));
+    chmodSync(objectPath, 0o644);
+    writeFileSync(objectPath, "corrupt object\n");
+  } else if (mutation === "dirty-gitlink") {
+    writeFileSync(path.join(checkout, "Dependencies", "Vendor", "README.md"), "dirty submodule\n");
+  } else if (mutation === "export-subst") {
+    writeFileSync(sourcePath, `let fixture = "${head}"\n`, "utf8");
+  } else if (mutation === "gitlink-sibling") {
+    const sibling = path.join(checkout, "Core", "Vendor", "Injected.swift");
+    mkdirSync(path.dirname(sibling), { recursive: true });
+    writeFileSync(sibling, "let injected = true\n", "utf8");
+  } else if (mutation === "ignored") {
+    writeFileSync(path.join(checkout, ".git", "info", "exclude"), "Hidden.swift\n", "utf8");
+    writeFileSync(path.join(checkout, "Hidden.swift"), "let hidden = true\n", "utf8");
+  } else if (mutation === "untracked") {
+    writeFileSync(path.join(checkout, "Untracked.swift"), "let untracked = true\n", "utf8");
+  } else if (mutation === "replacement-ref") {
+    const approvedHead = head;
+    writeFileSync(sourcePath, 'let fixture = "replacement"\n', "utf8");
+    const committed = spawnSync("git", ["commit", "-qam", "replacement"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(committed.status, committed.stderr).toBe(0);
+    const replacementHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: checkout,
+      encoding: "utf8",
+    }).stdout.trim();
+    const replaced = spawnSync("git", ["replace", approvedHead, replacementHead], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(replaced.status, replaced.stderr).toBe(0);
+    const detached = spawnSync("git", ["checkout", "-q", "--detach", approvedHead], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(detached.status, detached.stderr).toBe(0);
+    writeFileSync(sourcePath, 'let fixture = "replacement"\n', "utf8");
+    head = approvedHead;
+  }
+
+  return runHelper(`
+    set -euo pipefail
+    ${getCompiledPeekabooHelperBlock()}
+    compiled_peekaboo_commit ${JSON.stringify(buildPath)} ${JSON.stringify(expectedOverride ?? head)}
+  `);
+}
+
 function getStopPackagedAppBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("running_packaged_app_pids()");
@@ -287,7 +461,7 @@ function getSwiftPMResourceBundleBlock(): string {
 function getSwiftPMResourcePatchBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()");
-  const end = script.indexOf("PNPM_CMD=()");
+  const end = script.indexOf("cleanup_package_build() {", start);
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -681,13 +855,34 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it("resolves the exact pinned Peekaboo source revision from Package.resolved", () => {
-    const expectedRevision = "a2fb16764a7d1c53bf696127c287ba32703f614f";
     const packageResolved = readFileSync("apps/macos/Package.resolved", "utf8");
+    const parsed = JSON.parse(packageResolved) as {
+      pins: Array<{ identity: string; state: { revision?: string } }>;
+    };
+    const expectedRevision = parsed.pins.find((pin) => pin.identity === "peekaboo")?.state.revision;
     const result = runPeekabooSourceCommitHarness(packageResolved);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(expectedRevision);
     expect(result.stderr).toBe("");
+  });
+
+  it("requires the locked Peekaboo pin to match the requested elevation release source", () => {
+    const requestedRevision = "b".repeat(40);
+    const packageResolved = readFileSync("apps/macos/Package.resolved", "utf8");
+    const parsed = JSON.parse(packageResolved) as {
+      pins: Array<{ identity: string; state: { revision?: string } }>;
+    };
+    const pinnedRevision = parsed.pins.find((pin) => pin.identity === "peekaboo")?.state.revision;
+    expect(pinnedRevision).toMatch(/^[0-9a-f]{40}$/);
+
+    const matching = runPeekabooSourceCommitHarness(packageResolved, pinnedRevision!);
+    expect(matching.status, matching.stderr).toBe(0);
+    expect(matching.stdout).toBe(pinnedRevision);
+
+    const mismatched = runPeekabooSourceCommitHarness(packageResolved, requestedRevision);
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toContain("does not match requested release source");
   });
 
   it.each([
@@ -748,6 +943,57 @@ describe("package-mac-app plist stamping", () => {
     expect(helperCopy).toContain('/usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}"');
     expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
   });
+
+  it.runIf(process.platform === "darwin")(
+    "merges framework Mach-O binaries when the checkout path contains glob metacharacters",
+    () => {
+      const root = tempDirs.make("openclaw-package-framework-[fixture]-");
+      const primary = path.join(root, "Primary.framework");
+      const secondary = path.join(root, "Secondary.framework");
+      const destination = path.join(root, "Destination.framework");
+      const relativeBinary = path.join("Versions", "A", "OpenClawFixture");
+
+      for (const framework of [primary, secondary, destination]) {
+        mkdirSync(path.dirname(path.join(framework, relativeBinary)), { recursive: true });
+      }
+
+      const fixtureBinary = "/bin/ls";
+      const fixtureArchitectures = spawnSync("/usr/bin/lipo", ["-archs", fixtureBinary], {
+        encoding: "utf8",
+      })
+        .stdout.trim()
+        .split(/\s+/u);
+      const [primaryArchitecture, secondaryArchitecture] = fixtureArchitectures;
+      if (!primaryArchitecture || !secondaryArchitecture) {
+        throw new Error(`${fixtureBinary} must contain at least two architectures`);
+      }
+      const primaryBinary = path.join(primary, relativeBinary);
+      const secondaryBinary = path.join(secondary, relativeBinary);
+      const destinationBinary = path.join(destination, relativeBinary);
+      expect(
+        spawnSync("/usr/bin/lipo", [
+          "-thin",
+          primaryArchitecture,
+          fixtureBinary,
+          "-output",
+          primaryBinary,
+        ]).status,
+      ).toBe(0);
+      expect(spawnSync("/bin/cp", [fixtureBinary, secondaryBinary]).status).toBe(0);
+      writeFileSync(destinationBinary, readFileSync(primaryBinary));
+
+      const result = runHelper(`
+        set -euo pipefail
+        ${getMergeFrameworkMachOsBlock()}
+        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
+        /usr/bin/lipo -info ${JSON.stringify(destinationBinary)}
+      `);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(primaryArchitecture);
+      expect(result.stdout).toContain(secondaryArchitecture);
+    },
+  );
 
   it.each([
     { title: "keeps the default backend when Xcode's Metal shim works", shimExit: 0, xcrunExit: 0 },
@@ -972,11 +1218,17 @@ describe("package-mac-app plist stamping", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
+    // Hosts with a system corepack in /usr/bin (plus a cached pnpm) would satisfy
+    // the detection this test needs to fail; an empty cache with network disabled
+    // keeps "corepack pnpm is unavailable" true everywhere.
+    const corepackHome = tempDirs.make("openclaw-package-corepack-home-");
 
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
       PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      export COREPACK_HOME=${JSON.stringify(corepackHome)}
+      export COREPACK_ENABLE_NETWORK=0
       ${helperBlock}
       run_pnpm build
     `);
@@ -1001,13 +1253,13 @@ describe("package-mac-app plist stamping", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.2+");
+    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.3+");
     expect(result.stderr).toContain("Current Swift is 6.0");
   });
 
-  it("rejects Command Line Tools even when they provide Swift 6.2", () => {
+  it("rejects Command Line Tools even when they provide Swift 6.3", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "command-line-tools",
     });
 
@@ -1022,10 +1274,33 @@ describe("package-mac-app plist stamping", () => {
     expect(result.stderr).toContain("DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer");
   });
 
-  it("accepts Swift 6.2 from a selected full Xcode developer directory", () => {
+  it("accepts Swift 6.3 from a selected full Xcode developer directory", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "xcode",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects Xcode 26.3 even when it exposes a Swift 6.3 binary", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.3.1",
+      selectedDeveloperDir: "xcode",
+      xcodeVersion: "26.3",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Xcode 26.4+");
+    expect(result.stderr).toContain("current Xcode is 26.3");
+  });
+
+  it("accepts newer major Xcode toolchains that satisfy the Swift floor", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.4.0",
+      selectedDeveloperDir: "xcode",
+      xcodeVersion: "27.0",
     });
 
     expect(result.status).toBe(0);
@@ -1034,7 +1309,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("honors DEVELOPER_DIR when the global selection is Command Line Tools", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "command-line-tools",
       developerDirOverride: "xcode",
     });
@@ -1045,7 +1320,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("accepts usable full Xcode tooling from a custom developer directory", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "custom-xcode",
     });
 
@@ -1055,7 +1330,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("rejects an unusable selected developer directory", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "invalid",
     });
 
@@ -1066,7 +1341,7 @@ describe("package-mac-app plist stamping", () => {
   it("preserves the native Xcode failure before generic selection guidance", () => {
     const diagnostic = "xcodebuild: error: SDK metadata is unavailable";
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "xcode",
       xcodebuildFailure: diagnostic,
     });
@@ -1272,16 +1547,74 @@ describe("package-mac-app plist stamping", () => {
     const script = readFileSync(scriptPath, "utf8");
     const resolveCall =
       'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve';
-    const buildCall =
-      'run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
+    const buildCall = 'swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
 
-    expect(script).toContain('resolved_file="$ROOT_DIR/apps/macos/Package.resolved"');
+    expect(script).toContain(
+      'resolved_file="${SWIFT_PACKAGE_ROOT:-$ROOT_DIR/apps/macos}/Package.resolved"',
+    );
+    expect(script).toContain(
+      'SWIFT_PACKAGE_LOCK_BASELINE="$SWIFT_PACKAGE_CONTAINER/Package.resolved.committed"',
+    );
+    expect(script).toContain('chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"');
+    expect(script).toContain("identity in result");
     expect(script).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
     expect(script).toContain('cp "$resolved_snapshot" "$resolved_file"');
     expect(script).toContain("ERROR: Swift package resolution changed Package.resolved");
     expect(script).toContain(resolveCall);
     expect(script).toContain(buildCall);
+    expect(
+      script.indexOf(
+        "prepare_swift_package_root",
+        script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
+      ),
+    ).toBeLessThan(script.indexOf(resolveCall));
+    expect(script.indexOf("cleanup_swift_package_root", script.indexOf(buildCall))).toBeGreaterThan(
+      script.indexOf(buildCall),
+    );
+    const buildIndex = script.indexOf(buildCall);
+    expect(script.lastIndexOf("verify_snapshot_swift_lock", buildIndex)).toBeGreaterThan(
+      script.indexOf(resolveCall),
+    );
+    expect(script.indexOf("verify_snapshot_swift_lock", buildIndex)).toBeGreaterThan(buildIndex);
+    expect(script).not.toContain("swift build --disable-automatic-resolution");
     expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(buildCall));
+  });
+
+  it("stamps only the clean Peekaboo source that SwiftPM actually compiled", () => {
+    const verifier = getCompiledPeekabooHelperBlock();
+    expect(verifier).toContain('"core.commitGraph=false"');
+    expect(verifier).toContain('"--no-replace-objects"');
+    expect(verifier).toContain('"fsck", "--full", "--strict"');
+    expect(verifier).toContain('"cat-file", object_type');
+    expect(readFileSync(scriptPath, "utf8")).toContain("hdiutil attach -quiet -readonly -nobrowse");
+    expect(readFileSync(scriptPath, "utf8")).toContain(
+      'swift package --scratch-path "$build_path" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"',
+    );
+    const mismatched = runRealCompiledPeekabooHarness("none", "e".repeat(40));
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toContain("does not match locked source");
+
+    const cleanCheckout = runRealCompiledPeekabooHarness("none");
+    expect(cleanCheckout.status, cleanCheckout.stderr).toBe(0);
+    const nestedGitlink = runRealCompiledPeekabooHarness("nested-gitlink");
+    expect(nestedGitlink.status, nestedGitlink.stderr).toBe(0);
+
+    for (const mutation of [
+      "assume-unchanged",
+      "corrupt-object",
+      "dirty-gitlink",
+      "export-subst",
+      "gitlink-sibling",
+      "ignored",
+      "replacement-ref",
+      "untracked",
+    ] as const) {
+      const dirty = runRealCompiledPeekabooHarness(mutation);
+      expect(dirty.status).toBe(1);
+      expect(dirty.stderr).toContain(
+        "Compiled Peekaboo checkout does not exactly match its committed source",
+      );
+    }
   });
 
   it("restores and rejects a Swift package resolution that changes the lockfile", () => {
@@ -1346,10 +1679,22 @@ describe("package-mac-app plist stamping", () => {
     const packageScript = readFileSync(scriptPath, "utf8");
     const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
     const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
+    const cuaManifest = JSON.parse(
+      readFileSync("extensions/cua-computer/package.json", "utf8"),
+    ) as {
+      dependencies: Record<string, string>;
+      cuaDriverArtifacts: Record<string, { archiveSha256?: string }>;
+    };
 
     expect(stageScript).toContain('TAG="cua-driver-rs-v${VERSION}"');
     expect(stageScript).toContain(
-      'EXPECTED_SHA256="733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e"',
+      'ARTIFACT_MANIFEST="$ROOT_DIR/extensions/cua-computer/package.json"',
+    );
+    expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
+    expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.21.0");
+    expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
+      "5e327e58f6ce81d5c117fe5edec5f267e87e1b921e8c5a8aa4f7f21cbcf5f273",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
@@ -1362,6 +1707,27 @@ describe("package-mac-app plist stamping", () => {
     );
     expect(codesignScript.indexOf("Signing embedded CUA driver")).toBeLessThan(
       codesignScript.indexOf("# Finally sign the bundle"),
+    );
+  });
+
+  it("omits the CUA driver only from elevation-host packages", () => {
+    const packageScript = readFileSync(scriptPath, "utf8");
+    const variantBlock = packageScript.slice(
+      packageScript.indexOf('SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"'),
+      packageScript.indexOf("# OPENCLAW_SKIP_MLX_TTS"),
+    );
+    const cuaBlock = packageScript.slice(
+      packageScript.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]'),
+      packageScript.indexOf('echo "📦 Copying CLI installer"'),
+    );
+
+    expect(variantBlock).toContain("standard | elevation-host");
+    expect(variantBlock).toContain("Unknown OPENCLAW_MAC_SIGNING_VARIANT value");
+    expect(cuaBlock).toContain("Omitting embedded CUA driver from elevation-host package");
+    expect(cuaBlock).toContain("else");
+    expect(cuaBlock).toContain("Staging embedded CUA driver");
+    expect(cuaBlock).toContain(
+      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
     );
   });
 

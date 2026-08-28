@@ -36,9 +36,12 @@ import {
   HISTORY_SCAN_MAX_SESSION_CHARS,
   HISTORY_SCAN_SESSION_OVERHEAD_CHARS,
   readHistoryScanSession,
-  resolveSkillHistoryScanTranscriptBudget,
   type SkillHistoryScanBatchSession,
 } from "./history-scan-transcript.js";
+import {
+  resolveSkillWorkshopModelContextTokens,
+  resolveSkillWorkshopProjectionBudgets,
+} from "./model-context-budget.js";
 import { getSkillProposalRunProgress } from "./service.js";
 
 type ActiveSkillHistoryScan = {
@@ -222,13 +225,9 @@ async function runSkillHistoryScanCore(
           )
         ).model
       : undefined;
-  const contextTokens = resolvedModel
-    ? Math.min(
-        resolvedModel.contextTokens ?? resolvedModel.contextWindow,
-        resolvedModel.contextWindow,
-      )
-    : undefined;
-  const maxTranscriptChars = resolveSkillHistoryScanTranscriptBudget(contextTokens);
+  const contextTokens = resolveSkillWorkshopModelContextTokens(resolvedModel);
+  const maxTranscriptChars =
+    resolveSkillWorkshopProjectionBudgets(contextTokens).historyTranscriptChars;
   const maxSessionTranscriptChars = Math.min(
     HISTORY_SCAN_MAX_SESSION_CHARS,
     Math.max(1, maxTranscriptChars - HISTORY_SCAN_SESSION_OVERHEAD_CHARS),

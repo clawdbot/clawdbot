@@ -1,4 +1,5 @@
 // Line plugin module implements send behavior.
+import { randomUUID } from "node:crypto";
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -6,6 +7,10 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -14,6 +19,7 @@ import { messageAction, normalizeLineMessageActions } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
+import { runLinePushWithRetries } from "./send-retry.js";
 import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
@@ -28,30 +34,70 @@ type QuickReply = messagingApi.QuickReply;
 type QuickReplyItem = messagingApi.QuickReplyItem;
 type LineLocation = NonNullable<LineChannelData["location"]>;
 
-const userProfileCache = new Map<
-  string,
-  { displayName: string; pictureUrl?: string; fetchedAt: number }
->();
+type LineUserProfile = { displayName: string; pictureUrl?: string };
+type LineIdentityCache<T> = {
+  values: Map<string, { value: T; fetchedAt: number }>;
+  pending: Map<string, Promise<T>>;
+};
+
+const profileCache: LineIdentityCache<LineUserProfile | null> = {
+  values: new Map(),
+  pending: new Map(),
+};
+const groupNameCache: LineIdentityCache<string | undefined> = {
+  values: new Map(),
+  pending: new Map(),
+};
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
 const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
+const LINE_LOCATION_LABEL_LIMIT = 100;
+// This cap bounds receipts and diagnostics: overflow after acceptance becomes no-retry partial
+// delivery, while rejected responses keep their status with prefix-only diagnostics.
+const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
-function cacheUserProfile(
-  userId: string,
-  profile: { displayName: string; pictureUrl?: string; fetchedAt: number },
-): void {
-  // Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
-  userProfileCache.delete(userId);
-  userProfileCache.set(userId, profile);
-  if (userProfileCache.size <= PROFILE_CACHE_MAX_ENTRIES) {
+// Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
+function rememberLineIdentity<T>(cache: LineIdentityCache<T>, key: string, value: T): void {
+  const entry = { value, fetchedAt: Date.now() };
+  cache.values.delete(key);
+  cache.values.set(key, entry);
+  if (cache.values.size <= PROFILE_CACHE_MAX_ENTRIES) {
     return;
   }
-  for (const [key, cached] of userProfileCache) {
-    if (profile.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
-      userProfileCache.delete(key);
+  for (const [cachedKey, cached] of cache.values) {
+    if (entry.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
+      cache.values.delete(cachedKey);
     }
   }
-  pruneMapToMaxSize(userProfileCache, PROFILE_CACHE_MAX_ENTRIES);
+  pruneMapToMaxSize(cache.values, PROFILE_CACHE_MAX_ENTRIES);
+}
+
+async function loadLineIdentity<T>(
+  cache: LineIdentityCache<T>,
+  key: string,
+  load: () => Promise<T>,
+): Promise<T> {
+  const cached = cache.values.get(key);
+  if (cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS) {
+    return cached.value;
+  }
+  const pending = cache.pending.get(key);
+  if (pending) {
+    return await pending;
+  }
+  const lookup = load().then((value) => {
+    rememberLineIdentity(cache, key, value);
+    return value;
+  });
+  cache.pending.set(key, lookup);
+  pruneMapToMaxSize(cache.pending, PROFILE_CACHE_MAX_ENTRIES);
+  try {
+    return await lookup;
+  } finally {
+    if (cache.pending.get(key) === lookup) {
+      cache.pending.delete(key);
+    }
+  }
 }
 
 interface LineSendOpts {
@@ -172,6 +218,7 @@ async function sendLineProviderMessages(
   operation: "push" | "reply",
   token: string,
   request: messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest,
+  retryKey?: string,
 ): Promise<messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse> {
   const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
     `https://api.line.me/v2/bot/message/${operation}`,
@@ -181,25 +228,35 @@ async function sendLineProviderMessages(
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
         "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
+        ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {}),
       },
       body: JSON.stringify(request),
     },
   );
 
-  if (!response.ok) {
+  // LINE answers a retried key with 409 and the accepted request's sent messages
+  // instead of delivering the batch a second time, so that conflict is the
+  // earlier attempt's success rather than a failure of this one.
+  const acceptedRetryConflict = retryKey !== undefined && response.status === 409;
+
+  if (!response.ok && !acceptedRetryConflict) {
+    const body = await readResponseTextLimited(response, LINE_PROVIDER_RESPONSE_MAX_BYTES).catch(
+      () => "",
+    );
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
-      body: await response.text(),
+      body,
     });
   }
 
   try {
-    const text = await response.text();
-    return (text ? JSON.parse(text) : null) as
-      | messagingApi.PushMessageResponse
-      | messagingApi.ReplyMessageResponse;
+    return await readProviderJsonResponse<
+      messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse
+    >(response, `LINE ${operation} response`, {
+      maxBytes: LINE_PROVIDER_RESPONSE_MAX_BYTES,
+    });
   } catch (error) {
     // LINE accepted this exact request before its receipt became unreadable; retrying duplicates it.
     throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
@@ -248,14 +305,29 @@ function isValidLineLocation(location: LineLocation): boolean {
   return location.title.trim().length > 0 && location.address.trim().length > 0;
 }
 
-export function createLocationMessage(location: LineLocation): LocationMessage | null {
+// A pin LINE will not render still carries the values the sender wrote, and the
+// coordinates are always present, so the location degrades to the text it was
+// made of instead of vanishing from the reply.
+function locationTextFallback(location: LineLocation): TextMessage {
+  // The pin caps each label, and so must the fallback: an unbounded label would
+  // breach LINE's text limit and lose the location the same silent way.
+  const authored = [location.title, location.address]
+    .map((label) => truncateUtf16Safe(label.trim(), LINE_LOCATION_LABEL_LIMIT))
+    .filter(Boolean);
+  return {
+    type: "text",
+    text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
+  };
+}
+
+export function createLocationMessage(location: LineLocation): LocationMessage | TextMessage {
   if (!isValidLineLocation(location)) {
-    return null;
+    return locationTextFallback(location);
   }
   return {
     type: "location",
-    title: truncateUtf16Safe(location.title, 100),
-    address: truncateUtf16Safe(location.address, 100),
+    title: truncateUtf16Safe(location.title, LINE_LOCATION_LABEL_LIMIT),
+    address: truncateUtf16Safe(location.address, LINE_LOCATION_LABEL_LIMIT),
     latitude: location.latitude,
     longitude: location.longitude,
   };
@@ -325,17 +397,25 @@ async function pushLineMessages(
 
   const { account, token, chatId } = createLinePushContext(to, opts);
   const normalizedMessages = messages.map(normalizeLineMessageActions);
-  const pushRequest = sendLineProviderMessages("push", token, {
-    to: chatId,
-    messages: normalizedMessages,
-  });
+  // One retry key per logical push: every attempt reuses it so LINE deduplicates
+  // an attempt that was accepted before its outcome reached us.
+  const retryKey = randomUUID();
 
-  const response = behavior.errorContext
-    ? await pushRequest.catch((err: unknown) => {
-        logLineHttpError(err, behavior.errorContext!);
-        throw err;
-      })
-    : await pushRequest;
+  const response = await runLinePushWithRetries(async () => {
+    try {
+      return await sendLineProviderMessages(
+        "push",
+        token,
+        { to: chatId, messages: normalizedMessages },
+        retryKey,
+      );
+    } catch (err) {
+      if (behavior.errorContext) {
+        logLineHttpError(err, behavior.errorContext);
+      }
+      throw err;
+    }
+  }, "line:push");
   const { messageId, messageIds } = resolveLineProviderMessageIds(response, "push");
   const result: LineSendResult = {
     messageId,
@@ -511,11 +591,7 @@ export async function pushLocationMessage(
   location: LineLocation,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  const message = createLocationMessage(location);
-  if (!message) {
-    throw new Error("LINE location title and address must be non-empty");
-  }
-  return pushLineMessages(to, [message], opts, {
+  return pushLineMessages(to, [createLocationMessage(location)], opts, {
     verboseMessage: (chatId) => `line: pushed location to ${chatId}`,
   });
 }
@@ -591,41 +667,100 @@ export async function showLoadingAnimation(
   }
 }
 
+export type LineConversationScope = { groupId?: string; roomId?: string };
+
+function lineProfileCacheKey(
+  accountId: string,
+  userId: string,
+  scope: LineConversationScope,
+): string {
+  const conversation = scope.groupId
+    ? ["group", scope.groupId]
+    : scope.roomId
+      ? ["room", scope.roomId]
+      : ["direct"];
+  return JSON.stringify([accountId, "profile", ...conversation, userId]);
+}
+
+// A group or room member who has not added the bot as a friend is invisible to
+// the plain profile endpoint, so the sender's conversation decides which one can
+// answer. Reading the wrong one returns 404 for exactly the people whose names
+// matter most in a group.
+function fetchLineMemberProfile(
+  client: messagingApi.MessagingApiClient,
+  userId: string,
+  scope: LineConversationScope,
+): Promise<{ displayName: string; pictureUrl?: string }> {
+  if (scope.groupId) {
+    return client.getGroupMemberProfile(scope.groupId, userId);
+  }
+  if (scope.roomId) {
+    return client.getRoomMemberProfile(scope.roomId, userId);
+  }
+  return client.getProfile(userId);
+}
+
 export async function getUserProfile(
   userId: string,
-  opts: LineClientOpts & { useCache?: boolean },
-): Promise<{ displayName: string; pictureUrl?: string } | null> {
+  opts: LineClientOpts & { useCache?: boolean } & LineConversationScope,
+): Promise<LineUserProfile | null> {
   const useCache = opts.useCache ?? true;
-
-  if (useCache) {
-    const cached = userProfileCache.get(userId);
-    if (cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS) {
-      return { displayName: cached.displayName, pictureUrl: cached.pictureUrl };
-    }
-  }
-
-  const { client } = createLineMessagingClient(opts);
-
   try {
-    const profile = await client.getProfile(userId);
-    const result = {
-      displayName: profile.displayName,
-      pictureUrl: profile.pictureUrl,
+    // Client construction resolves the canonical account for the cache key and
+    // can throw; an unresolvable name must never cost the inbound turn.
+    const { account, token } = resolveLineMessagingAccount(opts);
+    const cacheKey = lineProfileCacheKey(account.accountId, userId, opts);
+    const load = async () => {
+      try {
+        const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
+        const profile = await fetchLineMemberProfile(client, userId, opts);
+        return { displayName: profile.displayName, pictureUrl: profile.pictureUrl };
+      } catch (err) {
+        logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
+        return null;
+      }
     };
-
-    cacheUserProfile(userId, {
-      ...result,
-      fetchedAt: Date.now(),
-    });
-
-    return result;
+    if (!useCache) {
+      const profile = await load();
+      rememberLineIdentity(profileCache, cacheKey, profile);
+      return profile;
+    }
+    return await loadLineIdentity(profileCache, cacheKey, load);
   } catch (err) {
     logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
     return null;
   }
 }
 
-export async function getUserDisplayName(userId: string, opts: LineClientOpts): Promise<string> {
+export async function getUserDisplayName(
+  userId: string,
+  opts: LineClientOpts & LineConversationScope,
+): Promise<string> {
   const profile = await getUserProfile(userId, opts);
   return profile?.displayName ?? userId;
+}
+
+// LINE never puts the group name in a webhook, and multi-person rooms have no
+// name endpoint at all, so only groups can be named and only by asking.
+export async function getLineGroupName(
+  groupId: string,
+  opts: LineClientOpts,
+): Promise<string | undefined> {
+  try {
+    const { account, token } = resolveLineMessagingAccount(opts);
+    const cacheKey = JSON.stringify([account.accountId, "group", groupId]);
+    return await loadLineIdentity(groupNameCache, cacheKey, async () => {
+      try {
+        const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
+        const summary = await client.getGroupSummary(groupId);
+        return summary.groupName.trim() || undefined;
+      } catch (err) {
+        logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
+        return undefined;
+      }
+    });
+  } catch (err) {
+    logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
+    return undefined;
+  }
 }

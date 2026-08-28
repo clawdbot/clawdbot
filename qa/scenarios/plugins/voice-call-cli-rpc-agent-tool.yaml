@@ -1,4 +1,4 @@
-title: Voice Call CLI, RPC, agent tool, and realtime consult flow
+title: Voice Call CLI, RPC, classic webhook, agent tool, and realtime consult flow
 
 scenario:
   id: voice-call-cli-rpc-agent-tool
@@ -7,11 +7,12 @@ scenario:
   coverage:
     primary:
       - voice-call.cli-rpc-agent-tool
-  objective: Verify the real Voice Call CLI, Gateway RPC, and Gateway-invoked agent tool share one mock-provider runtime whose realtime media stream reaches embedded-agent consult context.
+  objective: Verify the real Voice Call CLI, Gateway RPC, classic webhook response, and Gateway-invoked agent tool share one mock-provider runtime whose realtime media stream reaches embedded-agent consult context.
   successCriteria:
     - The CLI starts an outbound call through its Gateway RPC path.
     - The registered Gateway RPC starts an outbound call through the same mock provider runtime.
     - Gateway tools.invoke starts an outbound call through the registered voice_call agent tool.
+    - A two-turn classic inbound webhook keeps caller history at user priority exactly once and ignores blank final speech.
     - The runtime issues a real webhook media-stream token for the tool-started call.
     - The fake realtime provider invokes openclaw_agent_consult and the embedded agent receives caller transcript and provider context.
   docsRefs:
@@ -28,7 +29,7 @@ scenario:
     kind: script
     parallelSafe: true
     path: test/e2e/qa-lab/runtime/voice-call-gateway.ts
-    summary: Starts a real Gateway and Voice Call plugin, runs the actual CLI plus RPC and tools.invoke entry points, then drives the runtime-issued realtime media stream through embedded-agent consult.
+    summary: Starts a real Gateway and Voice Call plugin, runs the actual CLI, RPC, classic webhook, and tools.invoke entry points, then drives the runtime-issued realtime media stream through embedded-agent consult.
     args:
       - --artifact-base
       - ${outputDir}

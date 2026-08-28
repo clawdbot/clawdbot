@@ -25,8 +25,13 @@ export function composerDraftSearch(draft: string): string {
 const SESSION_KEY_UUID_SUFFIX_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
+type SessionNavigationContext<TRouteId extends string> = Pick<
+  ApplicationContext<TRouteId>,
+  "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
+>;
+
 type ContextSessionNavigationTargetParams<TRouteId extends string> = {
-  context: ApplicationContext<TRouteId>;
+  context: SessionNavigationContext<TRouteId>;
   face: BoardFace;
   sessionKey: string;
   agentId?: string;
@@ -35,6 +40,7 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   row?: never;
   mainKey?: never;
   shortIdLength?: number;
+  exactKey?: boolean;
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
   navigationKey?: string;
@@ -49,6 +55,7 @@ type ExplicitSessionNavigationTargetParams = {
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
   shortIdLength?: number;
+  exactKey?: boolean;
   agentId?: never;
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
@@ -117,6 +124,7 @@ function pathForNonCatalogSessionKey(params: {
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
   shortIdLength?: number;
+  exactKey?: boolean;
 }): string {
   const key = params.row?.key ?? params.sessionKey;
   const agentId =
@@ -127,6 +135,7 @@ function pathForNonCatalogSessionKey(params: {
   return (
     pathForSession(params.face, normalizeAgentId(agentId), key, params.basePath, {
       displayName: params.row?.displayName,
+      exactKey: params.exactKey,
       mainKey: params.mainKey,
       shortIdLength: params.shortIdLength,
     }) ?? pathForRoute(params.face, params.basePath)
@@ -168,6 +177,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
     fallbackAgentId,
     basePath,
     shortIdLength: params.shortIdLength,
+    exactKey: params.exactKey,
     ...(catalogKey ? { mainKey } : { row, mainKey }),
   });
   const search = catalogKey ? catalogSessionSearch(catalogKey) : undefined;

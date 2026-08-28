@@ -285,7 +285,6 @@ describe("OpenAI-compatible image provider helper", () => {
       cfg: {} as never,
     });
 
-    expect(result.images).toHaveLength(4);
     expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
       imageBytes.byteLength,
       imageBytes.byteLength,

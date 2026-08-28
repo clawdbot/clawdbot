@@ -10,12 +10,14 @@ import {
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import {
   createGateway,
   createGatewayHarness,
   createSessions,
+  createSessionsHarness,
+  deferred,
   mountSidebar,
+  successfulSessionPatch,
 } from "../app-sidebar.ts";
 import {
   answerConfirmDialog,
@@ -58,31 +60,53 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  it("names each session's pin and menu buttons after their owning session", async () => {
+  it("names session actions and routes menu hints through the shared tooltip", async () => {
     const { sidebar } = await mountMultiSelect();
 
     for (const key of ["agent:main:a", "agent:main:b"]) {
       const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      const menu = row?.querySelector<HTMLElement>("[data-session-menu]");
+      const tooltip = menu?.closest("openclaw-tooltip") as
+        | (HTMLElement & { content: string; describe: boolean })
+        | null;
       expect(label).toBeTruthy();
       expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
         `Pin session: ${label}`,
       );
-      expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toBe(
-        `Open session menu: ${label}`,
-      );
+      expect(menu?.getAttribute("aria-label")).toBe(`Open session menu: ${label}`);
+      expect(menu?.hasAttribute("title")).toBe(false);
+      expect(tooltip?.content).toBe("Open session menu");
+      expect(tooltip?.describe).toBe(false);
     }
   });
 
   it("restores the thread action anchor when Tab exits its keyboard context menu", async () => {
     const { sidebar } = await mountMultiSelect();
-    const link = rowLink(sidebar, "agent:main:a");
     const trigger = sidebar.querySelector<HTMLElement>(
       '[data-session-key="agent:main:a"] [data-session-menu]',
     );
-    link.focus();
-    link.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    const tooltip = trigger?.closest("openclaw-tooltip") as
+      | (HTMLElement & {
+          disabled: boolean;
+          renderRoot: ShadowRoot;
+          updateComplete: Promise<unknown>;
+        })
+      | null;
+    if (!trigger || !tooltip) {
+      throw new Error("expected session menu tooltip");
+    }
+    const popup = tooltip.renderRoot.querySelector("wa-tooltip") as
+      | (HTMLElement & { open: boolean })
+      | null;
+    trigger.focus();
+    expect(popup?.open).toBe(true);
+
+    trigger.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
+    await tooltip.updateComplete;
+    expect(tooltip.disabled).toBe(true);
+    expect(popup?.open).toBe(false);
 
     const menu = await sessionMenu(sidebar);
     const item = menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");
@@ -94,27 +118,53 @@ describe("AppSidebar multi-select", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("cmd-click toggles rows into the selection and plain click clears it", async () => {
+  it.each([
+    { modifier: "Command", event: { metaKey: true } },
+    { modifier: "Control", event: { ctrlKey: true } },
+  ])("lets $modifier-click open session links through the browser", async ({ event }) => {
     const { sidebar } = await mountMultiSelect();
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true, ...event });
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    rowLink(sidebar, "agent:main:a").dispatchEvent(clickEvent);
     await sidebar.updateComplete;
+
+    expect(clickEvent.defaultPrevented).toBe(false);
+    expect(selectedRowKeys(sidebar)).toEqual([]);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("option-click toggles selection and plain click clears it while navigating", async () => {
+    const { sidebar } = await mountMultiSelect();
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+
+    const optionClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      altKey: true,
+    });
+    rowLink(sidebar, "agent:main:a").dispatchEvent(optionClick);
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
+    await sidebar.updateComplete;
+    expect(optionClick.defaultPrevented).toBe(true);
     expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a", "agent:main:b"]);
 
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a"]);
 
     click(rowLink(sidebar, "agent:main:c"));
     await sidebar.updateComplete;
     expect(selectedRowKeys(sidebar)).toEqual([]);
+    expect(onNavigate).toHaveBeenCalledOnce();
   });
 
   it("shift-click extends the selection from the anchor across the visible order", async () => {
     const { sidebar } = await mountMultiSelect();
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
     click(rowLink(sidebar, "agent:main:c"), { shiftKey: true });
     await sidebar.updateComplete;
 
@@ -124,8 +174,8 @@ describe("AppSidebar multi-select", () => {
   it("archives every selected session from the batch menu", async () => {
     const { sidebar, harness } = await mountMultiSelect();
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:a");
     await sidebar.updateComplete;
@@ -160,8 +210,8 @@ describe("AppSidebar multi-select", () => {
   it("marks every selected session unread through patchMany", async () => {
     const { sidebar, harness } = await mountMultiSelect(["sessions.patchMany"]);
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:a");
     await sidebar.updateComplete;
@@ -170,8 +220,8 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
     expect(harness.patchMany).toHaveBeenCalledWith(
       [
-        { key: "agent:main:a", agentId: "main" },
-        { key: "agent:main:b", agentId: "main" },
+        { key: "agent:main:a", agentId: "main", expectedSessionId: "session:agent:main:a" },
+        { key: "agent:main:b", agentId: "main", expectedSessionId: "session:agent:main:b" },
       ],
       { unread: true },
     );
@@ -182,8 +232,8 @@ describe("AppSidebar multi-select", () => {
   it("archives serially when an older Gateway does not advertise patchMany", async () => {
     const { sidebar, harness, request } = await mountMultiSelect(["sessions.patch"]);
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:a");
     await sidebar.updateComplete;
@@ -220,51 +270,73 @@ describe("AppSidebar multi-select", () => {
     expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 
-  it("archives serially when an older Gateway omits method metadata and rejects patchMany", async () => {
+  it("disables batch archive when method metadata is missing", async () => {
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "unknown method: sessions.patchMany",
     });
     const { sidebar, harness, request } = await mountMultiSelect(null, rejection);
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:a");
     await sidebar.updateComplete;
 
     const menu = await sessionMenu(sidebar);
     const archive = menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]');
-    expect(archive?.disabled).toBe(false);
+    expect(archive?.disabled).toBe(true);
     archive?.click();
+    await Promise.resolve();
 
-    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      1,
-      "agent:main:a",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:a",
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      2,
-      "agent:main:b",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:b",
-        deferListRefresh: true,
-      },
-    );
-    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toHaveLength(
-      1,
-    );
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
     expect(harness.patchMany).not.toHaveBeenCalled();
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
+    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+  });
+
+  it("hides an archived current thread immediately without navigating away", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const setSessionKeySpy = vi.spyOn(gatewayHarness.gateway, "setSessionKey");
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:a",
+      "agent:main:b",
+    ]);
+    const pendingPatch = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockReturnValueOnce(pendingPatch.promise);
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+    sidebar.connected = true;
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = "agent:main:a";
+    await sidebar.updateComplete;
+
+    openContextMenu(sidebar, "agent:main:a");
+    await sidebar.updateComplete;
+    (await sessionMenu(sidebar)).querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull();
+    expect(setSessionKeySpy).not.toHaveBeenCalled();
+
+    const result = harness.sessions.state.result;
+    harness.publishList({
+      result: result
+        ? {
+            ...result,
+            sessions: result.sessions.map((row) =>
+              row.key === "agent:main:a" ? Object.assign({}, row, { archived: true }) : row,
+            ),
+          }
+        : null,
+    });
+    pendingPatch.resolve(successfulSessionPatch("agent:main:a"));
+
+    await waitForFast(() =>
+      expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull(),
+    );
+    expect(setSessionKeySpy).not.toHaveBeenCalled();
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
@@ -272,8 +344,8 @@ describe("AppSidebar multi-select", () => {
     try {
       const { sidebar, harness } = await mountMultiSelect();
 
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { altKey: true });
       await sidebar.updateComplete;
       openContextMenu(sidebar, "agent:main:b");
       await sidebar.updateComplete;
@@ -287,8 +359,18 @@ describe("AppSidebar multi-select", () => {
 
       await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
       expect(harness.deleteMany).toHaveBeenCalledWith([
-        { key: "agent:main:a", agentId: "main", deleteTranscript: true },
-        { key: "agent:main:b", agentId: "main", deleteTranscript: true },
+        {
+          key: "agent:main:a",
+          agentId: "main",
+          deleteTranscript: true,
+          expectedSessionId: "session:agent:main:a",
+        },
+        {
+          key: "agent:main:b",
+          agentId: "main",
+          deleteTranscript: true,
+          expectedSessionId: "session:agent:main:b",
+        },
       ]);
     } finally {
       restoreDialogPolyfill();
@@ -298,8 +380,8 @@ describe("AppSidebar multi-select", () => {
   it("retargets the menu to an unselected row and drops the selection", async () => {
     const { sidebar } = await mountMultiSelect();
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:c");
     await sidebar.updateComplete;
@@ -510,12 +592,16 @@ describe("AppSidebar catalog session rows", () => {
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
       try {
         await sidebar.updateComplete;
+        // The rendered row owns this catalog even if the global selection changes
+        // before its already-rendered click handler runs.
+        (sidebar as unknown as { newSessionAgentId: string }).newSessionAgentId = "jarvis";
         (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
       } finally {
         window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
       }
       expect(detail).toEqual({
         open: true,
+        agentId: "main",
         catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
       });
       expect(navigate).not.toHaveBeenCalled();
@@ -623,7 +709,7 @@ describe("AppSidebar catalog session rows", () => {
       const state = row?.querySelector(".session-row-state");
 
       expect(link?.getAttribute("aria-describedby")).toBe(state?.id);
-      expect(link?.getAttribute("title")).toBe("Running catalog · Local Codex · Active run");
+      expect(link?.hasAttribute("title")).toBe(false);
       expect(state?.querySelector('.session-run-spinner[aria-label="Active run"]')).not.toBeNull();
       expect(state?.querySelector(".session-run-spinner")?.hasAttribute("title")).toBe(false);
     } finally {
@@ -650,63 +736,6 @@ describe("AppSidebar catalog session rows", () => {
       expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
       // Live-row parity: the adopted row exposes the regular session actions.
       expect(rows[0]?.querySelector("[data-session-menu]")).not.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a selected adopted catalog session as one row", async () => {
-    vi.useFakeTimers();
-    try {
-      const { sidebar } = await mountWithCatalog(
-        catalogList([
-          {
-            threadId: "thread-1",
-            name: "Release checklist",
-            sessionKey: "agent:main:adopted-codex",
-          },
-        ]),
-        ["agent:main:main", "agent:main:adopted-codex"],
-      );
-      // Selecting the adopted session must not re-insert it as a thread row:
-      // the catalog section already renders it live.
-      sidebar.sessionKey = "agent:main:adopted-codex";
-      await sidebar.updateComplete;
-
-      const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("binds the adopted session immediately on the catalog-continued event", async () => {
-    vi.useFakeTimers();
-    try {
-      const { sidebar } = await mountWithCatalog(
-        catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
-        ["agent:main:main", "agent:main:adopted-codex"],
-      );
-      expect(
-        sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]'),
-      ).toHaveLength(1);
-
-      document.dispatchEvent(
-        new CustomEvent(CATALOG_SESSION_CONTINUED_EVENT, {
-          detail: {
-            catalogId: "codex",
-            hostId: "gateway:local",
-            threadId: "thread-1",
-            sessionKey: "agent:main:adopted-codex",
-          },
-        }),
-      );
-      await sidebar.updateComplete;
-
-      const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }

@@ -5,9 +5,10 @@ import {
   qaTransportSupportsModuleFlows,
 } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { invalidateQaSuiteArtifactGeneration } from "./suite-artifacts.js";
 import { resolveRequestedQaSuiteModels } from "./suite-model-selection.js";
 import {
-  collectQaSuiteGatewayConfigPatch,
+  collectQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
   normalizeQaSuiteConcurrency,
@@ -69,6 +70,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
   if (params?.roundTripProbe && params.runtimePair) {
     throw new Error("QA round-trip probes are not supported with runtime-pair runs.");
   }
+  await invalidateQaSuiteArtifactGeneration(outputDir);
   const enabledPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedScenarios),
@@ -78,7 +80,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
         : []),
     ]),
   ];
-  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(
+  const gatewayConfigPatches = collectQaSuiteGatewayConfigPatches(
     selectedScenarios,
     params?.adapterOptions?.sutAccountId?.trim() ||
       (channelDriver === "crabline" ? "default" : "sut"),
@@ -104,7 +106,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     fastMode,
     channelDriver,
     enabledPluginIds,
-    gatewayConfigPatch,
+    gatewayConfigPatches,
     gatewayRuntimeOptions,
     concurrency,
     progressEnabled,

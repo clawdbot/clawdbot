@@ -34,7 +34,7 @@ import {
   type StreamingMode,
 } from "./streaming.js";
 
-export { createChannelProgressReceiptTracker } from "./progress-receipt-tracker.js";
+export { createChannelProgressWorkCounter } from "./progress-work-counter.js";
 
 // A recent model preamble remains the primary status; utility narration fills
 // the slot only after the model has been quiet for this interval. Exported for
@@ -286,6 +286,32 @@ export function createChannelProgressDraftCompositor(params: {
     clearTimeoutFn,
   });
 
+  const startAndRender = async (options?: { flush?: boolean }): Promise<boolean> => {
+    const alreadyStarted = gate.hasStarted;
+    if (!alreadyStarted) {
+      lastStartRendered = false;
+    }
+    await gate.startNow();
+    if (!gate.hasStarted) {
+      return false;
+    }
+    // Startup already rendered; preserve its acceptance without publishing twice.
+    return alreadyStarted ? await render(options) : lastStartRendered;
+  };
+
+  const renderAfterRetraction = async (): Promise<boolean> => {
+    if (!gate.hasStarted) {
+      return false;
+    }
+    const rendered = await render();
+    if (rendered || formatDraftText()) {
+      return rendered;
+    }
+    lastRenderedText = "";
+    await params.deleteCurrent?.();
+    return true;
+  };
+
   /**
    * Commentary line identity. An explicit item id owns its line. Without one,
    * providers stream cumulative snapshots ("Checking" → "Checking the
@@ -391,15 +417,7 @@ export function createChannelProgressDraftCompositor(params: {
       return shouldStoreLine ? await publish() : false;
     }
     if (options?.startImmediately || params.shouldStartNow?.(line)) {
-      const alreadyStarted = gate.hasStarted;
-      if (!alreadyStarted) {
-        lastStartRendered = false;
-      }
-      await gate.startNow();
-      if (!gate.hasStarted) {
-        return false;
-      }
-      return alreadyStarted ? await render() : lastStartRendered;
+      return await startAndRender();
     }
     const alreadyStarted = gate.hasStarted;
     const progressActive = await gate.noteWork();
@@ -491,15 +509,8 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       if (options?.startImmediately) {
-        const alreadyStarted = gate.hasStarted;
-        if (!alreadyStarted) {
-          lastStartRendered = false;
-        }
-        await gate.startNow();
-        if (!gate.hasStarted) {
-          return false;
-        }
-        return alreadyStarted ? await render({ flush: true }) : lastStartRendered;
+        // Explicit activity flushes even after startup; other updates can batch.
+        return await startAndRender({ flush: true });
       }
       const alreadyStarted = gate.hasStarted;
       const progressActive = await gate.noteWork();
@@ -526,26 +537,9 @@ export function createChannelProgressDraftCompositor(params: {
       planSteps = steps && steps.length > 0 ? steps.map((entry) => ({ ...entry })) : undefined;
       planExplanation = options?.explanation?.replace(/\s+/g, " ").trim() ?? "";
       if (!planSteps && !planExplanation) {
-        if (!gate.hasStarted) {
-          return false;
-        }
-        const rendered = await render();
-        if (rendered || formatDraftText()) {
-          return rendered;
-        }
-        lastRenderedText = "";
-        await params.deleteCurrent?.();
-        return true;
+        return await renderAfterRetraction();
       }
-      const alreadyStarted = gate.hasStarted;
-      if (!alreadyStarted) {
-        lastStartRendered = false;
-      }
-      await gate.startNow();
-      if (!gate.hasStarted) {
-        return false;
-      }
-      return alreadyStarted ? await render() : lastStartRendered;
+      return await startAndRender();
     },
     async pushPreambleHeadline(text?: string, options?: { itemId?: string }) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
@@ -577,16 +571,7 @@ export function createChannelProgressDraftCompositor(params: {
         preambleItemId = undefined;
         preambleAt = undefined;
         clearPreambleExpiryTimer();
-        if (!gate.hasStarted) {
-          return false;
-        }
-        const rendered = await render();
-        if (rendered || formatDraftText()) {
-          return rendered;
-        }
-        lastRenderedText = "";
-        await params.deleteCurrent?.();
-        return true;
+        return await renderAfterRetraction();
       }
       const isNewPreambleItem = Boolean(itemId && itemId !== preambleItemId);
       if (isNewPreambleItem) {
@@ -709,15 +694,7 @@ export function createChannelProgressDraftCompositor(params: {
         lastIdLessCommentaryId = lineId;
         lastIdLessCommentaryBare = bareNormalized;
       }
-      const alreadyStarted = gate.hasStarted;
-      if (!alreadyStarted) {
-        lastStartRendered = false;
-      }
-      await gate.startNow();
-      if (!gate.hasStarted) {
-        return false;
-      }
-      return alreadyStarted ? await render() : lastStartRendered;
+      return await startAndRender();
     },
   };
 }

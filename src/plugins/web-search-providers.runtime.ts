@@ -23,6 +23,7 @@ function resolveWebSearchCandidatePluginIds(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
+  manifestRecords?: readonly PluginManifestRecord[];
 }): string[] | undefined {
   return resolveManifestDeclaredWebProviderCandidatePluginIds({
     contract: "webSearchProviders",
@@ -32,6 +33,7 @@ function resolveWebSearchCandidatePluginIds(params: {
     env: params.env,
     onlyPluginIds: params.onlyPluginIds,
     origin: params.origin,
+    manifestRecords: params.manifestRecords,
   });
 }
 
@@ -55,6 +57,7 @@ export function resolvePluginWebSearchProviders(params: {
   cache?: boolean;
   mode?: "runtime" | "setup";
   origin?: PluginManifestRecord["origin"];
+  manifestRecords?: readonly PluginManifestRecord[];
 }): PluginWebSearchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
@@ -70,6 +73,7 @@ export function resolveRuntimeWebSearchProviders(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
+  manifestRecords?: readonly PluginManifestRecord[];
 }): PluginWebSearchProviderEntry[] {
   return resolveRuntimeWebProviders(params, {
     resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,

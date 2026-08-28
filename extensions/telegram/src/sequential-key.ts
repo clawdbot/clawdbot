@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { hasTelegramApprovalCallbackPrefix } from "./approval-callback-data.js";
 import {
+  getCachedTelegramForumFlag,
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramMessageForumFlagHint,
   resolveTelegramMessageThreadSpec,
@@ -105,47 +106,14 @@ export function isTelegramReadOnlyControlLaneText(params: {
   return command?.category === "status" && TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS.has(command.key);
 }
 
-function isTelegramTargetedStopCommand(rawText?: string, botUsername?: string): boolean {
-  const trimmed = rawText?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  // Isolated ingress may not have getMe() metadata yet. A targeted Telegram
-  // /stop@bot command still needs the control lane so it can cancel a busy turn.
-  const match = trimmed.match(/^\/stop@([A-Za-z0-9_]+)(?:$|\s|[.!?…,，。;；:：'"’”)\]}])/iu);
-  if (!match) {
-    return false;
-  }
-  const normalizedBotUsername = botUsername?.trim().toLowerCase();
-  if (!normalizedBotUsername) {
-    return true;
-  }
-  return match[1]?.toLowerCase() === normalizedBotUsername;
-}
-
 function resolveTelegramCommandAliasForControlLane(
   rawText?: string,
   botUsername?: string,
 ): string | undefined {
   const trimmed = rawText?.trim();
-  if (!trimmed?.startsWith("/")) {
+  if (!trimmed) {
     return undefined;
   }
-
-  const targetedMatch = trimmed.match(
-    /^\/([A-Za-z0-9_-]+)(?:@([A-Za-z0-9_]+))?(?:$|\s|[.!?…,，。;；:：'"’”)\]}])/iu,
-  );
-  const targetBotUsername = targetedMatch?.[2]?.trim().toLowerCase();
-  const normalizedBotUsername = botUsername?.trim().toLowerCase();
-  if (targetBotUsername && normalizedBotUsername && targetBotUsername !== normalizedBotUsername) {
-    return undefined;
-  }
-
-  if (targetBotUsername && !normalizedBotUsername) {
-    const commandAlias = `/${targetedMatch?.[1]?.toLowerCase() ?? ""}`;
-    return commandAlias === "/" ? undefined : commandAlias;
-  }
-
   return (
     maybeResolveTextAlias(
       normalizeCommandBody(trimmed, botUsername ? { botUsername } : undefined),
@@ -168,15 +136,12 @@ function isTelegramActiveRunControlLaneText(params: {
 }
 
 function isTelegramControlLaneText(params: { rawText?: string; botUsername?: string }): boolean {
-  if (
-    isAbortRequestText(
-      params.rawText,
-      params.botUsername ? { botUsername: params.botUsername } : undefined,
-    )
-  ) {
-    return true;
-  }
-  if (isTelegramTargetedStopCommand(params.rawText, params.botUsername)) {
+  // Live polling and webhook admission already have bot identity. In defensive pre-identity
+  // paths, accepting every @target admits foreign-bot commands; only canonical aborts fence.
+  const abortCommandOptions = params.botUsername
+    ? { botUsername: params.botUsername }
+    : { targetedCommandMode: "pre-identity" as const };
+  if (isAbortRequestText(params.rawText, abortCommandOptions)) {
     return true;
   }
   if (isTelegramActiveRunControlLaneText(params)) {
@@ -250,7 +215,26 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   // Raw durable-ingress fixtures and malformed updates can carry a partial
   // message. Treat missing chat identity as an unknown lane instead of
   // crashing before the queue records the update.
-  const threadSpec = msg?.chat ? resolveTelegramMessageThreadSpec(msg) : undefined;
+  //
+  // General forum topic (topic:1) messages lack both `is_topic_message` and
+  // `is_forum` in the payload, so the forum flag hint is undefined. Fall back
+  // to the in-memory cache (populated by earlier messages or getChat calls)
+  // so the lane key resolves to `telegram:${chatId}:topic:1` rather than the
+  // base lane, preventing a cross-lane session-init race.
+  const forumHint = msg?.chat
+    ? resolveTelegramMessageForumFlagHint({
+        chatType: msg.chat.type,
+        isForum: msg.chat.is_forum,
+        isTopicMessage: msg.is_topic_message,
+      })
+    : undefined;
+  const cachedForumFlag =
+    forumHint === undefined && msg?.chat?.type === "supergroup" && typeof msg.chat.id === "number"
+      ? getCachedTelegramForumFlag(msg.chat.id)
+      : undefined;
+  const threadSpec = msg?.chat
+    ? resolveTelegramMessageThreadSpec(msg, forumHint ?? cachedForumFlag)
+    : undefined;
   const threadId =
     threadSpec?.scope === "dm"
       ? shouldUseTelegramDmThreadSession({

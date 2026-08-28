@@ -26,12 +26,11 @@ function readPackageJson(): RootPackageJson {
   return JSON.parse(fs.readFileSync("package.json", "utf8")) as RootPackageJson;
 }
 
-function readWindowsCiPartScripts(): [string, string, string] {
+function readWindowsCiPartScripts(): [string, string] {
   const scripts = readPackageJson().scripts;
   return [
     expectDefined(scripts["test:windows:ci:1"], "Windows CI part 1 script"),
     expectDefined(scripts["test:windows:ci:2"], "Windows CI part 2 script"),
-    expectDefined(scripts["test:windows:ci:3"], "Windows CI part 3 script"),
   ];
 }
 
@@ -99,7 +98,7 @@ describe("package scripts", () => {
   it("finds node script targets after env assignments and valued node options", () => {
     expect(
       extractNodeScriptTargets(
-        "FOO=1 node --import tsx scripts/release-check.ts && node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-surface-report.mts && env BAR=1 node -r tsx scripts/check.ts",
+        "FOO=1 node --import ./scripts/tsx.mjs scripts/release-check.ts && node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/plugin-sdk-surface-report.mts && env BAR=1 node -r ./preload.cjs scripts/check.ts",
       ),
     ).toEqual([
       "scripts/release-check.ts",
@@ -140,34 +139,39 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 3 },
+    { scriptName: "build:docker", expectedCount: 2 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
-  ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
-    const script = expectDefined(
-      readPackageJson().scripts[scriptName],
-      `package script ${scriptName}`,
-    );
+  ])(
+    "runs TypeScript steps in $scriptName through the tooling bootstrap",
+    ({ scriptName, expectedCount }) => {
+      const script = expectDefined(
+        readPackageJson().scripts[scriptName],
+        `package script ${scriptName}`,
+      );
 
-    expect(script).not.toContain("--experimental-strip-types");
-    expect(script.match(/node --import tsx scripts\/[^\s]+\.ts/gu)).toHaveLength(expectedCount);
-  });
+      expect(script).not.toContain("--experimental-strip-types");
+      expect(
+        script.match(/node --import \.\/scripts\/tsx\.mjs scripts\/[^\s]+\.ts(?=\s|$)/gu),
+      ).toHaveLength(expectedCount);
+    },
+  );
 
   it("enables live cache validation in the package script", () => {
     expect(readPackageJson().scripts["test:live:cache"]).toBe(
-      "node --import tsx scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
+      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/check-live-cache.ts",
     );
   });
 
   it("runs browser extension bootstrap E2E against real Chromium", () => {
     expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
-      "node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 
   it("gives the plugin SDK usage scan enough heap for repository-wide analysis", () => {
     expect(readPackageJson().scripts["plugin-sdk:usage"]).toBe(
-      "node --max-old-space-size=8192 --import tsx scripts/analyze-plugin-sdk-usage.ts",
+      "node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/analyze-plugin-sdk-usage.ts",
     );
   });
 
@@ -179,7 +183,29 @@ describe("package scripts", () => {
 
   it("runs runtime postbuild before plugin SDK strict export checks", () => {
     expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
-      "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
+      "node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
+    );
+  });
+
+  it("builds generated plugin assets before Docker runtime postbuild", () => {
+    const commands = expectDefined(
+      readPackageJson().scripts["build:docker"],
+      "package script build:docker",
+    ).split(" && ");
+
+    expect(commands.indexOf("pnpm plugins:assets:build")).toBeLessThan(
+      commands.indexOf("node scripts/runtime-postbuild.mjs"),
+    );
+  });
+
+  it("cleans package builds before validating release contents", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["build:package"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/build-all.mts package",
+    );
+    expect(scripts["release:check"]).toBe(
+      "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",
     );
   });
 
@@ -204,14 +230,15 @@ describe("package scripts", () => {
     expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
   });
 
-  it("partitions Windows CI coverage into three disjoint explicit test lists", () => {
+  it("partitions Windows CI coverage into two disjoint explicit test lists", () => {
     const scripts = readPackageJson().scripts;
     const partScripts = readWindowsCiPartScripts();
     const partTargets = partScripts.map(readWindowsCiTargets);
 
-    expect(scripts["test:windows:ci"]).toBe(
-      "pnpm test:windows:ci:1 && pnpm test:windows:ci:2 && pnpm test:windows:ci:3",
-    );
+    // Blacksmith's Windows class admits exactly 2 concurrent jobs, so the split
+    // width is pinned here: a 3rd part queues and a single lane serializes.
+    expect(scripts["test:windows:ci"]).toBe("pnpm test:windows:ci:1 && pnpm test:windows:ci:2");
+    expect(scripts["test:windows:ci:3"]).toBeUndefined();
     for (const [partIndex, targets] of partTargets.entries()) {
       const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
       expect(

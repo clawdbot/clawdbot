@@ -13,10 +13,10 @@ import { renderSettingsRow, renderSettingsSection } from "../../components/setti
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  buildAgentContext,
   buildModelOptions,
   normalizeModelValue,
   resolveAgentConfig,
-  resolveAgentRuntimeLabel,
   resolveAgentTextAvatar,
   resolveEffectiveModelFallbacks,
   resolveModelFallbacks,
@@ -74,23 +74,16 @@ export function renderAgentOverview(params: {
     onModelFallbacksChange,
     onSelectPanel,
   } = params;
-  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
+  const context = buildAgentContext(
+    agent,
+    configForm,
+    agentFilesList,
+    params.defaultId,
+    params.agentIdentity,
+  );
+  const isDefault = context.isDefault;
   const config = resolveAgentConfig(configForm, agent.id);
   const agentModel = agent.model;
-  const workspaceFromFiles =
-    agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
-  const workspace =
-    workspaceFromFiles ||
-    config.entry?.workspace ||
-    config.defaults?.workspace ||
-    agent.workspace ||
-    "default";
-  const model = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : config.defaults?.model
-      ? resolveModelLabel(config.defaults?.model)
-      : resolveModelLabel(agentModel);
-  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
   const entryPrimary = resolveModelPrimary(config.entry?.model);
   const defaultPrimary =
@@ -103,8 +96,6 @@ export function renderAgentOverview(params: {
     resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agentModel));
   const fallbackChips = modelFallbacks ?? [];
-  const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
-  const skillCount = skillFilter?.length ?? null;
   const disabled = !params.canUpdateConfig || !configForm || configLoading || configSaving;
   const thinkingDefault = agent.thinkingDefault ?? "-";
 
@@ -116,7 +107,8 @@ export function renderAgentOverview(params: {
   const identityAvatarUrl =
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
-    resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(identityName || agent.id) || "?");
+    resolveAgentTextAvatar(agent, params.agentIdentity) ??
+    (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   const identityInvalid =
@@ -214,7 +206,7 @@ export function renderAgentOverview(params: {
               ?disabled=${identityBusy || !identityDirty || identityInvalid}
               @click=${() => params.onIdentitySave()}
             >
-              ${identityBusy ? t("common.saving") : t("common.save")}
+              ${params.identitySaving ? t("common.saving") : t("common.save")}
             </button>
           </div>
           <div class="settings-row__desc agent-identity-editor__hint">
@@ -236,22 +228,18 @@ export function renderAgentOverview(params: {
                 @click=${() => onSelectPanel("files")}
                 aria-label=${t("agents.context.openFilesTab")}
               >
-                ${workspace}
+                ${context.workspace}
               </button>
             </openclaw-tooltip>
           </dd>
           <dt>${t("agents.context.primaryModel")}</dt>
-          <dd><code>${model}</code></dd>
+          <dd><code>${context.model}</code></dd>
           <dt>${t("agents.context.runtime")}</dt>
-          <dd><code>${runtime}</code></dd>
+          <dd><code>${context.runtime}</code></dd>
           <dt>${t("agents.context.thinkingDefault")}</dt>
           <dd><code>${thinkingDefault}</code></dd>
           <dt>${t("agents.context.skillsFilter")}</dt>
-          <dd>
-            ${skillFilter
-              ? t("agents.overview.selectedSkills", { count: String(skillCount) })
-              : t("agents.overview.allSkills")}
-          </dd>
+          <dd>${context.skillsLabel}</dd>
         </dl>
       `,
     )}
@@ -307,10 +295,16 @@ export function renderAgentOverview(params: {
                     ? t("agents.overview.inheritDefaultModel", { model: defaultPrimary })
                     : t("agents.overview.inheritDefault"),
               },
-              ...buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog),
+              ...buildModelOptions(
+                configForm,
+                effectivePrimary ?? undefined,
+                params.modelCatalog,
+                agent.id,
+              ),
             ],
             disabled,
             onChange: (value) => onModelChange(agent.id, value || null),
+            onOpen: params.onModelCatalogRetry,
           }),
         })}
         ${renderSettingsRow({

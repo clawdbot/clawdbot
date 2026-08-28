@@ -26,11 +26,7 @@ type DiscordLoopbackRequest = {
   path: string | undefined;
 };
 
-export type MockCallSource = {
-  mock: {
-    calls: ArrayLike<ReadonlyArray<unknown>>;
-  };
-};
+export type MockCallSource = Pick<MockFn, "mock">;
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -63,6 +59,7 @@ export function timerDelayAt(source: MockCallSource, callIndex = 0) {
 
 export async function createDiscordLoopbackRest(options?: {
   respond?: (request: DiscordLoopbackRequest) => unknown;
+  status?: (request: DiscordLoopbackRequest) => number;
 }): Promise<{
   rest: RequestClient;
   requests: DiscordLoopbackRequest[];
@@ -81,7 +78,9 @@ export async function createDiscordLoopbackRest(options?: {
         path: request.url,
       };
       requests.push(received);
-      response.writeHead(200, { "Content-Type": "application/json" });
+      response.writeHead(options?.status?.(received) ?? 200, {
+        "Content-Type": "application/json",
+      });
       response.end(
         JSON.stringify(
           options?.respond?.(received) ??

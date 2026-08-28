@@ -15,6 +15,10 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createAgentRuntimeExecutionLineageHandoff,
+  readAgentRuntimeExecutionLineage,
+} from "../../gateway/agent-runtime-execution-lineage.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
@@ -24,6 +28,7 @@ import {
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
 import { getOperatorApprovalRuntimeToken } from "../../gateway/operator-approval-runtime-token.js";
+import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -33,6 +38,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
+import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
 
 /** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
@@ -225,6 +231,7 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.remove",
   "cron.run",
   "cron.runs",
+  "secrets.store.delete",
 ]);
 
 const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>(["node.invoke"]);
@@ -384,11 +391,43 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   }
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
-    return await mintAgentRuntimeIdentityToken({
-      ...identity,
-      operationalRunInstance: identity.operationalRunInstance,
-      ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
-    });
+    const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
+    const activeAuthority = getActiveAgentRunDelegatedAuthority(identity.operationalRunInstance);
+    const executionLineage = readAgentRuntimeExecutionLineage(sessionSpawnContext);
+    if (executionLineage && !activeAuthority) {
+      throw new Error("execution lineage handoff requires active parent authority");
+    }
+    const lineageHandoff =
+      sessionSpawnContext && executionLineage && activeAuthority
+        ? createAgentRuntimeExecutionLineageHandoff({
+            agentId: identity.agentId,
+            sessionKey: identity.sessionKey,
+            operationalRunInstance: identity.operationalRunInstance,
+            delegatedAuthority: activeAuthority,
+            ...(parentExecutionIdentityToken
+              ? { executionIdentity: parentExecutionIdentityToken }
+              : {}),
+            sessionSpawnContext,
+          })
+        : undefined;
+    if (executionLineage && !lineageHandoff) {
+      throw new Error("execution lineage handoff could not bind the parent admission");
+    }
+    try {
+      return await mintAgentRuntimeIdentityToken({
+        ...identity,
+        operationalRunInstance: identity.operationalRunInstance,
+        ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
+        ...(lineageHandoff
+          ? { executionLineageHandoffId: lineageHandoff.id }
+          : sessionSpawnContext
+            ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
+            : {}),
+      });
+    } catch (error) {
+      lineageHandoff?.revoke();
+      throw error;
+    }
   } catch (error) {
     if (optionalLocalIdentity && !params.required) {
       return undefined;
@@ -465,11 +504,13 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   const resolvedMessageActionContext = terminalSourceReply
     ? {
         ...messageActionContext,
+        turnCapability: params.turnCapability,
         sourceReplyFinal: true as const,
         sourceReplyToolCallId: sourceReplyToolCallId!,
       }
     : {
         ...messageActionContext,
+        turnCapability: params.turnCapability,
         ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
         ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
       };

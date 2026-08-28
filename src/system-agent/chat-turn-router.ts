@@ -1,4 +1,3 @@
-import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -16,21 +15,29 @@ import type {
   ChatWizardResult,
   SystemAgentChatReply,
 } from "./chat-wizard-host.js";
+import {
+  isSystemAgentSensitiveConfigValue,
+  redactSystemAgentConfigPath,
+} from "./config-redaction.js";
 import { approvalQuestion } from "./dialogue.js";
 import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
+import { isSystemAgentNavigationOperation } from "./operation-types.js";
+import { isInvalidConfigSetOperation } from "./operations-internal.js";
 import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
+  SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
   type SystemAgentCommandDeps,
   type SystemAgentOperation,
   type SystemAgentOperationResult,
 } from "./operations.js";
 import {
+  hashSystemAgentOperation,
   resolveOperatorApprovalDecision,
   resolvePendingOperatorProposal,
   type SystemAgentApprovalIntent,
@@ -52,6 +59,7 @@ type ChatTurnRouterOptions = {
   classifyApproval?: SystemAgentApprovalClassifier;
   surface?: "cli" | "gateway";
   operatorApprovalOnly?: boolean;
+  requesterAgentId?: string;
 };
 
 type CaptureRuntime = RuntimeEnv & { read: () => string };
@@ -75,8 +83,21 @@ function formatOperationError(error: unknown): string {
 
 export function redactSensitiveCommandText(text: string): string {
   const operation = parseSystemAgentOperation(text);
-  if (operation.kind === "config-set" && isSensitiveConfigPath(operation.path)) {
-    return `config set ${operation.path} <redacted secret>`;
+  if (isInvalidConfigSetOperation(operation)) {
+    return "config set <invalid path> <redacted secret>";
+  }
+  if (operation.kind === "config-set") {
+    const displayPath = redactSystemAgentConfigPath(operation.path);
+    if (
+      displayPath !== operation.path ||
+      isSystemAgentSensitiveConfigValue(operation.path, operation.value)
+    ) {
+      return `config set ${displayPath} <redacted secret>`;
+    }
+  }
+  if (operation.kind === "config-set-ref") {
+    const displayPath = redactSystemAgentConfigPath(operation.path);
+    return `config set-ref ${displayPath} <redacted reference>`;
   }
   return text;
 }
@@ -136,16 +157,21 @@ export class ChatTurnRouter {
 
   propose(operation: SystemAgentOperation): string {
     this.clearPendingProposals();
-    this.pending = operation;
-    return describeSystemAgentPersistentOperation(operation);
-  }
-
-  hasPendingProposal(): boolean {
-    return this.pending !== null;
+    this.pending = this.recordCreateAgentRequester(operation);
+    return describeSystemAgentPersistentOperation(this.pending);
   }
 
   getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
-    return resolvePendingOperatorProposal(this.pending, this.agentSession.proposalRef);
+    const proposal = resolvePendingOperatorProposal(this.pending, this.agentSession.proposalRef);
+    if (!proposal) {
+      return null;
+    }
+    const operation = this.recordCreateAgentRequester(proposal.operation);
+    // Request provenance participates in approval identity, but reading the
+    // operator projection must not transfer ownership of a host-seeded plan.
+    return operation === proposal.operation
+      ? proposal
+      : { operation, hash: hashSystemAgentOperation(operation) };
   }
 
   async resolveOperatorApproval(
@@ -161,15 +187,16 @@ export class ChatTurnRouter {
         this.proposalResolution = "approved";
         return await this.applyApprovedPersistentOperation(operation);
       },
-      denied: () => ({ text: "Denied. No change.", action: "none" as const }),
+      denied: () => {
+        this.proposalResolution = "declined";
+        return { text: "Denied. No change.", action: "none" as const };
+      },
     });
   }
 
   clearForInferenceLoss(): void {
-    this.pending = null;
+    this.clearPendingProposals();
     this.proposalResolution = undefined;
-    this.agentSession.proposalRef.current = undefined;
-    this.agentSession.proposalRef.operation = undefined;
     this.awaitingSetupChannel = false;
     this.lastSensitiveChannel = undefined;
   }
@@ -218,26 +245,18 @@ export class ChatTurnRouter {
       return { text: "Approval pending. Human must decide in OpenClaw UI.", action: "none" };
     }
     const typed = parseSystemAgentOperation(text);
-    if (typed.kind === "config-set" && isSensitiveConfigPath(typed.path)) {
-      return await this.runOperation(typed, undefined);
-    }
-    const typedRefusal = this.refuseDelegatedNavigationDirective(typed.kind);
-    if (typedRefusal) {
-      return { text: typedRefusal, action: "none" };
-    }
-    if (typed.kind === "open-tui") {
-      this.clearPendingProposals();
-      return await this.runOperation(typed, undefined);
+    if (isInvalidConfigSetOperation(typed)) {
+      return { text: typed.message, action: "none" };
     }
     if (
-      typed.kind === "open-setup" ||
-      typed.kind === "channel-setup" ||
-      typed.kind === "skills-setup" ||
-      typed.kind === "search-setup" ||
-      typed.kind === "gateway-config-setup" ||
-      typed.kind === "memory-import" ||
-      typed.kind === "model-setup"
+      typed.kind === "config-set" ||
+      typed.kind === "config-set-ref" ||
+      typed.kind === "config-get" ||
+      typed.kind === "config-schema"
     ) {
+      return await this.runOperation(typed, undefined);
+    }
+    if (isSystemAgentNavigationOperation(typed)) {
       return await this.runOperation(typed, undefined);
     }
 
@@ -250,13 +269,10 @@ export class ChatTurnRouter {
         return await this.applyPendingProposal(this.pending);
       }
       if (intent === "decline") {
-        const skippedModelSetup = this.pending.kind === "model-setup";
         this.clearPendingProposals();
         this.proposalResolution = "declined";
         return {
-          text: skippedModelSetup
-            ? "Skipped. The current inference route is unchanged."
-            : "Skipped. No barnacles on config today.",
+          text: "Skipped. No barnacles on config today.",
           action: "none",
         };
       }
@@ -291,15 +307,6 @@ export class ChatTurnRouter {
   private async applyPendingProposal(pending: SystemAgentOperation): Promise<SystemAgentChatReply> {
     this.clearPendingProposals();
     this.proposalResolution = "approved";
-    if (pending.kind === "channel-setup") {
-      return await this.startWizard(this.wizard.startChannel(pending.channel));
-    }
-    if (pending.kind === "model-setup") {
-      return this.startModelSetup();
-    }
-    if (!isPersistentSystemAgentOperation(pending)) {
-      return await this.runOperation(pending, undefined);
-    }
     return await this.applyApprovedPersistentOperation(pending);
   }
 
@@ -325,7 +332,7 @@ export class ChatTurnRouter {
       return {
         text: [
           baseText,
-          "Your agent is hatching — handing you over now. You can always find me in Settings → Ask OpenClaw.",
+          `Your agent is hatching — handing you over now. ${this.agentHandoffReturnHint()}`,
         ].join("\n\n"),
         action: "open-tui",
         agentDraft: "hatch",
@@ -366,6 +373,7 @@ export class ChatTurnRouter {
         overview,
         surface: this.options.surface ?? "cli",
         approvalArmed,
+        ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
         session: this.agentSession,
       });
     } catch (error) {
@@ -438,77 +446,45 @@ export class ChatTurnRouter {
   }): Promise<SystemAgentChatReply> {
     await this.callbacks.requireVerifiedInference();
     const directive = loopReply.directive;
-    const refusal = this.refuseDelegatedNavigationDirective(directive?.kind);
-    if (refusal) {
-      return { text: [loopReply.text, refusal].filter(Boolean).join("\n\n"), action: "none" };
+    if (!directive) {
+      return { text: loopReply.text, action: "none" };
     }
-    if (directive?.kind === "approved-operation") {
-      const applied = await this.applyApprovedPersistentOperation(directive.operation);
-      return { ...applied, text: [loopReply.text, applied.text].filter(Boolean).join("\n\n") };
-    }
-    if (directive?.kind === "channel-setup") {
-      return await this.prependWizard(loopReply.text, this.wizard.startChannel(directive.channel));
-    }
-    if (directive?.kind === "skills-setup") {
-      return await this.prependWizard(loopReply.text, this.wizard.startSkills());
-    }
-    if (directive?.kind === "search-setup") {
-      return await this.prependWizard(loopReply.text, this.wizard.startSearch());
-    }
-    if (directive?.kind === "gateway-config-setup") {
-      return await this.prependWizard(loopReply.text, this.wizard.startGateway());
-    }
-    if (directive?.kind === "memory-import") {
-      return await this.prependWizard(loopReply.text, this.wizard.startMemoryImport());
-    }
-    if (directive?.kind === "model-setup") {
-      const setup = this.startModelSetup();
-      return { ...setup, text: [loopReply.text, setup.text].filter(Boolean).join("\n\n") };
-    }
-    if (directive?.kind === "open-tui") {
-      this.clearPendingProposals();
-      return { text: loopReply.text, action: "open-tui", handoff: directive };
-    }
-    if (directive?.kind === "open-setup") {
-      const handoff = await this.runOperation(directive, undefined);
-      return { ...handoff, text: [loopReply.text, handoff.text].filter(Boolean).join("\n\n") };
-    }
-    return { text: loopReply.text, action: "none" };
-  }
-
-  private refuseDelegatedNavigationDirective(kind: string | undefined): string | undefined {
-    if (!this.options.operatorApprovalOnly) {
-      return undefined;
-    }
-    if (
-      kind === "channel-setup" ||
-      kind === "skills-setup" ||
-      kind === "search-setup" ||
-      kind === "gateway-config-setup" ||
-      kind === "memory-import" ||
-      kind === "model-setup" ||
-      kind === "open-setup" ||
-      kind === "open-tui"
-    ) {
-      return "Channel, model, and setup flows need a human operator in the OpenClaw app; they cannot run from a delegated agent request.";
-    }
-    return undefined;
+    const reply =
+      directive.kind === "approved-operation"
+        ? await this.applyApprovedPersistentOperation(directive.operation)
+        : await this.runOperation(directive, undefined);
+    return {
+      ...reply,
+      text:
+        directive.kind === "open-tui" && reply.action === "open-tui"
+          ? loopReply.text
+          : [loopReply.text, reply.text].filter(Boolean).join("\n\n"),
+    };
   }
 
   private async runOperation(
     operation: SystemAgentOperation,
     provenance: string | undefined,
   ): Promise<SystemAgentChatReply> {
+    const recordedOperation = this.recordCreateAgentRequester(operation);
     await this.callbacks.requireVerifiedInference();
-    if (operation.kind === "open-tui") {
-      this.clearPendingProposals();
+    // All inputs (typed commands, tool directives, and planner fallback) enter
+    // here before any wizard or handoff starts.
+    if (this.options.operatorApprovalOnly && isSystemAgentNavigationOperation(recordedOperation)) {
       return {
-        text: "Opening your normal agent TUI. Use /openclaw there to come back.",
-        action: "open-tui",
-        handoff: operation,
+        text: SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
+        action: "none",
       };
     }
-    if (operation.kind === "open-setup") {
+    if (recordedOperation.kind === "open-tui") {
+      this.clearPendingProposals();
+      return {
+        text: `Opening a chat with your agent. ${this.agentHandoffReturnHint()}`,
+        action: "open-tui",
+        handoff: recordedOperation,
+      };
+    }
+    if (recordedOperation.kind === "open-setup") {
       this.clearPendingProposals();
       if (this.options.surface === "gateway") {
         return {
@@ -516,13 +492,13 @@ export class ChatTurnRouter {
           action: "none",
         };
       }
-      if (!["channels", "search", "gateway"].includes(operation.target)) {
+      if (!["channels", "search", "gateway"].includes(recordedOperation.target)) {
         return {
           text: "Setup can replace the inference route powering this session. Exit OpenClaw and run `openclaw onboard`; it saves only a route that passes a live test. Then start OpenClaw again.",
           action: "none",
         };
       }
-      let handoff = operation;
+      let handoff = recordedOperation;
       if (handoff.target === "channels" && !handoff.channel) {
         if (!this.lastSensitiveChannel) {
           this.awaitingSetupChannel = true;
@@ -543,44 +519,51 @@ export class ChatTurnRouter {
             : "Gateway setup";
       return { text: `Opening the ${label} wizard.`, action: "open-setup", handoff };
     }
-    if (operation.kind === "channel-setup") {
-      return await this.startWizard(this.wizard.startChannel(operation.channel));
+    if (recordedOperation.kind === "channel-setup") {
+      return await this.startWizard(this.wizard.startChannel(recordedOperation.channel));
     }
-    if (operation.kind === "skills-setup") {
+    if (recordedOperation.kind === "skills-setup") {
       return await this.startWizard(this.wizard.startSkills());
     }
-    if (operation.kind === "search-setup") {
+    if (recordedOperation.kind === "search-setup") {
       return await this.startWizard(this.wizard.startSearch());
     }
-    if (operation.kind === "gateway-config-setup") {
+    if (recordedOperation.kind === "gateway-config-setup") {
       return await this.startWizard(this.wizard.startGateway());
     }
-    if (operation.kind === "memory-import") {
+    if (recordedOperation.kind === "memory-import") {
       return await this.startWizard(this.wizard.startMemoryImport());
     }
-    if (operation.kind === "model-setup") {
+    if (recordedOperation.kind === "model-setup") {
       return this.startModelSetup();
     }
 
     const capture = createCaptureRuntime();
-    if (isPersistentSystemAgentOperation(operation) && !this.options.yes) {
+    if (isPersistentSystemAgentOperation(recordedOperation) && !this.options.yes) {
       this.clearPendingProposals();
-      this.pending = operation;
-      await executeSystemAgentOperation(operation, capture, {
+      // Validate through the executor before staging; delegated handoff copy must
+      // not turn a forbidden operation into an approvable proposal.
+      await executeSystemAgentOperation(recordedOperation, capture, {
         approved: false,
+        operatorApprovalOnly: this.options.operatorApprovalOnly,
         deps: this.commandDeps(),
       });
+      this.pending = recordedOperation;
       return {
-        text: [provenance, capture.read(), approvalQuestion(operation)]
+        text: [
+          provenance,
+          capture.read(),
+          this.options.operatorApprovalOnly ? undefined : approvalQuestion(recordedOperation),
+        ]
           .filter(Boolean)
           .join("\n\n"),
         action: "none",
       };
     }
     const result = await this.executeOperation(
-      operation,
+      recordedOperation,
       capture,
-      this.options.yes === true || !isPersistentSystemAgentOperation(operation),
+      this.options.yes === true || !isPersistentSystemAgentOperation(recordedOperation),
     );
     const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
@@ -626,14 +609,6 @@ export class ChatTurnRouter {
     return { text: await this.finishWizardText(resolved), action: "none" };
   }
 
-  private async prependWizard(
-    prefix: string,
-    result: Promise<ChatWizardResult>,
-  ): Promise<SystemAgentChatReply> {
-    const reply = await this.startWizard(result);
-    return { ...reply, text: [prefix, reply.text].filter(Boolean).join("\n\n") };
-  }
-
   private async finishWizardText(result: ChatWizardResult): Promise<string> {
     const verify = result.configWritten ? await this.callbacks.verifyConfigAfterWrite() : null;
     return [result.text, verify].filter(Boolean).join("\n");
@@ -660,10 +635,29 @@ export class ChatTurnRouter {
     };
   }
 
+  private agentHandoffReturnHint(): string {
+    // Only the TUI uses /openclaw for navigation; web chat runs rescue in place.
+    return this.options.surface === "gateway"
+      ? "You can return through Settings → Ask OpenClaw."
+      : "Use /openclaw to come back.";
+  }
+
   private clearPendingProposals(): void {
     this.pending = null;
     this.agentSession.proposalRef.current = undefined;
     this.agentSession.proposalRef.operation = undefined;
+  }
+
+  private recordCreateAgentRequester(operation: SystemAgentOperation): SystemAgentOperation {
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    if (
+      operation.kind !== "create-agent" ||
+      !requesterAgentId ||
+      operation.requesterAgentId === requesterAgentId
+    ) {
+      return operation;
+    }
+    return { ...operation, requesterAgentId };
   }
 
   private armFollowUp(operation: SystemAgentOperation | undefined): string | null {

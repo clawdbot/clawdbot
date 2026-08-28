@@ -59,6 +59,57 @@ function agentAttentionRow(
 }
 
 describe("AppSidebar session attention", () => {
+  it("projects canonical attention onto Home across row refresh ordering", async () => {
+    const mainKey = "agent:main:main";
+    const client = {
+      request: vi.fn().mockResolvedValue({ questions: [] }),
+    } as unknown as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const sessionsHarness = createSessionsHarness("main", [mainKey]);
+    setRows(sessionsHarness, [agentAttentionRow(mainKey)]);
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessionsHarness.sessions);
+    const home = sidebar.querySelector(".nav-item--home");
+
+    expect(home?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+
+    gatewayHarness.publishEvent("question.requested", {
+      id: "question-home",
+      agentId: "main",
+      sessionKey: mainKey,
+      questions: [
+        {
+          questionId: "confirm",
+          header: "Confirm",
+          question: "Continue?",
+          options: [{ label: "Continue", description: "Resume the run." }],
+        },
+      ],
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      status: "pending",
+    });
+    await sidebar.updateComplete;
+    expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
+
+    setRows(sessionsHarness, []);
+    await sidebar.updateComplete;
+    expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
+
+    gatewayHarness.publishEvent("question.resolved", {
+      id: "question-home",
+      status: "cancelled",
+    });
+    setRows(sessionsHarness, [failedRow(mainKey)]);
+    await sidebar.updateComplete;
+    expect(home?.querySelector('[data-session-attention="error"]')).not.toBeNull();
+
+    setRows(sessionsHarness, [
+      { key: mainKey, kind: "direct", label: "Home", updatedAt: 3, status: "done" },
+    ]);
+    await sidebar.updateComplete;
+    expect(home?.querySelector("[data-session-attention]")).toBeNull();
+  });
+
   it("shows question attention ahead of a run error and clears it on resolution", async () => {
     const client = {
       request: vi.fn().mockResolvedValue({ questions: [] }),
@@ -129,8 +180,38 @@ describe("AppSidebar session attention", () => {
       sessionsHarness.sessions,
     );
 
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    await sidebar.updateComplete;
     expect(sidebar.textContent).toContain("Deploying to staging");
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+  });
+
+  it("defaults to one line without hiding attention", async () => {
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [
+      {
+        key: sessionKey,
+        kind: "direct",
+        label: "Deploy",
+        updatedAt: 2,
+        agentStatus: { note: "Deploying to staging", expiresAt: Date.now() + 60_000 },
+      },
+    ]);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
+
+    const previewRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(previewRow?.textContent).not.toContain("Deploying to staging");
+    expect(previewRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
+
+    setRows(sessionsHarness, [failedRow()]);
+    await sidebar.updateComplete;
+
+    const attentionRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(attentionRow?.textContent).toContain("Run failed: Provider credits exhausted");
+    expect(attentionRow?.classList.contains("sidebar-recent-session--single-line")).toBe(false);
   });
 
   it("does not render an expired agent declaration", async () => {
@@ -180,7 +261,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
-  it("uses shared tooltips for Home and agent approval badges", async () => {
+  it("uses canonical Home attention without duplicating an agent approval badge", async () => {
     const mainKey = "agent:main:main";
     const approval = {
       id: "approval-main",
@@ -197,22 +278,18 @@ describe("AppSidebar session attention", () => {
       [approval],
     );
 
-    const homeBadge = sidebar.querySelector(".nav-item--home .session-approval-badge");
-    expect(homeBadge?.getAttribute("aria-label")).toBe("Approval needed");
-    expect(homeBadge?.hasAttribute("title")).toBe(false);
+    const homeAttention = sidebar.querySelector(
+      '.nav-item--home [data-session-attention="approval"]',
+    );
+    expect(homeAttention).not.toBeNull();
     expect(
-      (homeBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+      (homeAttention?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
         ?.content,
-    ).toBe("Approval needed");
+    ).toBe("Waiting for approval");
 
-    const agentBadge = sidebar.querySelector(".sidebar-agent-card__approval-count");
-    const agentLabel = agentBadge?.getAttribute("aria-label");
-    expect(agentLabel).toBeTruthy();
-    expect(agentBadge?.hasAttribute("title")).toBe(false);
     expect(
-      (agentBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe(agentLabel);
+      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+    ).not.toContain("pending approval");
   });
 
   it("shows an error icon and reason for an unread failure", async () => {
@@ -266,13 +343,25 @@ describe("AppSidebar session attention", () => {
       JSON.stringify(["ungrouped"]),
     );
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [agentAttentionRow()]);
+    setRows(sessionsHarness, [
+      agentAttentionRow(),
+      {
+        key: "agent:main:peer",
+        kind: "direct",
+        updatedAt: 1,
+        worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
+      },
+    ]);
     const { sidebar } = await mountSidebar(
       createGateway({} as GatewayBrowserClient),
       sessionsHarness.sessions,
     );
 
     const section = sidebar.querySelector('[data-session-section="ungrouped"]');
+    expect(sidebar.querySelector('[data-session-section="work"]')).not.toBeNull();
+    expect(
+      section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-expanded"),
+    ).toBe("false");
     expect(section?.querySelector(".sidebar-session-group-attention")).not.toBeNull();
     expect(section?.querySelector(".sidebar-recent-session")).toBeNull();
   });
@@ -288,6 +377,12 @@ describe("AppSidebar session attention", () => {
       const sessionsHarness = createSessionsHarness("main", [parentKey]);
       setRows(sessionsHarness, [
         { key: parentKey, kind: "direct", updatedAt: 1, childSessions: [childKey] },
+        {
+          key: "agent:main:peer",
+          kind: "direct",
+          updatedAt: 0,
+          worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
+        },
       ]);
       const approval = {
         id: "approval-child",
@@ -323,6 +418,7 @@ describe("AppSidebar session attention", () => {
         ),
       ).not.toBeNull();
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
+      expect(sidebar.querySelector('[data-session-section="work"]')).not.toBeNull();
       sidebar.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
       await sidebar.updateComplete;
       expect(

@@ -2,7 +2,7 @@
 // project, and npm-declared agent resources.
 import { mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { DefaultPackageManager } from "./package-manager.js";
@@ -282,6 +282,64 @@ describe("DefaultPackageManager", () => {
     expect(resolved.skills).toEqual([]);
     expect(resolved.prompts).toEqual([]);
     expect(resolved.themes).toEqual([]);
+  });
+
+  it("honors filters on direct local extension files", async () => {
+    const root = tempDirs.make("openclaw-package-manager-filter-");
+    const extensionPath = join(root, "extension.ts");
+    await writeFile(extensionPath, "export default {};\n", "utf-8");
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({
+        packages: [{ source: extensionPath, extensions: [] }],
+      }),
+    });
+
+    expect((await manager.resolve()).extensions).toEqual([
+      expect.objectContaining({ path: extensionPath, enabled: false }),
+    ]);
+  });
+
+  it("treats object local directories without filters like string sources", async () => {
+    const root = tempDirs.make("openclaw-package-manager-object-");
+    const extensionDir = join(root, "extension");
+    const extensionPath = join(extensionDir, "index.ts");
+    await mkdir(extensionDir);
+    await writeFile(extensionPath, "export default {};\n", "utf-8");
+    const resolveSource = async (source: string | { source: string; extensions?: string[] }) =>
+      await new DefaultPackageManager({
+        cwd: root,
+        agentDir: join(root, "agent"),
+        settingsManager: SettingsManager.inMemory({ packages: [source] }),
+      }).resolve();
+
+    expect(await resolveSource({ source: extensionDir })).toEqual(
+      await resolveSource(extensionDir),
+    );
+    expect((await resolveSource({ source: extensionDir, extensions: [] })).extensions).toEqual([
+      expect.objectContaining({ path: extensionDir, enabled: false }),
+    ]);
+  });
+
+  it.each([
+    ["local", "./missing-extension.ts"],
+    ["npm", "npm:@openclaw/missing-test"],
+    ["git", "https://github.com/openclaw/missing-test.git"],
+  ])("reports missing %s package sources through the owner callback", async (_kind, source) => {
+    const root = tempDirs.make("openclaw-package-manager-missing-");
+    const onMissing = vi.fn(async () => "skip" as const);
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({ packages: [source] }),
+    });
+
+    const resolved = await manager.resolve(onMissing);
+
+    expect(onMissing).toHaveBeenCalledOnce();
+    expect(onMissing).toHaveBeenCalledWith(source);
+    expect(resolved).toEqual({ extensions: [], skills: [], prompts: [], themes: [] });
   });
 
   it("keeps temporary package paths in a private per-agent directory", async () => {

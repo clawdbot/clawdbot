@@ -1,11 +1,6 @@
 // File Transfer tests cover mime plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  IMAGE_MIME_INLINE_SET,
-  TEXT_INLINE_MAX_BYTES,
-  TEXT_INLINE_MIME_SET,
-  mimeFromExtension,
-} from "./mime.js";
+import { IMAGE_MIME_INLINE_SET, TEXT_INLINE_MAX_BYTES, mimeFromExtension } from "./mime.js";
 
 describe("mimeFromExtension", () => {
   it("returns the mapped mime for known extensions", () => {
@@ -45,14 +40,6 @@ describe("MIME constants", () => {
     // heic/heif intentionally excluded
     expect(IMAGE_MIME_INLINE_SET.has("image/heic")).toBe(false);
     expect(IMAGE_MIME_INLINE_SET.has("image/heif")).toBe(false);
-  });
-
-  it("TEXT_INLINE_MIME_SET covers small-text inlining types", () => {
-    expect(TEXT_INLINE_MIME_SET.has("text/plain")).toBe(true);
-    expect(TEXT_INLINE_MIME_SET.has("text/markdown")).toBe(true);
-    expect(TEXT_INLINE_MIME_SET.has("application/json")).toBe(true);
-    expect(TEXT_INLINE_MIME_SET.has("text/csv")).toBe(true);
-    expect(TEXT_INLINE_MIME_SET.has("text/xml")).toBe(true);
   });
 
   it("TEXT_INLINE_MAX_BYTES is the documented 8KB cap", () => {

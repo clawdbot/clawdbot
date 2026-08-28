@@ -1,6 +1,7 @@
+import type { TSchema } from "typebox";
 // LLM Core type module defines shared TypeScript contracts.
-export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
+export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
 /** Provider API families with first-class request/stream adapters in OpenClaw. */
 export type KnownApi =
@@ -332,9 +333,29 @@ export interface UserMessage {
 }
 
 /** Assistant turn, including provider identity and final stop state. */
+export type AssistantDeliveryTtsFacts = {
+  tagged: true;
+  text?: string;
+  directives?: Array<{
+    provider?: string;
+    values: Record<string, string>;
+  }>;
+};
+
 export interface AssistantMessage {
   role: "assistant";
   content: (TextContent | ThinkingContent | ToolCall)[];
+  openclawDelivery?: {
+    audioAsVoice?: true;
+    /** Exact media directives consumed by the managed-media transcript rewrite owner. */
+    mediaUrls?: string[];
+    replyToCurrent?: true;
+    replyToId?: string;
+    /** Provider text phase is unresolved until the assistant turn reaches terminal state. */
+    textPhaseRequiresTerminal?: true;
+    /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
+    tts?: AssistantDeliveryTtsFacts;
+  };
   api: Api;
   provider: Provider;
   model: string;
@@ -391,8 +412,6 @@ export interface AssistantImages {
   errorMessage?: string;
   timestamp: number; // Unix timestamp in milliseconds
 }
-
-import type { TSchema } from "typebox";
 
 /** Provider tool declaration with a TypeBox/JSON-schema parameter object. */
 export interface Tool<TParameters extends TSchema = TSchema> {
@@ -515,6 +534,8 @@ export interface OpenAIResponsesCompat {
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
+  supportsInstructions?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -656,7 +677,7 @@ export interface Model<TApi extends Api = Api> {
     cacheRead: number; // $/million tokens
     cacheWrite: number; // $/million tokens
   };
-  contextWindow: number;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while allowing a

@@ -4,7 +4,6 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SpawnResult } from "../process/exec-result.js";
@@ -14,12 +13,9 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   formatControlUiSshHint,
   handleReset,
-  moveToTrash,
   normalizeGatewayTokenInput,
   openUrl,
   printWizardHeader,
-  probeGatewayConfiguredModel,
-  probeGatewayReachable,
   resolveBrowserOpenCommand,
   resolveAdvertisedControlUiLinks,
   resolveControlUiLinks,
@@ -487,97 +483,6 @@ describe("handleReset", () => {
   });
 });
 
-describe("moveToTrash", () => {
-  it("uses fs-safe trash instead of resolving a PATH trash command", async () => {
-    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-helper-"));
-    const targetPath = path.join(testRoot, "target");
-    fs.mkdirSync(targetPath, { recursive: true });
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-    const sourcePath = expectedTrashSourcePath(targetPath);
-
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
-    }
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
-      allowedRoots: [path.dirname(sourcePath)],
-    });
-    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(`Moved to Trash: ${targetPath}`);
-  });
-
-  it("allows fs-safe trash to move a symlink whose target resolves outside the parent", async () => {
-    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-symlink-"));
-    const targetPath = path.join(testRoot, "target-link");
-    const outsideTarget = path.join(os.tmpdir(), "openclaw-trash-symlink-target");
-    fs.writeFileSync(targetPath, "link placeholder");
-    vi.spyOn(fsPromises, "lstat").mockResolvedValue({
-      isSymbolicLink: () => true,
-    } as fs.Stats);
-    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) =>
-      String(candidate) === path.dirname(targetPath) ? path.dirname(targetPath) : outsideTarget,
-    );
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
-    }
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(targetPath, {
-      allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
-    });
-  });
-
-  it("moves a dangling symlink instead of treating it as already removed", async () => {
-    const testRoot = tempDirs.make("openclaw-trash-dangling-link-");
-    const targetPath = path.join(testRoot, "workspace-link");
-    fs.symlinkSync(path.join(testRoot, "missing-target"), targetPath, "dir");
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-    const sourcePath = expectedTrashSourcePath(targetPath);
-
-    try {
-      await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
-    } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
-    }
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
-      allowedRoots: [path.dirname(sourcePath)],
-    });
-  });
-
-  it("canonicalizes a symlinked parent before calling fs-safe trash", async () => {
-    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-parent-link-"));
-    const lexicalParent = path.join(testRoot, "state-link");
-    const realParent = path.join(testRoot, "state-real");
-    const targetPath = path.join(lexicalParent, "openclaw.json");
-    const sourcePath = path.join(realParent, "openclaw.json");
-    fs.mkdirSync(lexicalParent, { recursive: true });
-    fs.writeFileSync(targetPath, "{}\n");
-    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) =>
-      String(candidate) === lexicalParent ? realParent : String(candidate),
-    );
-    vi.spyOn(fsPromises, "lstat").mockResolvedValue({
-      isSymbolicLink: () => false,
-    } as fs.Stats);
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
-    }
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
-      allowedRoots: [realParent],
-    });
-  });
-});
-
 describe("openUrl", () => {
   it("passes OAuth URLs to Windows FileProtocolHandler without cmd parsing", async () => {
     vi.stubEnv("VITEST", "");
@@ -628,285 +533,43 @@ describe("resolveBrowserOpenCommand", () => {
 });
 
 describe("formatControlUiSshHint", () => {
+  it.each([
+    {
+      label: "plain HTTP root",
+      tlsEnabled: false,
+      basePath: undefined,
+      expectedUrl: "http://localhost:18789/",
+    },
+    {
+      label: "plain HTTP base path",
+      tlsEnabled: false,
+      basePath: "/control",
+      expectedUrl: "http://localhost:18789/control/",
+    },
+    {
+      label: "HTTPS root",
+      tlsEnabled: true,
+      basePath: undefined,
+      expectedUrl: "https://localhost:18789/",
+    },
+    {
+      label: "HTTPS base path",
+      tlsEnabled: true,
+      basePath: "/control",
+      expectedUrl: "https://localhost:18789/control/",
+    },
+  ])("uses the Gateway transport for $label", ({ tlsEnabled, basePath, expectedUrl }) => {
+    const hint = formatControlUiSshHint({ port: 18789, basePath, tlsEnabled });
+
+    expect(hint).toContain(`Then open:\n${expectedUrl}`);
+  });
+
   it("includes the IPv4-only BYOH note and workaround", () => {
-    const hint = formatControlUiSshHint({ port: 18789 });
+    const hint = formatControlUiSshHint({ port: 18789, tlsEnabled: false });
     expect(hint).toContain("BYOH note: lan, tailnet, and custom bind are currently IPv4-only.");
     expect(hint).toContain(
       "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     );
-  });
-});
-
-describe("probeGatewayReachable", () => {
-  it("uses a hello-only probe for onboarding reachability", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: true,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: 42,
-      error: null,
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
-
-    const result = await probeGatewayReachable({
-      url: "ws://127.0.0.1:18789",
-      token: "tok_test",
-      timeoutMs: 2500,
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(mocks.probeGateway).toHaveBeenCalledWith({
-      url: "ws://127.0.0.1:18789",
-      timeoutMs: 2500,
-      auth: {
-        token: "tok_test",
-        password: undefined,
-      },
-      detailLevel: "none",
-    });
-  });
-
-  it("returns the probe error detail on failure", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "connect failed: timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
-
-    const result = await probeGatewayReachable({
-      url: "ws://127.0.0.1:18789",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      detail: "connect failed: timeout",
-    });
-  });
-
-  it("bounds thrown probe errors without splitting UTF-16", async () => {
-    const detail = `${"x".repeat(118)}…`;
-    const params = { url: "ws://127.0.0.1:18789" };
-    mocks.probeGateway.mockRejectedValue(new Error(`${"x".repeat(118)}🚀tail\nignored`));
-    expect(await probeGatewayReachable(params)).toEqual({ ok: false, detail });
-    expect(await probeGatewayConfiguredModel(params)).toEqual({ kind: "unreachable", detail });
-  });
-
-  it("forwards a configured TLS fingerprint to the gateway probe", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: true,
-      configSnapshot: null,
-    });
-
-    await expect(
-      probeGatewayReachable({
-        url: "wss://gateway.example.com:18789",
-        tlsFingerprint: "sha256:11:22:33:44",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(mocks.probeGateway).toHaveBeenCalledWith({
-      url: "wss://gateway.example.com:18789",
-      timeoutMs: 1500,
-      auth: {
-        token: undefined,
-        password: undefined,
-      },
-      tlsFingerprint: "sha256:11:22:33:44",
-      detailLevel: "none",
-    });
-  });
-
-  it("lets a configured preauth handshake timeout widen the default probe budget", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: true,
-      configSnapshot: null,
-    });
-
-    await expect(
-      probeGatewayReachable({
-        url: "wss://gateway.example.com:18789",
-        preauthHandshakeTimeoutMs: 30_000,
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(mocks.probeGateway).toHaveBeenCalledWith({
-      url: "wss://gateway.example.com:18789",
-      timeoutMs: 30_000,
-      auth: {
-        token: undefined,
-        password: undefined,
-      },
-      preauthHandshakeTimeoutMs: 30_000,
-      detailLevel: "none",
-    });
-  });
-
-  it("classifies configured and missing default-agent models from config-only probes", async () => {
-    mocks.probeGateway
-      .mockResolvedValueOnce({
-        ok: true,
-        server: { version: "2026.7.2", connId: "conn-configured" },
-        configSnapshot: {
-          valid: true,
-          config: { agents: { list: [{ id: "work", default: true, model: "openai/gpt-5.5" }] } },
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        server: { version: "2026.7.2", connId: "conn-missing" },
-        configSnapshot: { valid: true, config: { gateway: { mode: "local" } } },
-      });
-
-    await expect(
-      probeGatewayConfiguredModel({
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).resolves.toEqual({ kind: "configured" });
-    await expect(
-      probeGatewayConfiguredModel({
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).resolves.toEqual({
-      kind: "missing-configured-model",
-      detail: "Gateway default agent has no configured model",
-    });
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ detailLevel: "config" }),
-    );
-  });
-
-  it("keeps post-Hello config read failures on the reachable Gateway path", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      connectLatencyMs: 42,
-      error: "config.get: unauthorized",
-      auth: { role: null, scopes: [], capability: "unknown" },
-      server: { version: "2026.7.2", connId: "conn-1" },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "reachable-unverified",
-      detail: "config.get: unauthorized",
-    });
-  });
-
-  it("keeps typed pre-Hello Gateway auth failures on the reachable path", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      connectLatencyMs: 42,
-      error: "device pairing required",
-      connectErrorDetails: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
-      auth: { role: null, scopes: [], capability: "pairing_pending" },
-      server: { version: null, connId: null },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "reachable-unverified",
-      detail: "device pairing required",
-    });
-  });
-
-  it("does not mistake an arbitrary open WebSocket for a Gateway", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      connectLatencyMs: 42,
-      error: "websocket closed",
-      auth: { role: null, scopes: [], capability: "unknown" },
-      server: { version: null, connId: null },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "unreachable",
-      detail: "websocket closed",
-    });
-  });
-
-  it("does not trust an unrecognized connect error code as Gateway evidence", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      connectLatencyMs: 42,
-      error: "foreign protocol error",
-      connectErrorDetails: { code: "NOT_AN_OPENCLAW_CONNECT_ERROR" },
-      auth: { role: null, scopes: [], capability: "unknown" },
-      server: { version: null, connId: null },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "unreachable",
-      detail: "foreign protocol error",
-    });
-  });
-
-  it("does not trust a config-shaped response without Gateway handshake evidence", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: true,
-      connectLatencyMs: 42,
-      error: null,
-      auth: { role: null, scopes: [], capability: "unknown" },
-      server: { version: "foreign-server", connId: null },
-      configSnapshot: {
-        valid: true,
-        config: { agents: { defaults: { model: "openai/foreign-model" } } },
-      },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "unreachable",
-    });
-  });
-
-  it("keeps a first-time connect-only auth result on the reachable Gateway path", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      connectLatencyMs: 42,
-      error: "missing scope: operator.read",
-      auth: { role: "operator", scopes: [], capability: "connected_no_operator_scope" },
-      server: { version: "2026.7.2", connId: "conn-1" },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "reachable-unverified",
-      detail: "missing scope: operator.read",
-    });
-  });
-
-  it("treats an invalid config snapshot as reachable but unverified", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: true,
-      connectLatencyMs: 42,
-      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-      server: { version: "2026.7.2", connId: "conn-1" },
-      configSnapshot: { valid: false },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "reachable-unverified",
-      detail: "Gateway returned an invalid config snapshot",
-    });
-  });
-
-  it("distinguishes pre-Hello connection failures from reachable Gateway failures", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      connectLatencyMs: null,
-      error: "connect failed: timeout",
-      auth: { role: null, scopes: [], capability: "unknown" },
-      server: { version: null, connId: null },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "unreachable",
-      detail: "connect failed: timeout",
-    });
   });
 });
 

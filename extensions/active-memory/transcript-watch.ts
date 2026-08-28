@@ -195,6 +195,10 @@ function watchTerminalMemorySearchResult(params: {
         undefined,
         params.toolsAllow,
       );
+      // Execution can settle while this transcript read is still in flight.
+      if (stopped || params.abortSignal.aborted) {
+        return;
+      }
       if (result) {
         finish(result);
         return;

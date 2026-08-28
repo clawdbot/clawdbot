@@ -1,6 +1,7 @@
 // Covers context-token lookup caches, catalog warmup, and provider-qualified
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { replaceDiscoveredContextTokenCache } from "./context-cache.js";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "./context-resolution.js";
@@ -110,6 +111,19 @@ function createContextOverrideConfig(
         },
       },
     },
+  };
+}
+
+function createConfiguredModel(id: string, contextTokens: number): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: contextTokens,
+    contextTokens,
+    maxTokens: 4096,
   };
 }
 
@@ -377,23 +391,24 @@ describe("lookupContextTokens", () => {
     await flushAsyncWarmup();
 
     expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
-    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        agentDir: expect.any(String),
-        readOnly: true,
-      }),
-    );
-    expect(contextTestState.loadModelCatalogOwnerSnapshot.mock.calls[0]?.[0]).not.toHaveProperty(
-      "workspaceDir",
-    );
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+    });
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(
       ANTHROPIC_CONTEXT_1M_TOKENS,
     );
   });
 
   it("keeps ordinary cache loading on the exact owner path", async () => {
-    const config = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
+    const config = {
+      ...createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000),
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: {}, beta: {} },
+      },
+    } satisfies OpenClawConfig;
     mockDiscoveryDeps([
       {
         id: "anthropic/claude-opus-4.7-20260219",
@@ -405,9 +420,10 @@ describe("lookupContextTokens", () => {
     const { ensureContextWindowCacheLoaded, lookupContextTokens } = await importContextModule();
     await ensureContextWindowCacheLoaded(config);
 
-    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ config, readOnly: true }),
-    );
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+    });
     expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
     expect(
       lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
@@ -415,7 +431,14 @@ describe("lookupContextTokens", () => {
   });
 
   it("warms from the current Gateway-published owner without hashing a fallback owner key", async () => {
-    const requestedConfig = createContextOverrideConfig("synthetic", "stale-model", 111_000);
+    const requestedConfig = {
+      ...createContextOverrideConfig("synthetic", "stale-model", 111_000),
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: {}, beta: {} },
+      },
+    } satisfies OpenClawConfig;
     const publishedConfig = createContextOverrideConfig("synthetic", "current-model", 222_000);
     contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValueOnce({
       config: publishedConfig,
@@ -430,15 +453,10 @@ describe("lookupContextTokens", () => {
       await importContextModule();
     await prewarmContextWindowCacheAfterReady({ config: requestedConfig });
 
-    expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: requestedConfig,
-        allowGatewaySubagentBinding: true,
-      }),
-    );
-    expect(
-      contextTestState.getPublishedModelCatalogOwnerSnapshot.mock.calls[0]?.[0],
-    ).not.toHaveProperty("readOnly");
+    expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      config: requestedConfig,
+      allowGatewaySubagentBinding: true,
+    });
     expect(contextTestState.loadModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
     expect(
       lookupContextTokens("current-model", {
@@ -587,27 +605,6 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("claude-sonnet")).toBe(654_321);
   });
 
-  it("uses projected source config for a cloned runtime config", async () => {
-    const runtimeConfig = createContextOverrideConfig(
-      "anthropic-vertex",
-      "claude-sonnet-4-6",
-      200_000,
-    );
-    contextTestState.runtimeConfigSnapshot = runtimeConfig;
-    contextTestState.runtimeConfigSourceSnapshot = {};
-    const clonedConfig = structuredClone(runtimeConfig);
-
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
-    expect(
-      resolveContextTokensForModel({
-        cfg: clonedConfig,
-        provider: "anthropic-vertex",
-        model: "claude-sonnet-4-6",
-        allowAsyncLoad: false,
-      }),
-    ).toBe(1_000_000);
-  });
-
   it("resolveContextTokensForModel handles self-prefixed provider-owned discovery ids", async () => {
     mockDiscoveryDeps([
       {
@@ -650,6 +647,98 @@ describe("lookupContextTokens", () => {
       model: "gemini-3.1-pro-preview",
     });
     expect(result).toBe(200_000);
+  });
+
+  it.each([
+    {
+      name: "matches a bare configured row for a provider-self-prefixed runtime model",
+      model: "kilocode/kilo-auto/balanced",
+      configuredModels: [createConfiguredModel("kilo-auto/balanced", 900_000)],
+      expected: 900_000,
+    },
+    {
+      name: "prefers the exact qualified row over an earlier bare row",
+      model: "kilocode/kilo-auto/balanced",
+      configuredModels: [
+        createConfiguredModel("kilo-auto/balanced", 111_000),
+        createConfiguredModel("kilocode/kilo-auto/balanced", 900_000),
+      ],
+      expected: 900_000,
+    },
+    {
+      name: "does not strip another provider's prefix",
+      model: "openrouter/anthropic/claude-sonnet-5",
+      configuredModels: [createConfiguredModel("anthropic/claude-sonnet-5", 900_000)],
+      expected: 128_000,
+    },
+  ])("$name", async ({ model, configuredModels, expected }) => {
+    mockDiscoveryDeps([{ provider: "kilocode", id: model, contextWindow: 128_000 }]);
+    const cfg = {
+      models: {
+        providers: {
+          kilocode: { baseUrl: "https://example.invalid", models: configuredModels },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
+    lookupContextTokens(model);
+    await flushAsyncWarmup();
+
+    expect(resolveContextTokensForModel({ cfg, provider: "kilocode", model })).toBe(expected);
+  });
+
+  it("bounds a per-model cap by the Anthropic fixed contract", async () => {
+    mockDiscoveryDeps([]);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    expect(
+      resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                models: [
+                  {
+                    id: "claude-sonnet-4-6",
+                    contextWindow: 2_000_000,
+                    contextTokens: 1_200_000,
+                  },
+                ],
+              },
+            },
+          },
+        } as never,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      }),
+    ).toBe(1_000_000);
+  });
+
+  it("bounds an authored effective cap by a smaller authored context window", async () => {
+    mockDiscoveryDeps([]);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    expect(
+      resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                models: [
+                  {
+                    id: "gpt-5.6-sol",
+                    contextWindow: 128_000,
+                    contextTokens: 1_000_000,
+                  },
+                ],
+              },
+            },
+          },
+        } as never,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+      }),
+    ).toBe(128_000);
   });
 
   it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {
@@ -715,7 +804,6 @@ describe("lookupContextTokens", () => {
     const openrouterResult = resolveContextTokensForModel({
       provider: "openrouter",
       model: "google/gemini-2.5-pro",
-      contextTokensOverride: 2_000_000,
     });
     expect(openrouterResult).toBe(999_000);
 
@@ -723,9 +811,23 @@ describe("lookupContextTokens", () => {
     const googleUnconfiguredResult = resolveContextTokensForModel({
       provider: "google",
       model: "gemini-2.5-pro",
-      contextTokensOverride: 2_000_000,
     });
-    expect(googleUnconfiguredResult).toBe(2_000_000);
+    expect(googleUnconfiguredResult).toBeUndefined();
+  });
+
+  it("resolveContextTokensForModel follows modelProvider aliases to per-model config", async () => {
+    mockDiscoveryDeps([]);
+    const cfg = createContextOverrideConfig("anthropic", "claude-custom", 180_000);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    expect(
+      resolveContextTokensForModel({
+        cfg: cfg as never,
+        provider: "fixture-cli",
+        modelProvider: "anthropic",
+        model: "anthropic/claude-custom",
+      }),
+    ).toBe(180_000);
   });
 
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {

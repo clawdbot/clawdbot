@@ -1,6 +1,7 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   readAgentRunTerminalOutcome,
+  hasFinalInboundReplyDispatch,
   runChannelInboundEvent,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -40,6 +41,7 @@ import {
   handleReplySkip,
   resetReasoningStepState,
 } from "./bot-message-dispatch-reply.js";
+import { resolveHumanDelayConfig } from "./bot-message-dispatch.agent.runtime.js";
 import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
@@ -122,6 +124,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           },
           ctxPayload: context.ctxPayload,
           record: context.turn.record,
+          dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
           delivery: {
             deliverWithProviderMessageSending: async (payload, info) =>
               await deliverReply(turn, payload, info),
@@ -132,6 +135,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           },
           dispatcherOptions: {
             ...replyPipeline,
+            humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
             beforeDeliver: async (payload) => payload,
             onBeforeDeliverCancelled: (payload, info) =>
               handleBeforeDeliverCancelled(turn, payload, info),
@@ -146,6 +150,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   admission: turn.turnAdoptionLifecycle.admission ?? "exclusive",
                   onAdopted: turn.turnAdoptionLifecycle.onAdopted,
                   onDeferred: turn.turnAdoptionLifecycle.onDeferred,
+                  onDeferredHeartbeat: turn.turnAdoptionLifecycle.onDeferredHeartbeat,
                   onAbandoned: turn.turnAdoptionLifecycle.onAbandoned,
                   abortSignal: turn.turnAdoptionLifecycle.abortSignal,
                 }
@@ -230,21 +235,16 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onReasoningEnd: turn.reasoningLane.stream
               ? () => {
                   const queued = enqueueDraftEvent(turn, async () => {
-                    turn.progressSummary.closeReasoningBurst();
                     turn.splitReasoningOnNextStream = turn.reasoningLane.hasStreamedMessage;
                     turn.progressCompositor.reset();
                   });
                   return queued.then(() => false);
                 }
-              : () => {
-                  turn.progressSummary.closeReasoningBurst();
-                  return false;
-                },
+              : () => false,
             onQueuedFollowupAdmitted: () => {
               beginDraftQueuedFollowup(turn);
               turn.finalAnswerDeliveryStarted = false;
               turn.finalAnswerDelivered = false;
-              turn.sawProgressFinal = false;
               turn.progressCompositor.beginNewTurn({ force: true });
             },
             onQueuedFollowupSettled: async () => {
@@ -268,6 +268,12 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
             progressPreambleEnabled: turn.progressPreambleEnabled,
             commentaryPayloadsEnabled: turn.progressPreambleEnabled,
+            // Read the current getter after core freezes visibility so draft
+            // and durable commentary cannot both own the same preamble.
+            shouldDeliverCommentaryPayloads:
+              turn.streamMode === "progress" && turn.commentaryProgressEnabled
+                ? () => turn.verboseProgressActive()
+                : undefined,
             reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
             onToolStart: (payload) => handleToolStart(turn, payload),
             onItemEvent: (payload) => handleItemEvent(turn, payload),
@@ -313,13 +319,10 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     if (!turnResult.dispatched) {
       return false;
     }
-    turn.queuedFinal ||= turnResult.dispatchResult.queuedFinal;
+    turn.queuedFinal ||= hasFinalInboundReplyDispatch(turnResult.dispatchResult);
     turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
-    if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
-      turn.sawProgressFinal = true;
-    }
     turn.suppressSilentReplyFallback =
       turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
     return true;

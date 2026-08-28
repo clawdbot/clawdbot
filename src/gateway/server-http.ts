@@ -16,25 +16,28 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
-  CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
-  CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
-  CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX,
+  parseControlUiUserAvatarPath,
+  parseControlUiResourcePath,
+  type ControlUiResourceRoute,
 } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
   isControlUiApprovalDocumentPath,
+  isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
+  classifyNodeWorkerBundleTransferPath,
   classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
 } from "./gateway-http-route-contracts.js";
@@ -44,7 +47,12 @@ import {
   sendGatewayAuthFailure,
   setDefaultSecurityHeaders,
 } from "./http-common.js";
-import { resolveRequestClientIp } from "./net.js";
+import {
+  markGatewayIngressTransport,
+  prepareGatewayIngressAttribution,
+  type GatewayIngressTransport,
+  type GatewayUnattributableProxyReporter,
+} from "./ingress-attribution.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   getCachedPluginGatewayAuthBypassPaths,
@@ -53,6 +61,7 @@ import {
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
 import { handleGatewayProbeRequest } from "./server-http-probes.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
 import {
@@ -62,7 +71,10 @@ import {
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import { canonicalizeUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import {
+  handleNodeWorkerBundleTransferHttpRequest,
+  type NodeWorkerBundleTransferHttpCallback,
+} from "./worker-environments/node-worker-bundle-transfer-http.js";
 import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
@@ -89,6 +101,9 @@ const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-ap
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
 const getWorkspaceIconHttpModule = createLazyRuntimeModule(
   () => import("./workspace-icon-http.js"),
+);
+const getChannelAvatarHttpModule = createLazyRuntimeModule(
+  () => import("./channel-avatar-http.js"),
 );
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
@@ -124,32 +139,7 @@ function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
   );
 }
 
-type GatewayHttpRequestStage = {
-  name: string;
-  run: () => Promise<boolean> | boolean;
-  continueOnError?: boolean;
-};
-
-async function runGatewayHttpRequestStages(
-  stages: readonly GatewayHttpRequestStage[],
-): Promise<boolean> {
-  for (const stage of stages) {
-    try {
-      if (await stage.run()) {
-        return true;
-      }
-    } catch (err) {
-      if (!stage.continueOnError) {
-        throw err;
-      }
-      // Log and skip the failing stage so subsequent stages (control-ui,
-      // gateway-probes, etc.) remain reachable. A common trigger is a
-      // plugin-owned route/runtime code still failing to load an optional dependency.
-      console.error(`[gateway-http] stage "${stage.name}" threw — skipping:`, err);
-    }
-  }
-  return false;
-}
+type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
 /** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
@@ -167,6 +157,7 @@ export function createGatewayHttpServer(opts: {
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
+  isPluginAuthenticatedRoute?: (pathContext: PluginRoutePathContext) => boolean;
   resolvePluginNodeCapabilityRoute?: ResolvePluginNodeCapabilityRoute;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
@@ -174,14 +165,19 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Strict limiter for the public join-code exchange, including loopback. */
   joinRateLimiter?: AuthRateLimiter;
+  /** Authenticator/dispatcher for the reserved node worker bundle namespace. */
+  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
   /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
   getRuntimeConfig?: () => OpenClawConfig;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
+  ingressTransport?: GatewayIngressTransport;
+  reportUnattributableProxy?: GatewayUnattributableProxyReporter;
 }): HttpServer {
   const {
     clients,
@@ -208,9 +204,19 @@ export function createGatewayHttpServer(opts: {
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
-  const handleServerRequest = (req: IncomingMessage, res: ServerResponse) => {
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-      handleRequest(req, res),
+  const handleServerRequest = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    expectation?: "continue" | "reject",
+  ) => {
+    markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
+    void runHttpConnectionRequest(
+      req,
+      () =>
+        runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+          handleRequest(req, res, expectation),
+        ),
+      res,
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
       if (!res.destroyed) {
@@ -221,11 +227,37 @@ export function createGatewayHttpServer(opts: {
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, handleServerRequest)
     : createHttpServer(handleServerRequest);
+  // Node otherwise sends interim/expectation responses before application admission.
+  httpServer.on("checkContinue", (req, res) => handleServerRequest(req, res, "continue"));
+  httpServer.on("checkExpectation", (req, res) => handleServerRequest(req, res, "reject"));
+  httpServer.on("connect", (req, socket) => {
+    void runHttpConnectionRequest(
+      req,
+      async () => {
+        socket.destroy();
+      },
+      "upgrade",
+    );
+  });
 
-  async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+  async function handleRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    expectation?: "continue" | "reject",
+  ) {
     setDefaultSecurityHeaders(res, {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
+    // Preserve Node's version/token classification while deferring its response
+    // until admission; reparsing Expect here would change HTTP/1.0 semantics.
+    if (expectation === "reject") {
+      res.writeHead(417);
+      res.end();
+      return;
+    }
+    if (expectation === "continue") {
+      res.writeContinue();
+    }
 
     // Don't interfere with real WebSocket upgrades; ws handles the 'upgrade' event.
     if (isWebSocketUpgradeRequest(req)) {
@@ -250,9 +282,10 @@ export function createGatewayHttpServer(opts: {
           req,
           res,
           requestPath,
-          getResolvedAuth(),
+          resolvedAuth,
           [],
           false,
+          rateLimiter,
           getReadiness,
           getStartup,
         );
@@ -262,6 +295,11 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadGatewayConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const ingressAttribution = prepareGatewayIngressAttribution({
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+      });
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -275,6 +313,22 @@ export function createGatewayHttpServer(opts: {
       const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
+      if (ingressAttribution.kind === "unattributable-proxy") {
+        opts.reportUnattributableProxy?.(ingressAttribution);
+        if (
+          !nodeCapability &&
+          handlePluginRequest &&
+          opts.isPluginAuthenticatedRoute?.(pluginPathContext) &&
+          (await handlePluginRequest(req, res, pluginPathContext, {
+            gatewayRequestClientIp: ingressAttribution.remoteAddress,
+          }))
+        ) {
+          return;
+        }
+        sendGatewayAuthFailure(res, { ok: false, reason: ingressAttribution.reason });
+        return;
+      }
+      const requestClientIp = ingressAttribution.clientIp;
       const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
@@ -294,68 +348,77 @@ export function createGatewayHttpServer(opts: {
           agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
           root: controlUiRoot,
         });
+      const handleStandaloneControlUiRequest = async () => {
+        if (!controlUiEnabled) {
+          respondNotFound(res);
+          return true;
+        }
+        if (await handleControlUiRequest()) {
+          return true;
+        }
+        respondNotFound(res);
+        return true;
+      };
       const requestStages: GatewayHttpRequestStage[] = [
-        {
-          name: "gateway-probes",
-          run: () =>
-            handleGatewayProbeRequest(
-              req,
-              res,
-              scopedRequestPath,
-              resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              getReadiness,
-              getStartup,
-            ),
-        },
+        () =>
+          handleGatewayProbeRequest(
+            req,
+            res,
+            scopedRequestPath,
+            resolvedAuthValue,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+            getReadiness,
+            getStartup,
+          ),
       ];
       const addRequestStage = (
-        name: string,
         enabled: boolean,
-        run: GatewayHttpRequestStage["run"],
+        stage: GatewayHttpRequestStage,
         admitted = false,
       ) => {
         if (enabled) {
-          requestStages.push({
-            name,
-            run: admitted ? () => runWithGatewayHttpWorkAdmission(res, run) : run,
-          });
+          requestStages.push(admitted ? () => runWithGatewayHttpWorkAdmission(res, stage) : stage);
         }
       };
-      const addAdmittedStage = (
-        name: string,
-        enabled: boolean,
-        run: GatewayHttpRequestStage["run"],
-      ) => addRequestStage(name, enabled, run, true);
+      const addAdmittedStage = (enabled: boolean, stage: GatewayHttpRequestStage) =>
+        addRequestStage(enabled, stage, true);
 
       const workerGatewayRoute = classifyWorkerGatewayPath(scopedRequestPath);
-      addRequestStage("worker-gateway", workerGatewayRoute !== "outside", () => {
+      addRequestStage(workerGatewayRoute !== "outside", () => {
         respondNotFound(res);
         return true;
       });
 
-      addAdmittedStage(
-        "worker-transfer",
-        classifyNodeWorkspaceTransferPath(scopedRequestPath) !== "outside",
-        () =>
-          handleNodeWorkspaceTransferHttpRequest({
-            req,
-            res,
-            clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
-            rateLimiter: joinRateLimiter,
-            callback: opts.handleNodeWorkspaceTransferRequest,
-          }),
+      addAdmittedStage(classifyNodeWorkerBundleTransferPath(scopedRequestPath) !== "outside", () =>
+        handleNodeWorkerBundleTransferHttpRequest({
+          req,
+          res,
+          clientIp: ingressAttribution.rateLimit.subject.key,
+          rateLimiter: joinRateLimiter,
+          callback: opts.handleNodeWorkerBundleTransferRequest,
+        }),
+      );
+
+      addAdmittedStage(classifyNodeWorkspaceTransferPath(scopedRequestPath) !== "outside", () =>
+        handleNodeWorkspaceTransferHttpRequest({
+          req,
+          res,
+          clientIp: ingressAttribution.rateLimit.subject.key,
+          rateLimiter: joinRateLimiter,
+          callback: opts.handleNodeWorkspaceTransferRequest,
+        }),
       );
 
       const devicePairingJoinShortcode = parseDevicePairingJoinRequestPath(scopedRequestPath);
       if (devicePairingJoinShortcode !== null) {
-        addAdmittedStage("device-pairing-join", true, async () =>
+        addAdmittedStage(true, async () =>
           (await getDevicePairingJoinHttpModule()).handleDevicePairingJoinHttpRequest({
             req,
             res,
             shortcode: devicePairingJoinShortcode,
-            clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
+            clientIp: ingressAttribution.rateLimit.subject.key,
             rateLimiter: joinRateLimiter,
           }),
         );
@@ -365,104 +428,82 @@ export function createGatewayHttpServer(opts: {
       // this exact GET and 405 every provider redirect. The claim is exact-path
       // and config-gated, so preceding hooks cannot shadow any hook route.
       addAdmittedStage(
-        "mcp-oauth-callback",
         req.method === "GET" &&
           scopedRequestPath === "/oauth/mcp/callback" &&
           Boolean(opts.handleMcpOAuthCallbackRequest),
         () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
       );
-      addRequestStage("hooks", true, () => handleHooksRequest(req, res));
+      // The hook owner claims only its configured base path before entering HTTP admission;
+      // this unconditional dispatcher must stay plain so unrelated routes can fall through.
+      addRequestStage(true, () => handleHooksRequest(req, res));
       addAdmittedStage(
-        "watch-node",
         Boolean(opts.handleWatchNodeRequest) && scopedRequestPath.startsWith("/api/nodes/watch/"),
         () => opts.handleWatchNodeRequest?.(req, res) ?? false,
       );
       addAdmittedStage(
-        "models",
         openAiCompatEnabled &&
           (scopedRequestPath === "/v1/models" || scopedRequestPath.startsWith("/v1/models/")),
         async () =>
           (await getModelsHttpModule()).handleOpenAiModelsHttpRequest(req, res, routeAuth),
       );
-      addAdmittedStage(
-        "embeddings",
-        openAiCompatEnabled && scopedRequestPath === "/v1/embeddings",
-        async () =>
-          (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, routeAuth),
+      addAdmittedStage(openAiCompatEnabled && scopedRequestPath === "/v1/embeddings", async () =>
+        (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, routeAuth),
       );
-      addAdmittedStage("tools-invoke", scopedRequestPath === "/tools/invoke", async () =>
+      addAdmittedStage(scopedRequestPath === "/tools/invoke", async () =>
         (await getToolsInvokeHttpModule()).handleToolsInvokeHttpRequest(req, res, routeAuth),
       );
-      addAdmittedStage(
-        "sessions-kill",
-        /^\/sessions\/[^/]+\/kill$/.test(scopedRequestPath),
-        async () =>
-          (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, routeAuth),
+      addAdmittedStage(/^\/sessions\/[^/]+\/kill$/.test(scopedRequestPath), async () =>
+        (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, routeAuth),
       );
-      addAdmittedStage(
-        "sessions-history",
-        /^\/sessions\/[^/]+\/history$/.test(scopedRequestPath),
-        async () =>
-          (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
-            ...routeAuth,
-            getResolvedAuth,
-          }),
+      addAdmittedStage(/^\/sessions\/[^/]+\/history$/.test(scopedRequestPath), async () =>
+        (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
+          ...routeAuth,
+          getResolvedAuth,
+        }),
       );
-      addAdmittedStage(
-        "board-widget",
-        scopedRequestPath.startsWith("/__openclaw__/board/"),
-        async () => (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
+      addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/board/"), async () =>
+        (await getBoardHttpModule()).handleBoardHttpRequest(req, res, {
+          resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
+        }),
       );
-      const userProfileAvatarPath = canonicalizeUserProfileAvatarPath(
+      const userProfileAvatarRoute = parseControlUiUserAvatarPath(
         scopedRequestPath,
         controlUiRouteBasePath,
       );
-      addAdmittedStage("user-profile-avatar", userProfileAvatarPath !== undefined, async () =>
+      addAdmittedStage(userProfileAvatarRoute.matched, async () =>
         (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
           req,
           res,
-          userProfileAvatarPath ?? scopedRequestPath,
-          routeAuth,
+          scopedRequestPath,
+          { ...routeAuth, basePath: controlUiRouteBasePath },
         ),
       );
-      addAdmittedStage(
-        "openresponses",
-        openResponsesEnabled && scopedRequestPath === "/v1/responses",
-        async () =>
-          (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
-            ...routeAuth,
-            config: openResponsesConfig,
-          }),
+      addAdmittedStage(openResponsesEnabled && scopedRequestPath === "/v1/responses", async () =>
+        (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
+          ...routeAuth,
+          config: openResponsesConfig,
+          resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
+        }),
       );
       addAdmittedStage(
-        "openai",
         openAiChatCompletionsEnabled && scopedRequestPath === "/v1/chat/completions",
         async () =>
           (await getOpenAiHttpModule()).handleOpenAiHttpRequest(req, res, {
             ...routeAuth,
             config: openAiChatCompletionsConfig,
+            resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
           }),
       );
-      addRequestStage(
-        "control-ui-approval-document",
-        isControlUiApprovalDocumentPath({
-          basePath: controlUiBasePath,
-          pathname: scopedRequestPath,
-        }),
-        async () => {
-          if (!controlUiEnabled) {
-            respondNotFound(res);
-            return true;
-          }
-          const handled = await handleControlUiRequest();
-          if (handled) {
-            return true;
-          }
-          respondNotFound(res);
-          return true;
-        },
-      );
-      addRequestStage("node-capability-auth", Boolean(nodeCapability), async () => {
+      const approvalDocument = isControlUiApprovalDocumentPath({
+        basePath: controlUiBasePath,
+        pathname: scopedRequestPath,
+      });
+      const focusDocument = isControlUiFocusDocumentPath({
+        basePath: controlUiBasePath,
+        pathname: scopedRequestPath,
+      });
+      addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
+      addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
           req,
@@ -482,7 +523,6 @@ export function createGatewayHttpServer(opts: {
         return false;
       });
       addRequestStage(
-        "canvas-documents",
         Boolean(nodeCapability) &&
           isCoreCanvasHostEnabled(configSnapshot) &&
           isCanvasDocumentHttpPath(scopedRequestPath),
@@ -491,7 +531,6 @@ export function createGatewayHttpServer(opts: {
       // This page must remain reachable when a plugin route is broken so the
       // operator can disable it. Other explicit plugin routes retain precedence.
       addRequestStage(
-        "control-ui-plugin-manager",
         controlUiEnabled &&
           isControlUiPluginManagerRequest({
             basePath: controlUiBasePath,
@@ -505,9 +544,8 @@ export function createGatewayHttpServer(opts: {
         configSnapshot.mcp?.apps?.enabled === true &&
         (mcpAppRoute === "shell" || mcpAppRoute === "view")
       ) {
-        requestStages.push({
-          name: "mcp-app-standalone",
-          run: async () =>
+        requestStages.push(
+          async () =>
             await runWithGatewayHttpWorkAdmission(res, async () => {
               const standalone = await getMcpAppStandaloneModule();
               return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
@@ -515,66 +553,58 @@ export function createGatewayHttpServer(opts: {
                 sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
               });
             }),
-        });
+        );
       }
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {
-        const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
         let pluginGatewayAuthSatisfied = false;
         let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
         let pluginRequestOperatorScopes: string[] | undefined;
-        // Auth and dispatch stay separate so authorized context reaches the handler while
-        // plugin failures can still fall through to core and Control UI routes.
+        // Auth and dispatch stay separate so authorized context reaches the handler.
         requestStages.push(
-          {
-            name: "plugin-auth",
-            run: async () => {
-              if (
-                !(shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
-                  pluginPathContext,
-                ) ||
-                (await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(scopedRequestPath)
-              ) {
-                return false;
-              }
-              // Bypass paths come only from activated channel plugins; every other protected
-              // route must authorize before runtime scopes are derived.
-              const { authorizePluginGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
-              const { resolvePluginRouteRuntimeOperatorScopes } =
-                await getPluginRouteRuntimeScopesModule();
-              const authResult = await authorizePluginGatewayHttpRequestOrReply({
-                req,
-                res,
-                ...routeAuth,
-                requestPath: scopedRequestPath,
-                resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
-              });
-              if (!authResult) {
-                return true;
-              }
-              pluginGatewayAuthSatisfied = true;
-              pluginGatewayRequestAuth = authResult.requestAuth;
-              pluginRequestOperatorScopes = authResult.operatorScopes;
+          async () => {
+            if (
+              !(shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
+                pluginPathContext,
+              ) ||
+              (await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(scopedRequestPath)
+            ) {
               return false;
-            },
+            }
+            // Bypass paths come only from activated channel plugins; every other protected
+            // route must authorize before runtime scopes are derived.
+            const { authorizePluginGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
+            const { resolvePluginRouteRuntimeOperatorScopes } =
+              await getPluginRouteRuntimeScopesModule();
+            const authResult = await authorizePluginGatewayHttpRequestOrReply({
+              req,
+              res,
+              ...routeAuth,
+              requestPath: scopedRequestPath,
+              resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
+            });
+            if (!authResult) {
+              return true;
+            }
+            pluginGatewayAuthSatisfied = true;
+            pluginGatewayRequestAuth = authResult.requestAuth;
+            pluginRequestOperatorScopes = authResult.operatorScopes;
+            return false;
           },
-          {
-            name: "plugin-http",
-            continueOnError: true,
-            run: () =>
-              handlePluginRequest(req, res, pluginPathContext, {
-                gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
-                gatewayRequestAuth: pluginGatewayRequestAuth,
-                gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
-                gatewayRequestClientIp: requestClientIp,
-              }),
-          },
+          () =>
+            handlePluginRequest(req, res, pluginPathContext, {
+              gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
+              gatewayRequestAuth: pluginGatewayRequestAuth,
+              gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
+              gatewayRequestClientIp: requestClientIp,
+            }),
         );
       }
 
+      addRequestStage(focusDocument, handleStandaloneControlUiRequest);
+
       addRequestStage(
-        "chat-managed-media",
         scopedRequestPath.startsWith("/api/chat/media/outgoing/") ||
           (controlUiRouteBasePath.length > 0 &&
             scopedRequestPath.startsWith(`${controlUiRouteBasePath}/api/chat/media/outgoing/`)),
@@ -586,10 +616,16 @@ export function createGatewayHttpServer(opts: {
           ),
       );
       addRequestStage(
-        "control-ui-catalog-icon",
         controlUiEnabled &&
-          [CONTROL_UI_PLUGIN_ICON_PATH_PREFIX, CONTROL_UI_CATALOG_ICON_PATH_PREFIX].some((prefix) =>
-            scopedRequestPath.startsWith(`${controlUiRouteBasePath}${prefix}/`),
+          (
+            [
+              "pluginIcon",
+              "catalogIcon",
+              "linkFavicon",
+            ] as const satisfies readonly ControlUiResourceRoute[]
+          ).some(
+            (route) =>
+              parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath).matched,
           ),
         async () =>
           (await getPluginIconHttpModule()).handlePluginIconHttpRequest(
@@ -599,11 +635,9 @@ export function createGatewayHttpServer(opts: {
           ),
       );
       addRequestStage(
-        "control-ui-workspace-icon",
         controlUiEnabled &&
-          scopedRequestPath.startsWith(
-            `${controlUiRouteBasePath}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/`,
-          ),
+          parseControlUiResourcePath("workspaceIcon", scopedRequestPath, controlUiRouteBasePath)
+            .matched,
         async () =>
           (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest(
             req,
@@ -611,19 +645,33 @@ export function createGatewayHttpServer(opts: {
             controlUiRouteOptions,
           ),
       );
-      addRequestStage("control-ui-assistant-media", controlUiEnabled, async () =>
+      addRequestStage(
+        controlUiEnabled &&
+          parseControlUiResourcePath("channelAvatar", scopedRequestPath, controlUiRouteBasePath)
+            .matched,
+        async () =>
+          (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest(
+            req,
+            res,
+            controlUiRouteOptions,
+          ),
+      );
+      addRequestStage(controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
           agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
         }),
       );
-      addRequestStage("control-ui-avatar", controlUiEnabled, async () =>
+      addRequestStage(controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAvatarRequest(req, res, controlUiRouteOptions),
       );
-      addRequestStage("control-ui-http", controlUiEnabled, handleControlUiRequest);
+      addRequestStage(controlUiEnabled, handleControlUiRequest);
 
-      if (await runGatewayHttpRequestStages(requestStages)) {
-        return;
+      // A completed or disconnected response owns the request even when a stage reports fallthrough.
+      for (const stage of requestStages) {
+        if ((await stage()) || res.destroyed || res.writableEnded) {
+          return;
+        }
       }
 
       // Startup owns sidecar readiness. The plugin registry is still empty here, so an
@@ -645,7 +693,4 @@ export function createGatewayHttpServer(opts: {
   return httpServer;
 }
 
-export {
-  attachGatewayUpgradeHandler,
-  attachWorkerGatewayUpgradeHandler,
-} from "./server-http-upgrades.js";
+export { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";

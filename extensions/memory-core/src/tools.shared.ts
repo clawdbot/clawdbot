@@ -1,61 +1,20 @@
 // Memory Core plugin module implements tools.shared behavior.
-import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  listMemoryCorpusSupplements,
-  resolveMemorySearchConfig,
-  resolveSessionAgentIds,
-  type MemoryCorpusSearchResult,
-  type AnyAgentTool,
-  type OpenClawConfig,
+import type {
+  AnyAgentTool,
+  OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type } from "typebox";
+import {
+  resolveMemoryToolContext,
+  type MemoryToolContract,
+  type MemoryToolOptions,
+} from "./memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
-type MemoryToolOptions = {
-  config?: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | undefined;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  oneShotCliRun?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-};
-
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
-
-export const MemorySearchSchema = Type.Object({
-  query: Type.String(),
-  maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
-  minScore: optionalFiniteNumberSchema(),
-  corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
-});
-
-export const MemoryGetSchema = Type.Object({
-  path: Type.String(),
-  from: Type.Optional(Type.Integer()),
-  lines: Type.Optional(Type.Integer()),
-  corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
-});
-
-function resolveMemoryToolContext(options: MemoryToolOptions) {
-  const cfg = options.getConfig?.() ?? options.config;
-  if (!cfg) {
-    return null;
-  }
-  const { sessionAgentId: agentId } = resolveSessionAgentIds({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-    agentId: options.agentId,
-  });
-  if (!resolveMemorySearchConfig(cfg, agentId)) {
-    return null;
-  }
-  return { cfg, agentId };
-}
 
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
@@ -93,10 +52,7 @@ export async function getMemoryManagerContextWithPurpose(params: {
 
 export function createMemoryTool(params: {
   options: MemoryToolOptions;
-  label: string;
-  name: string;
-  description: string;
-  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  contract: MemoryToolContract;
   execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
@@ -104,12 +60,19 @@ export function createMemoryTool(params: {
     return null;
   }
   return {
-    label: params.label,
-    name: params.name,
-    description: params.description,
-    parameters: params.parameters,
+    label: params.contract.label,
+    name: params.contract.name,
+    description: params.contract.describe(ctx.sources),
+    parameters: params.contract.parameters,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
-      const latestCtx = resolveMemoryToolContext(params.options) ?? ctx;
+      const latestCtx = params.options.getConfig ? resolveMemoryToolContext(params.options) : ctx;
+      // A live getter makes missing or disabled current config a revocation.
+      // The captured context is valid only for fixed-snapshot callers.
+      if (!latestCtx) {
+        throw new Error(
+          "Memory is disabled for this agent. Enable memory search for this agent, then retry.",
+        );
+      }
       return await params.execute(latestCtx)(toolCallId, toolParams, signal, onUpdate);
     },
   };
@@ -155,55 +118,4 @@ export function buildMemorySearchUnavailableResult(
       error: reason,
     },
   };
-}
-
-export async function searchMemoryCorpusSupplements(params: {
-  query: string;
-  maxResults?: number;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  corpus?: "memory" | "wiki" | "all" | "sessions";
-}): Promise<MemoryCorpusSearchResult[]> {
-  if (params.corpus === "memory" || params.corpus === "sessions") {
-    return [];
-  }
-  const supplements = listMemoryCorpusSupplements();
-  if (supplements.length === 0) {
-    return [];
-  }
-  const results = (
-    await Promise.all(
-      supplements.map(async (registration) => await registration.supplement.search(params)),
-    )
-  ).flat();
-  return results
-    .toSorted((left, right) => {
-      if (left.score !== right.score) {
-        return right.score - left.score;
-      }
-      return left.path.localeCompare(right.path);
-    })
-    .slice(0, Math.max(1, params.maxResults ?? 10));
-}
-
-export async function getMemoryCorpusSupplementResult(params: {
-  lookup: string;
-  fromLine?: number;
-  lineCount?: number;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  corpus?: "memory" | "wiki" | "all" | "sessions";
-}) {
-  if (params.corpus === "memory" || params.corpus === "sessions") {
-    return null;
-  }
-  for (const registration of listMemoryCorpusSupplements()) {
-    const result = await registration.supplement.get(params);
-    if (result) {
-      return result;
-    }
-  }
-  return null;
 }

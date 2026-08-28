@@ -106,6 +106,69 @@ export function setChatSessionProjection(owner: object, projection: SessionProje
   chatSessionProjections.set(owner, projection);
 }
 
+/** Publish one exact live transcript order without dropping reducer-owned entry identity. */
+export function publishChatSessionProjectionMessages(
+  owner: ChatSessionProjectionOwner,
+  messages: readonly unknown[],
+  options: {
+    event?: SessionProjectionEvent;
+    retainSupersededMessages?: boolean;
+    scope?: SessionProjectionScope;
+  } = {},
+): SessionProjectionState {
+  const scope = options.scope ?? readChatSessionProjectionScope(owner);
+  const base = getChatSessionProjection(owner, owner.chatMessages, scope);
+  const current = options.event ? reduceSessionProjection(base, { ...options.event, scope }) : base;
+  const eventMessage = options.event?.type === "messagePersisted" ? options.event.message : null;
+  const currentMessages = new Set(current.entries.map((entry) => entry.message));
+  const supersededMessages = options.retainSupersededMessages
+    ? new Set<unknown>()
+    : new Set(
+        base.entries
+          .filter((entry) => !currentMessages.has(entry.message))
+          .map((entry) => entry.message),
+      );
+  const eventAccepted = eventMessage === null || currentMessages.has(eventMessage);
+  const acceptedMessages: unknown[] = [];
+  let eventPublished = false;
+  for (const message of messages) {
+    if (supersededMessages.has(message)) {
+      if (eventAccepted && eventMessage !== null && !eventPublished) {
+        acceptedMessages.push(eventMessage);
+        eventPublished = true;
+      }
+      continue;
+    }
+    if (message === eventMessage) {
+      if (!eventAccepted || eventPublished) {
+        continue;
+      }
+      eventPublished = true;
+    }
+    acceptedMessages.push(message);
+  }
+  const remainingEntries = [...current.entries];
+  const seeded = createSessionProjection(scope, acceptedMessages);
+  const entries = seeded.entries.map((seededEntry) => {
+    const existingIndex = remainingEntries.findIndex(
+      (entry) => entry.message === seededEntry.message,
+    );
+    if (existingIndex < 0) {
+      return seededEntry;
+    }
+    return remainingEntries.splice(existingIndex, 1)[0] ?? seededEntry;
+  });
+  const projection: SessionProjectionState = {
+    ...current,
+    scope: { ...current.scope, ...scope },
+    entries,
+    messages: entries.map((entry) => entry.message),
+  };
+  setChatSessionProjection(owner, projection);
+  owner.chatMessages = [...projection.messages];
+  return projection;
+}
+
 function adoptInitialUserMessage(
   message: unknown,
   envelope: SessionMessageEnvelope | undefined,
@@ -129,7 +192,6 @@ function adoptInitialUserMessage(
     ...authoritative,
     content: handoff.message.content,
     __openclaw: {
-      ...handoff.message["__openclaw"],
       ...authoritativeMetadata,
     },
   };
@@ -175,9 +237,9 @@ export function reduceChatSessionProjection(
     return next;
   };
   const preparedEvent =
-    event.type === "messagePersisted"
+    event.type === "messagePersisted" && handoff
       ? { ...event, message: adopt(event.message, event.envelope ?? event) }
-      : event.type === "snapshotLoaded"
+      : event.type === "snapshotLoaded" && handoff
         ? { ...event, messages: event.messages.map((message) => adopt(message)) }
         : event;
   let projection = current;

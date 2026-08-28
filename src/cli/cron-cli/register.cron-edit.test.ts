@@ -55,7 +55,38 @@ describe("cron edit command", () => {
     expect(help).toContain("--best-effort-deliver");
     expect(help).toContain("--display-name <name>");
     expect(help).toContain("--clear-display-name");
+    expect(help).toContain("--on-exit <shell>");
+    expect(help).toContain("--on-exit-cwd <path>");
+    expect(help).toContain("main|isolated|current|session:<id>");
     expect(help).toMatch(/also\s+implies --announce when used alone/);
+  });
+
+  it("accepts --json as the explicit machine-output spelling", async () => {
+    await createCronProgram().parseAsync(["edit", "job-1", "--enable", "--json"], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { enabled: true },
+    });
+  });
+
+  it("rethrows contradictory options in JSON mode without accessing the Gateway", async () => {
+    const originalArgv = process.argv;
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    process.argv = ["node", "openclaw", "cron", "edit", "job-1", "--json"];
+    try {
+      await expect(
+        createCronProgram()
+          .parseAsync(["edit", "job-1", "--enable", "--disable", "--json"], { from: "user" })
+          .then(() => undefined),
+      ).rejects.toThrow("Choose --enable or --disable, not both");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      process.argv = originalArgv;
+      exitSpy.mockRestore();
+    }
   });
 
   it("updates the human-readable display name without changing the job name", async () => {
@@ -687,6 +718,18 @@ describe("cron edit command", () => {
     );
   });
 
+  it.each([
+    ["--model", "", "--clear-model"],
+    ["--model", "   ", "--clear-model"],
+    ["--thinking", "", "--clear-thinking"],
+    ["--thinking", "   ", "--clear-thinking"],
+  ])("rejects blank %s %j combined with %s", async (flag, value, clearFlag) => {
+    await expectCronEditRejection(
+      [flag, value, clearFlag],
+      `Use ${flag} or ${clearFlag}, not both`,
+    );
+  });
+
   it("stores an explicit wildcard with --clear-tools", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {
@@ -1010,6 +1053,28 @@ describe("cron edit command", () => {
     exitSpy.mockRestore();
   });
 
+  it.each(["", "   "])("rejects blank --command-cwd %j", async (value) => {
+    await expectCronEditRejection(["--command-cwd", value], "--command-cwd must not be blank");
+  });
+
+  it("rejects blank --command-cwd before loading an existing job", async () => {
+    await expectCronEditRejection(
+      ["--pacing-min", "30m", "--command-cwd", "   "],
+      "--command-cwd must not be blank",
+    );
+  });
+
+  it.each(["", "   "])("preserves --command-input %j as command stdin", async (value) => {
+    await createCronProgram().parseAsync(["edit", "job-1", "--command-input", value], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { payload: { kind: "command", input: value } },
+    });
+  });
+
   it("rejects --webhook combined with a delivery clear flag", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
@@ -1027,6 +1092,10 @@ describe("cron edit command", () => {
 
     errorSpy.mockRestore();
     exitSpy.mockRestore();
+  });
+
+  it.each(["", "not-a-url"])("rejects invalid --webhook %j before gateway RPC", async (value) => {
+    await expectCronEditRejection(["--webhook", value], "--webhook must be a valid http(s) URL");
   });
 
   it("documents the delivery clear flags alongside the sibling --clear-model", () => {

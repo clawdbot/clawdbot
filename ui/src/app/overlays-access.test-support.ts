@@ -54,6 +54,7 @@ export function createGatewayHarness(
       return snapshot;
     },
     connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
+    connectionRevision: 0,
     eventLog: [],
     connect,
     setSessionKey() {},
@@ -121,6 +122,9 @@ export function createGatewayHarness(
     },
     gateway,
     connect,
+    replaceSnapshotWithoutPublishing(next: Partial<ApplicationGatewaySnapshot>) {
+      snapshot = { ...snapshot, ...next };
+    },
     update(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
       for (const listener of snapshotListeners) {
@@ -138,6 +142,18 @@ export async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function setupResult(setupId: string, expiresAtMs = Date.now() + 60_000) {
+  return {
+    setupId,
+    expiresAtMs,
+    setupCode: `setup-code-${setupId}`,
+    gatewayUrl: "wss://gateway.test",
+    auth: "token",
+    urlSource: "test",
+    access: "full",
+  } as const;
 }
 
 export function registerOverlayPairingAccessTests() {
@@ -192,7 +208,7 @@ export function registerOverlayPairingAccessTests() {
         await flushMicrotasks();
 
         expect(overlays.snapshot.devicePairPendingCount).toBe(2);
-        expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+        expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       } finally {
         stalePending.resolve({ pending: [] });
         overlays.dispose();
@@ -237,7 +253,7 @@ export function registerOverlayPairingAccessTests() {
       expect(request.mock.calls.filter(([method]) => method === "device.pair.list")).toHaveLength(
         2,
       );
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       overlays.dispose();
     });
 
@@ -261,7 +277,10 @@ export function registerOverlayPairingAccessTests() {
       const overlays = createApplicationOverlays(harness.gateway);
       await overlays.openDevicePairSetup();
       const mintingSetup = overlays.refreshDevicePairSetup();
-      expect(request).toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "loading",
+        access: "full",
+      });
 
       harness.update({
         hello: {
@@ -269,18 +288,27 @@ export function registerOverlayPairingAccessTests() {
         } as ApplicationGatewaySnapshot["hello"],
       });
       expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
-      expect(overlays.snapshot.devicePairSetup).toBeNull();
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "selection",
+        access: "full",
+      });
 
       setup.resolve({
+        setupId: "retired-setup",
+        expiresAtMs: Date.now() + 60_000,
         setupCode: "retired-test-setup-code",
         gatewayUrl: "ws://gateway.test",
+        auth: "token",
+        urlSource: "test",
         access: "full",
       });
       await mintingSetup;
 
       expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
-      expect(overlays.snapshot.devicePairSetup).toBeNull();
-      expect(overlays.snapshot.devicePairSetupLoading).toBe(false);
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "selection",
+        access: "full",
+      });
       expect(
         request.mock.calls.filter(([method]) => method === "device.pair.setupCode"),
       ).toHaveLength(1);
@@ -310,9 +338,12 @@ export function registerOverlayPairingAccessTests() {
       });
 
       expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
-      expect(overlays.snapshot.devicePairSetup).toBeNull();
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "selection",
+        access: "full",
+      });
       expect(overlays.snapshot.devicePairPendingCount).toBe(0);
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       overlays.dispose();
     });
 
@@ -332,7 +363,7 @@ export function registerOverlayPairingAccessTests() {
       await overlays.refreshDevicePairSetup();
 
       expect(request).not.toHaveBeenCalledWith("device.pair.list", {});
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
       overlays.dispose();
     });
@@ -353,8 +384,156 @@ export function registerOverlayPairingAccessTests() {
       await overlays.refreshDevicePairSetup();
 
       expect(request).toHaveBeenCalledWith("device.pair.list", {});
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       overlays.dispose();
     });
+
+    it("completes only the active setup from the dedicated event", async () => {
+      let setupId = "setup-first";
+      const request = vi.fn<RequestFn>((method) => {
+        if (method === "device.pair.setupCode") {
+          return Promise.resolve(setupResult(setupId));
+        }
+        return Promise.resolve(method === "device.pair.list" ? { pending: [] } : []);
+      });
+      const harness = createGatewayHarness(client(request));
+      const overlays = createApplicationOverlays(harness.gateway);
+
+      await overlays.openDevicePairSetup();
+      await overlays.refreshDevicePairSetup();
+      expect(overlays.snapshot.devicePairSetupLifecycle).toMatchObject({
+        phase: "waiting",
+        setup: { setupId: "setup-first" },
+      });
+
+      harness.emitEvent("device.pair.resolved", {
+        setupId: "setup-first",
+        deviceId: "phone-first",
+      });
+      harness.emitEvent("device.pair.setup.completed", {
+        setupId: "setup-unrelated",
+        deviceId: "phone-unrelated",
+        deviceName: "Unrelated phone",
+        access: "full",
+        ts: 1,
+      });
+      expect(overlays.snapshot.devicePairSetupLifecycle.phase).toBe("waiting");
+
+      setupId = "setup-second";
+      await overlays.refreshDevicePairSetup();
+      harness.emitEvent("device.pair.setup.completed", {
+        setupId: "setup-first",
+        deviceId: "phone-stale",
+        deviceName: "Stale phone",
+        access: "full",
+        ts: 2,
+      });
+      expect(overlays.snapshot.devicePairSetupLifecycle).toMatchObject({
+        phase: "waiting",
+        setup: { setupId: "setup-second" },
+      });
+
+      harness.emitEvent("device.pair.setup.completed", {
+        setupId: "setup-second",
+        deviceId: "phone-current",
+        deviceName: "  Operator's iPhone  ",
+        access: "limited",
+        ts: 3,
+      });
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "success",
+        deviceName: "Operator's iPhone",
+        access: "limited",
+      });
+      overlays.dispose();
+    });
+
+    it("surfaces delivery uncertainty only for the active setup", async () => {
+      const request = vi.fn<RequestFn>((method) =>
+        Promise.resolve(
+          method === "device.pair.setupCode"
+            ? setupResult("setup-current")
+            : method === "device.pair.list"
+              ? { pending: [] }
+              : [],
+        ),
+      );
+      const harness = createGatewayHarness(client(request));
+      const overlays = createApplicationOverlays(harness.gateway);
+
+      await overlays.openDevicePairSetup();
+      await overlays.refreshDevicePairSetup();
+      harness.emitEvent("device.pair.setup.deliveryUncertain", {
+        setupId: "setup-stale",
+        deviceId: "phone-stale",
+        access: "full",
+        ts: 1,
+      });
+      expect(overlays.snapshot.devicePairSetupLifecycle.phase).toBe("waiting");
+
+      harness.emitEvent("device.pair.setup.deliveryUncertain", {
+        setupId: "setup-current",
+        deviceId: "phone-current",
+        deviceName: "Phone",
+        access: "full",
+        ts: 2,
+      });
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "delivery-uncertain",
+        access: "full",
+      });
+      overlays.dispose();
+    });
+
+    it.each(["reconnect", "access revocation", "dispose"] as const)(
+      "retires the setup expiry timer on %s",
+      async (boundary) => {
+        vi.useFakeTimers();
+        vi.setSystemTime(10_000);
+        const request = vi.fn<RequestFn>((method) =>
+          Promise.resolve(
+            method === "device.pair.setupCode"
+              ? setupResult("setup-timer", 70_000)
+              : { pending: [] },
+          ),
+        );
+        const harness = createGatewayHarness(client(request));
+        harness.update({
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
+        const overlays = createApplicationOverlays(harness.gateway);
+
+        try {
+          await overlays.openDevicePairSetup();
+          await overlays.refreshDevicePairSetup();
+          expect(vi.getTimerCount()).toBe(1);
+
+          if (boundary === "reconnect") {
+            harness.update({ client: client(request) });
+          } else if (boundary === "access revocation") {
+            harness.update({
+              hello: {
+                auth: { role: "operator", scopes: ["operator.pairing"] },
+              } as ApplicationGatewaySnapshot["hello"],
+            });
+          } else {
+            overlays.dispose();
+          }
+
+          expect(vi.getTimerCount()).toBe(0);
+          if (boundary !== "dispose") {
+            expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+              phase: "selection",
+              access: "full",
+            });
+          }
+        } finally {
+          overlays.dispose();
+          vi.useRealTimers();
+        }
+      },
+    );
   });
 }

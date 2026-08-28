@@ -44,16 +44,19 @@ export function normalizeAgentCommandDefaultModelRef(
 
 export function parseAgentCommandModelRef(
   cfg: OpenClawConfig,
+  agentId: string,
   raw: string,
   defaultProvider: string,
   modelManifestContext: ModelManifestNormalizationContext,
 ) {
   const parsed = resolveModelRefFromString({
     cfg,
+    agentId,
     raw,
     defaultProvider,
     aliasIndex: buildModelAliasIndex({
       cfg,
+      agentId,
       defaultProvider,
       ...modelManifestContext,
       allowPluginNormalization: false,

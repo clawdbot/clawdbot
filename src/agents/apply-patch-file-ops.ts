@@ -10,6 +10,7 @@ import {
   FsSafeError,
   root as fsRoot,
 } from "../infra/fs-safe.js";
+import { writeHostFile } from "./host-file-write.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -25,6 +26,8 @@ export type SandboxApplyPatchConfig = {
 
 export type ApplyPatchFileOptions = {
   cwd: string;
+  /** Containment boundary when relative paths resolve from a nested cwd. */
+  root?: string;
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
@@ -86,7 +89,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       operations: {
         readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
         writeFile: async (filePath, content) => {
-          await fs.writeFile(filePath, content, "utf8");
+          await writeHostFile(filePath, content);
         },
         createFileExclusive: async (filePath, content) => {
           try {
@@ -107,7 +110,8 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
     });
   }
 
-  const rootPromise = fsRoot(options.cwd);
+  const containmentRoot = options.root ?? options.cwd;
+  const rootPromise = fsRoot(containmentRoot);
   // Mirror the read path: canonicalize contained symlink parents so a patch
   // that reads through a directory alias can also mutate through it. Escaping
   // aliases still fail the containment check against the canonical root.
@@ -123,8 +127,8 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
     } catch {
       // Keep the lexical path; the containment check below owns the failure.
     }
-    const canonicalCwd = await fs.realpath(options.cwd).catch(() => options.cwd);
-    return toRelativeSandboxPath(canonicalCwd, canonicalAbsolute, pathOptions);
+    const canonicalRoot = await fs.realpath(containmentRoot).catch(() => containmentRoot);
+    return toRelativeSandboxPath(canonicalRoot, canonicalAbsolute, pathOptions);
   };
   return withPatchMemoryWriteProvenance({
     observer: options.memoryWriteProvenance,
@@ -132,7 +136,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       readFile: async (filePath) => {
         const opened = await openRootFileFollowingParents({
           absolutePath: filePath,
-          rootPath: options.cwd,
+          rootPath: containmentRoot,
           boundaryLabel: "workspace root",
         });
         assertBoundaryRead(opened, filePath);

@@ -17,6 +17,11 @@ export const browserPanelStyles = css`
     right: var(--oc-terminal-reserve-right, 0px);
     bottom: var(--oc-terminal-reserve-bottom, 0px);
   }
+  .bp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
   .bp-actions {
     flex: none;
   }
@@ -97,11 +102,21 @@ export const browserPanelStyles = css`
   }
   .bp-viewport {
     position: relative;
+    display: flex;
     flex: 1;
     min-height: 0;
+    flex-direction: column;
     overflow: auto;
     background: var(--bg, #0e1015);
     outline: none;
+  }
+  /* The tab panel's own body must stretch, otherwise an empty state sizes to its
+     content and sits in the upper third instead of centring in the viewport. */
+  .bp-viewport::part(base) {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
   }
   .bp-stage {
     position: relative;
@@ -187,17 +202,5 @@ export const browserPanelStyles = css`
   }
   .bp-note--error {
     color: var(--danger, #ff6b6b);
-  }
-  .bp-loading {
-    position: absolute;
-    top: 8px;
-    right: 12px;
-    z-index: 3;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    color: var(--muted, #8a919e);
-    background: color-mix(in srgb, var(--bg, #0e1015) 80%, transparent);
-    border: 1px solid var(--border, #262b34);
   }
 `;

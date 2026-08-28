@@ -1,0 +1,152 @@
+/* Dash palette; selected by index.html and app/theme.ts. */
+
+:root[data-theme="dash"] {
+  /*
+   * Accent — toasted caramel on deep cocoa
+   *
+   * WCAG 2.1 AA audit (bg = #1a1210, relative luminance ≈ 0.0069):
+   *   --accent #cf8b4d  contrast ≈ 6.55:1  AA text ✓ (on --card #221a16: 6.07:1 ✓)
+   *   --accent-hover #dd9c60  contrast ≈ 7.9:1  ✓
+   *   --primary-foreground #1a1210 on #cf8b4d button: 6.55:1 AA ✓
+   *   --primary-foreground #1a1210 on #dd9c60 hover: 7.9:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
+   *   focus-ring at 80% opacity: ≈ 4.1:1 against bg ✓ (non-text 3:1 required)
+   */
+  --ring: #cf8b4d;
+  --accent: #cf8b4d;
+  --accent-hover: #dd9c60;
+  --accent-muted: #cf8b4d;
+  --accent-subtle: rgba(207, 139, 77, 0.14);
+  --accent-glow: rgba(207, 139, 77, 0.22);
+  --primary: #cf8b4d;
+  --primary-foreground: #1a1210;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  /* Focus — match caramel accent, slightly higher ring opacity for dark bg visibility */
+  --focus: rgba(207, 139, 77, 0.2);
+
+  /* Surfaces — deep cocoa tones */
+  --bg: #1a1210;
+  --bg-accent: #201816;
+  --bg-elevated: #28201c;
+  --bg-hover: #302822;
+  --bg-muted: #302822;
+
+  --card: #221a16;
+  --card-foreground: #ece0d8;
+  --card-highlight: rgba(255, 240, 225, 0.04);
+  --popover: #28201c;
+  --popover-foreground: #ece0d8;
+
+  --panel: #1a1210;
+  --panel-strong: #28201c;
+  --panel-hover: #302822;
+  --chrome: rgba(26, 18, 16, 0.96);
+  --chrome-strong: rgba(26, 18, 16, 0.98);
+
+  --text: #d8c8b8;
+  --text-strong: #f0e4da;
+  --chat-text: #d8c8b8;
+  --muted: #a18f80;
+  --muted-strong: #a08f7f;
+  --muted-foreground: #a18f80;
+
+  --border: #362a1c;
+  --border-strong: #4c3e2c;
+  --border-hover: #62513c;
+  --input: #362a1c;
+
+  --secondary: #221a16;
+  --secondary-foreground: #ece0d8;
+  /* Gold cream, a clear step off the caramel accent (9.8:1 on bg) so the two
+     voices no longer blur into one brown. */
+  --accent-2: #dcb878;
+  --accent-2-muted: rgba(220, 184, 120, 0.7);
+  --accent-2-subtle: rgba(220, 184, 120, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(10, 6, 4, 0.35);
+  --shadow-md: 0 4px 16px rgba(10, 6, 4, 0.45);
+  --shadow-lg: 0 12px 32px rgba(10, 6, 4, 0.55);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(255, 240, 225, 0.03);
+  /* Typography — DM Sans chrome, Fraunces chat prose (fonts/dm-sans.css + fonts/fraunces.css): the
+     Absolutely recipe tuned warm. Fallbacks keep text painting on failure. */
+  --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: "Fraunces", Georgia, "Times New Roman", serif;
+}
+
+:root[data-theme="dash-light"] {
+  /*
+   * Accent — toasted sienna on warm parchment
+   *
+   * WCAG 2.1 AA audit (bg = #f7f2ec, relative luminance ≈ 0.893):
+   *   --accent #8a512c  contrast ≈ 5.7:1  AA text ✓
+   *   --accent-hover #74421f  contrast ≈ 7.4:1  AAA ✓
+   *   --primary-foreground #ffffff on #8a512c button: 6.4:1 AA ✓
+   *   focus-ring at 70% opacity: ≈ 3.3:1 against parchment bg ✓
+   */
+  --ring: #8a512c;
+  --accent: #8a512c;
+  --accent-hover: #74421f;
+  --accent-muted: #8a512c;
+  --accent-subtle: rgba(138, 81, 44, 0.12);
+  --accent-glow: rgba(138, 81, 44, 0.16);
+  --primary: #8a512c;
+
+  /* Surfaces — warm parchment tones */
+  --bg: #f7f2ec;
+  --bg-accent: #f0e8e0;
+  --bg-hover: #e8ddd2;
+  --bg-muted: #e8ddd2;
+  --bg-content: #f0e8e0;
+
+  --card-foreground: #2c2118;
+  --card-highlight: rgba(80, 50, 20, 0.02);
+  --popover-foreground: #2c2118;
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 48%,
+    var(--panel-strong) 52%
+  );
+
+  --panel: #f7f2ec;
+  --panel-strong: #f0e8e0;
+  --panel-hover: #e0d4c8;
+  --chrome: rgba(247, 242, 236, 0.96);
+  --chrome-strong: rgba(247, 242, 236, 0.98);
+
+  --text: #4a3828;
+  --text-strong: #2c2118;
+  --chat-text: #4a3828;
+  --muted: #725d4d;
+  --muted-strong: #604838;
+  --muted-foreground: #725d4d;
+
+  --border: #ddd0c2;
+  --border-strong: #c8b8a6;
+  --border-hover: #b0a090;
+  --input: #ddd0c2;
+
+  --secondary: #f0e8e0;
+  --secondary-foreground: #4a3828;
+  /* Antique gold mirrors the dark variant's second voice (5.3:1 on bg). */
+  --accent-2: #7d6027;
+  --accent-2-muted: rgba(125, 96, 39, 0.75);
+  --accent-2-subtle: rgba(125, 96, 39, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(60, 40, 20, 0.06);
+  --shadow-md: 0 4px 12px rgba(60, 40, 20, 0.08);
+  --shadow-lg: 0 12px 28px rgba(60, 40, 20, 0.1);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(80, 50, 20, 0.04);
+  /* Typography — DM Sans chrome, Fraunces chat prose (fonts/dm-sans.css + fonts/fraunces.css); see the
+     dark block. */
+  --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: "Fraunces", Georgia, "Times New Roman", serif;
+}

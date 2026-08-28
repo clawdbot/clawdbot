@@ -1,6 +1,7 @@
 // withTelegramPlainFallback owns formatted-to-plain recovery for durable sends,
 // final replies, and draft previews. A second orchestrator reintroduces silent drift.
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js";
 
 // Any RICH_MESSAGE_*_INVALID rejection (entities, media, depth) degrades to
@@ -76,14 +77,7 @@ export function splitTelegramPlainTextChunks(text: string, limit: number): strin
     return [];
   }
   const normalizedLimit = Math.max(1, Math.floor(limit));
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    const end = surrogateSafeChunkEnd(text, start + normalizedLimit, start);
-    chunks.push(text.slice(start, end));
-    start = end;
-  }
-  return chunks;
+  return chunkTextForOutbound(text, normalizedLimit, { preserveWhitespace: true });
 }
 
 function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit: number): string[] {

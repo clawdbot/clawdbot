@@ -4,7 +4,7 @@ import {
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Compile } from "typebox/compile";
+import { Compile } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 type LocalRefResolution =
@@ -15,6 +15,7 @@ type LocalRefResolution =
       resourceBaseId: string | undefined;
     }
   | { found: false };
+type JsonSchemaNode = JsonSchemaValue | JsonSchemaNode[];
 const schemaResourceIds = new WeakMap<object, number>();
 let nextSchemaResourceId = 1;
 const schemaMapKeywords = new Set([
@@ -670,18 +671,26 @@ function inlineLocalRefsForMatch(
   root: JsonSchemaValue,
   resourceRoot: JsonSchemaValue,
   resourceBaseId: string | undefined,
+  resolvingRefs?: Set<string>,
+): JsonSchemaValue;
+function inlineLocalRefsForMatch(
+  schema: JsonSchemaNode,
+  root: JsonSchemaValue,
+  resourceRoot: JsonSchemaValue,
+  resourceBaseId: string | undefined,
+  resolvingRefs?: Set<string>,
+): JsonSchemaNode;
+function inlineLocalRefsForMatch(
+  schema: JsonSchemaNode,
+  root: JsonSchemaValue,
+  resourceRoot: JsonSchemaValue,
+  resourceBaseId: string | undefined,
   resolvingRefs = new Set<string>(),
-): JsonSchemaValue {
+): JsonSchemaNode {
   if (Array.isArray(schema)) {
     return schema.map((entry) =>
-      inlineLocalRefsForMatch(
-        entry as JsonSchemaValue,
-        root,
-        resourceRoot,
-        resourceBaseId,
-        resolvingRefs,
-      ),
-    ) as unknown as JsonSchemaValue;
+      inlineLocalRefsForMatch(entry, root, resourceRoot, resourceBaseId, resolvingRefs),
+    );
   }
   if (!isRecord(schema)) {
     return schema;

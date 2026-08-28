@@ -9,6 +9,7 @@ import {
 } from "../../components/provider-icon.ts";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/model-setup.css";
 import {
   failureLabel,
@@ -84,6 +85,7 @@ type ModelSetupViewProps = {
   canAdmin: boolean;
   canVerify: boolean;
   canPrepare: boolean;
+  modelConfigured?: boolean;
   gatewayTooOld: boolean;
   refreshWarning: string | null;
   actionsDisabled: boolean;
@@ -160,7 +162,9 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
                   <strong>${candidate.label}</strong>
                   <span class="model-setup__chip">${candidateStatus(candidate)}</span>
                 </div>
-                <div class="muted">${candidate.modelRef} · ${candidate.detail}</div>
+                <div class="muted">
+                  ${candidate.modelRef} · ${formatUiExternalText(candidate.detail)}
+                </div>
                 ${testing
                   ? html`<div class="model-setup__testing" role="status">
                       ${t("modelSetup.candidates.testing", { modelRef: candidate.modelRef })}
@@ -250,8 +254,10 @@ function renderUnavailable(props: ModelSetupViewProps, result: SystemAgentSetupD
               <div class="model-setup__provider-copy">
                 ${renderProviderIcon(props, candidate)}
                 <div>
-                  <div><strong>${candidate.label}</strong> — ${candidate.detail}</div>
-                  <div class="muted">${candidate.reason}</div>
+                  <div>
+                    <strong>${candidate.label}</strong> — ${formatUiExternalText(candidate.detail)}
+                  </div>
+                  <div class="muted">${formatUiExternalText(candidate.reason)}</div>
                 </div>
               </div>
               <div class="model-setup__row-actions">
@@ -576,6 +582,74 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
   `;
 }
 
+function renderLoadingSection(params: {
+  title: string;
+  rows?: number;
+  intro?: string;
+  className?: string;
+  status?: string;
+}) {
+  return html`
+    <section class=${`settings-section ${params.className ?? ""}`.trim()}>
+      <div class="settings-section__header"><h2>${params.title}</h2></div>
+      ${params.intro ? html`<p class="muted">${params.intro}</p>` : nothing}
+      <div class="model-setup__rows">
+        ${Array.from(
+          { length: params.rows ?? 1 },
+          (_, index) => html`
+            <div class="model-setup__row model-setup__loading-row">
+              <span class="model-setup__loading-icon skeleton"></span>
+              <span class="model-setup__loading-copy">
+                ${index === 0 && params.status
+                  ? html`<span class="model-setup__loading-status">${params.status}</span>`
+                  : html`<span class="skeleton skeleton-line skeleton-line--medium"></span>`}
+                <span class="skeleton skeleton-line skeleton-line--long"></span>
+              </span>
+              <span class="model-setup__loading-action skeleton"></span>
+            </div>
+          `,
+        )}
+      </div>
+    </section>
+  `;
+}
+
+function renderLoading(modelConfigured: boolean) {
+  return html`
+    <div
+      class="model-setup__loading"
+      role="status"
+      aria-busy="true"
+      aria-label=${t("modelSetup.loading")}
+    >
+      <div class="model-setup__loading-sections" aria-hidden="true">
+        ${modelConfigured
+          ? renderLoadingSection({
+              title: t("modelSetup.verify.title"),
+              className: "model-setup__loading-section--selected",
+              status: t("modelSetup.loading"),
+            })
+          : nothing}
+        ${renderLoadingSection({
+          title: t("modelSetup.candidates.title"),
+          className: "model-setup__loading-section--candidates",
+          status: modelConfigured ? undefined : t("modelSetup.loading"),
+        })}
+        ${renderLoadingSection({
+          title: t("modelSetup.prepare.title"),
+          intro: t("modelSetup.prepare.intro"),
+          rows: 2,
+        })}
+        ${renderLoadingSection({
+          title: t("modelSetup.signIn.title"),
+          className: "model-setup__loading-section--sign-in",
+        })}
+        ${renderLoadingSection({ title: t("modelSetup.manual.title") })}
+      </div>
+    </div>
+  `;
+}
+
 export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
   let body: unknown;
   if (props.page.phase === "ready") {
@@ -589,7 +663,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       ${t("modelSetup.access.gatewayTooOld")}
     </div>`;
   } else if (props.page.phase === "loading") {
-    body = html`<div class="model-setup__loading" role="status">${t("modelSetup.loading")}</div>`;
+    body = renderLoading(props.modelConfigured === true);
   } else if (props.page.phase === "detect-error") {
     body = html`
       <div class="callout danger" role="alert">${props.page.message}</div>

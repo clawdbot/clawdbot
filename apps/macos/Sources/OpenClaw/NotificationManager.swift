@@ -68,3 +68,46 @@ struct NotificationManager {
         }
     }
 }
+
+enum TestNotificationOutcome: Encodable, Equatable {
+    case pending
+    case sent
+    case error(String)
+
+    private enum State: String, Encodable {
+        case pending
+        case sent
+        case error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case message
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .pending:
+            try container.encode(State.pending, forKey: .state)
+        case .sent:
+            try container.encode(State.sent, forKey: .state)
+        case let .error(message):
+            try container.encode(State.error, forKey: .state)
+            try container.encode(message, forKey: .message)
+        }
+    }
+}
+
+@MainActor
+enum TestNotificationAction {
+    static func send() async -> TestNotificationOutcome {
+        let sent = await NotificationManager().send(
+            title: "OpenClaw",
+            body: "Test notification",
+            sound: nil)
+        return sent
+            ? .sent
+            : .error("Notification could not be sent. Check System Settings → Notifications and try again.")
+    }
+}

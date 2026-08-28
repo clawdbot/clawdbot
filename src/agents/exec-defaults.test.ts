@@ -1,9 +1,14 @@
 // Verifies exec host, sandbox, and approval-default resolution for embedded agents.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { resolveExecDefaults, resolveNodeExecEligibility } from "./exec-defaults.js";
+
+const execStoreDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function withDefaultAgent(config: OpenClawConfig): OpenClawConfig {
   return {
@@ -52,6 +57,47 @@ describe("resolveExecDefaults", () => {
     expect(defaults.effectiveHost).toBe("sandbox");
     expect(defaults.canRequestNode).toBe(false);
   });
+
+  it.each(["gateway", "node"] as const)(
+    "keeps required sessions sandboxed and hides nodes despite configured host=%s",
+    async (host) => {
+      const sessionKey = "agent:main:guest";
+      const storePath = path.join(execStoreDirs.make("openclaw-required-exec-"), "sessions.json");
+      const sessionEntry = {
+        sessionId: "guest-session",
+        updatedAt: 1,
+        sandbox: "required" as const,
+      };
+      await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+      const cfg = withDefaultAgent({
+        session: { store: storePath },
+        agents: { defaults: { sandbox: { mode: "off" } } },
+        tools: { exec: { host } },
+      });
+
+      expect(resolveExecDefaults({ cfg, sessionKey, sandboxAvailable: true })).toMatchObject({
+        host: "auto",
+        effectiveHost: "sandbox",
+        canRequestNode: false,
+      });
+      expect(resolveExecDefaults({ cfg, sessionEntry, sandboxAvailable: true })).toMatchObject({
+        host: "auto",
+        effectiveHost: "sandbox",
+        canRequestNode: false,
+      });
+      expect(
+        resolveExecDefaults({
+          cfg,
+          sessionKey,
+          sandboxAvailable: true,
+          elevatedRequested: true,
+        }).effectiveHost,
+      ).toBe("sandbox");
+      expect(resolveNodeExecEligibility({ cfg, sessionKey, sandboxAvailable: true }).canExec).toBe(
+        false,
+      );
+    },
+  );
 
   it("keeps node routing available when exec host is auto without sandbox", () => {
     const defaults = resolveExecDefaults({
@@ -236,6 +282,29 @@ describe("resolveExecDefaults", () => {
     });
   });
 
+  it("keeps an explicit full session at full/off despite host approval floors", () => {
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "always",
+      },
+      agents: {},
+    });
+
+    expect(
+      resolveExecDefaults({
+        cfg: withDefaultAgent({}),
+        sessionEntry: { permissionMode: "full" } as SessionEntry,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "full",
+      security: "full",
+      ask: "off",
+    });
+  });
+
   it("keeps agent mode overrides ahead of the global mode", () => {
     expect(
       resolveExecDefaults({
@@ -336,6 +405,18 @@ describe("resolveExecDefaults", () => {
         }),
       }),
     ).toEqual({ canExec: false, node: "build-mac" });
+  });
+
+  it("uses an explicitly loaded approval snapshot for read-only callers", () => {
+    const load = vi.mocked(execApprovals.loadExecApprovals);
+
+    expect(
+      resolveNodeExecEligibility({
+        cfg: withDefaultAgent({ tools: { exec: { host: "node", mode: "full" } } }),
+        execApprovals: { version: 1, defaults: { security: "deny" }, agents: {} },
+      }),
+    ).toEqual({ canExec: false });
+    expect(load).not.toHaveBeenCalled();
   });
 
   it("blocks node skill eligibility when the gateway denies system.run", () => {

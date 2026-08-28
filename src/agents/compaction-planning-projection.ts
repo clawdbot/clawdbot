@@ -1,4 +1,5 @@
 /** Builds bounded transcript projections for compaction worker planning. */
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "./runtime/index.js";
 
@@ -7,6 +8,7 @@ const TEXT_SAMPLE_CHARS = 8_192;
 const PLANNING_MAX_CHARS = 256 * 1024;
 const MAX_ARGUMENT_ESTIMATE_CHARS = 1_000_000;
 const UNMEASURABLE_ARGUMENT_OMITTED_CHARS = Number.MAX_SAFE_INTEGER;
+// Omitted chars use token-estimate weights; payload limits remain raw serialized lengths.
 const OMITTED_CHARS_FIELD = "__openclawCompactionPlanningOmittedChars";
 
 type ProjectionBudget = {
@@ -14,7 +16,7 @@ type ProjectionBudget = {
 };
 
 export function readCompactionPlanningOmittedChars(message: AgentMessage): number {
-  const value = (message as unknown as Record<string, unknown>)[OMITTED_CHARS_FIELD];
+  const value = Reflect.get(message, OMITTED_CHARS_FIELD);
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
@@ -30,11 +32,15 @@ function projectText(
   budget.remainingChars -= sample.length;
   return {
     text: sample,
-    omittedChars: text.length - sample.length,
+    omittedChars: estimateStringChars(text.slice(sample.length)),
   };
 }
 
-function jsonStringLengthWithin(text: string, maxChars: number): number | undefined {
+function jsonStringLengthWithin(
+  text: string,
+  maxChars: number,
+  estimate: { cjkChars: number },
+): number | undefined {
   let length = 2;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? "";
@@ -64,16 +70,18 @@ function jsonStringLengthWithin(text: string, maxChars: number): number | undefi
       return undefined;
     }
   }
+  estimate.cjkChars += estimateStringChars(text) - text.length;
   return length;
 }
 
 function jsonLengthWithin(
   value: unknown,
   maxChars: number,
+  estimate: { cjkChars: number },
   seen = new Set<object>(),
 ): number | undefined {
   if (typeof value === "string") {
-    return jsonStringLengthWithin(value, maxChars);
+    return jsonStringLengthWithin(value, maxChars, estimate);
   }
   if (value === null) {
     return 4;
@@ -91,7 +99,12 @@ function jsonLengthWithin(
   if (Array.isArray(value)) {
     for (const entry of value) {
       const separatorLength = length === 2 ? 0 : 1;
-      const entryLength = jsonLengthWithin(entry, maxChars - length - separatorLength, seen);
+      const entryLength = jsonLengthWithin(
+        entry,
+        maxChars - length - separatorLength,
+        estimate,
+        seen,
+      );
       if (entryLength === undefined) {
         return undefined;
       }
@@ -107,10 +120,11 @@ function jsonLengthWithin(
         continue;
       }
       const separatorLength = length === 2 ? 0 : 1;
-      const keyLength = jsonStringLengthWithin(key, maxChars - length - separatorLength);
+      const keyLength = jsonStringLengthWithin(key, maxChars - length - separatorLength, estimate);
       const entryLength = jsonLengthWithin(
         record[key],
         maxChars - length - separatorLength - (keyLength ?? 0) - 1,
+        estimate,
         seen,
       );
       if (keyLength === undefined || entryLength === undefined) {
@@ -127,16 +141,18 @@ function jsonLengthWithin(
 }
 
 function projectToolArguments(value: unknown, budget: ProjectionBudget): number | undefined {
-  const length = jsonLengthWithin(value, budget.remainingChars);
-  if (length !== undefined) {
+  const estimate = { cjkChars: 0 };
+  const length = jsonLengthWithin(value, MAX_ARGUMENT_ESTIMATE_CHARS, estimate);
+  if (length !== undefined && length <= budget.remainingChars) {
     budget.remainingChars -= length;
     return undefined;
   }
   budget.remainingChars = 0;
   // Unmeasurable arguments must force an oversized plan, never understate token pressure.
-  return (
-    jsonLengthWithin(value, MAX_ARGUMENT_ESTIMATE_CHARS) ?? UNMEASURABLE_ARGUMENT_OMITTED_CHARS
-  );
+  // The replacement {} already contributes two chars to the projected estimate.
+  return length === undefined
+    ? UNMEASURABLE_ARGUMENT_OMITTED_CHARS
+    : length + estimate.cjkChars - 2;
 }
 
 function projectContentBlock(
@@ -204,11 +220,10 @@ function projectStringFields(
   fields: readonly string[],
   budget: ProjectionBudget,
 ): AgentMessage {
-  const record = message as unknown as Record<string, unknown>;
   let omittedChars = readCompactionPlanningOmittedChars(message);
-  let next: Record<string, unknown> | undefined;
+  let next: AgentMessage | undefined;
   for (const field of fields) {
-    const value = record[field];
+    const value = Reflect.get(message, field);
     if (typeof value !== "string") {
       continue;
     }
@@ -216,13 +231,11 @@ function projectStringFields(
     if (!projected) {
       continue;
     }
-    next ??= { ...record };
-    next[field] = projected.text;
+    next ??= { ...message };
+    Reflect.set(next, field, projected.text);
     omittedChars += projected.omittedChars;
   }
-  return next
-    ? ({ ...next, [OMITTED_CHARS_FIELD]: omittedChars } as unknown as AgentMessage)
-    : message;
+  return next ? Object.assign(next, { [OMITTED_CHARS_FIELD]: omittedChars }) : message;
 }
 
 function projectMessage(message: AgentMessage, budget: ProjectionBudget): AgentMessage {
@@ -268,11 +281,10 @@ function projectMessage(message: AgentMessage, budget: ProjectionBudget): AgentM
   if (!changed) {
     return source;
   }
-  return {
-    ...(source as unknown as Record<string, unknown>),
+  return Object.assign({}, source, {
     content: projectedContent,
     [OMITTED_CHARS_FIELD]: readCompactionPlanningOmittedChars(source) + omittedChars,
-  } as unknown as AgentMessage;
+  });
 }
 
 export function projectCompactionPlanningMessages(messages: AgentMessage[]): AgentMessage[] {

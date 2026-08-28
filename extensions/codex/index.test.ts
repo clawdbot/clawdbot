@@ -1,5 +1,6 @@
 // Codex tests cover index plugin behavior.
 import fs from "node:fs";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import openAIPlugin from "../openai/index.js";
@@ -17,6 +18,12 @@ import { CODEX_SUPERVISION_COMPAT_TOOL_NAMES } from "./src/supervision-tools.js"
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
 const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
+const explicitAgentConfig = {
+  agents: {
+    ownership: "explicit",
+    entries: { main: {}, clawblocker: {}, blockdigest: {} },
+  },
+} as OpenClawConfig;
 
 function createCodexTestRuntime(
   current?: () => unknown,
@@ -55,7 +62,7 @@ describe("codex plugin", () => {
     expect(manifest.providers).toBeUndefined();
   });
 
-  it("does not open plugin state while registering with the base runtime", () => {
+  it("does not select an agent or open plugin state while registering", () => {
     const openSyncKeyedStore = vi.fn(() => {
       throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
     });
@@ -66,13 +73,65 @@ describe("codex plugin", () => {
           id: "codex",
           name: "Codex",
           source: "test",
-          config: {},
+          config: explicitAgentConfig,
           pluginConfig: {},
           runtime: { state: { openSyncKeyedStore } } as never,
         }),
       ),
     ).not.toThrow();
     expect(openSyncKeyedStore).not.toHaveBeenCalled();
+  });
+
+  it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
+    const registerAgentHarness = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
+    const registerSessionCatalog = vi.fn();
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: explicitAgentConfig,
+          pluginConfig: {},
+          runtime: createCodexTestRuntime(() => explicitAgentConfig),
+          registerAgentHarness,
+          registerNodeHostCommand,
+          registerNodeInvokePolicy,
+          registerSessionCatalog,
+        }),
+      ),
+    ).not.toThrow();
+
+    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerSessionCatalog).toHaveBeenCalledOnce();
+    expect(registerNodeHostCommand.mock.calls.map(([command]) => command.command)).toEqual(
+      expect.arrayContaining([
+        "codex.appServer.threads.list.v1",
+        "codex.appServer.thread.turns.list.v1",
+        "codex.terminal.resume.v1",
+        "codex.exec-server.stdio.v1",
+      ]),
+    );
+    const nodeExecServerCommand = registerNodeHostCommand.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.command === "codex.exec-server.stdio.v1");
+    expect(nodeExecServerCommand).toMatchObject({
+      command: "codex.exec-server.stdio.v1",
+      cap: "codex.exec-server",
+      dangerous: true,
+      duplex: true,
+    });
+    const nodeExecServerPolicy = registerNodeInvokePolicy.mock.calls
+      .map(([policy]) => policy)
+      .find((policy) => policy.commands.includes("codex.exec-server.stdio.v1"));
+    expect(nodeExecServerPolicy).toMatchObject({
+      commands: ["codex.exec-server.stdio.v1"],
+      dangerous: true,
+    });
+    expect(nodeExecServerPolicy.defaultPlatforms).toBeUndefined();
   });
 
   it("proactively monitors an explicitly configured remote websocket app-server", () => {
@@ -95,12 +154,14 @@ describe("codex plugin", () => {
       }),
     );
 
-    expect(registerService).toHaveBeenCalledOnce();
-    expect(mockCallArg(registerService)).toMatchObject({
-      id: "codex-app-server-connection-health",
-      start: expect.any(Function),
-      stop: expect.any(Function),
-    });
+    expect(registerService).toHaveBeenCalledTimes(2);
+    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+      expect.objectContaining({
+        id: "codex-app-server-connection-health",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      }),
+    );
   });
 
   it("does not start remote connection monitoring for local Codex transports", () => {
@@ -119,7 +180,12 @@ describe("codex plugin", () => {
         }),
       );
 
-      expect(registerService).not.toHaveBeenCalled();
+      expect(registerService).toHaveBeenCalledOnce();
+      expect(mockCallArg(registerService)).toMatchObject({
+        id: "codex-desktop-generation",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      });
     }
   });
 
@@ -157,6 +223,9 @@ describe("codex plugin", () => {
     );
 
     const agentHarnessRegistration = mockCallArg(registerAgentHarness) as Record<string, unknown>;
+    const agentHarnessOptions = mockCallArg(registerAgentHarness, 0, 1) as
+      | Record<string, unknown>
+      | undefined;
     const mediaProviderRegistration = mockCallArg(registerMediaUnderstandingProvider) as
       | Record<string, unknown>
       | undefined;
@@ -171,6 +240,8 @@ describe("codex plugin", () => {
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
       visibleReplies: "message_tool",
     });
+    expect(agentHarnessRegistration.compactNative).toBeUndefined();
+    expect(typeof agentHarnessOptions?.nativeCompaction).toBe("function");
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
     expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
     expect(typeof agentHarnessRegistration.loadMcpToolCatalog).toBe("function");
@@ -222,7 +293,7 @@ describe("codex plugin", () => {
         id: "codex",
         name: "Codex",
         source: "test",
-        config: {},
+        config: explicitAgentConfig,
         pluginConfig: { sessionCatalog: { enabled: false } },
         runtime: createCodexTestRuntime(),
         registerAgentHarness,
@@ -242,7 +313,11 @@ describe("codex plugin", () => {
     const nodeCommands = registerNodeHostCommand.mock.calls.map(
       ([command]) => (command as { command: string }).command,
     );
-    expect(nodeCommands).toEqual(["codex.cli.sessions.list", "codex.cli.session.resume"]);
+    expect(nodeCommands).toEqual([
+      "codex.cli.sessions.list",
+      "codex.cli.session.resume",
+      "codex.exec-server.stdio.v1",
+    ]);
     expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
     expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
     expect(registerSessionCatalog).not.toHaveBeenCalled();
@@ -894,6 +969,7 @@ describe("codex plugin", () => {
         },
       },
     };
+    const runtime = createCodexTestRuntime(() => liveConfig);
     plugin.register(
       createTestPluginApi({
         id: "codex",
@@ -901,7 +977,7 @@ describe("codex plugin", () => {
         source: "test",
         config: {},
         pluginConfig: { codexPlugins: { enabled: false } },
-        runtime: createCodexTestRuntime(() => liveConfig),
+        runtime,
         registerAgentHarness,
         registerCommand: vi.fn(),
         registerMediaUnderstandingProvider: vi.fn(),
@@ -923,6 +999,8 @@ describe("codex plugin", () => {
       {
         bindingStore: expect.any(Object),
         pluginConfig: liveConfig.plugins.entries.codex.config,
+        runtime,
+        runtimeModelId: undefined,
         nativeHookRelay: { enabled: true },
       },
     );

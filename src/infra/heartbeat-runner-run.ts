@@ -1,3 +1,4 @@
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
@@ -7,7 +8,6 @@ import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js"
 import {
   isHeartbeatTypingEnabled,
   heartbeatLog,
-  resolveHeartbeatAckMaxChars,
   resolveHeartbeatChannelPlugin,
   resolveHeartbeatTypingIntervalSeconds,
 } from "./heartbeat-runner-config.js";
@@ -41,7 +41,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   if (prepared.kind === "skipped") {
     return { status: "skipped", reason: prepared.reason };
   }
-  const { cfg, agentId, heartbeat, startedAt } = wake;
+  const { cfg, agentId, startedAt } = wake;
   const { delivery, visibility, replyPrefix, runSessionKey } = prepared;
   const { outboundPolicySessionKey, hasRelayableExecCompletion } = prepared;
 
@@ -143,21 +143,15 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   try {
     await heartbeatTyping?.onReplyStart();
     const agentRun = await invokeHeartbeatAgentRun(opts, wake, prepared);
-    if (agentRun.kind === "busy") {
-      emitHeartbeatEvent({
-        status: "skipped",
-        reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-        durationMs: Date.now() - startedAt,
-      });
-      return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
-    }
-    if (agentRun.kind === "preempted") {
-      emitHeartbeatEvent({
-        status: "skipped",
-        reason: HEARTBEAT_SKIP_PREEMPTED,
-        durationMs: Date.now() - startedAt,
-      });
-      return { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED };
+    if (agentRun.kind !== "completed") {
+      const reason =
+        agentRun.kind === "busy"
+          ? HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
+          : agentRun.kind === "preempted"
+            ? HEARTBEAT_SKIP_PREEMPTED
+            : "agent-runner-cancelled";
+      emitHeartbeatEvent({ status: "skipped", reason, durationMs: Date.now() - startedAt });
+      return { status: "skipped", reason };
     }
     const outcome = classifyHeartbeatAgentOutcome({
       agentRun,
@@ -168,7 +162,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           ctx: { ChatType: delivery.chatType, Provider: delivery.channel },
         }) === "message_tool_only",
       responsePrefix: resolveHeartbeatResponsePrefix(),
-      ackMaxChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
+      ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     });
     return await finalizeHeartbeatOutcome({
       opts,

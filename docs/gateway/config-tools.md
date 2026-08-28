@@ -23,7 +23,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | Profile     | Includes                                                                                                                                                                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`   | `session_status` only                                                                                                                                                                                                                                   |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`                |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`              |
 | `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
 | `full`      | No restriction (same as unset)                                                                                                                                                                                                                          |
 
@@ -42,7 +42,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                   |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`                                                                                                                                                     |
+| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
 | `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                     |
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                    |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
@@ -61,6 +61,8 @@ Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` 
 - exact MCP server tool names or server globs such as `outlook__send_mail` or `outlook__*` when you only want one server
 
 Server globs use the provider-safe MCP server prefix, not necessarily the raw `mcp.servers` key. Non-`[A-Za-z0-9_-]` characters become `-`, names that do not start with a letter get an `mcp-` prefix, and long or duplicate prefixes may be truncated or suffixed; for example, `mcp.servers["Outlook Graph"]` uses a glob like `outlook-graph__*`.
+
+Per-run `toolsAllow` caps also accept globs such as `outlook*` or `out*graph*` for configured MCP servers. These globs can trigger catalog discovery across all enabled static MCP servers, just like `outlook__*`; they do not limit which servers connect. Discovery is conservative and can run even when no tool ultimately matches. Final tool allow/deny and sandbox policies still apply, disabled servers remain excluded unless explicitly enabled by a session override, and requester-scoped servers still require their verified requester context.
 
 ```json5
 {
@@ -90,17 +92,16 @@ catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
 
-`enabled` defaults to `"auto"`, which engages code mode only for models whose
-catalog entry flags `compat.codeMode: "preferred"`. See
+`enabled` defaults to `false`, including when the object sets other Code Mode
+options. To engage code mode only for models whose catalog entry flags
+`compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
 [Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
-
-To opt out for every run:
 
 ```json5
 {
   tools: {
     codeMode: {
-      enabled: false,
+      enabled: "auto",
     },
   },
 }
@@ -110,7 +111,7 @@ The shorthand is also accepted:
 
 ```json5
 {
-  tools: { codeMode: false },
+  tools: { codeMode: "auto" },
 }
 ```
 
@@ -144,6 +145,14 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
 <Note>
 `allow` and `alsoAllow` cannot both be set in the same scope (`tools`, `tools.byProvider.<id>`, `agents.entries.*.tools`) — config validation rejects it. Merge `alsoAllow` entries into `allow`, or drop `allow` and use `profile` + `alsoAllow` instead.
 </Note>
+
+The image inspection tool is `view_image`. If an older config still names
+`image` in an allow, `alsoAllow`, or deny list, run `openclaw doctor --fix` to
+rewrite supported global, per-agent, provider, sandbox, sender, channel, and
+Gateway policy surfaces. Doctor preserves patterns such as `image*` that may
+still match other tools and adds `view_image` when the pattern no longer covers
+inspection. Patterns that already cover both names, such as `*` or `*image*`,
+remain unchanged.
 
 ### `tools.byProvider`
 
@@ -203,6 +212,56 @@ Controls elevated exec access outside the sandbox:
 - `/elevated on|off|ask|full` stores state per session; inline directives apply to single message.
 - Elevated `exec` bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).
 
+### `tools.github`
+
+GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
+
+Use **Agents → Tools → GitHub Identity → Connect GitHub** for the recommended setup. OpenClaw displays a one-time user code and a fixed link to `https://github.com/login/device`; you open GitHub explicitly and approve `repo`, `workflow`, `read:org`, and `gist`. The latter two are part of GitHub CLI's minimum classic-token contract. The Gateway owns the device code, token exchange, account verification, private managed `gh` profile, and rotating refresh token. None of those credentials enter browser responses, config, logs, command arguments, transcripts, or model environments.
+
+OAuth access tokens expire after about eight hours. The Gateway refreshes them before expiry, verifies the durable GitHub account ID, and atomically replaces the credential inside the same private profile so already-running local tools continue using that identity. An expired or rejected refresh token is shown as **Reconnect required**. Refresh never blocks Gateway startup.
+
+**Use a PAT instead** preserves the fine-grained personal access token setup as an explicit fallback. The browser places the pasted token in the secret store as a one-use handoff. The Gateway hard-deletes that handoff before passing its value to `gh auth login` on stdin. Both setup paths verify `/user`, publish an account-owned managed profile, default Git authorship to the account's canonical GitHub noreply identity, and store only secret-free config:
+
+```json5
+{
+  tools: {
+    github: {
+      profileId: "ghp_0123456789abcdef0123456789abcdef",
+      kind: "oauth",
+      gitAuthor: { name: "Automation User", email: "automation@example.com" },
+    },
+  },
+  agents: {
+    entries: {
+      reviewer: {
+        tools: {
+          github: {
+            profileId: "ghp_fedcba9876543210fedcba9876543210",
+            gitAuthor: { name: "Review Agent" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Omitting `agents.entries.<id>.tools.github` inherits the system identity. An agent object is a complete managed override. Settings shows the effective identity and the selected configuration scope separately, so editing **System** never masquerades as an agent override. If a configured managed profile is missing or unusable, GitHub status reports `configured_unavailable`; it never falls back to the native profile.
+
+Managed identity applies to the `gh` CLI/API account and optional Git author/committer metadata in local OpenClaw exec and the local Codex harness. OpenClaw supplies a private `GH_CONFIG_DIR`, clears ambient `GH_TOKEN` and `GITHUB_TOKEN` precedence, and applies configured author fields through process-local environment and Git config overlays. It does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. OAuth refresh keeps the same profile path and atomically replaces only its credential after verifying the durable account ID, so admitted local processes see the refreshed token on their next `gh` command. Choosing a different identity or inheritance target creates or selects another profile for new runs; existing processes keep their prior selected profile until they close. Retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
+
+Managed profiles provide execution and coordination identity; they are not an OS-user security sandbox. A process with unrestricted host execution under the same OS account can access account-owned files, including managed `gh` profiles. Use an OpenClaw sandbox, a dedicated host, or a dedicated OS user when adversarial isolation is required.
+
+The profile is not forwarded to node hosts, OpenClaw sandboxes, remote-exec placements, or cloud workers; those environments remain credential-free. The `github_publish` tool instead records a bounded publication request. For cloud and remote-exec turns, the Gateway waits until the exact workspace result is reconciled and accepted, then commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a draft pull request. The tool and worker payload contain no repository authority or credential.
+
+Local session-owned worktrees can use the same **Publish PR** action in the Control UI. The Gateway derives the managed worktree, repository, branch, base, and head from current session ownership. It never accepts those authority facts from the browser or model. Publication retries use a durable request ID, an exact commit marker, remote branch observation, and pull-request lookup by head branch so a Gateway restart or lost response does not create duplicate commits, pushes, or pull requests.
+
+Verification proves which account answered the GitHub API request. Status reports the credential kind, access expiry, refresh availability, OAuth scopes, and Git author while distinguishing missing credentials, unverified transport failures, and GitHub rate limiting without returning `gh` diagnostics. Repository-specific grants remain unknown until an exact repository operation succeeds; `/user` does not prove write access.
+
+Removing an agent override or choosing native credentials deletes the associated local refresh record after the config change. Already-running local processes may retain the old profile and its current access token until they exit, restart, or the token expires, while new runs use the updated identity immediately. This local change does not revoke the authorization at GitHub; revoke it separately from the OAuth application's GitHub settings when required.
+
+Control UI repository previews and project discovery use the separate optional `gateway.controlUi.github.token` service credential. They never consume an agent tool identity. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
+
 ### `tools.exec`
 
 ```json5
@@ -227,6 +286,8 @@ Controls elevated exec access outside the sandbox:
 
 Values shown are defaults except `applyPatch.allowModels` (empty/unset by default, meaning any compatible model may use `apply_patch`). `approvalRunningNoticeMs` emits a running notice when approval-backed exec runs long; `0` disables it.
 
+`tools.exec.grantExpiryDays` (unset by default) sets the default lifetime, in days (1–3650), for standing grants minted by Always allow on automation approvals. Unset keeps grants valid until revoked or the owning automation changes. Terms freeze at mint, so changing the value affects only future grants; see [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations).
+
 ### `tools.loopDetection`
 
 Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
@@ -249,7 +310,7 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
     web: {
       search: {
         enabled: true,
-        apiKey: "brave_api_key", // or BRAVE_API_KEY env (Brave provider)
+        provider: "brave", // optional; omit for auto-detect
         maxResults: 5,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
@@ -268,10 +329,19 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
       },
     },
   },
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: { apiKey: "brave_api_key" }, // or BRAVE_API_KEY env
+        },
+      },
+    },
+  },
 }
 ```
 
-Values shown are defaults except `provider` and `userAgent`. `maxResponseBytes` clamps to 32000–10000000; `maxChars` clamps to `maxCharsCap` (raise `maxCharsCap` to allow larger responses).
+Web-search provider credentials belong under `plugins.entries.<plugin>.config.webSearch`, as shown for Brave; see [Web search](/tools/web#storing-api-keys). The `tools.web` values shown are defaults except `provider` and `userAgent`. `maxResponseBytes` clamps to 32000–10000000; `maxChars` clamps to `maxCharsCap` (raise `maxCharsCap` to allow larger responses).
 
 ### `tools.media`
 
@@ -309,7 +379,7 @@ Configures inbound media understanding (image/audio/video):
 
     - `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc.)
     - `model`: model id override
-    - `profile` / `preferredProfile`: `auth-profiles.json` profile selection
+    - `profile` / `preferredProfile`: stored auth-profile selection
 
     **CLI entry** (`type: "cli"`):
 
@@ -320,10 +390,10 @@ Configures inbound media understanding (image/audio/video):
 
     - `capabilities`: list containing one or more of `image`, `audio`, and `video`.
     - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`: per-entry overrides.
-    - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
+    - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `view_image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
     - Failures fall back to the next entry.
 
-    Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
+    Provider auth follows standard order: SQLite auth profiles → env vars → `models.providers.*.apiKey`.
 
   </Accordion>
 </AccordionGroup>
@@ -345,8 +415,8 @@ Configures inbound media understanding (image/audio/video):
 
 Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
 
-Default: `tree` (current session + sessions spawned by it, such as subagents, plus ambient
-watched group sessions for the same agent).
+Default: `tree` (current session + sessions spawned by it, such as subagents;
+the main session can reach every session of the same agent).
 
 ```json5
 {
@@ -362,10 +432,11 @@ watched group sessions for the same agent).
 <AccordionGroup>
   <Accordion title="Visibility scopes">
     - `self`: only the current session key.
-    - `tree`: current session + sessions spawned by the current session (subagents). For read operations, it also includes same-agent group sessions that the current session watches through ambient group awareness.
+    - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
-    - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
+    - `self` remains strict for main. Incognito denial remains absolute, and cross-agent access still requires `all` plus `tools.agentToAgent` policy.
+    - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), access stays limited to spawned sessions even if the caller is main or `tools.sessions.visibility="all"`.
     - When not `all`, `sessions_list` includes a compact `visibility` field
       describing the effective mode and a warning that some sessions may be
       omitted outside the current scope.
@@ -373,11 +444,11 @@ watched group sessions for the same agent).
   </Accordion>
 </AccordionGroup>
 
-With the default `session.dmScope: "main"`, human activity in a group makes that same-agent group
-session ambiently visible to the agent's main session. In a multi-user setup, `"main"` also shares
-one DM session across users, so each user routed there can read from ambiently watched groups,
-including through session-memory `memory_search`. Use a per-peer `dmScope` for DM isolation, or set
-`tools.sessions.visibility: "self"` to opt out of ambient watched-session reads.
+Ambient group watches still queue activity notices and tell the main session
+where something happened. They do not grant access: main's same-agent access is
+built into `tree`. In a multi-user setup, `session.dmScope: "main"` shares that
+main session across users; use a per-peer DM scope for isolation, or set
+`tools.sessions.visibility: "self"` for strict current-session access.
 
 ### `tools.sessions_spawn`
 
@@ -416,19 +487,19 @@ Controls inline attachment support for `sessions_spawn`.
 
 ### `tools.updatePlan`
 
-Kill switch for the structured `update_plan` checklist tool used for non-trivial multi-step work tracking.
+Kill switch for `progress_card`, the durable plan and status note used for non-trivial multi-step work tracking.
 
 ```json5
 {
   tools: {
-    updatePlan: false, // hide update_plan from every run
+    updatePlan: false, // hide progress_card from every run
   },
 }
 ```
 
 - Default: `true` for every provider and model. Set `false` to keep the tool off; there is no model-specific auto-enable rule.
-- The tool description adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
-- `tools.deny: ["update_plan"]` also removes the tool, so use whichever surface already carries your tool policy.
+- The tool description tells the model to keep the plan current, use at most one `in_progress` step, and add Markdown only when it contributes information beyond the steps.
+- Use `progress_card` in new `tools.allow` and `tools.deny` policies. Existing policies that name `update_plan` map to `progress_card`, so shipped allowlists and denylists keep their meaning.
 
 Older configs used `tools.experimental.planTool`. Run `openclaw doctor --fix` to move the value to `tools.updatePlan`.
 
@@ -526,8 +597,6 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `openai-chatgpt-responses`, `anthropic-messages`, `google-generative-ai`, `google-vertex`, `github-copilot`, `bedrock-converse-stream`, `ollama`, `azure-openai-responses`). For self-hosted `/v1/chat/completions` backends such as MLX, vLLM, SGLang, and most OpenAI-compatible local servers, use `openai-completions`. A custom provider with `baseUrl` but no `api` defaults to `openai-completions`; set `openai-responses` only when the backend supports `/v1/responses`.
     - `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
     - `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
-    - `models.providers.*.contextWindow`: default native context window for models under this provider when the model entry does not set `contextWindow`.
-    - `models.providers.*.contextTokens`: default effective runtime context cap for models under this provider when the model entry does not set `contextTokens`.
     - `models.providers.*.maxTokens`: default output-token cap for models under this provider when the model entry does not set `maxTokens`.
     - `models.providers.*.timeoutSeconds`: optional per-provider model HTTP request timeout in seconds, including connect, headers, body, and total request abort handling.
     - `models.providers.*.injectNumCtxForOpenAICompat`: for Ollama + `openai-completions`, inject `options.num_ctx` into requests (default: `true`).
@@ -543,14 +612,14 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `request.auth`: auth strategy override. Modes: `"provider-default"` (use provider's built-in auth), `"authorization-bearer"` (with `token`), `"header"` (with `headerName`, `value`, optional `prefix`).
     - `request.proxy`: HTTP proxy override. Modes: `"env-proxy"` (use `HTTP_PROXY`/`HTTPS_PROXY` env vars), `"explicit-proxy"` (with `url`). Both modes accept an optional `tls` sub-object.
     - `request.tls`: TLS override for direct connections. Fields: `ca`, `cert`, `key`, `passphrase` (all accept SecretRef), `serverName`, `insecureSkipVerify`.
-    - `request.allowPrivateNetwork`: when `true`, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard. Custom/local provider base URLs already trust the exact configured origin, except metadata/link-local origins, which remain blocked without explicit opt-in. Set this to `false` to opt out of exact-origin trust. WebSocket uses the same `request` for headers/TLS but not that fetch SSRF gate. Default `false`.
+    - `request.allowPrivateNetwork`: when `true`, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard. Custom/local provider base URLs already trust the exact configured origin, except metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins, which remain blocked without explicit opt-in. Set this to `false` to opt out of exact-origin trust. WebSocket uses the same `request` for headers/TLS but not that fetch SSRF gate. Default `false`.
 
   </Accordion>
   <Accordion title="Model catalog entries">
     - `models.providers.*.models`: explicit provider model catalog entries.
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
-    - `models.providers.*.models.*.contextWindow`: native model context window metadata. This overrides provider-level `contextWindow` for that model.
-    - `models.providers.*.models.*.contextTokens`: optional runtime context cap. This overrides provider-level `contextTokens`; use it when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
+    - `models.providers.*.models.*.contextWindow`: native context-window metadata for that model.
+    - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
 
     #### Custom provider capability declarations
 
@@ -566,6 +635,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `supportsReasoningEffort` | Accepts a reasoning-effort control. |
     | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
+    | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
     | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
     | `supportsStrictMode` | Accepts strict tool schemas. |
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |
@@ -579,7 +649,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `requiresAssistantAfterToolResult` | Requires an assistant message after tool results. |
     | `requiresThinkingAsText` | Replays reasoning as text rather than structured content. |
     | `requiresReasoningContentOnAssistantMessages` | Preserves DeepSeek-style `reasoning_content` during replay. |
-    | `toolSchemaProfile` | Selects a tool-schema normalization profile. Custom model entries recognize `llamacpp` and `gemini`. The `llamacpp` profile removes `pattern` and `maxLength` values at or above 2000; built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the same cleaner automatically. Custom `llama-server` models must select it explicitly. See the llama.cpp example below. |
+    | `toolSchemaProfile` | Selects a tool-schema normalization profile. Custom model entries recognize `llamacpp` and `gemini`. The `llamacpp` profile removes `pattern` and `maxLength` values at or above 2000; built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the same cleaner automatically. Custom provider IDs pointed at llama-server must select it explicitly. See the llama.cpp example below. |
     | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint before tool schemas are sent. Use this for endpoint-specific gaps beyond a profile's targeted transformations. |
     | `toolCallArgumentsEncoding` | Selects the endpoint's tool-call argument encoding. |
     | `requiresOpenAiAnthropicToolPayload` | Converts OpenAI-shaped tool calls to Anthropic-family payloads. |
@@ -657,7 +727,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
 
   </Accordion>
   <Accordion title="Local models (llama.cpp / llama-server)">
-    Point a **custom** `openai-completions` provider at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint). The built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the llama.cpp schema cleaner automatically; a custom endpoint does not. Set `compat.toolSchemaProfile: "llamacpp"` on each model whose llama-server chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
+    The canonical `llama-cpp` provider applies the llama.cpp schema cleaner in managed and existing-server modes. If you instead point a **custom provider ID** at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint), set `compat.toolSchemaProfile: "llamacpp"` on each model whose chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
 
     ```json5
     {

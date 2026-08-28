@@ -8,7 +8,6 @@ import {
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
-  DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
@@ -18,7 +17,6 @@ import {
   readStringParam,
   resolveCitationRedirectUrl,
   resolveSearchCacheTtlMs,
-  resolveSearchCount,
   resolveSearchTimeoutSeconds,
   type SearchConfigRecord,
   withTrustedWebSearchEndpoint,
@@ -126,7 +124,7 @@ function freshnessStartTime(freshness: GeminiFreshness, now: Date): string {
   return toGeminiTimeRangeTimestamp(start);
 }
 
-function queryWithSoftFreshness(query: string, freshness?: "day"): string {
+function queryWithSoftFreshness(query: string, freshness?: GeminiFreshness): string {
   if (freshness !== "day") {
     return query;
   }
@@ -137,7 +135,12 @@ function resolveGeminiTimeRangeFilter(
   args: Record<string, unknown>,
   now = new Date(),
 ):
-  | { timeRangeFilter?: GeminiTimeRangeFilter; freshness?: "day" }
+  | {
+      timeRangeFilter?: GeminiTimeRangeFilter;
+      freshness?: GeminiFreshness;
+      dateAfter?: string;
+      dateBefore?: string;
+    }
   | {
       error:
         | "invalid_freshness"
@@ -175,6 +178,7 @@ function resolveGeminiTimeRangeFilter(
       };
     }
     return {
+      freshness,
       timeRangeFilter: {
         startTime: freshnessStartTime(freshness, now),
         endTime: toGeminiTimeRangeTimestamp(now),
@@ -187,6 +191,8 @@ function resolveGeminiTimeRangeFilter(
   }
 
   return {
+    dateAfter,
+    dateBefore,
     timeRangeFilter: {
       startTime: dateAfter ? isoDateStart(dateAfter) : "1970-01-01T00:00:00Z",
       endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : toGeminiTimeRangeTimestamp(now),
@@ -384,6 +390,7 @@ export async function executeGeminiSearch(
   searchConfig?: SearchConfigRecord,
   context?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
+  context?.signal?.throwIfAborted();
   const unsupportedResponse = buildUnsupportedSearchFilterResponse(
     {
       country: args.country,
@@ -412,13 +419,10 @@ export async function executeGeminiSearch(
   }
 
   const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
+  void readPositiveIntegerParam(args, "count", {
+    max: MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+  });
   const model = resolveGeminiModel(geminiConfig);
   const baseUrl = resolveGeminiBaseUrl(geminiConfig);
   const headers = resolveGeminiWebSearchHeaders(geminiConfig);
@@ -434,15 +438,15 @@ export async function executeGeminiSearch(
   const cacheKey = buildSearchCacheKey([
     "gemini",
     query,
-    resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
     baseUrl,
     model,
     timeRange.freshness,
-    timeRange.timeRangeFilter?.startTime,
-    timeRange.timeRangeFilter?.endTime,
+    timeRange.dateAfter,
+    timeRange.dateBefore,
     headersCacheKey,
   ]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -458,6 +462,7 @@ export async function executeGeminiSearch(
     timeRangeFilter: timeRange.timeRangeFilter,
     headers,
   });
+  context?.signal?.throwIfAborted();
   const payload = {
     query,
     provider: "gemini",
@@ -472,6 +477,6 @@ export async function executeGeminiSearch(
     content: wrapWebContent(result.content),
     citations: result.citations,
   };
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }

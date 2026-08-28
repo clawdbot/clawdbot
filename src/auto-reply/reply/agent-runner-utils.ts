@@ -27,11 +27,11 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
-export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
-import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
+export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 type EmbeddedReplyRoute = Pick<
@@ -42,6 +42,7 @@ type EmbeddedReplyRoute = Pick<
   | "originatingChatType"
   | "originatingThreadId"
   | "originatingReplyToId"
+  | "originatingReplyToMode"
 >;
 
 /** Selects the freshest runtime config usable by queued reply execution. */
@@ -127,14 +128,12 @@ export function buildThreadingToolContext(params: {
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
   });
-  const originTo = resolveOriginMessageTo({
-    originatingTo: sessionCtx.OriginatingTo,
-    to: sessionCtx.To,
-  });
+  const originTo = sessionCtx.OriginatingTo ?? sessionCtx.To;
   if (!config) {
     return {
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
     };
   }
   const rawProvider = normalizeOptionalLowercaseString(originProvider);
@@ -142,6 +141,7 @@ export function buildThreadingToolContext(params: {
     return {
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
     };
   }
   const provider = normalizeChatChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
@@ -153,6 +153,7 @@ export function buildThreadingToolContext(params: {
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
       hasRepliedRef,
     };
   }
@@ -184,6 +185,7 @@ export function buildThreadingToolContext(params: {
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
     currentSourceTurnId,
+    replyToMode: context.replyToMode ?? sessionCtx.ReplyToMode,
   };
 }
 
@@ -262,6 +264,7 @@ function buildEmbeddedContextFromTemplate(params: {
       params.run.chatType,
     MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
+    ReplyToMode: params.replyRoute?.originatingReplyToMode ?? params.sessionCtx.ReplyToMode,
   };
   return {
     sessionId: params.run.sessionId,
@@ -274,10 +277,7 @@ function buildEmbeddedContextFromTemplate(params: {
     }),
     ...(sessionCtx.ChatType ? { chatType: sessionCtx.ChatType } : {}),
     agentAccountId: sessionCtx.AccountId,
-    messageTo: resolveOriginMessageTo({
-      originatingTo: sessionCtx.OriginatingTo,
-      to: sessionCtx.To,
-    }),
+    messageTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const builtinManager = vi.hoisted(() => ({
   search: vi.fn(async () => []),
-  readFile: vi.fn(async () => ({ text: "", path: "MEMORY.md" })),
+  readFile: vi.fn(async () => ({ status: "ok" as const, text: "", path: "MEMORY.md" })),
   status: vi.fn(() => ({ backend: "builtin" as const, provider: "openai" })),
   probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
   probeVectorAvailability: vi.fn(async () => true),

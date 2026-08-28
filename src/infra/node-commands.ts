@@ -19,16 +19,28 @@ export const NODE_MCP_TOOLS_CALL_COMMAND = "mcp.tools.call.v1";
 export const NODE_AGENT_CLI_CLAUDE_RUN_COMMAND = "agent.cli.claude.run.v1";
 export const NODE_DEVICE_APPS_COMMAND = "device.apps";
 
+export const NODE_WORKER_BUNDLE_INSTALL_COMMAND = "worker.bundle.install.v1";
 export const NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND = "worker.launch.v1";
 export const NODE_WORKER_SUPERVISOR_STATUS_COMMAND = "worker.status.v1";
 export const NODE_WORKER_SUPERVISOR_CANCEL_COMMAND = "worker.cancel.v1";
+export const NODE_WORKER_ENVIRONMENT_STOP_COMMAND = "worker.environment.stop.v1";
 export const NODE_WORKER_WORKSPACE_EXEC_COMMAND = "worker.workspace.exec.v1";
+export const NODE_WORKER_WORKSPACE_RETAIN_COMMAND = "worker.workspace.retain.v1";
+export const NODE_WORKER_DESKTOP_STREAM_COMMAND = "worker.desktop.stream.v1";
+export const NODE_WORKER_DESKTOP_LAUNCH_COMMAND = "worker.desktop.launch.v1";
+export const NODE_WORKER_PORTAL_STREAM_COMMAND = "worker.portal.stream.v1";
 export const NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE = "WORKER_CAPACITY_EXHAUSTED";
 export const NODE_WORKER_PRIVATE_COMMANDS = [
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+  NODE_WORKER_DESKTOP_STREAM_COMMAND,
+  NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+  NODE_WORKER_PORTAL_STREAM_COMMAND,
 ] as const;
 
 const PRIVATE_NODE_INVOKE_COMMAND_SET = new Set<string>(NODE_WORKER_PRIVATE_COMMANDS);
@@ -75,3 +87,7 @@ export function isBrowserProxyNodeInvokeCommand(command: unknown): boolean {
 
 export const NODE_MCP_TOOL_CALL_TIMEOUT_MS = 120_000;
 export const NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_MCP_TOOL_CALL_TIMEOUT_MS + 5_000;
+
+export const NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS = 30_000;
+// Leave the Gateway time to return the node's structured timeout and dispatch status.
+export const NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS + 5_000;

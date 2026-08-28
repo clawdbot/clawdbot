@@ -103,6 +103,73 @@ describe("observed browser dialogs", () => {
     observed.cleanup();
   });
 
+  it.each([true, false])(
+    "aborts every in-flight action with the original armed dialog failure (accept: %s)",
+    async (accept) => {
+      const { page, emit } = createPageHarness();
+      ensurePageState(page);
+      const dialog = createDialog();
+      const failure = new Error("Browser dialog response failed");
+      dialog[accept ? "accept" : "dismiss"].mockRejectedValue(failure);
+      const first = createObservedDialogAbortSignalForPage({ page });
+      const second = createObservedDialogAbortSignalForPage({ page });
+
+      armObservedDialogResponseOnPage({ page, accept, timeoutMs: 1000 });
+      emit("dialog", dialog);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(first.signal.reason).toBe(failure);
+      expect(second.signal.reason).toBe(failure);
+      expect(getObservedBrowserStateForPage(page).dialogs).toEqual({ pending: [], recent: [] });
+      first.cleanup();
+      second.cleanup();
+    },
+  );
+
+  it.each([true, false])(
+    "does not requeue a consumed dialog when an explicit response fails (accept: %s)",
+    async (accept) => {
+      const { page, emit } = createPageHarness();
+      ensurePageState(page);
+      const dialog = createDialog();
+      const failure = new Error("Browser dialog response failed");
+      dialog[accept ? "accept" : "dismiss"].mockRejectedValue(failure);
+      emit("dialog", dialog);
+
+      await expect(respondToObservedDialogOnPage({ page, dialogId: "d1", accept })).rejects.toBe(
+        failure,
+      );
+
+      expect(getObservedBrowserStateForPage(page).dialogs).toEqual({ pending: [], recent: [] });
+      await expect(respondToObservedDialogOnPage({ page, dialogId: "d1", accept })).rejects.toThrow(
+        'Dialog "d1" is not pending.',
+      );
+    },
+  );
+
+  it.each([true, false])(
+    "records an already-closed dialog as remotely handled (accept: %s)",
+    async (accept) => {
+      const { page, emit } = createPageHarness();
+      ensurePageState(page);
+      const dialog = createDialog();
+      dialog[accept ? "accept" : "dismiss"].mockRejectedValue(
+        new Error("Protocol error: No dialog is showing"),
+      );
+      emit("dialog", dialog);
+
+      const closed = await respondToObservedDialogOnPage({ page, dialogId: "d1", accept });
+
+      expect(closed.closedBy).toBe("remote");
+      expect(getObservedBrowserStateForPage(page).dialogs).toMatchObject({
+        pending: [],
+        recent: [{ id: "d1", closedBy: "remote" }],
+      });
+    },
+  );
+
   it("uses the default arm-next-dialog timeout for non-finite timeoutMs", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

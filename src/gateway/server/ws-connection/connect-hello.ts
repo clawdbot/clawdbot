@@ -6,20 +6,26 @@ import {
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
-  revokeDeviceBootstrapToken,
-  restoreDeviceBootstrapToken,
+  restoreGenericDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
-import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import {
+  broadcastSetupHandoffDeliveryUncertain,
+  broadcastSetupHandoffCompletion,
+  confirmSetupHandoffDelivery,
+  consumeSetupHandoff,
+  type SetupHandoff,
+} from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
@@ -42,6 +48,7 @@ export async function sendGatewayHello(
 ): Promise<void> {
   const {
     connId,
+    bootId,
     nodeReapprovalCoordinator,
     gatewayMethods,
     events,
@@ -65,6 +72,7 @@ export async function sendGatewayHello(
     role,
     scopes,
     device,
+    devicePublicKey,
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
@@ -75,7 +83,6 @@ export async function sendGatewayHello(
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
-    controlUiDeviceAuthMigrationPending,
   } = state;
   // Prefer the authenticated human; principal scopes never inherit device-token rows.
   const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
@@ -94,8 +101,10 @@ export async function sendGatewayHello(
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
+    client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
+    revisionProjector: buildRequestContext().configRevisionProjector,
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
@@ -106,12 +115,21 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  // Gateway runtime provenance is independent of the UI artifact source.
+  // Consumers use the source field to decide whether UI build comparison applies.
+  const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
+    ? ("configured" as const)
+    : ("bundled" as const);
+  const serverBuildId = resolveRuntimeServiceBuildId();
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
     protocol: PROTOCOL_VERSION,
     server: {
       version: resolveRuntimeServiceVersion(process.env),
+      ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      bootId,
+      controlUiBuildSource,
       connId,
     },
     features: {
@@ -120,6 +138,13 @@ export async function sendGatewayHello(
       capabilities: [
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+        GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+        GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+        GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
@@ -129,9 +154,6 @@ export async function sendGatewayHello(
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
-    ...(controlUiDeviceAuthMigrationPending
-      ? { deviceAuthMigration: { pending: true as const } }
-      : {}),
     auth: {
       role,
       scopes,
@@ -158,9 +180,7 @@ export async function sendGatewayHello(
   };
   advanceHandshakePhase("hello_payload_prepared");
 
-  let revokedBootstrapTokenRecord:
-    | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
-    | undefined;
+  let bootstrapHandoff: SetupHandoff | undefined;
   if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
     try {
       if (handoffBootstrapProfile || issuedBootstrapProfile) {
@@ -170,40 +190,87 @@ export async function sendGatewayHello(
           scopes,
         });
         if (handoffBootstrapProfile || redemption.fullyRedeemed) {
-          const revoked = await revokeDeviceBootstrapToken({
+          const consumed = await consumeSetupHandoff({
             token: bootstrapTokenCandidate,
+            deviceId: device.id,
+            pairedDeviceMatches: (paired) => paired?.publicKey === devicePublicKey,
           });
-          if (!revoked.removed) {
-            logGateway.warn(
-              `bootstrap token revoke skipped after profile redemption device=${device.id}`,
-            );
-          } else {
-            revokedBootstrapTokenRecord = revoked.record;
+          if (!consumed) {
+            await releasePendingNodePairingCleanup();
+            setCloseCause("bootstrap-token-consume-failed");
+            close();
+            return;
           }
+          bootstrapHandoff = consumed;
         }
       }
     } catch (err) {
       logGateway.warn(
         `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
       );
+      await releasePendingNodePairingCleanup();
+      setCloseCause("bootstrap-token-consume-failed", { error: formatForLog(err) });
+      close();
+      return;
     }
   }
   try {
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
-    if (revokedBootstrapTokenRecord) {
-      try {
-        await restoreDeviceBootstrapToken({ record: revokedBootstrapTokenRecord });
-      } catch (restoreErr) {
-        logGateway.warn(
-          `bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
-        );
+    if (bootstrapHandoff) {
+      if (bootstrapHandoff.completion) {
+        try {
+          broadcastSetupHandoffDeliveryUncertain({
+            handoff: bootstrapHandoff,
+            broadcast: buildRequestContext().broadcast,
+          });
+        } catch (broadcastError) {
+          logGateway.warn(
+            `setup delivery-uncertain broadcast failed device=${device?.id ?? "unknown"}: ${formatForLog(broadcastError)}`,
+          );
+        }
+      } else {
+        try {
+          await restoreGenericDeviceBootstrapToken({ record: bootstrapHandoff.record });
+        } catch (restoreError) {
+          logGateway.warn(
+            `generic bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreError)}`,
+          );
+        }
       }
     }
     await releasePendingNodePairingCleanup();
     setCloseCause("hello-send-failed", { error: formatForLog(err) });
     close();
     return;
+  }
+  if (bootstrapHandoff) {
+    try {
+      const confirmedHandoff = await confirmSetupHandoffDelivery({ handoff: bootstrapHandoff });
+      if (confirmedHandoff) {
+        broadcastSetupHandoffCompletion({
+          handoff: confirmedHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } else {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      }
+    } catch (err) {
+      logGateway.warn(
+        `setup completion confirmation failed device=${device?.id ?? "unknown"}: ${formatForLog(err)}`,
+      );
+      try {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } catch {
+        // The durable uncertain row remains the status-reconciliation path.
+      }
+    }
   }
   let authProvided = authMethod;
   if (authMethod !== "device-token" && authMethod !== "bootstrap-token") {

@@ -2,10 +2,8 @@
 // agent reports a model id. This includes custom models.json entries.
 
 import { getRuntimeConfig } from "../config/config.js";
-import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   applyConfiguredContextWindows,
   type ContextWindowCatalog,
@@ -121,11 +119,8 @@ function ensureContextWindowCacheLoadedFromOwner(params: {
           : await (async () => {
               const { loadPreparedModelCatalogOwnerSnapshot } =
                 await loadPreparedModelCatalogRuntime();
-              const defaultAgentId = resolveDefaultAgentId(cfg);
               return await loadPreparedModelCatalogOwnerSnapshot({
                 config: cfg,
-                agentId: defaultAgentId,
-                agentDir: resolveAgentDir(cfg, defaultAgentId),
                 readOnly: true,
               }).then(
                 (value) => ({ status: "fulfilled" as const, value }),
@@ -188,11 +183,8 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (shouldStop()) {
       return;
     }
-    const defaultAgentId = resolveDefaultAgentId(params.config);
     const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
       config: params.config,
-      agentId: defaultAgentId,
-      agentDir: resolveAgentDir(params.config, defaultAgentId),
       allowGatewaySubagentBinding: true,
     });
     if (!owner) {
@@ -321,14 +313,8 @@ export function resolveContextTokensForModel(
     skipRuntimeConfigLoad: Boolean(params.cfg),
   };
   prepareContextWindowCache(lookupOptions);
-  const sourceCfg =
-    params.sourceCfg !== undefined
-      ? params.sourceCfg
-      : params.cfg
-        ? projectConfigOntoRuntimeSourceSnapshot(params.cfg)
-        : undefined;
   return resolveContextTokensForModelFromCache(
-    { ...params, sourceCfg },
+    params,
     (modelId) => lookupCachedContextTokens(modelId),
     (modelId) => lookupCachedContextWindow(modelId),
   );

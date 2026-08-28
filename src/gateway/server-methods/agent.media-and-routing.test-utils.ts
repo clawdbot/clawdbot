@@ -9,13 +9,15 @@ import {
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import {
+  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  waitForActiveGatewayRootWork,
 } from "../../process/gateway-work-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import {
   getAgentTestMocks,
+  operatorWriteCliClient,
   makeContext,
   type AgentHandlerArgs,
   type AgentParams,
@@ -379,11 +381,7 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-runtime-owner",
       },
       {
-        client: {
-          internal: {
-            pluginRuntimeOwnerId: "memory-core",
-          },
-        } as never,
+        client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "memory-core" }),
       },
     );
 
@@ -401,16 +399,14 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-tools-also-allow",
       },
       {
-        client: {
-          internal: {
-            agentRunTracking: "plugin_subagent",
-            pluginRuntimeOwnerId: "workboard",
-            runtimePluginToolGrant: {
-              pluginId: "workboard",
-              toolNames: ["workboard_heartbeat", "workboard_complete"],
-            },
+        client: createSyntheticPluginRuntimeClient({
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "workboard",
+          runtimePluginToolGrant: {
+            pluginId: "workboard",
+            toolNames: ["workboard_heartbeat", "workboard_complete"],
           },
-        } as never,
+        }),
       },
     );
 
@@ -421,6 +417,28 @@ describe("gateway agent handler", () => {
       pluginId: "workboard",
       toolNames: ["workboard_heartbeat", "workboard_complete"],
     });
+  });
+
+  it("forwards a tracked plugin subagent exact empty tool cap", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "write a tool-free narrative",
+        sessionKey: "agent:main:subagent:dreaming-narrative",
+        idempotencyKey: "plugin-tools-disabled",
+      },
+      {
+        client: createSyntheticPluginRuntimeClient({
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "memory-core",
+          pluginSubagentToolsAllow: [],
+        }),
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{ toolsAllow?: string[] }>();
+    expect(call.toolsAllow).toEqual([]);
   });
 
   it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
@@ -538,11 +556,7 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-runtime-existing-owner",
       },
       {
-        client: {
-          internal: {
-            pluginRuntimeOwnerId: "memory-core",
-          },
-        } as never,
+        client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "memory-core" }),
       },
     );
 
@@ -563,11 +577,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "test-idem-model-override",
-        client: {
-          connect: {
-            scopes: ["operator.admin"],
-          },
-        } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -678,11 +688,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "test-idem-model-override-write",
-        client: {
-          connect: {
-            scopes: ["operator.write"],
-          },
-        } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.write"]),
         respond,
       },
     );
@@ -708,9 +714,7 @@ describe("gateway agent handler", () => {
       {
         reqId: "test-idem-model-override-internal",
         client: {
-          connect: {
-            scopes: ["operator.write"],
-          },
+          ...operatorWriteCliClient(["operator.write"]),
           internal: {
             allowModelOverride: true,
           },
@@ -1204,6 +1208,7 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
+      status: "queued",
       task: "follow-up",
     });
   });
@@ -1293,7 +1298,7 @@ describe("gateway agent handler", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
       totalTokens: 12,
-      status: "running",
+      status: "queued",
     });
     expect(mockCallArg(broadcastToConnIds, 0, 2)).toEqual(new Set(["conn-1"]));
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({
@@ -1435,6 +1440,13 @@ describe("gateway agent handler", () => {
         basePersisted: true,
         toolsAllow: ["image_generate", "write"],
         toolsAllowIsDefault: true,
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+        toolsAllowExecTargetRequirement: {
+          version: 1,
+          target: { version: 1, host: "gateway", ask: "always" },
+          grantIndex: 1,
+        },
         cliSessionBindingFacts: {
           sourceReplyDeliveryMode: "automatic" as const,
           requireExplicitMessageTarget: true,
@@ -1479,6 +1491,11 @@ describe("gateway agent handler", () => {
       sessionId?: string;
       toolsAllow?: string[];
       toolsAllowIsDefault?: boolean;
+      scheduledToolPolicy?: {
+        version: 1;
+        mode: "trusted";
+        execTarget?: { host: "gateway"; ask?: "always" };
+      };
       requireExplicitMessageTarget?: boolean;
       sourceReplyDeliveryMode?: string;
       cliSessionBindingFacts?: {
@@ -1493,8 +1510,13 @@ describe("gateway agent handler", () => {
     expect(callArgs.model).toBe("claude-opus-4-8");
     expect(callArgs.thinking).toBe("high");
     expect(callArgs.bootstrapContextRunKind).toBe("cron");
-    expect(callArgs.toolsAllow).toEqual(["image_generate", "write"]);
+    expect(callArgs.toolsAllow).toEqual(["image_generate", "exec", "write"]);
     expect(callArgs.toolsAllowIsDefault).toBe(true);
+    expect(callArgs.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "trusted",
+      execTarget: { host: "gateway", ask: "always" },
+    });
     expect(callArgs.requireExplicitMessageTarget).toBe(true);
     expect(callArgs.sourceReplyDeliveryMode).toBe("automatic");
     expect(callArgs.cliSessionBindingFacts).toEqual({
@@ -1550,6 +1572,15 @@ describe("gateway agent handler", () => {
       basePersisted: false,
       code: ErrorCodes.INVALID_REQUEST,
     },
+    {
+      name: "when its required exec pin is missing",
+      client: "continuation" as const,
+      phase: "ready" as const,
+      freshRevision: "revision-1",
+      basePersisted: true,
+      damagedExecPin: true,
+      code: ErrorCodes.UNAVAILABLE,
+    },
   ])("rejects a cron media continuation $name", async (testCase) => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
@@ -1565,6 +1596,16 @@ describe("gateway agent handler", () => {
           "basePersisted" in testCase ? testCase.basePersisted : testCase.phase === "ready",
         ...("ownerLifecycleGeneration" in testCase
           ? { ownerLifecycleGeneration: testCase.ownerLifecycleGeneration }
+          : {}),
+        ...("damagedExecPin" in testCase
+          ? {
+              toolsAllow: ["image_generate", "write"],
+              toolsAllowExecTargetRequirement: {
+                version: 1,
+                target: { version: 1, host: "gateway", ask: "always" },
+                grantIndex: 1,
+              },
+            }
           : {}),
       },
     };
@@ -1981,7 +2022,7 @@ describe("gateway agent handler", () => {
         phase: "ready",
         basePersisted: true,
       });
-      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-recovered",
@@ -2070,7 +2111,7 @@ describe("gateway agent handler", () => {
       expect(context.logGateway.warn).toHaveBeenCalledWith(
         "cron continuation release recovery exhausted for cron-media-release-exhausts",
       );
-      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-exhausted",

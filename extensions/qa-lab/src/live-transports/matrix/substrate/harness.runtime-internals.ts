@@ -4,12 +4,14 @@ import path from "node:path";
 import type { FetchLike } from "../../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE =
-  "ghcr.io/matrix-construct/tuwunel:v1.8.2@sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78";
+  "ghcr.io/matrix-construct/tuwunel:v1.8.3@sha256:699fa9971c174e01c884abad8d1a3cfb2fe518e1a71f1fa16ea9dedf11873d74";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
+
+class MatrixQaHarnessTimeoutError extends Error {}
 
 export type MatrixQaHarnessFiles = {
   outputDir: string;
@@ -27,12 +29,11 @@ export function buildVersionsUrl(baseUrl: string) {
 export async function isMatrixVersionsReachable(
   baseUrl: string,
   fetchImpl: FetchLike,
-  timeoutMs = MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS,
+  timeoutSignal = AbortSignal.timeout(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS),
   signal?: AbortSignal,
 ) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    const timeoutSignal = AbortSignal.timeout(Math.max(1, timeoutMs));
     response = await fetchImpl(buildVersionsUrl(baseUrl), {
       signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
     });
@@ -57,7 +58,7 @@ export async function withMatrixQaHarnessTimeout<T>(
       task,
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          reject(new MatrixQaHarnessTimeoutError(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);
@@ -93,6 +94,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     const probeController = new AbortController();
     let reachableCandidate: string | undefined;
     let probeConsumedDeadline = false;
+    const requestTimeoutMs = Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, remainingMs);
     try {
       // Race both network paths so neither stalled probe can starve or delay
       // a healthy peer. The outer deadline also bounds injected fetch fakes.
@@ -101,26 +103,28 @@ export async function waitForReachableMatrixBaseUrl(params: {
         remainingMs,
         Promise.any(
           candidateBaseUrls.map(async (baseUrl) => {
+            const requestTimeoutSignal = AbortSignal.timeout(Math.max(1, requestTimeoutMs));
             if (
               await isMatrixVersionsReachable(
                 baseUrl,
                 params.fetchImpl,
-                Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+                requestTimeoutSignal,
                 probeController.signal,
               )
             ) {
               return baseUrl;
+            }
+            if (requestTimeoutMs === remainingMs && requestTimeoutSignal.aborted) {
+              probeConsumedDeadline = true;
             }
             throw new Error("Matrix versions endpoint unreachable");
           }),
         ),
       );
     } catch (error) {
-      // A stalled probe consumed the entire remaining budget; its timeout can
-      // fire marginally before Date.now() crosses the deadline, so re-polling
-      // here would start a doomed extra probe. Fast candidate failures re-poll.
-      probeConsumedDeadline =
-        error instanceof Error && error.message.startsWith("Matrix health probes timed out");
+      // The outer timeout covers injected fetches that ignore abort signals.
+      // Request timeouts record the same deadline fact before rejecting.
+      probeConsumedDeadline ||= error instanceof MatrixQaHarnessTimeoutError;
     } finally {
       probeController.abort();
     }

@@ -1,14 +1,14 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { ControlUiPluginFrameGrantAck } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
   CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY,
   CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY,
   resolveControlUiPluginTabPathname,
-  type ControlUiPluginFrameGrantAck,
-} from "../../../../src/gateway/control-ui-contract.js";
+} from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";

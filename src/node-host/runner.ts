@@ -1,29 +1,33 @@
 /** CLI runner for node-host stdin/stdout command dispatch. */
-import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import {
-  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-} from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
+import { startNodeHostConnection } from "./connection.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
+import {
+  resolveNodeHostCloudflareAccess,
+  type NodeHostCloudflareAccessConfig,
+} from "./gateway-cloudflare-access.js";
+import { resolveNodeHostGatewayPlatformIdentity } from "./gateway-platform-identity.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
   coerceNodeInvokePayload,
 } from "./invoke-payload.js";
-import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
+import { prepareNodeHostRuntime } from "./runtime.js";
 import { runStartupMigrations } from "./startup-state-migrations.js";
 
 type NodeHostRunOptions = {
@@ -31,43 +35,20 @@ type NodeHostRunOptions = {
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: NodeHostCloudflareAccessConfig;
   gatewayCandidates?: NodeHostGatewayConfig[];
   gatewayBootstrapToken?: string;
   preferGatewayBootstrapToken?: boolean;
   /** Stop cleanly after the first authenticated hello (used before service install). */
   stopAfterFirstConnect?: boolean;
+  /** Host worker sessions for this process even when durable node config is disabled. */
+  forceWorkerRuns?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
   installedAppsSharing?: boolean;
 };
-
-function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
-  switch (platform) {
-    case "darwin":
-      return "macos";
-    case "win32":
-      return "windows";
-    case "linux":
-      return "linux";
-    default:
-      return "unknown";
-  }
-}
-
-function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
-  switch (platform) {
-    case "darwin":
-      return "Mac";
-    case "win32":
-      return "Windows";
-    case "linux":
-      return "Linux";
-    default:
-      return undefined;
-  }
-}
 
 function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
@@ -79,6 +60,7 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
@@ -115,73 +97,6 @@ function handleNodeHostReconnectPaused(
   exit(1);
 }
 
-const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
-const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
-const NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS = 250;
-const NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS = 5_000;
-
-function isExactUnknownMethodError(error: unknown, method: string): boolean {
-  return (
-    error instanceof GatewayClientRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message === `unknown method: ${method}`
-  );
-}
-
-function isExactLegacyNodeAuthorizationError(
-  error: unknown,
-  method: string,
-  gatewayProtocol: number,
-): boolean {
-  const legacyUnknownMethodShape =
-    gatewayProtocol === 3 ||
-    (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD);
-  return (
-    legacyUnknownMethodShape &&
-    error instanceof GatewayClientRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message === "unauthorized role: node"
-  );
-}
-
-function classifyNodeMethodFailure(
-  error: unknown,
-  method: string,
-  gatewayProtocol: number,
-): "legacy-unsupported" | "rejected" | "transient" {
-  if (
-    isExactUnknownMethodError(error, method) ||
-    isExactLegacyNodeAuthorizationError(error, method, gatewayProtocol)
-  ) {
-    return "legacy-unsupported";
-  }
-  if (error instanceof GatewayClientRequestError && error.gatewayCode === "INVALID_REQUEST") {
-    return "rejected";
-  }
-  return "transient";
-}
-
-type NodeOptionalPublicationMethod =
-  | typeof NODE_RUNNER_INVENTORY_UPDATE_METHOD
-  | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
-  | typeof NODE_SKILLS_UPDATE_METHOD;
-
-type NodeOptionalPublicationState = {
-  status: "unknown" | "supported" | "unsupported";
-  hasPending: boolean;
-  pendingParams?: unknown;
-  hasPublishedParams: boolean;
-  publishedParams?: unknown;
-  hasRejectedParams: boolean;
-  rejectedParams?: unknown;
-  retryDelayMs: number;
-  retryPending: boolean;
-  retryTimer?: NodeJS.Timeout;
-  hasInFlightParams: boolean;
-  inFlightParams?: unknown;
-  inFlight?: Promise<void>;
-};
-
 async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -203,6 +118,10 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
     return config;
   }
   const nextConfig = structuredClone(config);
+  copyConfigResolutionFactsExcept(config, nextConfig, [
+    "gateway.remote.token",
+    "gateway.remote.password",
+  ]);
   if (nextConfig.gateway?.remote) {
     // Local node-host must not inherit gateway.remote.* auth material, which can
     // suppress GatewayClient device-token fallback and cause local token mismatches.
@@ -216,12 +135,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   // Operator-approved startup is a second authorized entry point for Doctor-owned
   // state migrators. Runtime invokes those owners here and never migrates inline.
   await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
+  const cfg = getRuntimeConfig();
   const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
-    tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
+    tls: opts.gatewayTls ?? cfg.gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
     contextPath: opts.gatewayContextPath,
+    cloudflareAccess: opts.gatewayCloudflareAccess,
   };
   const fallbackDisplayName = await getMachineDisplayName();
   const config = await configureNodeHost({
@@ -234,246 +155,59 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
   const gateway = config.gateway ?? plannedGateway;
-  const gatewayCandidates = opts.gatewayCandidates?.length ? opts.gatewayCandidates : [gateway];
+  const gatewayCandidates = opts.gatewayCandidates?.length
+    ? opts.gatewayCandidates.map((candidate, index) =>
+        index === 0 && gateway.cloudflareAccess && !candidate.cloudflareAccess
+          ? { ...candidate, cloudflareAccess: gateway.cloudflareAccess }
+          : candidate,
+      )
+    : [gateway];
 
-  const cfg = getRuntimeConfig();
+  const plaintextAccessCandidate = gatewayCandidates.find(
+    (candidate) => candidate.cloudflareAccess && candidate.tls !== true,
+  );
+  if (plaintextAccessCandidate) {
+    throw new Error("Cloudflare Access credentials require a TLS Gateway connection");
+  }
+
+  const resolvedCloudflareAccess = await Promise.all(
+    gatewayCandidates.map(
+      async (candidate) =>
+        await resolveNodeHostCloudflareAccess({
+          value: candidate.cloudflareAccess,
+          config: cfg,
+          env: process.env,
+        }),
+    ),
+  );
+  const cloudflareAccessByCandidate = new Map<NodeHostGatewayConfig, CloudflareAccessCredentials>();
+  gatewayCandidates.forEach((candidate, index) => {
+    const credentials = resolvedCloudflareAccess[index];
+    if (credentials) {
+      cloudflareAccessByCandidate.set(candidate, credentials);
+    }
+  });
   const preparedRuntime = await prepareNodeHostRuntime({
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
     enableWorkerRuns: true,
+    forceWorkerRuns: opts.forceWorkerRuns,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  const { token, password } = opts.preferGatewayBootstrapToken
+  if (preparedRuntime.workerHostingDisabledReason) {
+    writeStderrLine(
+      `node host worker hosting disabled: ${preparedRuntime.workerHostingDisabledReason}`,
+    );
+  }
+  const { token, password } = opts.gatewayBootstrapToken
     ? {}
     : await resolveNodeHostGatewayCredentials({
         config: cfg,
         env: process.env,
       });
 
-  let inventory: NodeHostInventory = preparedRuntime.initialInventory;
-  let workerRunsAvailable = false;
-  let gatewayHelloReceived = false;
-  let gatewayConnectionGeneration = 0;
-  let connectedGatewayProtocol = 0;
-  let optionalPublicationStates = new Map<
-    NodeOptionalPublicationMethod,
-    NodeOptionalPublicationState
-  >();
-  const retireOptionalPublications = () => {
-    for (const state of optionalPublicationStates.values()) {
-      if (state.retryTimer) {
-        clearTimeout(state.retryTimer);
-      }
-    }
-    optionalPublicationStates.clear();
-  };
-  const retireGatewayConnection = () => {
-    gatewayConnectionGeneration += 1;
-    gatewayHelloReceived = false;
-    connectedGatewayProtocol = 0;
-    retireOptionalPublications();
-  };
-
-  const queueOptionalPublication = (
-    method: NodeOptionalPublicationMethod,
-    params: unknown,
-    label: string,
-    isRetry = false,
-  ): void => {
-    if (!gatewayHelloReceived) {
-      return;
-    }
-    const connectionGeneration = gatewayConnectionGeneration;
-    const gatewayProtocol = connectedGatewayProtocol;
-    const connectionIsCurrent = () => connectionGeneration === gatewayConnectionGeneration;
-    let state = optionalPublicationStates.get(method);
-    if (!state) {
-      state = {
-        status: "unknown",
-        hasPending: false,
-        hasPublishedParams: false,
-        hasRejectedParams: false,
-        retryDelayMs: NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS,
-        retryPending: false,
-        hasInFlightParams: false,
-      };
-      optionalPublicationStates.set(method, state);
-    }
-    if (state.hasInFlightParams && isDeepStrictEqual(state.inFlightParams, params)) {
-      // The latest desired value remains authoritative even when it matches the
-      // active request. Replace a newer pending value so A -> B -> A cannot publish B.
-      if (state.hasPending) {
-        state.pendingParams = params;
-      }
-      return;
-    }
-    if (
-      state.status === "unsupported" ||
-      (state.hasRejectedParams && isDeepStrictEqual(state.rejectedParams, params)) ||
-      (state.hasPending && isDeepStrictEqual(state.pendingParams, params)) ||
-      (!state.inFlight &&
-        state.hasPublishedParams &&
-        isDeepStrictEqual(state.publishedParams, params))
-    ) {
-      return;
-    }
-    if (state.retryTimer) {
-      clearTimeout(state.retryTimer);
-      state.retryTimer = undefined;
-    }
-    if (!isRetry) {
-      state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
-    }
-    state.hasRejectedParams = false;
-    state.rejectedParams = undefined;
-    state.pendingParams = params;
-    state.hasPending = true;
-    if (state.inFlight) {
-      return;
-    }
-    const publish = async () => {
-      while (state.hasPending && state.status !== "unsupported") {
-        if (!connectionIsCurrent()) {
-          return;
-        }
-        const nextParams = state.pendingParams;
-        state.pendingParams = undefined;
-        state.hasPending = false;
-        if (state.hasPublishedParams && isDeepStrictEqual(state.publishedParams, nextParams)) {
-          continue;
-        }
-        if (state.hasRejectedParams && !isDeepStrictEqual(state.rejectedParams, nextParams)) {
-          // A different value reopens publication. Keeping the old rejection
-          // would drop a later return to that value while this request is in flight.
-          state.hasRejectedParams = false;
-          state.rejectedParams = undefined;
-        }
-        state.inFlightParams = nextParams;
-        state.hasInFlightParams = true;
-        try {
-          await client.request(method, nextParams);
-          // Request settlement races reconnect teardown. Stale completions must
-          // not mutate or report against the retired connection.
-          if (!connectionIsCurrent()) {
-            return;
-          }
-          state.status = "supported";
-          state.publishedParams = nextParams;
-          state.hasPublishedParams = true;
-          state.hasRejectedParams = false;
-          state.rejectedParams = undefined;
-          state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
-          state.retryPending = false;
-        } catch (error) {
-          if (!connectionIsCurrent()) {
-            return;
-          }
-          const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
-          if (failure === "legacy-unsupported") {
-            state.status = "unsupported";
-            state.pendingParams = undefined;
-            state.hasPending = false;
-            state.retryPending = false;
-          } else {
-            writeStderrLine(`node host ${label} publish failed: ${String(error)}`);
-            if (failure === "rejected") {
-              state.hasRejectedParams = true;
-              state.rejectedParams = nextParams;
-              state.retryPending = false;
-              if (state.hasPending && isDeepStrictEqual(state.pendingParams, nextParams)) {
-                state.pendingParams = undefined;
-                state.hasPending = false;
-              }
-            } else {
-              // A timeout or transport failure can occur after the Gateway applied
-              // the update. Forget the acknowledged baseline so the next desired
-              // value is never skipped against an uncertain remote state.
-              state.hasPublishedParams = false;
-              state.publishedParams = undefined;
-              if (!state.hasPending || isDeepStrictEqual(state.pendingParams, nextParams)) {
-                state.pendingParams = nextParams;
-                state.hasPending = true;
-                state.retryPending = true;
-                break;
-              }
-            }
-          }
-        } finally {
-          state.inFlightParams = undefined;
-          state.hasInFlightParams = false;
-        }
-      }
-    };
-    const inFlight = publish().finally(() => {
-      if (state.inFlight === inFlight) {
-        state.inFlight = undefined;
-        if (
-          state.hasPending &&
-          state.status !== "unsupported" &&
-          gatewayHelloReceived &&
-          connectionIsCurrent()
-        ) {
-          const pendingParams = state.pendingParams;
-          const retryPending = state.retryPending;
-          state.retryPending = false;
-          if (retryPending) {
-            const retryDelayMs = state.retryDelayMs;
-            state.retryDelayMs = Math.min(retryDelayMs * 2, NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS);
-            state.retryTimer = setTimeout(() => {
-              state.retryTimer = undefined;
-              if (
-                state.hasPending &&
-                isDeepStrictEqual(state.pendingParams, pendingParams) &&
-                gatewayHelloReceived &&
-                connectionIsCurrent()
-              ) {
-                state.pendingParams = undefined;
-                state.hasPending = false;
-                queueOptionalPublication(method, pendingParams, label, true);
-              }
-            }, retryDelayMs);
-            state.retryTimer.unref?.();
-          } else {
-            state.pendingParams = undefined;
-            state.hasPending = false;
-            queueOptionalPublication(method, pendingParams, label);
-          }
-        }
-      }
-    });
-    state.inFlight = inFlight;
-  };
-
-  const publishInventory = () => {
-    if (!gatewayHelloReceived) {
-      return;
-    }
-    if (inventory.skills) {
-      queueOptionalPublication(NODE_SKILLS_UPDATE_METHOD, { skills: inventory.skills }, "skill");
-    }
-    queueOptionalPublication(
-      NODE_PLUGIN_TOOLS_UPDATE_METHOD,
-      { tools: inventory.pluginTools },
-      "plugin tool",
-    );
-  };
-
-  const publishRunnerInventory = () => {
-    // The handshake keeps the immutable build ceiling. Live inventory withdraws
-    // only new-launch eligibility while full, leaving status/cancel negotiated.
-    queueOptionalPublication(
-      NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-      {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        ...(workerRunsAvailable && preparedRuntime.manifest.workerRuns
-          ? { workerRuns: preparedRuntime.manifest.workerRuns }
-          : {}),
-      },
-      "runner inventory",
-    );
-  };
-
+  let consecutivePermanentGatewayRejections = 0;
   const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
     void configureNodeHost({
       nodeId,
@@ -488,6 +222,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const client = createNodeHostGatewayCandidateConnection({
     candidates: gatewayCandidates,
+    cloudflareAccessByCandidate,
     clientOptions: {
       token: token || undefined,
       bootstrapToken: opts.gatewayBootstrapToken,
@@ -497,8 +232,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
       clientDisplayName: displayName,
       clientVersion: VERSION,
-      platform: resolveNodeHostGatewayPlatform(process.platform),
-      deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
+      ...resolveNodeHostGatewayPlatformIdentity(process.platform),
       mode: GATEWAY_CLIENT_MODES.NODE,
       role: "node",
       scopes: [],
@@ -507,7 +241,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       caps: preparedRuntime.manifest.caps,
       commands: preparedRuntime.manifest.commands,
       computerUse: preparedRuntime.manifest.computerUse,
-      workerRuns: preparedRuntime.manifest.workerRuns,
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,
       deviceIdentity: loadOrCreateDeviceIdentity(),
@@ -535,24 +268,46 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         void activeRuntime.invoke(payload);
       }
     },
-    onHelloOk: (hello, url, tlsFingerprint) => {
+    onHelloOk: (hello, url, tlsFingerprint, cloudflareAccess) => {
+      consecutivePermanentGatewayRejections = 0;
       writeStderrLine(`node host gateway connected: ${url}`);
-      activeRuntime.updateGatewayConnection({ url, ...(tlsFingerprint ? { tlsFingerprint } : {}) });
-      gatewayConnectionGeneration += 1;
-      gatewayHelloReceived = true;
-      connectedGatewayProtocol = hello.protocol;
-      retireOptionalPublications();
-      optionalPublicationStates = new Map();
       if (opts.stopAfterFirstConnect) {
         void finish(0);
         return;
       }
-      publishRunnerInventory();
-      publishInventory();
+      activeRuntime.connect({
+        url,
+        protocol: hello.protocol,
+        capabilities: hello.features?.capabilities ?? [],
+        ...(tlsFingerprint ? { tlsFingerprint } : {}),
+        ...(cloudflareAccess ? { cloudflareAccess } : {}),
+      });
     },
     onConnectError: (error) => {
-      // keep retrying (handled by GatewayClient)
       writeStderrLine(`node host gateway connect failed: ${error.message}`);
+      const rejection =
+        error instanceof GatewayClientRequestError && isRecord(error.details)
+          ? error.details
+          : undefined;
+      if (
+        rejection?.reason !== "websocket-upgrade-rejected" ||
+        rejection.httpStatus !== 403 ||
+        rejection.gatewayErrorType !== "proxy_attribution_required"
+      ) {
+        consecutivePermanentGatewayRejections = 0;
+        return;
+      }
+      if (++consecutivePermanentGatewayRejections < 3) {
+        return;
+      }
+      const remediation =
+        typeof rejection.gatewayErrorMessage === "string"
+          ? rejection.gatewayErrorMessage
+          : error.message;
+      writeStderrLine(
+        `node host gateway permanently rejected connection (${rejection.gatewayErrorType}): ${remediation}; exiting`,
+      );
+      void finish(1);
     },
     onReconnectPaused: (info) => {
       handleNodeHostReconnectPaused(info, {
@@ -565,29 +320,16 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
     },
     onClose: (code, reason) => {
-      retireGatewayConnection();
-      activeRuntime.updateGatewayConnection();
-      activeRuntime.cancelAll();
+      activeRuntime.disconnect();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
     onWinningCandidate: persistWinningGateway,
   });
-  const activeRuntime = preparedRuntime.start({
+  const activeRuntime = startNodeHostConnection({
+    prepared: preparedRuntime,
     client,
-    onInventoryChanged: (nextInventory) => {
-      inventory = nextInventory;
-      publishInventory();
-    },
-    onRunnerAvailabilityChanged: (available) => {
-      workerRunsAvailable = available;
-      publishRunnerInventory();
-    },
-    onManifestChanged: (manifest) => {
-      // Manifest changes force a reconnect. Retire the current publication queue
-      // now so it cannot drain against the closing connection.
-      retireGatewayConnection();
-      client.updateNodeManifest(manifest);
-    },
+    writeStderrLine,
+    onManifestChanged: (manifest) => client.updateNodeManifest(manifest),
   });
 
   let stopping = false;
@@ -603,7 +345,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     process.off("SIGTERM", onSigterm);
   };
   const stopClientAndMcp = async () => {
-    retireGatewayConnection();
     client.stop();
     try {
       await activeRuntime.close();

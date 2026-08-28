@@ -155,6 +155,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 const downloadLineMediaMock = vi.hoisted(() => vi.fn());
+const getUserDisplayNameMock = vi.hoisted(() => vi.fn(async (userId: string) => userId));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -168,6 +169,8 @@ vi.mock("./download.js", async (importActual) => ({
 }));
 
 vi.mock("./send.js", () => ({
+  getLineGroupName: vi.fn(),
+  getUserDisplayName: getUserDisplayNameMock,
   pushMessageLine: pairingDeliveryMocks.pushMessageLine,
   replyMessageLine: pairingDeliveryMocks.replyMessageLine,
 }));
@@ -351,6 +354,8 @@ describe("handleLineWebhookEvents", () => {
     downloadLineMediaMock.mockImplementation(async () => {
       throw new Error("downloadLineMedia should not be called from bot-handlers tests");
     });
+    getUserDisplayNameMock.mockReset();
+    getUserDisplayNameMock.mockImplementation(async (userId: string) => userId);
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -856,32 +861,67 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
   });
 
-  it("records unmentioned group messages as pending history", async () => {
+  it("keeps matching display names distinct in pending group history", async () => {
     const processMessage = vi.fn();
     const groupHistories = new Map<string, HistoryEntry[]>();
-    const event = createTestMessageEvent({
-      message: { id: "m-hist-1", type: "text", text: "hello history", quoteToken: "q-hist-1" },
-      timestamp: 1700000000000,
-      source: { type: "group", groupId: "group-hist-1", userId: "user-hist" },
-      webhookEventId: "evt-hist-1",
+    getUserDisplayNameMock.mockResolvedValue("Sora");
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
     });
 
     await handleLineWebhookEvents(
-      [event],
-      createLineWebhookTestContext({
-        processMessage,
-        groupPolicy: "open",
-        groupHistories,
-      }),
+      [
+        createTestMessageEvent({
+          message: { id: "m-hist-1", type: "text", text: "first", quoteToken: "q-hist-1" },
+          timestamp: 1700000000000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-one" },
+          webhookEventId: "evt-hist-1",
+        }),
+        createTestMessageEvent({
+          message: { id: "m-hist-2", type: "text", text: "second", quoteToken: "q-hist-2" },
+          timestamp: 1700000001000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-two" },
+          webhookEventId: "evt-hist-2",
+        }),
+      ],
+      context,
     );
 
     expect(processMessage).not.toHaveBeenCalled();
-    const entries = groupHistories.get("group-hist-1");
-    expect(entries).toHaveLength(1);
-    const entry = entries?.[0];
-    expect(entry?.sender).toBe("user:user-hist");
-    expect(entry?.body).toBe("hello history");
-    expect(entry?.timestamp).toBe(1700000000000);
+    expect(groupHistories.get("group-hist-1")).toEqual([
+      expect.objectContaining({ sender: "Sora (user-one)", body: "first" }),
+      expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
+    ]);
+
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-hist-mention",
+            type: "text",
+            text: "@Bot summarize",
+            quoteToken: "q-hist-mention",
+            mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+          },
+          timestamp: 1700000002000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-three" },
+          webhookEventId: "evt-hist-mention",
+        }),
+      ],
+      context,
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inboundHistory: [
+          expect.objectContaining({ sender: "Sora (user-one)", body: "first" }),
+          expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
+        ],
+      }),
+    );
   });
 
   it("keeps a group message recorded during a mention turn instead of clearing it", async () => {
@@ -1265,7 +1305,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards LINE file names to media downloads", async () => {
+  it("forwards LINE file names to media downloads and to the message context", async () => {
     const processMessage = vi.fn();
     downloadLineMediaMock.mockResolvedValueOnce({
       path: "/tmp/line-media/voice-note.m4a",
@@ -1300,8 +1340,43 @@ describe("handleLineWebhookEvents", () => {
           {
             path: "/tmp/line-media/voice-note.m4a",
             contentType: "audio/x-m4a",
+            fileName: "voice-note.m4a",
           },
         ],
+      }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the media fact unnamed for LINE message types that carry no file name", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media/photo.jpg",
+      contentType: "image/jpeg",
+      size: 2048,
+    });
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-named-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-named",
+      },
+      source: { type: "user", userId: "user-image-named" },
+      webhookEventId: "evt-image-named",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+    );
+
+    expect(downloadLineMediaMock).toHaveBeenCalledWith("image-named-1", "token", 1, {
+      originalFilename: undefined,
+    });
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/tmp/line-media/photo.jpg", contentType: "image/jpeg" }],
       }),
     );
     expect(processMessage).toHaveBeenCalledTimes(1);
@@ -1358,6 +1433,49 @@ describe("handleLineWebhookEvents", () => {
         createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
       ),
     ).rejects.toBeInstanceOf(MediaFetchError);
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not materialize or dispatch media after ingress cancellation", async () => {
+    const cancellation = new Error("LINE webhook spool stopped");
+    const abort = new AbortController();
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementationOnce(
+      async (
+        _messageId: string,
+        _token: string,
+        _maxBytes: number,
+        options?: { signal?: AbortSignal },
+      ) => {
+        options?.signal?.throwIfAborted();
+        throw new Error("download did not receive ingress cancellation");
+      },
+    );
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-cancelled-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-cancelled",
+      },
+      source: { type: "user", userId: "user-image-cancelled" },
+      webhookEventId: "evt-image-cancelled",
+    });
+    const context = {
+      ...createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+      turnAdoptionLifecycle: {
+        admission: "exclusive" as const,
+        abortSignal: abort.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    };
+    abort.abort(cancellation);
+
+    await expect(handleLineWebhookEvents([event], context)).rejects.toBe(cancellation);
 
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
     expect(processMessage).not.toHaveBeenCalled();

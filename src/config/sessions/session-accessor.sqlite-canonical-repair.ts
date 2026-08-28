@@ -5,10 +5,9 @@ import {
 } from "../../infra/kysely-sync.js";
 import {
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { listSqliteSessionEntriesWithCanonicalOwnerEvidence } from "./session-accessor.sqlite-canonical-inventory.js";
-import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
@@ -19,11 +18,12 @@ import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-refere
 import {
   getSessionKysely,
   resolveSqliteStoreScope,
+  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { bindSessionWindowEntryProjection } from "./session-accessor.sqlite-session-row.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
-import type { SessionEntryListScope } from "./session-accessor.types.js";
+import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import {
   deleteSessionTranscriptIndexInTransaction,
@@ -33,12 +33,6 @@ import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
 // Doctor-only cross-store transfer. Runtime readers never reconcile aliases.
-
-export function listSqliteSessionEntriesForCanonicalRepair(
-  scope: SessionEntryListScope = {},
-): Array<SessionEntrySummary & { rawEntryJson?: string }> {
-  return listSqliteSessionEntriesWithCanonicalOwnerEvidence(scope);
-}
 
 function resolveSqliteCanonicalRepairLookupKeys(
   canonicalKey: string,
@@ -133,6 +127,55 @@ export function listSqliteSessionGenerationIdsForCanonicalRepair(params: {
   return readSessionGenerationIdsForKeys(database, uniqueStrings(params.sourceKeys), {
     exactStoredKeys: true,
   });
+}
+
+/** Doctor-only normalization of imported transcript rows before copy or archival. */
+export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
+  sources: readonly {
+    agentId: string;
+    entry: SessionEntry;
+    sessionKey: string;
+    storePath: string;
+  }[],
+): Promise<void> {
+  const byDatabase = new Map<
+    string,
+    { resolved: ReturnType<typeof resolveSqliteStoreScope>; sources: typeof sources }
+  >();
+  for (const source of sources) {
+    const resolved = resolveSqliteStoreScope(source.storePath, { agentId: source.agentId });
+    const key = `${resolved.path ?? source.storePath}\0${resolved.databaseAgentId ?? resolved.agentId}`;
+    const grouped = byDatabase.get(key) ?? { resolved, sources: [] };
+    byDatabase.set(key, { ...grouped, sources: [...grouped.sources, source] });
+  }
+  for (const group of byDatabase.values()) {
+    await runExclusiveSqliteSessionWrite(group.resolved, async () => {
+      runOpenClawAgentWriteTransaction((database) => {
+        // Inventory and generation creation share one snapshot so copied rows and later archive
+        // plans observe the same immutable identity for each imported transcript.
+        const sessionIds = uniqueStrings([
+          ...group.sources.flatMap((source) => [...collectSessionStateIdsForEntry(source.entry)]),
+          ...readSessionGenerationIdsForKeys(
+            database,
+            group.sources.map((source) => source.sessionKey),
+            { exactStoredKeys: true },
+          ),
+        ]);
+        const db = getSessionKysely(database.db);
+        const eventSessionIds = executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            .select("session_id")
+            .where("session_id", "in", sessionIds)
+            .groupBy("session_id"),
+        ).rows;
+        for (const row of eventSessionIds) {
+          ensureTranscriptGenerationInTransaction(database, row.session_id);
+        }
+      }, toDatabaseOptions(group.resolved));
+    });
+  }
 }
 
 /** Doctor-only same-store rewrite for delivery attribution owned by removed aliases. */
@@ -426,7 +469,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     if (!replaced) {
       continue;
     }
-    // Search and active-event tables are derived from transcript_events; force their canonical rebuild.
+    // Doctor repair runs outside gateway requests and must atomically finish copied projections.
     deleteSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     reconcileSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     publishSessionEntryCacheInvalidation(params.destination);
@@ -446,6 +489,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     params.destination,
     params.preferredSessionKey ? [params.preferredSessionKey] : sourceKeys,
     params.canonicalKey,
+    { includeParticipants: false },
   );
 }
 

@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildProductionControlUiE2e,
   canRunPlaywrightChromium,
+  captureControlUiE2eFailureDiagnostics,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
@@ -17,7 +19,6 @@ import {
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/service-worker-update");
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const workerUpdateVersionsStorageKey = "openclaw.control-ui-e2e.worker-update-versions";
 
 const buildA = "service-worker-build-a";
 const buildB = "service-worker-build-b";
@@ -162,18 +163,14 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
     return value.active?.state === "activated";
   });
   if (!registration.controlled) {
+    // Reload once so the freshly activated worker controls the page. The
+    // reload may land on a router deep link like /chat/research; the preview
+    // server mirrors the Gateway's depth-insensitive /assets/ resolution, so
+    // that boots correctly. (A racy replaceState("/") used to canonicalize
+    // the URL here and could interleave with the router's own redirect.)
     await page.reload();
   }
   await page.waitForFunction(() => navigator.serviceWorker?.controller?.state === "activated");
-}
-
-async function readWorkerUpdateVersions(page: Page): Promise<string[]> {
-  return page.evaluate((storageKey) => {
-    const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? "[]") as unknown;
-    return Array.isArray(stored)
-      ? stored.filter((value): value is string => typeof value === "string")
-      : [];
-  }, workerUpdateVersionsStorageKey);
 }
 
 async function fetchControlledAsset(
@@ -215,6 +212,40 @@ async function fetchControlledAsset(
 }
 
 describe("Control UI service-worker production update E2E", () => {
+  it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
+    // The built index.html references ./assets/* relatively, so a document at
+    // /chat/research requests /chat/assets/*. The Gateway resolves /assets/
+    // at any depth (src/gateway/control-ui.ts); the preview server must honor
+    // the same contract or reloads on deep links serve HTML as the module and
+    // the app silently never boots.
+    const context = await browser.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
+    await installMockGateway(page, {
+      assistantAgentId: "research",
+      defaultAgentId: "research",
+      serverBuildId: buildA,
+    });
+    try {
+      expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
+      await page.waitForFunction(() => Boolean(customElements.get("openclaw-app")), undefined, {
+        timeout: controlUiE2eWaitTimeoutMs,
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error,
+          label: "deep-link-boot",
+          pageErrors,
+        });
+      }
+      throw error;
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
   beforeAll(async () => {
     if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
@@ -254,27 +285,14 @@ describe("Control UI service-worker production update E2E", () => {
         ? { recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } } }
         : {}),
     });
-    // An update keeps the incumbent script URL while installing changed bytes.
-    // The worker emits its embedded version only after clients.claim() resolves.
-    await context.addInitScript((storageKey) => {
-      navigator.serviceWorker.addEventListener("message", (event) => {
-        if (event.data?.type !== "sw-updated" || typeof event.data.version !== "string") {
-          return;
-        }
-        const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? "[]") as unknown;
-        const versions = Array.isArray(stored)
-          ? stored.filter((value): value is string => typeof value === "string")
-          : [];
-        versions.push(event.data.version);
-        sessionStorage.setItem(storageKey, JSON.stringify(versions));
-      });
-    }, workerUpdateVersionsStorageKey);
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
     const gateway = await installMockGateway(page, {
       assistantAgentId: "research",
       defaultAgentId: "research",
+      serverBuildId: buildA,
+      serverVersion: "2026.7.10",
       featureMethods: ["terminal.open"],
       methodResponses: {
         "terminal.open": {
@@ -287,12 +305,48 @@ describe("Control UI service-worker production update E2E", () => {
       },
       terminalEnabled: true,
     });
+    const getCatalogOpens = async () =>
+      (await gateway.getRequests("terminal.open")).filter(
+        (request) =>
+          typeof request.params === "object" &&
+          request.params !== null &&
+          "catalog" in request.params,
+      );
     let installGate: InstallGate | null = null;
 
     try {
       expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
       await ensureControlledPage(page, pageErrors, buildA);
-      await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildA);
+      await expect
+        .poll(
+          async () =>
+            page.evaluate(() => {
+              const panel = document.querySelector("openclaw-terminal-panel") as
+                | (HTMLElement & { available: boolean })
+                | null;
+              const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
+                runtime?: {
+                  context?: {
+                    config: { current: { terminalEnabled: boolean } };
+                    gateway: { snapshot: { phase: string; hello: unknown } };
+                  };
+                };
+              };
+              return {
+                available: panel?.available ?? null,
+                phase: shell?.runtime?.context?.gateway.snapshot.phase ?? null,
+                terminalEnabled: shell?.runtime?.context?.config.current.terminalEnabled ?? null,
+                hasHello: shell?.runtime?.context?.gateway.snapshot.hello != null,
+              };
+            }),
+          { timeout: controlUiE2eWaitTimeoutMs },
+        )
+        .toMatchObject({
+          available: true,
+          phase: "connected",
+          terminalEnabled: true,
+          hasHello: true,
+        });
 
       const assetA = await findBuildAsset(buildA);
       const initialAsset = await fetchControlledAsset(page, assetA.path);
@@ -320,9 +374,18 @@ describe("Control UI service-worker production update E2E", () => {
         );
       });
       await gateway.setOnline(false);
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean })
+          | null;
+        return panel?.available === false;
+      });
       await rename(outDir, previousOutDir);
       await rename(nextOutDir, outDir);
       await rm(previousOutDir, { force: true, recursive: true });
+      // Assets and Gateway identity advance together in a deployment. Publish
+      // build B before a stale lazy chunk can reload and reconnect the document.
+      await gateway.setServerBuildId(buildB);
       // The production preview serves static files directly instead of applying
       // the Gateway's deep-link canonicalization before returning index.html.
       await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));
@@ -357,13 +420,20 @@ describe("Control UI service-worker production update E2E", () => {
         .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
         .toContain("thread-during-worker-refresh");
       await page.waitForTimeout(300);
-      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      const catalogOpensBeforeWorkerActivation = await getCatalogOpens();
+      expect(catalogOpensBeforeWorkerActivation.length).toBeLessThanOrEqual(1);
+      if (catalogOpensBeforeWorkerActivation.length > 0) {
+        const currentConnect = (await gateway.getRequests("connect")).at(-1);
+        expect(currentConnect?.params).toMatchObject({ client: { buildId: buildB } });
+      }
       installGate.release();
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);
-      await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildB);
+      await expect
+        .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
+        .toMatchObject({ client: { buildId: buildB } });
 
-      const terminal = page.locator("openclaw-terminal-panel");
+      const terminal = page.locator("openclaw-terminal-panel[embedded]");
       await terminal.waitFor({ state: "attached" });
       await expect
         .poll(() =>
@@ -381,8 +451,16 @@ describe("Control UI service-worker production update E2E", () => {
           }),
         )
         .toEqual({ agentId: "research", available: true, open: true });
-      const terminalOpen = await gateway.waitForRequest("terminal.open");
-      expect(terminalOpen.params).toMatchObject({
+      // Panel visibility precedes asynchronous terminal boot and RPC dispatch.
+      // Observe the request and finish its intent before counting exactly once.
+      await expect.poll(getCatalogOpens).toHaveLength(1);
+      await expect
+        .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
+        .toBeNull();
+      const catalogOpens = await getCatalogOpens();
+      expect(catalogOpens).toHaveLength(1);
+      const [terminalOpen] = catalogOpens;
+      expect(terminalOpen?.params).toMatchObject({
         agentId: "research",
         cols: expect.any(Number),
         rows: expect.any(Number),
@@ -392,7 +470,6 @@ describe("Control UI service-worker production update E2E", () => {
           threadId: "thread-during-worker-refresh",
         },
       });
-      expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
 
       await expect
         .poll(() => page.evaluate(() => caches.keys()))
@@ -403,6 +480,18 @@ describe("Control UI service-worker production update E2E", () => {
         sha256: assetB.sha256,
       });
       expect(refreshedAsset.sha256).not.toBe(initialAsset.sha256);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            async ({ assetPath, cacheName }) => {
+              const cache = await caches.open(cacheName);
+              const shell = await cache.match(new URL("./", window.location.origin));
+              return shell ? (await shell.text()).includes(assetPath) : false;
+            },
+            { assetPath: assetB.path, cacheName: `openclaw-control-${buildB}` },
+          ),
+        )
+        .toBe(true);
 
       if (captureUiProof) {
         await page.screenshot({
@@ -410,6 +499,17 @@ describe("Control UI service-worker production update E2E", () => {
           path: path.join(artifactDir, "updated-worker-controlled-page.png"),
         });
       }
+    } catch (error) {
+      // Boot/readiness stalls otherwise fail as all-null poll snapshots with
+      // no CI evidence; capture page state before the context closes.
+      if (error instanceof Error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error,
+          label: "service-worker-update-reconnect",
+          pageErrors,
+        });
+      }
+      throw error;
     } finally {
       await installGate?.close();
       await context.close();

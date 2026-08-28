@@ -13,7 +13,9 @@ extension OnboardingAISetupModel {
         return issue
     }
 
-    func showConfiguredGatewayProbeUnavailable() {
+    func showConfiguredGatewayProbeUnavailable(
+        summary: String = "The Gateway did not answer the inference check. Nothing was changed.")
+    {
         guard !self.ownsInferenceTransition ||
             self.configuredGatewayBlocker != nil ||
             self.waitingForPendingActivationDeadline
@@ -24,9 +26,7 @@ extension OnboardingAISetupModel {
         self.updateConfiguredGatewayBlockerState(
             .unavailable,
             phase: .ready,
-            detectError: Failure(
-                summary: "The Gateway did not answer the inference check. Nothing was changed.",
-                detail: nil))
+            detectError: Failure(summary: summary, detail: nil))
     }
 
     func showConfiguredGatewayAuthIssue(_ issue: RemoteGatewayAuthIssue) {

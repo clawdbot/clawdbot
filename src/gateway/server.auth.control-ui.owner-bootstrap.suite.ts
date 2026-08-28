@@ -1,8 +1,10 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, test } from "vitest";
 import {
   createOperatorIdentityFixture,
   seedApprovedOperatorReadPairing,
-  startControlUiServer,
+  startProxiedControlUiServer,
 } from "./server.auth.control-ui.fixtures.test-support.js";
 import {
   connectReq,
@@ -13,18 +15,47 @@ import {
   rpcReq,
   testState,
 } from "./server.auth.test-helpers.js";
+import { writeSessionStore } from "./test-helpers.js";
 
 export function registerControlUiOwnerBootstrapSuite(): void {
   test("silently approves host-authorized control ui owner bootstrap tokens", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
-      await import("../infra/device-pairing.js");
+    const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
     const { resolveSharedGatewaySessionGeneration } =
       await import("./server/ws-shared-generation.js");
+    const { prepareSessionWorkspaceIcon } = await import("./workspace-icon-http.js");
+    const { mutateConfigFile } = await import("../config/config.js");
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR must be set by the gateway test hooks");
+    }
+    const workspace = path.join(stateDir, "owner-icon-workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    const icon = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><path d="M0 0h1v1H0z"/></svg>',
+    );
+    await fs.writeFile(path.join(workspace, "favicon.svg"), icon);
+    await mutateConfigFile({
+      mutate(config) {
+        config.agents = {
+          ...config.agents,
+          defaults: { ...config.agents?.defaults, workspace },
+        };
+      },
+      afterWrite: { mode: "auto" },
+    });
+    const sessionKey = "agent:main:owner-icon";
+    testState.sessionStorePath = path.join(stateDir, "sessions.sqlite");
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: { sessionId: "owner-icon-session", updatedAt: Date.now() },
+      },
+    });
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-control-ui-",
@@ -69,6 +100,14 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       expect(recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
       expect((await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false })).ok).toBe(true);
       wsBootstrap.close();
+
+      await prepareSessionWorkspaceIcon({ sessionKey });
+      const iconResponse = await fetch(
+        `http://127.0.0.1:${port}/__openclaw__/workspace-icon/${encodeURIComponent(sessionKey)}`,
+        { headers: { Authorization: `Bearer ${deviceToken}` } },
+      );
+      expect(iconResponse.status).toBe(200);
+      expect(Buffer.from(await iconResponse.arrayBuffer())).toEqual(icon);
 
       const pending = (await listDevicePairing()).pending.filter(
         (entry) => entry.deviceId === identity.deviceId,
@@ -139,7 +178,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     const { BOOTSTRAP_HANDOFF_OPERATOR_SCOPES } =
       await import("../shared/device-bootstrap-profile.js");
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-control-ui-bounded-",
     );
@@ -213,7 +252,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     }
 
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath: secondIdentityPath } = await createOperatorIdentityFixture(
       "openclaw-control-ui-owner-upgrade-second-browser-",
     );
@@ -305,7 +344,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     const { BOOTSTRAP_HANDOFF_OPERATOR_SCOPES } =
       await import("../shared/device-bootstrap-profile.js");
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-control-ui-missing-purpose-",
@@ -350,7 +389,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-control-ui-node-profile-",

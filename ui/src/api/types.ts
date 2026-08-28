@@ -1,9 +1,11 @@
-export type {
-  UpdateAvailable,
-  UpdateHoldResult,
-  UpdateScheduleState,
-} from "../../../packages/gateway-protocol/src/index.js";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type {
+  CronJob as ProtocolCronJob,
+  CronListParams,
+  CronRunLogEntry as ProtocolCronRunLogEntry,
+  CronRunsParams,
+  SessionsFilesListResult as ProtocolSessionsFilesListResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -12,16 +14,28 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
-import type { CronJobBase } from "../../../src/cron/types-shared.js";
-import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  GatewayContextWindowOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
+export type {
+  AgentsFileEntry as AgentFileEntry,
+  AgentsFilesListResult,
+  AgentsFilesGetResult,
+  AgentsFilesSetResult,
+  SessionsFilesGetResult as SessionWorkspaceGetResult,
+  SessionsFilesSetResult as SessionWorkspaceSetResult,
+  CronJob,
+  CronRunLogEntry,
+  UpdateAvailable,
+  UpdateHoldResult,
+  UpdateScheduleState,
+} from "../../../packages/gateway-protocol/src/index.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
@@ -35,8 +49,8 @@ export type ChannelsPairingRequest =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
 export type SessionVisibility =
   import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
-export type SessionMembersListResult =
-  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
+export type SessionMembersListEvidenceResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListEvidenceResult;
 export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 export type ChannelsStatusSnapshot = ChannelsStatusResult;
 export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
@@ -265,6 +279,9 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
@@ -277,6 +294,7 @@ export type GatewayThinkingLevelOption = {
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
+export type { GatewayContextWindowOption };
 
 export type AgentsListResult = ProtocolAgentsListResult;
 
@@ -291,70 +309,6 @@ export type AgentIdentityResult = {
   emoji?: string;
 };
 
-export type AgentFileEntry = {
-  name: string;
-  path: string;
-  missing: boolean;
-  // Absence is a normal workspace state (optional profile files, MEMORY.md before
-  // anything is written); the editor offers these for creation instead of flagging them.
-  expectedAbsent?: boolean;
-  size?: number;
-  updatedAtMs?: number;
-  content?: string;
-};
-
-export type AgentsFilesListResult = {
-  agentId: string;
-  workspace: string;
-  files: AgentFileEntry[];
-};
-
-export type AgentsFilesGetResult = {
-  agentId: string;
-  workspace: string;
-  file: AgentFileEntry;
-};
-
-export type AgentsFilesSetResult = {
-  ok: true;
-  agentId: string;
-  workspace: string;
-  file: AgentFileEntry;
-};
-
-type SessionWorkspaceFileEntry = {
-  path: string;
-  workspacePath?: string;
-  name: string;
-  kind: "modified" | "read";
-  missing: boolean;
-  size?: number;
-  updatedAtMs?: number;
-  content?: string;
-  /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
-  hash?: string;
-  mimeType?: string;
-  contentEncoding?: "utf8" | "base64";
-  previewKind?: "text" | "image" | "unsupported";
-};
-
-type SessionWorkspaceBrowserEntry = {
-  path: string;
-  name: string;
-  kind: "file" | "directory";
-  sessionKind?: "modified" | "read" | "mixed";
-  size?: number;
-  updatedAtMs?: number;
-};
-
-type SessionWorkspaceBrowserResult = {
-  path: string;
-  parentPath?: string;
-  search?: string;
-  entries: SessionWorkspaceBrowserEntry[];
-  truncated?: boolean;
-};
-
 type SessionWorkspaceArtifactEntry = {
   id: string;
   type: string;
@@ -367,25 +321,9 @@ type SessionWorkspaceArtifactEntry = {
   };
 };
 
-export type SessionWorkspaceListResult = {
-  sessionKey: string;
-  root?: string;
-  gitCheckout?: boolean;
-  files: SessionWorkspaceFileEntry[];
-  browser?: SessionWorkspaceBrowserResult;
+// The workspace view joins file results with separately fetched artifacts.
+export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: SessionWorkspaceArtifactEntry[];
-};
-
-export type SessionWorkspaceGetResult = {
-  sessionKey: string;
-  root?: string;
-  file: SessionWorkspaceFileEntry;
-};
-
-export type SessionWorkspaceSetResult = {
-  sessionKey: string;
-  root?: string;
-  file: SessionWorkspaceFileEntry;
 };
 
 export type ArtifactDownloadResult = {
@@ -432,6 +370,9 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
+  placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
+  icon?: string;
+  channelAvatarUrl?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   surface?: string;
@@ -446,6 +387,9 @@ export type GatewaySessionRow = SessionRow & {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -522,6 +466,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
   archivedAt?: number;
+  contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -532,124 +477,30 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    contextWindow?: string;
+    contextWindows?: GatewayContextWindowOption[];
     thinkingLevel?: string;
     thinkingLevels?: GatewayThinkingLevelOption[];
   };
 };
 
-export type {
-  CostUsageSummary,
-  SessionsUsageResult,
-  SessionUsageTimeSeries,
-} from "../pages/usage/data-types.ts";
+export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
 
-export type CronRunStatus = "ok" | "error" | "skipped";
-export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
-export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
-export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
-export type CronRunScope = "job" | "all";
-export type CronRunsStatusValue = CronRunStatus;
-export type CronRunsStatusFilter = "all" | CronRunStatus;
-export type CronSortDir = "asc" | "desc";
-
-type CronSchedule =
-  | { kind: "at"; at: string }
-  | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
-  | { kind: "on-exit"; command: string; cwd?: string }
-  | {
-      kind: "stream";
-      command: string[];
-      cwd?: string;
-      mode?: "line" | "match";
-      match?: string;
-      batchMs?: number;
-      maxBatchBytes?: number;
-    };
-
-type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
-type CronWakeMode = "next-heartbeat" | "now";
-
-export type CronPayload = CoreCronPayload;
-
-type CronCompletionDestination = {
-  mode: "webhook";
-  to: string;
-};
-
-type CronDelivery = {
-  mode: "none" | "announce" | "webhook";
-  channel?: string;
-  to?: string;
-  threadId?: string | number;
-  accountId?: string;
-  bestEffort?: boolean;
-  completionDestination?: CronCompletionDestination;
-  failureDestination?: CronFailureDestination;
-};
-
-type CronFailureDestination = {
-  channel?: string;
-  to?: string;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-};
-
-type CronFailureAlert = {
-  after?: number;
-  channel?: string;
-  to?: string;
-  cooldownMs?: number;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-};
-
-type CronJobState = {
-  nextRunAtMs?: number;
-  runningAtMs?: number;
-  lastRunAtMs?: number;
-  lastRunStatus?: CronRunStatus;
-  lastStatus?: CronRunStatus;
-  lastError?: string;
-  lastErrorReason?: string;
-  lastDurationMs?: number;
-  consecutiveErrors?: number;
-  autoDisabled?: {
-    reason: "consecutive-failures" | "schedule-errors";
-    atMs: number;
-    consecutiveErrors: number;
-  };
-  lastDelivered?: boolean;
-  lastDeliveryStatus?: CronDeliveryStatus;
-  lastDeliveryError?: string;
-  lastFailureNotificationDelivered?: boolean;
-  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
-  lastFailureNotificationDeliveryError?: string;
-  lastFailureAlertAtMs?: number;
-  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
-  streamError?: string;
-  streamConsecutiveFailures?: number;
-  streamRestartExhausted?: boolean;
-  streamSourceIdentity?: string;
-  streamDroppedBatches?: number;
-  streamCoalescedBatches?: number;
-  streamLastStartedAtMs?: number;
-  streamLastExitAtMs?: number;
-};
-
-export type CronJob = CronJobBase<
-  CronSchedule,
-  CronSessionTarget,
-  CronWakeMode,
-  CronPayload,
-  CronDelivery,
-  CronFailureAlert | false
-> & {
-  state?: CronJobState;
-};
+export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
+export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;
+export type CronJobsEnabledFilter = NonNullable<CronListParams["enabled"]>;
+export type CronJobsScheduleKindFilter = NonNullable<CronListParams["scheduleKind"]>;
+export type CronJobsTriggerFilter = NonNullable<CronListParams["trigger"]>;
+export type CronJobsSortBy = NonNullable<CronListParams["sortBy"]>;
+export type CronRunScope = NonNullable<CronRunsParams["scope"]>;
+export type CronRunsStatusValue = NonNullable<CronRunsParams["statuses"]>[number];
+export type CronRunsStatusFilter = NonNullable<CronRunsParams["status"]>;
+export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
+export type CronPayload = ProtocolCronJob["payload"];
 
 export type CronStatus = {
   enabled: boolean;
+  triggersEnabled: boolean;
   jobs: number;
   nextWakeAtMs?: number | null;
 };
@@ -669,35 +520,8 @@ export type CronRunResult =
     }
   | { ok: false };
 
-export type CronRunLogEntry = {
-  ts: number;
-  jobId: string;
-  action?: "finished";
-  status?: CronRunStatus;
-  durationMs?: number;
-  error?: string;
-  summary?: string;
-  delivered?: boolean;
-  deliveryStatus?: CronDeliveryStatus;
-  deliveryError?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  runAtMs?: number;
-  nextRunAtMs?: number;
-  model?: string;
-  provider?: string;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    cache_read_tokens?: number;
-    cache_write_tokens?: number;
-  };
-  jobName?: string;
-};
-
 export type CronJobsListResult = {
-  jobs: CronJob[];
+  jobs: ProtocolCronJob[];
   snapshotRevision: string;
   total: number;
   limit: number;
@@ -707,7 +531,7 @@ export type CronJobsListResult = {
 };
 
 export type CronRunsResult = {
-  entries: CronRunLogEntry[];
+  entries: ProtocolCronRunLogEntry[];
   total?: number;
   limit?: number;
   offset?: number;
@@ -734,6 +558,7 @@ export type SkillClawHubLink =
       registry: string;
       slug: string;
       ownerHandle?: string;
+      requestedReference?: string;
       installedVersion: string;
       installedAt: number;
       originPath?: string;
@@ -814,8 +639,13 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   alias?: string;
+  tags?: string[];
   available?: boolean;
+  unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
+  unavailableUntil?: number;
   contextWindow?: number;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   reasoning?: boolean;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingDefault?: string;
@@ -827,11 +657,21 @@ export type ModelCatalogEntry = {
 
 export type ModelCatalogProviderOutcome =
   import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
+export type ModelCatalogResult = {
+  models: ModelCatalogEntry[];
+  providerOutcomes?: ModelCatalogProviderOutcome[];
+};
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;
 export type ToolsCatalogResult =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsCatalogResult;
+export type ToolsGitHubStatusResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubStatusResult;
+export type ToolsGitHubAuthorizeStartResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubAuthorizeStartResult;
+export type ToolsGitHubAuthorizePollResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubAuthorizePollResult;
 export type ToolsEffectiveEntry =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveEntry;
 export type ToolsEffectiveResult =
@@ -858,4 +698,3 @@ export type SystemAgentSetupVerifyResult =
 export type WizardNextResult =
   import("../../../packages/gateway-protocol/src/schema.js").WizardNextResult;
 export type WizardStep = import("../../../packages/gateway-protocol/src/schema.js").WizardStep;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { WorktreesRemoveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -7,6 +8,10 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
+import {
+  formatPreservedWorktreeConfirmation,
+  formatPreservedWorktreesNotice,
+} from "../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../lib/toast.ts";
 import type {
   SidebarRecentSession,
@@ -24,8 +29,9 @@ import {
   sessionRowAgentId,
 } from "./session-organizer-batch-mutations.ts";
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
-import { rememberSessionGroup } from "./session-organizer-catalog.ts";
+import { rememberSessionGroup, type SessionGroupActionHost } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 export type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 // The controller loads this module as a single namespace, so the catalog
@@ -34,6 +40,7 @@ export {
   deleteSessionGroup,
   renameSessionGroup,
   reorderSidebarSection,
+  updateSessionGroupDefaults,
 } from "./session-organizer-catalog.ts";
 
 export async function patchSession(
@@ -51,9 +58,7 @@ export async function patchSession(
     key: session.key,
     ...patch,
     agentId,
-    ...(typeof patch.archived === "boolean" && session.sessionId
-      ? { expectedSessionId: session.sessionId }
-      : {}),
+    ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
   };
   if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
     host.sessionData.publishSessionMutationError(
@@ -70,7 +75,7 @@ export async function patchSession(
   try {
     const patched = await scope.sessions.patch(session.key, patch, {
       agentId,
-      ...(typeof patch.archived === "boolean" ? { expectedSessionId: session.sessionId } : {}),
+      ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
       ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
     });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -157,7 +162,9 @@ export async function archiveSessionWithUndo(
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
+  scope.sessions.setArchivePending(session.key, true);
   const result = await patchSession(host, session, { archived: true }, scope);
+  scope.sessions.setArchivePending(session.key, false);
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
@@ -275,16 +282,25 @@ export async function deleteSessionsBatch(
     confirmLabel: t("common.delete"),
     danger: true,
     skipPreference: sessionDeleteSkipPreference(scope),
+    signal: scope.signal,
   });
   // A reconnect or a replaced sessions capability can land while the modal is
   // open, so the captured scope is revalidated before any delete leaves here.
-  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    showToast({ message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }) });
+    return;
+  }
+  if (!confirmed) {
     return;
   }
   const requests = rows.map((row) => ({
     key: row.key,
     agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
     deleteTranscript: true,
+    ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
     ...(row.archived === true ? { archivedOnly: true } : {}),
   }));
   for (const params of requests) {
@@ -304,12 +320,7 @@ export async function deleteSessionsBatch(
       }
     }
     if (result.preservedWorktrees.length > 0) {
-      window.alert(
-        t("sessionsView.deletePreservedWorktrees", {
-          count: String(result.preservedWorktrees.length),
-          branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
-        }),
-      );
+      window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
       if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
@@ -383,67 +394,88 @@ export async function renameSession(
   await patchSession(host, session, { label: normalizeOptionalString(label) ?? null }, scope);
 }
 
+export async function assignSessionOwner(
+  host: SessionActionHost,
+  session: Pick<SidebarRecentSession, "key">,
+  owner: Pick<SessionOwnerOption, "type" | "id">,
+  scope: SidebarSessionMutationScope,
+): Promise<void> {
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.assignOwner",
+      params: { key: session.key, owner },
+      requiredScope: "operator.write",
+    })
+  ) {
+    return;
+  }
+  const assigned = await scope.sessions.assignOwner(session.key, owner, {
+    agentId: parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId,
+  });
+  if (
+    host.sessionData.isSessionMutationScopeCurrent(scope) &&
+    !assigned &&
+    scope.sessions.state.error
+  ) {
+    host.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
+  }
+}
+
 export async function createSessionGroup(
   host: SessionOrganizerControllerHost,
   name: string,
   sessions: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
+  if (sessions.some((session) => !session.sessionId)) {
+    host.sessionData.publishSessionMutationError(scope, t("common.refresh"));
+    return "failed";
+  }
   const remembered = await rememberSessionGroup(host, name, scope);
   if (remembered !== "completed") {
     return remembered;
   }
-  // The dialog no longer blocks, so a captured row can be deleted while the
-  // catalog write is in flight, and sessions.patch would recreate it. Re-resolve
-  // every target against the current list, as the Sessions-page path does.
-  const targets = sessions.flatMap((session) => {
-    const current = host.findSidebarSessionByKey(session.key);
-    return current ? [current] : [];
-  });
-  if (targets.length > 0) {
-    const moved =
-      targets.length === 1
-        ? await patchSession(host, targets[0]!, { category: name }, scope)
-        : await patchSessions(host, targets, { category: name }, scope);
-    // Rows that left the list are absent from `targets`, so patching the
-    // remainder reports success for a selection that was only partly applied.
-    // Closing on that would leave the skipped rows unaccounted for, so the
-    // partial outcome is named here; it is terminal, as the group already exists.
-    if (moved === "completed" && targets.length < sessions.length) {
-      showToast({ message: t("sessionsView.newGroupMovePartial") });
-    }
-    return moved;
+  // The Gateway checks the identities captured with the action. A bounded
+  // roster can page them out or replace a key, so it cannot authorize the move.
+  if (sessions.length > 0) {
+    return sessions.length === 1
+      ? patchSession(host, sessions[0]!, { category: name }, scope)
+      : patchSessions(host, sessions, { category: name }, scope);
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  // A header-created group starts empty and needs no notice. Rows that were
-  // requested but resolved to nothing are a partial outcome: the group landed
-  // and the moves did not. The sidebar list is a bounded projection, so this is
-  // not proof the sessions are gone — say so rather than closing on a silent
-  // non-outcome the operator cannot account for.
-  if (sessions.length > 0) {
-    showToast({ message: t("sessionsView.newGroupMoveSkipped") });
-  }
-  // Re-render so the new section shows up.
+  // A header-created group starts empty and needs no assignment.
   host.requestUpdate();
   return "completed";
 }
 
 export async function assignSessionCategory(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionGroupActionHost,
+  session: SessionActionRow,
   category: string | null,
   scope: SidebarSessionMutationScope,
   patch: { pinned?: boolean } = {},
+  options: { resolveSession?: () => SessionActionRow | null } = {},
 ): Promise<void> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
+  const catalogChanged = Boolean(category && !host.knownSessionGroups().includes(category));
   if (category && (await rememberSessionGroup(host, category, scope)) !== "completed") {
     return;
   }
-  await patchSession(host, session, { category, ...patch }, scope);
+  const currentSession = options.resolveSession ? options.resolveSession() : session;
+  if (!currentSession) {
+    showToast({
+      message: t(catalogChanged ? "sessionsView.newGroupMoveSkipped" : "common.refresh"),
+    });
+    return;
+  }
+  if ((currentSession.category ?? null) === category && patch.pinned === undefined) {
+    return;
+  }
+  await patchSession(host, currentSession, { category, ...patch }, scope);
 }
 
 export async function forkSession(
@@ -458,6 +490,9 @@ export async function forkSession(
   const createParams = {
     parentSessionKey: session.key,
     fork: true,
+    ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
+      ? { forkFrom: "last-completed" as const }
+      : {}),
     agentId,
   };
   if (
@@ -492,15 +527,23 @@ export async function stopCloudWorker(
   // Reclaim during an active run is never offered, so decide that before the
   // await; a run starting while the modal is open is left to the gateway, whose
   // rejection is a recorded reason instead of a silently dropped confirmation.
-  if (!stopAction || (stopAction.method === "sessions.reclaim" && session.hasActiveRun)) {
+  if (!stopAction || (stopAction.blocksActiveRun && session.hasActiveRun)) {
     return;
   }
   const confirmed = await showConfirmDialog({
     message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
     confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
     danger: true,
+    signal: scope.signal,
   });
-  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    showToast({ message: t("sessionsView.stopCloudWorkerStale", { session: session.label }) });
+    return;
+  }
+  if (!confirmed) {
     return;
   }
   if (!requireSessionMutationAccess(host, scope, stopAction)) {
@@ -508,18 +551,10 @@ export async function stopCloudWorker(
   }
   try {
     const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
-    const result = await requestCloudWorkerStop(scope.client, stopAction, {
+    await requestCloudWorkerStop(scope.client, {
       key: session.key,
       agentId,
     });
-    if (result && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      showToast({
-        message: t("sessionsView.cloudWorkerStopResult", {
-          session: session.label,
-          state: result.worker?.state ?? result.status,
-        }),
-      });
-    }
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
@@ -542,14 +577,23 @@ export async function deleteSession(
     confirmLabel: t("common.delete"),
     danger: true,
     ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
+    signal: scope.signal,
   });
-  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    showToast({ message: t("sessionsView.deleteSessionStale", { session: session.label }) });
+    return;
+  }
+  if (!confirmed) {
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
   const deleteParams = {
     agentId,
     deleteTranscript: true,
+    ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
     ...(session.archived === true ? { archivedOnly: true } : {}),
   };
   if (
@@ -571,7 +615,6 @@ export async function deleteSession(
         return;
       }
     }
-    // Dirty/unpushed checkouts survive deletion; offer explicit removal.
     if (outcome.worktreePreserved) {
       const preserved = outcome.worktreePreserved;
       const removeAccess = readSessionMethodAccess(scope.gateway.snapshot, {
@@ -579,32 +622,36 @@ export async function deleteSession(
         requiredScope: "operator.admin",
       });
       if (!removeAccess.allowed) {
-        window.alert(
-          t("sessionsView.deletePreservedWorktrees", {
-            count: "1",
-            branches: preserved.branch,
-          }),
-        );
+        window.alert(formatPreservedWorktreesNotice([preserved]));
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
       } else {
         const removeWorktree = await showConfirmDialog({
-          message: t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          message: formatPreservedWorktreeConfirmation(preserved),
           confirmLabel: t("common.remove"),
           danger: true,
+          signal: scope.signal,
         });
         // Cancel needs this guard too: the delete already landed, so a scope
         // retired while the modal was open must not drive the navigation below.
+        // A retired scope leaves the worktree exactly like the no-access branch
+        // above, so it earns the same visible outcome instead of vanishing quietly.
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+          showToast({
+            message: formatPreservedWorktreesNotice([preserved]),
+          });
           return;
         }
         if (removeWorktree) {
           try {
-            await scope.client.request("worktrees.remove", {
+            const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
               id: preserved.id,
               force: true,
             });
+            if (result.snapshotError) {
+              host.sessionData.publishSessionMutationError(scope, result.snapshotError);
+            }
           } catch (error) {
             host.sessionData.publishSessionMutationError(scope, error);
           }

@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { extractAgentReplyTexts } from "../scripts/e2e/lib/agent-turn-output.mjs";
 import { terminateManagedChild } from "../scripts/lib/managed-child-process.mts";
-import { readPersistedAuthProfileStoreRaw } from "../src/agents/auth-profiles/sqlite.js";
+import { readPersistedSharedAuthProfileStoreRaw } from "../src/agents/auth-profiles/sqlite.js";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import {
   loadTranscriptEvents,
@@ -39,8 +39,8 @@ async function runOpenClaw(args: string[], env: NodeJS.ProcessEnv): Promise<stri
   }
 }
 
-function assertOpenAiEnvProfile(agentDir: string): void {
-  const store = readPersistedAuthProfileStoreRaw(agentDir) as {
+function assertOpenAiEnvProfile(env: NodeJS.ProcessEnv): void {
+  const store = readPersistedSharedAuthProfileStoreRaw(env) as {
     profiles?: Record<string, Record<string, unknown>>;
   } | null;
   expect(store?.profiles).toBeDefined();
@@ -232,14 +232,13 @@ describeLive("fresh OpenAI onboarding live", () => {
         "--json",
       ];
 
-      let firstGatewayToken: string | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         await runOpenClaw(onboardArgs, state.env);
         const rawConfig = await fs.readFile(state.configPath, "utf8");
         expect(rawConfig.includes(openAiApiKey)).toBe(false);
         const config = JSON.parse(rawConfig) as {
           agents?: { defaults?: { model?: { primary?: string }; workspace?: string } };
-          gateway?: { mode?: string; auth?: { mode?: string; token?: string } };
+          gateway?: { mode?: string; auth?: { mode?: string; token?: unknown } };
         };
         expect(config.agents?.defaults?.model?.primary).toBe("openai/gpt-5.6-sol");
         expect(config.agents?.defaults?.workspace).toBe(
@@ -247,14 +246,12 @@ describeLive("fresh OpenAI onboarding live", () => {
         );
         expect(config.gateway?.mode).toBe("local");
         expect(config.gateway?.auth?.mode).toBe("token");
-        const gatewayToken = config.gateway?.auth?.token;
-        expect(typeof gatewayToken === "string" && gatewayToken.length > 0).toBe(true);
-        if (firstGatewayToken === undefined) {
-          firstGatewayToken = gatewayToken;
-        } else {
-          expect(gatewayToken === firstGatewayToken).toBe(true);
-        }
-        assertOpenAiEnvProfile(state.agentDir());
+        expect(config.gateway?.auth?.token).toEqual({
+          source: "store",
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_TOKEN",
+        });
+        assertOpenAiEnvProfile(state.env);
       }
 
       await expect(fs.access(path.join(state.agentDir(), "auth-profiles.json"))).rejects.toThrow();
@@ -279,7 +276,7 @@ describeLive("fresh OpenAI onboarding live", () => {
         extractAgentReplyTexts(stdout).some((reply) => reply.includes(replyMarker)),
         `default OpenAI agent turn returned ${summarizeAgentOutput(stdout)}`,
       ).toBe(true);
-      assertOpenAiEnvProfile(state.agentDir());
+      assertOpenAiEnvProfile(state.env);
 
       gateway = spawn(
         process.execPath,
@@ -336,7 +333,7 @@ describeLive("fresh OpenAI onboarding live", () => {
       });
       expect(hasPersistedTranscriptMessage(persistedEvents, "user", gatewayPrompt)).toBe(true);
       expect(hasPersistedTranscriptMessage(persistedEvents, "assistant", replyMarker)).toBe(true);
-      assertOpenAiEnvProfile(state.agentDir());
+      assertOpenAiEnvProfile(state.env);
     } finally {
       await stopIsolatedGateway(gateway);
       await state.cleanup();

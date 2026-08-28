@@ -31,6 +31,7 @@ import {
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -101,6 +102,19 @@ function parsePositiveNumberOption(value: string | undefined, label: string): nu
   return parsed;
 }
 
+function parseMcpApprovalModeOption(
+  value: string | undefined,
+): McpCodexToolApprovalMode | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const mode = normalizeLowercaseStringOrEmpty(value);
+  if (mode !== "auto" && mode !== "prompt" && mode !== "approve") {
+    fail('--approval must be "auto", "prompt", or "approve".');
+  }
+  return mode;
+}
+
 function parseOAuthConfig(opts: {
   scope?: string;
   redirectUrl?: string;
@@ -163,6 +177,8 @@ type McpDoctorServerResult = {
 };
 
 const MCP_DOCTOR_CONCURRENCY = 4;
+const MCP_CODEX_APPROVAL_ANNOTATION_HINT =
+  "tools have no safety annotations; calls will require interactive approval";
 
 const SENSITIVE_HEADER_NAMES = new Set([
   "authorization",
@@ -315,7 +331,7 @@ async function collectMcpDoctorIssues(params: {
           }
         }
         const headers = asRecord(server.headers);
-        if (headers && "Authorization" in headers) {
+        if (headers && Object.keys(headers).some((key) => key.toLowerCase() === "authorization")) {
           issues.push(
             issue("warning", "OAuth is enabled and the static Authorization header is ignored"),
           );
@@ -364,23 +380,21 @@ async function collectMcpDoctorIssues(params: {
     server.enabled !== false &&
     !issues.some((entry) => entry.level === "error")
   ) {
-    const probeIssue = await probeMcpServerIssue({
+    const probeIssues = await probeMcpServerIssues({
       config: params.config,
       name,
       server,
     });
-    if (probeIssue) {
-      issues.push(probeIssue);
-    }
+    issues.push(...probeIssues);
   }
   return issues;
 }
 
-async function probeMcpServerIssue(params: {
+async function probeMcpServerIssues(params: {
   config: OpenClawConfig;
   name: string;
   server: Record<string, unknown>;
-}): Promise<McpDoctorIssue | null> {
+}): Promise<McpDoctorIssue[]> {
   const runtime = createSessionMcpRuntime({
     sessionId: "openclaw-cli-mcp-doctor",
     workspaceDir: process.cwd(),
@@ -394,14 +408,17 @@ async function probeMcpServerIssue(params: {
     const result = formatMcpProbeResult(await runtime.getCatalog());
     const diagnostic = result.diagnostics[0];
     if (diagnostic) {
-      return issue("error", `probe failed: ${diagnostic.message}`);
+      return [issue("error", `probe failed: ${diagnostic.message}`)];
     }
-    if (!result.servers[params.name]) {
-      return issue("error", "probe did not connect to this server");
+    const server = result.servers[params.name];
+    if (!server) {
+      return [issue("error", "probe did not connect to this server")];
     }
-    return null;
+    return server.approvalHint
+      ? [issue("info", `Codex approval mode: ${server.codexApprovalMode}; ${server.approvalHint}`)]
+      : [];
   } catch (err) {
-    return issue("error", `probe failed: ${formatErrorMessage(err)}`);
+    return [issue("error", `probe failed: ${formatErrorMessage(err)}`)];
   } finally {
     await runtime.dispose();
   }
@@ -496,31 +513,43 @@ function formatMcpProbeResult(
     servers: Object.fromEntries(
       Object.entries(catalog.servers)
         .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([name, server]) => [
-          name,
-          {
-            launch: server.launchSummary,
-            tools: server.toolCount,
-            ...(server.requestTimeoutMs ? { requestTimeoutMs: server.requestTimeoutMs } : {}),
-            ...(server.supportsParallelToolCalls
-              ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
-              : {}),
-            ...(server.tools?.filteredCount ? { filteredTools: server.tools.filteredCount } : {}),
-            ...(server.resources ? { resources: true } : {}),
-            ...(server.prompts ? { prompts: true } : {}),
-            ...(server.tools?.listChanged ||
-            server.resources?.listChanged ||
-            server.prompts?.listChanged
-              ? {
-                  listChanged: {
-                    tools: server.tools?.listChanged === true,
-                    resources: server.resources?.listChanged === true,
-                    prompts: server.prompts?.listChanged === true,
-                  },
-                }
-              : {}),
-          },
-        ]),
+        .map(([name, server]) => {
+          const codexApprovalMode = server.codexApprovalMode ?? "auto";
+          const serverTools = catalog.tools.filter((tool) => tool.serverName === name);
+          const approvalHint =
+            codexApprovalMode === "auto" &&
+            serverTools.length > 0 &&
+            serverTools.every((tool) => Object.keys(tool.codexAnnotations ?? {}).length === 0)
+              ? MCP_CODEX_APPROVAL_ANNOTATION_HINT
+              : undefined;
+          return [
+            name,
+            {
+              launch: server.launchSummary,
+              tools: server.toolCount,
+              codexApprovalMode,
+              ...(approvalHint ? { approvalHint } : {}),
+              ...(server.requestTimeoutMs ? { requestTimeoutMs: server.requestTimeoutMs } : {}),
+              ...(server.supportsParallelToolCalls
+                ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
+                : {}),
+              ...(server.tools?.filteredCount ? { filteredTools: server.tools.filteredCount } : {}),
+              ...(server.resources ? { resources: true } : {}),
+              ...(server.prompts ? { prompts: true } : {}),
+              ...(server.tools?.listChanged ||
+              server.resources?.listChanged ||
+              server.prompts?.listChanged
+                ? {
+                    listChanged: {
+                      tools: server.tools?.listChanged === true,
+                      resources: server.resources?.listChanged === true,
+                      prompts: server.prompts?.listChanged === true,
+                    },
+                  }
+                : {}),
+            },
+          ];
+        }),
     ),
     tools: projectedTools.map((tool) => tool.name).toSorted(),
     diagnostics: catalog.diagnostics ?? [],
@@ -650,7 +679,7 @@ export function registerMcpCli(program: Command) {
         });
       } catch (err) {
         defaultRuntime.error(
-          `MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw mcp list")} to inspect configured servers.`,
+          `MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep --require-rpc")} to inspect Gateway health.`,
         );
         defaultRuntime.exit(1);
       }
@@ -801,6 +830,15 @@ export function registerMcpCli(program: Command) {
           `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before probing it.`,
         );
       }
+      // Without this the human output is a bare header: both probe loops are empty,
+      // so an operator with no servers sees no outcome and no next step. JSON keeps
+      // emitting its empty envelope so machine consumers see a stable shape.
+      if (!opts.json && Object.keys(servers).length === 0) {
+        defaultRuntime.log(
+          `No MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand("openclaw mcp add <name> --command <command>")}.`,
+        );
+        return;
+      }
       const runtime = createSessionMcpRuntime({
         sessionId: "openclaw-cli-mcp-probe",
         workspaceDir: process.cwd(),
@@ -815,8 +853,11 @@ export function registerMcpCli(program: Command) {
           defaultRuntime.log(`MCP probe (${loaded.path}):`);
           for (const [serverName, server] of Object.entries(result.servers)) {
             defaultRuntime.log(
-              `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}`,
+              `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}, Codex approval ${server.codexApprovalMode}`,
             );
+            if (server.approvalHint) {
+              defaultRuntime.log(`  i ${server.approvalHint}`);
+            }
           }
           for (const diagnostic of result.diagnostics) {
             defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
@@ -931,6 +972,7 @@ export function registerMcpCli(program: Command) {
     .option("--timeout <seconds>", "Per-request timeout in seconds")
     .option("--connect-timeout <seconds>", "Connection timeout in seconds")
     .option("--parallel", "Mark this server safe for concurrent tool calls")
+    .option("--approval <mode>", "Codex MCP tool approval mode: auto, prompt, or approve")
     .option("--disabled", "Save the server disabled", false)
     .option("--ssl-verify <boolean>", "Verify HTTPS certificates: true or false")
     .option("--client-cert <path>", "HTTP mutual TLS client certificate path")
@@ -956,6 +998,7 @@ export function registerMcpCli(program: Command) {
           timeout?: string;
           connectTimeout?: string;
           parallel?: boolean;
+          approval?: string;
           disabled?: boolean;
           sslVerify?: string;
           clientCert?: string;
@@ -1022,6 +1065,10 @@ export function registerMcpCli(program: Command) {
         if (opts.parallel) {
           server.supportsParallelToolCalls = true;
         }
+        const approvalMode = parseMcpApprovalModeOption(opts.approval);
+        if (approvalMode) {
+          server.codex = { defaultToolsApprovalMode: approvalMode };
+        }
         const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
         setOptionalField(
           server,
@@ -1050,6 +1097,10 @@ export function registerMcpCli(program: Command) {
         if (!loaded.ok) {
           fail(loaded.error);
         }
+        const targetName = name.trim();
+        if (targetName && Object.hasOwn(loaded.mcpServers, targetName)) {
+          fail(`MCP server ${JSON.stringify(targetName)} already exists.`);
+        }
         const shouldProbe =
           opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
         if (shouldProbe) {
@@ -1059,7 +1110,7 @@ export function registerMcpCli(program: Command) {
             servers: { [name]: server },
           });
         }
-        const result = await setConfiguredMcpServer({ name, server });
+        const result = await setConfiguredMcpServer({ name, server, createOnly: true });
         if (!result.ok) {
           fail(result.error);
         }
@@ -1134,6 +1185,7 @@ export function registerMcpCli(program: Command) {
     .option("--clear-timeouts", "Clear request and connection timeout overrides", false)
     .option("--parallel", "Mark this server safe for concurrent tool calls")
     .option("--no-parallel", "Clear the concurrent tool-call marker")
+    .option("--approval <mode>", "Codex MCP tool approval mode: auto, prompt, or approve")
     .option("--auth <mode>", "HTTP auth mode: oauth")
     .option("--clear-auth", "Clear auth and OAuth metadata", false)
     .option("--oauth-scope <scope>", "OAuth scope")
@@ -1157,6 +1209,7 @@ export function registerMcpCli(program: Command) {
           connectTimeout?: string;
           clearTimeouts?: boolean;
           parallel?: boolean;
+          approval?: string;
           auth?: string;
           clearAuth?: boolean;
           oauthScope?: string;
@@ -1196,6 +1249,7 @@ export function registerMcpCli(program: Command) {
           const exclude = parseCsvList(opts.exclude);
           if (include || exclude) {
             next.toolFilter = {
+              ...asRecord(next.toolFilter),
               ...(include ? { include } : {}),
               ...(exclude ? { exclude } : {}),
             };
@@ -1226,6 +1280,13 @@ export function registerMcpCli(program: Command) {
           delete next.supportsParallelToolCalls;
           delete next.supports_parallel_tool_calls;
         }
+        const approvalMode = parseMcpApprovalModeOption(opts.approval);
+        if (approvalMode) {
+          next.codex = {
+            ...asRecord(next.codex),
+            defaultToolsApprovalMode: approvalMode,
+          };
+        }
         if (opts.clearAuth) {
           delete next.auth;
           delete next.oauth;
@@ -1245,7 +1306,7 @@ export function registerMcpCli(program: Command) {
           clientMetadataUrl: opts.oauthClientMetadataUrl,
         });
         if (oauth) {
-          next.oauth = oauth;
+          next.oauth = { ...asRecord(next.oauth), ...oauth };
         }
         if (opts.clearTls) {
           delete next.sslVerify;

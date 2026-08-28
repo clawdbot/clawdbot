@@ -8,7 +8,7 @@ import {
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveHomePath } from "./helpers.js";
 import pluginEntry from "./index.js";
 import { HERMES_REASON_INCLUDE_SECRETS } from "./items.js";
@@ -53,6 +53,15 @@ describe("Hermes migration provider", () => {
       } else {
         process.env.OPENCLAW_HOME = previous;
       }
+    }
+  });
+
+  it("keeps literal $ patterns in home when expanding tildes", () => {
+    const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
+    try {
+      expect(resolveHomePath("~/.hermes")).toBe(path.resolve("/home/$&user/.hermes"));
+    } finally {
+      spy.mockRestore();
     }
   });
 

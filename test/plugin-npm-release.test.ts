@@ -1,12 +1,14 @@
 // Plugin npm release tests validate plugin npm release artifacts.
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectChangedExtensionIdsFromPaths,
   collectPluginReleaseDependencyFreshnessErrors,
+  collectPluginNpmGitRangeSelection,
   collectPluginReleasePlan,
   collectPluginReleaseVersionFloorErrors,
   collectPublishablePluginPackages,
@@ -20,9 +22,11 @@ import {
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
-type ExecFileSync = typeof import("node:child_process").execFileSync;
+type ExecFileSync = typeof execFileSync;
 
 const childProcessMock = vi.hoisted(() => ({
   execFileSyncOverride: undefined as ExecFileSync | undefined,
@@ -30,13 +34,13 @@ const childProcessMock = vi.hoisted(() => ({
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  const execFileSync = ((...args: unknown[]) => {
+  const mockedExecFileSync = ((...args: unknown[]) => {
     const implementation = (childProcessMock.execFileSyncOverride ?? actual.execFileSync) as (
       ...args: unknown[]
     ) => unknown;
     return implementation(...args);
   }) as ExecFileSync;
-  return { ...actual, execFileSync };
+  return { ...actual, execFileSync: mockedExecFileSync };
 });
 
 const tempDirs: string[] = [];
@@ -167,12 +171,6 @@ function externalPluginContract(version: string) {
       openclawVersion: version,
     },
   };
-}
-
-function writePluginReadme(repoDir: string, extensionId: string): void {
-  const packageDir = join(repoDir, "extensions", extensionId);
-  mkdirSync(packageDir, { recursive: true });
-  writeFileSync(join(packageDir, "README.md"), `# ${extensionId}\n`);
 }
 
 describe("collectPublishablePluginPackageErrors", () => {
@@ -500,26 +498,9 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
 describe("collectPluginReleasePlan", () => {
   it("fails closed when the published-version lookup times out", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
-    writePluginReadme(repoDir, "demo-plugin");
-    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
-      name: "@openclaw/demo-plugin",
+    writePublishablePluginFixture(repoDir, {
       version: "2026.4.10",
-      type: "module",
-      repository: {
-        type: "git",
-        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-      },
-      openclaw: {
-        extensions: ["./index.ts"],
-        ...externalPluginContract("2026.4.10"),
-        install: {
-          npmSpec: "@openclaw/demo-plugin",
-        },
-        release: {
-          publishToNpm: true,
-        },
-      },
+      publishTo: "npm",
     });
     childProcessMock.execFileSyncOverride = ((command: string, args?: readonly string[]) => {
       expect(command).toBe("npm");
@@ -540,22 +521,28 @@ describe("collectPluginReleasePlan", () => {
 });
 
 describe("collectPublishablePluginPackages", () => {
+  it("rejects duplicate npm package names from different plugin directories", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    for (const extensionId of ["demo-one", "demo-two"]) {
+      writePublishablePluginFixture(repoDir, {
+        extensionId,
+        packageName: "@openclaw/shared-plugin",
+        version: "2026.4.10",
+        publishTo: "npm",
+      });
+    }
+
+    expect(() => collectPublishablePluginPackages(repoDir)).toThrow(
+      "package @openclaw/shared-plugin is declared by multiple plugin sources: demo-one (extensions/demo-one), demo-two (extensions/demo-two).",
+    );
+  });
+
   it("defers explicitly bundled plugins from npm and ClawHub release plans", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
-    writePluginReadme(repoDir, "demo-plugin");
-    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
-      name: "@openclaw/demo-plugin",
+    writePublishablePluginFixture(repoDir, {
       version: "2026.4.10",
-      type: "module",
-      repository: { type: "git", url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL },
-      openclaw: {
-        extensions: ["./index.ts"],
-        ...externalPluginContract("2026.4.10"),
-        build: { openclawVersion: "2026.4.10", bundledDist: true },
-        install: { npmSpec: "@openclaw/demo-plugin" },
-        release: { publishToClawHub: true, publishToNpm: true },
-      },
+      publishTo: "both",
+      bundledDist: true,
     });
 
     expect(collectPublishablePluginPackages(repoDir)).toStrictEqual([]);
@@ -599,26 +586,9 @@ describe("collectPublishablePluginPackages", () => {
 
   it("collects publishable npm plugins from extension package manifests", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
-    writePluginReadme(repoDir, "demo-plugin");
-    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
-      name: "@openclaw/demo-plugin",
+    writePublishablePluginFixture(repoDir, {
       version: "2026.4.10",
-      type: "module",
-      repository: {
-        type: "git",
-        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-      },
-      openclaw: {
-        extensions: ["./index.ts"],
-        ...externalPluginContract("2026.4.10"),
-        install: {
-          npmSpec: "@openclaw/demo-plugin",
-        },
-        release: {
-          publishToNpm: true,
-        },
-      },
+      publishTo: "npm",
     });
 
     expect(collectPublishablePluginPackages(repoDir)).toEqual([
@@ -637,18 +607,9 @@ describe("collectPublishablePluginPackages", () => {
   it("uses extended-stable for every publishable plugin at the exact root version", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     writeJsonFile(join(repoDir, "package.json"), { version: "2026.7.33" });
-    writePluginReadme(repoDir, "demo-plugin");
-    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
-      name: "@openclaw/demo-plugin",
+    writePublishablePluginFixture(repoDir, {
       version: "2026.7.33",
-      type: "module",
-      repository: { type: "git", url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL },
-      openclaw: {
-        extensions: ["./index.ts"],
-        ...externalPluginContract("2026.7.33"),
-        install: { npmSpec: "@openclaw/demo-plugin" },
-        release: { publishToNpm: true },
-      },
+      publishTo: "npm",
     });
 
     expect(
@@ -659,18 +620,9 @@ describe("collectPublishablePluginPackages", () => {
   it("rejects extended-stable plugins whose version differs from core", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     writeJsonFile(join(repoDir, "package.json"), { version: "2026.7.34" });
-    writePluginReadme(repoDir, "demo-plugin");
-    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
-      name: "@openclaw/demo-plugin",
+    writePublishablePluginFixture(repoDir, {
       version: "2026.7.33",
-      type: "module",
-      repository: { type: "git", url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL },
-      openclaw: {
-        extensions: ["./index.ts"],
-        ...externalPluginContract("2026.7.33"),
-        install: { npmSpec: "@openclaw/demo-plugin" },
-        release: { publishToNpm: true },
-      },
+      publishTo: "npm",
     });
 
     expect(() =>
@@ -680,29 +632,13 @@ describe("collectPublishablePluginPackages", () => {
 
   it("collects exact release dependencies that must match npm latest", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
-    writePluginReadme(repoDir, "demo-plugin");
-    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
-      name: "@openclaw/demo-plugin",
+    writePublishablePluginFixture(repoDir, {
       version: "2026.4.10",
-      type: "module",
-      repository: {
-        type: "git",
-        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-      },
-      dependencies: {
-        "demo-runtime": "1.2.3",
-      },
-      openclaw: {
-        extensions: ["./index.ts"],
-        ...externalPluginContract("2026.4.10"),
-        install: {
-          npmSpec: "@openclaw/demo-plugin",
-        },
-        release: {
-          publishToNpm: true,
-          requireLatestDependencies: ["demo-runtime"],
-        },
+      publishTo: "npm",
+      dependency: {
+        packageName: "demo-runtime",
+        version: "1.2.3",
+        requireLatest: true,
       },
     });
 
@@ -727,26 +663,9 @@ describe("collectPublishablePluginPackages", () => {
 
   it("does not validate unselected publishable plugin manifests", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
-    writePluginReadme(repoDir, "demo-plugin");
-    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
-      name: "@openclaw/demo-plugin",
+    writePublishablePluginFixture(repoDir, {
       version: "2026.4.10-beta.1",
-      type: "module",
-      repository: {
-        type: "git",
-        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-      },
-      openclaw: {
-        extensions: ["./index.ts"],
-        ...externalPluginContract("2026.4.10-beta.1"),
-        install: {
-          npmSpec: "@openclaw/demo-plugin",
-        },
-        release: {
-          publishToNpm: true,
-        },
-      },
+      publishTo: "npm",
     });
     mkdirSync(join(repoDir, "extensions", "private-plugin"), { recursive: true });
     writeJsonFile(join(repoDir, "extensions", "private-plugin", "package.json"), {
@@ -807,26 +726,9 @@ describe("collectPublishablePluginPackages", () => {
 
   it("publishes alpha plugin packages to the alpha dist-tag", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
-    writePluginReadme(repoDir, "demo-plugin");
-    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
-      name: "@openclaw/demo-plugin",
+    writePublishablePluginFixture(repoDir, {
       version: "2026.4.10-alpha.1",
-      type: "module",
-      repository: {
-        type: "git",
-        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-      },
-      openclaw: {
-        extensions: ["./index.ts"],
-        ...externalPluginContract("2026.4.10-alpha.1"),
-        install: {
-          npmSpec: "@openclaw/demo-plugin",
-        },
-        release: {
-          publishToNpm: true,
-        },
-      },
+      publishTo: "npm",
     });
 
     expect(collectPublishablePluginPackages(repoDir)).toEqual([
@@ -889,6 +791,26 @@ describe("resolveSelectedPublishablePluginPackages", () => {
       }),
     ).toThrowError("Unknown or non-publishable plugin package selection: @openclaw/missing.");
   });
+
+  it("rejects duplicate selected package provenance instead of choosing the last entry", () => {
+    const firstPlugin = publishablePlugins[0];
+    if (!firstPlugin) {
+      throw new Error("publishable plugin fixture is missing");
+    }
+    expect(() =>
+      resolveSelectedPublishablePluginPackages({
+        plugins: [
+          firstPlugin,
+          {
+            ...firstPlugin,
+            extensionId: "feishu-shadow",
+            packageDir: "extensions/feishu-shadow",
+          },
+        ],
+        selection: ["@openclaw/feishu"],
+      }),
+    ).toThrow("Plugin selection has conflicting plugin package provenance");
+  });
 });
 
 describe("collectChangedExtensionIdsFromPaths", () => {
@@ -901,6 +823,73 @@ describe("collectChangedExtensionIdsFromPaths", () => {
         "docs/reference/RELEASING.md",
       ]),
     ).toEqual(["feishu", "zalo"]);
+  });
+});
+
+describe("collectPluginNpmGitRangeSelection", () => {
+  it.each([
+    ".github/actions/setup-node-env/action.yml",
+    "packages/normalization-core/src/record-coerce.ts",
+    "packages/plugin-package-contract/src/schema.ts",
+    "scripts/lib/plugin-publication-candidates.ts",
+    "scripts/lib/plugin-publication-collector.ts",
+    "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/tsx.mjs",
+    "scripts/plugin-npm-release-plan.ts",
+  ])("selects all publishable plugins for an authority-only %s change", (changedPath) => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-range-");
+    const absolutePath = join(repoDir, changedPath);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, "// before\n");
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoDir });
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Tests",
+        "-c",
+        "user.email=tests@openclaw.invalid",
+        "commit",
+        "-qm",
+        "base",
+      ],
+      { cwd: repoDir },
+    );
+    const baseRef = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+
+    writeFileSync(absolutePath, "// after\n");
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Tests",
+        "-c",
+        "user.email=tests@openclaw.invalid",
+        "commit",
+        "-qm",
+        "change",
+      ],
+      { cwd: repoDir },
+    );
+    const headRef = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+
+    expect(
+      collectPluginNpmGitRangeSelection({
+        rootDir: repoDir,
+        gitRange: { baseRef, headRef },
+      }),
+    ).toEqual({
+      authorityChanged: true,
+      changedExtensionIds: [],
+    });
   });
 });
 

@@ -10,11 +10,13 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
+import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
+  type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { formatSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
@@ -25,6 +27,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
@@ -36,9 +39,13 @@ type SessionSqliteDatabase = Pick<
   | "conversations"
   | "heartbeat_outcomes"
   | "session_conversations"
+  | "session_goal_operations"
   | "session_members"
   | "session_nodes"
+  | "session_participants"
+  | "session_progress_cards"
   | "session_suggestions"
+  | "session_transcript_archives"
   | "session_transcript_active_events"
   | "session_transcript_index_state"
   | "session_windows"
@@ -54,6 +61,7 @@ export type ResolvedSqliteScope = {
   agentId: string;
   databaseAgentId?: string;
   env?: NodeJS.ProcessEnv;
+  ownerStorePath?: string;
   path?: string;
   sessionKey: string;
 };
@@ -62,6 +70,7 @@ export type ResolvedSqliteReadScope = {
   agentId: string;
   databaseAgentId?: string;
   env?: NodeJS.ProcessEnv;
+  ownerStorePath?: string;
   path?: string;
   sessionKey?: string;
 };
@@ -80,7 +89,7 @@ export type SessionSqliteTargetResolutionCache = Map<
 >;
 
 const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
-const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
+const SQLITE_TRANSCRIPT_READ_QUERY_CHUNK_SIZE = 400;
 
 export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SessionSqliteDatabase>(database);
@@ -163,6 +172,7 @@ export function resolveSqliteScope(
     agentId,
     ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
     ...(scope.env ? { env: scope.env } : {}),
+    ...(effectiveStorePath ? { ownerStorePath: effectiveStorePath } : {}),
     ...(storeTarget ? { path: storeTarget.path } : {}),
     sessionKey,
   };
@@ -209,6 +219,7 @@ export function resolveSqliteReadScope(
     agentId,
     ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
     ...(scope.env ? { env: scope.env } : {}),
+    ...(effectiveStorePath ? { ownerStorePath: effectiveStorePath } : {}),
     ...(storeTarget ? { path: storeTarget.path } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };
@@ -326,6 +337,54 @@ export function resolveSqliteTranscriptReadScope(
     ...resolveSqliteReadScope(scope, targetCache),
     sessionId: scope.sessionId,
   };
+}
+
+/** Borrow one store at a time so bounded registry eviction cannot invalidate a batched read. */
+export function readSqliteTranscriptStoreBatches<T>(
+  scopes: readonly SessionTranscriptReadScope[],
+  readChunk: (
+    database: Pick<OpenClawAgentDatabase, "db" | "path">,
+    sessionIds: readonly string[],
+  ) => Map<string, T>,
+): Array<T | undefined> {
+  const results: Array<T | undefined> = Array.from({ length: scopes.length });
+  const groups = new Map<
+    string,
+    { indexes: Map<string, number[]>; options: OpenClawAgentDatabaseOptions }
+  >();
+  const targetCache: SessionSqliteTargetResolutionCache = new Map();
+  for (const [index, scope] of scopes.entries()) {
+    const resolved = resolveSqliteTranscriptReadScope(scope, targetCache);
+    const options = toDatabaseOptions(resolved);
+    const databasePath = resolveOpenClawAgentSqlitePath(options);
+    const group = groups.get(databasePath) ?? { indexes: new Map(), options };
+    const indexes = group.indexes.get(resolved.sessionId) ?? [];
+    indexes.push(index);
+    group.indexes.set(resolved.sessionId, indexes);
+    groups.set(databasePath, group);
+  }
+  for (const group of groups.values()) {
+    withOpenClawAgentDatabaseReadOnly(
+      (database) => {
+        const sessionIds = [...group.indexes.keys()];
+        for (
+          let offset = 0;
+          offset < sessionIds.length;
+          offset += SQLITE_TRANSCRIPT_READ_QUERY_CHUNK_SIZE
+        ) {
+          const chunk = sessionIds.slice(offset, offset + SQLITE_TRANSCRIPT_READ_QUERY_CHUNK_SIZE);
+          for (const [sessionId, value] of readChunk(database, chunk)) {
+            for (const index of group.indexes.get(sessionId) ?? []) {
+              results[index] = value;
+            }
+          }
+        }
+      },
+      group.options,
+      { throwOnMissingTable: true },
+    );
+  }
+  return results;
 }
 
 export function toDatabaseOptions(

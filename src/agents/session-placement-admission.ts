@@ -1,6 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import type { SandboxContext } from "./sandbox/types.js";
 
 export type LocalTurnPlacementClaim = {
   sessionId: string;
@@ -11,7 +14,16 @@ export type LocalTurnPlacementClaim = {
 
 export type SessionPlacementTurnParams = RunEmbeddedAgentParams & { sessionFile: string };
 
+type SessionPlacementSandboxParams = {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionId: string;
+  sessionKey?: string;
+  workspaceDir: string;
+};
+
 export type SessionPlacementAdmissionProvider = {
+  recoverTerminalTurn?: (session: { sessionId: string; sessionKey?: string }) => string | undefined;
   executeLocalTurn: <T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) => Promise<T>;
   executeTurn: (
     claim: LocalTurnPlacementClaim,
@@ -21,8 +33,12 @@ export type SessionPlacementAdmissionProvider = {
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
+type PlacementSandboxAdmissionProvider = SessionPlacementAdmissionProvider & {
+  resolveSandbox?: (params: SessionPlacementSandboxParams) => Promise<SandboxContext | null>;
+};
+
 type SessionPlacementAdmissionState = {
-  provider?: SessionPlacementAdmissionProvider;
+  provider?: PlacementSandboxAdmissionProvider;
 };
 
 // Runtime chunks share one provider. The identity guard keeps an older gateway
@@ -31,11 +47,29 @@ const state = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionPlacementAdmissionState"),
   (): SessionPlacementAdmissionState => ({}),
 );
+// Carry exact local-turn cleanup until the embedded handle captures it; never recover by session id.
+const forcedTerminalSettlement = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionPlacementForcedTerminalSettlement"),
+  () => new AsyncLocalStorage<() => Promise<void>>(),
+);
+
+export function withSessionPlacementForcedTerminalSettlement<T>(
+  settle: () => Promise<void>,
+  task: () => Promise<T>,
+): Promise<T> {
+  return forcedTerminalSettlement.run(settle, task);
+}
+
+export function resolveSessionPlacementForcedTerminalSettlement():
+  | (() => Promise<void>)
+  | undefined {
+  return forcedTerminalSettlement.getStore();
+}
 
 export function installSessionPlacementAdmissionProvider(
   provider: SessionPlacementAdmissionProvider,
 ): () => void {
-  state.provider = provider;
+  state.provider = provider as PlacementSandboxAdmissionProvider;
   return () => {
     if (state.provider === provider) {
       state.provider = undefined;
@@ -79,4 +113,19 @@ export async function withLocalSessionPlacementTurnAdmission<T>(
     return await task();
   }
   return await provider.executeLocalTurn(claim, task);
+}
+
+/** Resolves an authoritative sandbox only when the live placement owns remote execution. */
+export async function resolveSessionPlacementSandbox(
+  params: SessionPlacementSandboxParams,
+): Promise<SandboxContext | null> {
+  return (await state.provider?.resolveSandbox?.(params)) ?? null;
+}
+
+/** The current placement owner alone can settle a proven terminal worker turn. */
+export function recoverTerminalSessionPlacementTurn(session: {
+  sessionId: string;
+  sessionKey?: string;
+}): string | undefined {
+  return state.provider?.recoverTerminalTurn?.(session);
 }

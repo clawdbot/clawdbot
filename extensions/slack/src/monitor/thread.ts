@@ -193,10 +193,6 @@ export async function resolveSlackThreadStarter(params: {
   }
 }
 
-export function resetSlackThreadStarterCacheForTest(): void {
-  THREAD_STARTER_CACHE.clear();
-}
-
 type SlackThreadMessage = {
   text: string;
   userId?: string;
@@ -243,7 +239,7 @@ export async function resolveSlackThreadHistory(params: {
 
   // Slack recommends no more than 200 per page.
   const fetchLimit = 200;
-  const retained: SlackRepliesPageMessage[] = [];
+  const retained: Array<[message: SlackRepliesPageMessage, text: string | undefined]> = [];
   let cursor: string | undefined;
   let pagesFetched = 0;
 
@@ -267,7 +263,7 @@ export async function resolveSlackThreadHistory(params: {
         if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
           continue;
         }
-        retained.push(msg);
+        retained.push([msg, text]);
       }
       if (retained.length > maxMessages) {
         retained.splice(0, retained.length - maxMessages);
@@ -286,13 +282,13 @@ export async function resolveSlackThreadHistory(params: {
       return [];
     }
 
-    return retained.map((msg) => ({
+    return retained.map(([message, text]) => ({
       // For file-only messages, create a placeholder showing attached filenames.
-      text: resolveSlackMessageText(msg) ?? formatSlackFilePlaceholder(msg.files),
-      userId: msg.user,
-      botId: msg.bot_id,
-      ts: msg.ts,
-      files: msg.files,
+      text: text ?? formatSlackFilePlaceholder(message.files),
+      userId: message.user,
+      botId: message.bot_id,
+      ts: message.ts,
+      files: message.files,
     }));
   } catch (err) {
     logVerbose(

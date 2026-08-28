@@ -27,6 +27,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagents/registry/subagent-active-context.js";
 import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
@@ -37,10 +38,7 @@ import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import { prependSystemPromptAddition } from "./attempt-prompt-helpers.js";
 import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
-import {
-  loadAttemptSessionEntryAfterQuotaMaintenance,
-  repairAttemptToolUseResultPairing,
-} from "./attempt-transcript-helpers.js";
+import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -203,7 +201,7 @@ type PersistedSender = {
 };
 
 function readPersistedSender(message: AgentMessage): PersistedSender | undefined {
-  const openclaw = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const openclaw = Reflect.get(message, "__openclaw");
   if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
     return undefined;
   }
@@ -458,7 +456,11 @@ export async function prepareEmbeddedAttemptHistory(input: {
       policy: input.transcriptPolicy,
     });
 
-    if (attempt.sessionKey && !isSettledTurnFinalization) {
+    if (
+      attempt.sessionKey &&
+      attempt.sessionPersistence !== "detached" &&
+      !isSettledTurnFinalization
+    ) {
       const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: input.sessionAgentId,
       });
@@ -541,7 +543,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       // Truncation can orphan tool_result blocks by removing the assistant message
       // that contained the matching tool_use, so repair the pairs once more.
       return input.transcriptPolicy.repairToolUseResultPairing
-        ? repairAttemptToolUseResultPairing(truncated, input.isOpenAIResponsesApi)
+        ? sanitizeToolUseResultPairingForModel(truncated, input.isOpenAIResponsesApi)
         : truncated;
     })();
     input.cacheTrace?.recordStage("session:limited", { messages: limited });
@@ -603,7 +605,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
         throw new Error("context engine assemble returned no result");
       }
       const assembledMessages = input.transcriptPolicy.repairToolUseResultPairing
-        ? repairAttemptToolUseResultPairing(assembled.messages, input.isOpenAIResponsesApi)
+        ? sanitizeToolUseResultPairingForModel(assembled.messages, input.isOpenAIResponsesApi)
         : assembled.messages;
       if (assembledMessages !== activeSession.messages) {
         activeSession.agent.state.messages = assembledMessages;

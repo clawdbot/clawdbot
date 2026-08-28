@@ -1,6 +1,8 @@
 // Control UI tests cover mobile pairing setup through the mocked Gateway.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import type { Page } from "playwright";
 import qrcode from "qrcode";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -14,7 +16,23 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/mobile-pairing");
+// Visual proof rides the behavioral scenario so every captured state is one the
+// assertions above it already proved, at whatever SHA the lane ran.
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "mobile-pairing",
+);
+
+async function captureUiProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(uiProofArtifactDir, { recursive: true });
+  await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
+}
 
 suite.define(() => {
   it("opens pairing from a catalog command without creating a transcript turn", async () => {
@@ -126,7 +144,7 @@ suite.define(() => {
     );
   });
 
-  it("defaults to full before issuance, supports limited fallback, and resets when reopened", async () => {
+  it("retires exact setup credentials across success, expiry, regeneration, and errors", async () => {
     const setupCode = Buffer.from(
       JSON.stringify({
         url: "wss://gateway.example.test",
@@ -135,13 +153,27 @@ suite.define(() => {
       "utf8",
     ).toString("base64url");
     const qrDataUrl = await qrcode.toDataURL(setupCode, { margin: 2, width: 360 });
-    mkdirSync(artifactDir, { recursive: true });
+    const setupResult = (
+      setupId: string,
+      access: "full" | "limited" | "node",
+      expiresAtMs = Date.now() + 120_000,
+      resolvedSetupCode = setupCode,
+    ) => ({
+      setupId,
+      expiresAtMs,
+      auth: "token",
+      gatewayUrl: "wss://gateway.example.test",
+      ...(access === "node" ? {} : { qrDataUrl }),
+      setupCode: resolvedSetupCode,
+      urlSource: "test",
+      access,
+    });
+
     await suite.withPage(
       {
         locale: "en-US",
-        recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
         serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
+        viewport: { height: 844, width: 390 },
       },
       async ({ page }) => {
         const pageErrors: string[] = [];
@@ -149,186 +181,249 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           presenceUsers: [{ self: true, id: "operator", name: "Operator" }],
           methodResponses: {
-            "device.pair.list": {
-              paired: [],
-              pending: [{ deviceId: "mobile-1", requestId: "request-1" }],
-            },
-            "device.pair.setupCode": {
-              auth: "token",
-              gatewayUrl: "wss://gateway.example.test",
-              qrDataUrl,
-              setupCode,
-              urlSource: "test",
-            },
+            "device.pair.list": { paired: [], pending: [] },
+            "device.pair.setupCode": setupResult("setup-full", "full"),
+            "device.pair.setupStatus": {},
             "node.list": { nodes: [] },
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}chat`);
+        const response = await page.goto(`${suite.server.baseUrl}settings/security`);
         expect(response?.status()).toBe(200);
-
-        // Pairing lives with the account-level controls in the footer identity menu.
-        const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
-        const sidebarPairingButton = sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
-          .locator(".sidebar-pair-mobile");
-        await sidebarPairingButton.waitFor();
-        await expect.poll(async () => sidebarPairingButton.isEnabled()).toBe(true);
-        await gateway.deferNext("device.pair.list");
-        await sidebarPairingButton.click();
+        const pairFromSettings = page
+          .locator(".security-page")
+          .getByRole("button", { name: "Pair device" });
+        await expect.poll(async () => pairFromSettings.isEnabled()).toBe(true);
+        await pairFromSettings.click();
 
         const dialog = page.getByRole("dialog", { name: "Pair a device" });
         const qr = page.getByAltText("OpenClaw mobile pairing QR code");
         await dialog.waitFor();
-        expect(await dialog.isVisible()).toBe(true);
-        expect(await qr.count()).toBe(0);
-        expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
-        expect(await page.getByRole("button", { name: "Create setup code" }).isVisible()).toBe(
-          true,
+        await page.getByRole("button", { name: "Create setup code" }).waitFor();
+        const dialogBox = await page.locator(".device-pair-setup").boundingBox();
+        expect(dialogBox?.width).toBeLessThanOrEqual(390);
+        await captureUiProof(page, "01-mobile-access-selection.png");
+
+        const help = page.getByRole("link", { name: "Pairing help (opens in a new tab)" });
+        expect(await help.getAttribute("target")).toBe("_blank");
+        expect((await help.getAttribute("rel"))?.split(" ")).toEqual(
+          expect.arrayContaining(["noopener", "noreferrer"]),
         );
-        await gateway.resolveDeferred("device.pair.list", {
-          paired: [],
-          pending: [{ deviceId: "mobile-1", requestId: "request-1" }],
-        });
+        expect(await help.locator("svg").count()).toBe(1);
+        await help.focus();
+        expect(await help.evaluate((element) => element === document.activeElement)).toBe(true);
+        await help.hover();
+        await captureUiProof(page, "10-mobile-pairing-help-focus-hover.png");
+        const [helpPopup] = await Promise.all([page.waitForEvent("popup"), help.click()]);
+        await helpPopup.waitForURL(/docs\.openclaw\.ai\/channels\/pairing/u);
+        expect(helpPopup.url()).toContain("docs.openclaw.ai/channels/pairing");
+        await helpPopup.close();
 
-        // modal-dialog renders its content in light DOM outside the native dialog element.
-        const accessRadios = page.locator('input[name="device-pair-access"]');
-        await expect.poll(async () => accessRadios.count()).toBe(3);
-        const fullAccess = accessRadios.nth(0);
-        const limitedAccess = accessRadios.nth(1);
-        expect(await fullAccess.isChecked()).toBe(true);
-        await page.screenshot({ path: path.join(artifactDir, "01-full-access-default.png") });
-
-        await limitedAccess.check();
-        expect(await limitedAccess.isChecked()).toBe(true);
-        await fullAccess.check();
-        expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
-
+        await gateway.deferNext("device.pair.setupCode");
         await page.getByRole("button", { name: "Create setup code" }).click();
-        const firstRequest = await gateway.waitForRequest("device.pair.setupCode");
-        expect(firstRequest.params).toEqual({});
-        await qr.waitFor();
-        expect(await qr.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
         expect(
-          await page.getByText("wss://gateway.example.test", { exact: true }).isVisible(),
+          await page.getByRole("status").getByText("Creating a secure setup code…").isVisible(),
         ).toBe(true);
-        expect(await page.getByText("Device requests waiting for review: 1").isVisible()).toBe(
+        expect(await qr.count()).toBe(0);
+        expect(await page.locator('input[name="device-pair-access"]').first().isDisabled()).toBe(
           true,
         );
-        expect(await fullAccess.isDisabled()).toBe(true);
-        expect(await limitedAccess.isDisabled()).toBe(true);
-        await page.screenshot({ path: path.join(artifactDir, "02-full-access-code.png") });
+        await captureUiProof(page, "02-mobile-loading.png");
+        await gateway.resolveDeferred("device.pair.setupCode", setupResult("setup-full", "full"));
+        await qr.waitFor();
+        await captureUiProof(page, "03-mobile-waiting.png");
 
-        const accessSequenceBeforeClose = (await gateway.getRequests("device.pair.setupCode")).map(
-          (request) =>
-            request.params &&
-            typeof request.params === "object" &&
-            "bootstrapProfile" in request.params &&
-            request.params.bootstrapProfile === "limited"
-              ? "limited"
-              : "full",
-        );
-        expect(accessSequenceBeforeClose).toEqual(["full"]);
-        await expect
-          .poll(async () => (await gateway.getRequests("device.pair.list")).length)
-          .toBe(1);
-
-        await gateway.emitGatewayEvent("device.pair.requested", { requestId: "request-2" });
-        await expect
-          .poll(async () => (await gateway.getRequests("device.pair.list")).length)
-          .toBe(2);
-
-        await page.locator(".device-pair-setup__close").click();
+        await gateway.emitGatewayEvent("device.pair.setup.completed", {
+          setupId: "setup-unrelated",
+          deviceId: "phone-unrelated",
+          deviceName: "Unrelated phone",
+          access: "full",
+          ts: 1,
+        });
+        expect(await qr.isVisible()).toBe(true);
+        await gateway.emitGatewayEvent("device.pair.setup.completed", {
+          setupId: "setup-full",
+          deviceId: "phone-full",
+          deviceName: "Test iPhone",
+          access: "full",
+          ts: 2,
+        });
+        await expect.poll(async () => qr.count()).toBe(0);
+        expect(await page.getByText("Test iPhone", { exact: true }).isVisible()).toBe(true);
+        expect(
+          await page.getByText("Device paired · Full access", { exact: true }).isVisible(),
+        ).toBe(true);
+        await captureUiProof(page, "04-mobile-full-success.png");
+        await page.getByRole("button", { name: "Done" }).click();
         await dialog.waitFor({ state: "hidden" });
 
-        const settingsResponse = await page.goto(`${suite.server.baseUrl}settings/security`);
-        expect(settingsResponse?.status()).toBe(200);
-        const quickSettingsPairingButton = page
-          .locator(".security-page")
-          .getByRole("button", { name: "Pair device" });
-        await quickSettingsPairingButton.waitFor();
-        const setupRequestsBeforeQuickSettings = (
-          await gateway.getRequests("device.pair.setupCode")
-        ).length;
-        await quickSettingsPairingButton.click();
-        await dialog.waitFor();
-        expect((await gateway.getRequests("device.pair.setupCode")).length).toBe(
-          setupRequestsBeforeQuickSettings,
+        await page.setViewportSize({ height: 900, width: 1280 });
+        await pairFromSettings.click();
+        await page.locator('input[name="device-pair-access"]').nth(1).check();
+        await gateway.setMethodResponse(
+          "device.pair.setupCode",
+          setupResult("setup-limited", "limited"),
         );
-        expect(await page.locator('input[name="device-pair-access"]').nth(0).isChecked()).toBe(
-          true,
-        );
-        const reopenedLimitedAccess = page.locator('input[name="device-pair-access"]').nth(1);
-        await reopenedLimitedAccess.check();
         await page.getByRole("button", { name: "Create setup code" }).click();
-        await expect
-          .poll(async () => (await gateway.getRequests("device.pair.setupCode")).length)
-          .toBe(setupRequestsBeforeQuickSettings + 1);
         await qr.waitFor();
-        const reopenedAccessSequence = (await gateway.getRequests("device.pair.setupCode"))
-          .slice(setupRequestsBeforeQuickSettings)
-          .map((request) =>
-            request.params &&
-            typeof request.params === "object" &&
-            "bootstrapProfile" in request.params &&
-            request.params.bootstrapProfile === "limited"
-              ? "limited"
-              : "full",
-          );
-        expect(reopenedAccessSequence).toEqual(["limited"]);
-        const accessSequence = [...accessSequenceBeforeClose, ...reopenedAccessSequence];
-        expect(accessSequence).toEqual(["full", "limited"]);
-        await page.screenshot({ path: path.join(artifactDir, "03-limited-access-code.png") });
-        writeFileSync(
-          path.join(artifactDir, "behavior-summary.json"),
-          `${JSON.stringify(
-            {
-              accessSequence,
-              reopenedDefault: "full",
-              setupRequestsIssued: accessSequence.length,
-            },
-            null,
-            2,
-          )}\n`,
-        );
-
-        await page.getByRole("button", { name: "New code" }).click();
-        await expect
-          .poll(async () => (await gateway.getRequests("device.pair.setupCode")).length)
-          .toBe(setupRequestsBeforeQuickSettings + 2);
         expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
           bootstrapProfile: "limited",
         });
+        await gateway.emitGatewayEvent("device.pair.setup.completed", {
+          setupId: "setup-limited",
+          deviceId: "phone-limited",
+          access: "limited",
+          ts: 3,
+        });
+        await expect.poll(async () => qr.count()).toBe(0);
+        expect(
+          await page.getByRole("heading", { name: "Device paired", exact: true }).isVisible(),
+        ).toBe(true);
+        expect(await page.getByText("Limited access", { exact: true }).isVisible()).toBe(true);
+        await captureUiProof(page, "05-desktop-limited-success.png");
+        await page.getByRole("button", { name: "Done" }).click();
 
+        // The completion event is droppable. With the event never delivered, the
+        // lapsing credential must still resolve to paired, not to expired.
+        await pairFromSettings.click();
+        await gateway.setMethodResponse(
+          "device.pair.setupCode",
+          setupResult("setup-missed", "full", Date.now() + 2_000),
+        );
+        await gateway.setMethodResponse("device.pair.setupStatus", {
+          completion: {
+            setupId: "setup-missed",
+            deviceId: "phone-missed",
+            deviceName: "Recovered iPhone",
+            access: "full",
+            ts: 5,
+          },
+        });
+        await page.getByRole("button", { name: "Create setup code" }).click();
+        await qr.waitFor();
+        await page.getByText("Recovered iPhone", { exact: true }).waitFor();
+        expect(await qr.count()).toBe(0);
+        expect(await page.getByText("Setup code expired", { exact: true }).count()).toBe(0);
+        expect((await gateway.getRequests("device.pair.setupStatus")).at(-1)?.params).toEqual({
+          setupId: "setup-missed",
+        });
+        await captureUiProof(page, "06-desktop-reconciled-success.png");
+        await page.getByRole("button", { name: "Done" }).click();
+
+        // Retiring the bearer is not success when the credential-bearing
+        // response did not finish. Surface a recovery path instead.
+        await pairFromSettings.click();
+        await gateway.setMethodResponse(
+          "device.pair.setupCode",
+          setupResult("setup-uncertain", "full", Date.now() + 2_000),
+        );
+        await gateway.setMethodResponse("device.pair.setupStatus", {
+          deliveryUncertain: {
+            setupId: "setup-uncertain",
+            deviceId: "phone-uncertain",
+            access: "full",
+            ts: 6,
+          },
+        });
+        await page.getByRole("button", { name: "Create setup code" }).click();
+        await page
+          .getByRole("heading", { name: "Pairing delivery could not be confirmed" })
+          .waitFor();
+        expect(await qr.count()).toBe(0);
+        expect(await page.getByRole("button", { name: "Generate new code" }).isVisible()).toBe(
+          true,
+        );
+        expect(await page.getByRole("button", { name: "Manage devices" }).isVisible()).toBe(true);
+        await captureUiProof(page, "07-desktop-delivery-uncertain.png");
+        await page.locator(".device-pair-setup__close").click();
+
+        await pairFromSettings.click();
+        await gateway.deferNext("device.pair.setupStatus");
+        await gateway.setMethodResponse(
+          "device.pair.setupCode",
+          setupResult("setup-expired", "full", 0),
+        );
+        await page.getByRole("button", { name: "Create setup code" }).click();
+        await page.getByRole("status").getByText("Loading…", { exact: true }).waitFor();
+        expect(await qr.count()).toBe(0);
+        expect(await page.getByRole("button", { name: "Copy setup code" }).count()).toBe(0);
+        expect(await page.getByText(setupCode, { exact: true }).count()).toBe(0);
+        await gateway.resolveDeferred("device.pair.setupStatus", {});
+        await page.getByRole("heading", { name: "Setup code expired", exact: true }).waitFor();
+        expect(await qr.count()).toBe(0);
+        await captureUiProof(page, "07-desktop-expired.png");
+
+        await gateway.setMethodResponse(
+          "device.pair.setupCode",
+          setupResult("setup-current", "full"),
+        );
+        await gateway.deferNext("device.pair.setupCode");
+        await page.getByRole("button", { name: "Generate new code" }).click();
+        expect(await qr.count()).toBe(0);
+        expect(
+          await page.getByText("Creating a secure setup code…", { exact: true }).isVisible(),
+        ).toBe(true);
+        await gateway.resolveDeferred(
+          "device.pair.setupCode",
+          setupResult("setup-current", "full"),
+        );
+        await qr.waitFor();
+        await gateway.emitGatewayEvent("device.pair.setup.completed", {
+          setupId: "setup-expired",
+          deviceId: "phone-stale",
+          access: "full",
+          ts: 4,
+        });
+        expect(await qr.isVisible()).toBe(true);
+        await captureUiProof(page, "08-desktop-regenerated-waiting.png");
+
+        await gateway.deferNext("device.pair.setupCode");
+        await page.getByRole("button", { name: "New code" }).click();
+        expect(await qr.count()).toBe(0);
+        await gateway.rejectDeferred("device.pair.setupCode", { message: "setup unavailable" });
+        const error = page.getByRole("alert");
+        expect(await error.getByText("Could not create a setup code.").isVisible()).toBe(true);
+        expect(await error.getByText("setup unavailable", { exact: false }).isVisible()).toBe(true);
+        await captureUiProof(page, "09-desktop-error.png");
+
+        await gateway.setMethodResponse(
+          "device.pair.setupCode",
+          setupResult("setup-recovered", "full"),
+        );
+        await page.getByRole("button", { name: "Reload" }).click();
+        await qr.waitFor();
+
+        await page.clock.install();
+        await gateway.deferNext("device.pair.setupCode");
+        await page.getByRole("button", { name: "New code" }).click();
+        await page.clock.fastForward(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS + 1);
+        await page.clock.runFor(100);
+        expect(
+          await error
+            .getByText("gateway request timed out after 30000ms: device.pair.setupCode")
+            .isVisible(),
+        ).toBe(true);
+        await page.getByRole("button", { name: "Reload" }).click();
+        await qr.waitFor();
         await page.locator(".device-pair-setup__close").click();
         await dialog.waitFor({ state: "hidden" });
-        await gateway.setMethodResponse("device.pair.setupCode", {
-          access: "node",
-          auth: "token",
-          expiresAtMs: Date.now() + 60_000,
-          gatewayUrl: "wss://gateway.example.test",
-          setupCode: "Node_AbC123",
-          urlSource: "test",
-        });
-        await quickSettingsPairingButton.click();
+        await gateway.setMethodResponse(
+          "device.pair.setupCode",
+          setupResult("setup-node", "node", Date.now() + 60_000, "Node_AbC123"),
+        );
+        await pairFromSettings.click();
         await dialog.waitFor();
         const nodeAccess = page.locator('input[name="device-pair-access"]').nth(2);
         await nodeAccess.check();
         await page.getByRole("button", { name: "Create setup code" }).click();
-        await expect
-          .poll(async () => (await gateway.getRequests("device.pair.setupCode")).length)
-          .toBe(setupRequestsBeforeQuickSettings + 3);
         expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
           bootstrapProfile: "node",
           includeQr: false,
         });
-        const nodeCommand = page.getByText('openclaw node run --pair "oc-pair://Node_AbC123"', {
-          exact: true,
-        });
-        await nodeCommand.waitFor();
-        expect(await nodeCommand.isVisible()).toBe(true);
-
+        await page
+          .getByText('openclaw node run --pair "oc-pair://Node_AbC123"', { exact: true })
+          .waitFor();
+        expect(await qr.count()).toBe(0);
         await page.getByRole("button", { name: "Manage devices" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/devices");
         expect(pageErrors).toEqual([]);

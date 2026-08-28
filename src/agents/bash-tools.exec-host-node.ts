@@ -25,19 +25,17 @@ import {
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import { shouldAwaitExecApprovalInline } from "./bash-tools.exec-approval-wait.js";
 import {
   formatNodeInvokeFailureFollowup,
-  formatNodeInvokeFailureToolResult,
   invokeNodeSystemRun,
 } from "./bash-tools.exec-host-node-failure.js";
 import {
   analyzeNodeApprovalRequirement,
   buildNodeSystemRunInvoke,
-  formatNodeRunToolResult,
-  invokeNodeSystemRunDirect,
+  dispatchNodeSystemRun,
   prepareNodeSystemRun,
   resolveNodeExecutionTarget,
-  shouldSkipNodeApprovalPrepare,
 } from "./bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
@@ -67,6 +65,9 @@ async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
   currentPolicyAllows?: (policy: { hostSecurity: ExecSecurity; hostAsk: ExecAsk }) => boolean;
   fallbackPolicy?: NodeGatewayPolicyCheckpoint;
 }): Promise<void> {
+  if (params.request.bypassHostApprovalFloors) {
+    return;
+  }
   const current = await execHostShared.resolveExecHostApprovalContext({
     agentId: params.request.agentId,
     security: params.request.security,
@@ -111,37 +112,21 @@ async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
-  const { hostSecurity, hostAsk, askFallback } =
-    await execHostShared.resolveExecHostApprovalContext({
-      agentId: params.agentId,
-      security: params.security,
-      ask: params.ask,
-      host: "node",
-    });
   const target = await resolveNodeExecutionTarget(params);
   params.signal?.throwIfAborted();
-  if (
-    shouldSkipNodeApprovalPrepare({
-      hostSecurity,
-      hostAsk,
-      strictInlineEval: params.strictInlineEval,
-    })
-  ) {
-    await assertCurrentNodeGatewayPolicyAllowsDispatch({
-      request: params,
-      authority: "current-policy",
-      currentPolicyAllows: (current) =>
-        shouldSkipNodeApprovalPrepare({
-          hostSecurity: current.hostSecurity,
-          hostAsk: current.hostAsk,
-          strictInlineEval: params.strictInlineEval,
-        }),
-    });
-    params.signal?.throwIfAborted();
-    return await invokeNodeSystemRunDirect({ request: params, target });
-  }
+  const { hostSecurity, hostAsk, askFallback } = params.bypassHostApprovalFloors
+    ? { hostSecurity: params.security, hostAsk: params.ask, askFallback: "deny" as const }
+    : await execHostShared.resolveExecHostApprovalContext({
+        agentId: params.agentId,
+        security: params.security,
+        ask: params.ask,
+        host: "node",
+      });
 
-  const prepared = await prepareNodeSystemRun({ request: params, target });
+  const prepared = await prepareNodeSystemRun({
+    request: { ...params, security: hostSecurity, ask: hostAsk },
+    target,
+  });
   const approvalAnalysis = await analyzeNodeApprovalRequirement({
     request: params,
     target,
@@ -174,16 +159,29 @@ export async function executeNodeHostCommand(
   });
   const unavailableDecisionRequestParams =
     unavailableDecisions.length > 0 ? { unavailableDecisions } : {};
+  const effectiveSecurity =
+    nodeSecurity === undefined ? hostSecurity : minSecurity(hostSecurity, nodeSecurity);
+  const effectiveAsk = nodeAsk === undefined ? hostAsk : maxAsk(hostAsk, nodeAsk);
+  if (effectiveSecurity === "deny") {
+    throw new Error("exec denied: host=node security=deny");
+  }
   const requiresAsk =
     requiresExecApproval({
-      ask: hostAsk,
-      security: hostSecurity,
+      ask: effectiveAsk,
+      security: effectiveSecurity,
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
     }) ||
     inlineEvalHit !== null ||
     requiresSecurityAuditSuppressionApproval;
+  if (
+    !requiresAsk &&
+    effectiveSecurity === "allowlist" &&
+    !(durableApprovalSatisfied || (analysisOk && allowlistSatisfied))
+  ) {
+    throw new Error("exec denied: host=node allowlist miss (ask=off)");
+  }
   if (requiresAsk && params.nonInteractiveApproval) {
     const text = `Exec denied (approval_required): ${params.command}`;
     return {
@@ -215,6 +213,7 @@ export async function executeNodeHostCommand(
       workdir: prepared.cwd,
       host: "node",
       nodeId: target.nodeId,
+      trigger: params.trigger,
       toolCallId: params.toolCallId,
       security: hostSecurity,
       ask: hostAsk,
@@ -393,12 +392,25 @@ export async function executeNodeHostCommand(
 
     if (!inlineApprovedByAsk) {
       // Human approval may complete after this tool call returns, so follow-up delivery owns invocation.
-      const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
+      const approvalRoute = await execHostShared.createExecApprovalRequestRoute({
         warnings: params.warnings,
         approvalRunningNoticeMs: params.approvalRunningNoticeMs,
         createApprovalSlug,
         turnSourceChannel: params.turnSourceChannel,
         turnSourceAccountId: params.turnSourceAccountId,
+        register: registerNodeApproval,
+        askFallback,
+        resolveTimedOut: async () => {
+          const fallback = await resolveCurrentTimeoutFallback();
+          return {
+            approvedByAsk: fallback.approvedByAsk,
+            deniedReason: fallback.deniedReason,
+            context: fallback,
+          };
+        },
+        requiresExplicitApproval: (fallback) =>
+          fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
+        requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
       });
       const {
         approvalId,
@@ -409,42 +421,11 @@ export async function executeNodeHostCommand(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
-      } = await execHostShared.createAndRegisterDefaultExecApprovalRequest({
-        ...requestArgs,
-        register: registerNodeApproval,
-      });
-      if (
-        execHostShared.shouldResolveExecApprovalUnavailableInline({
-          unavailableReason,
-          preResolvedDecision,
-        })
-      ) {
-        const {
-          baseDecision,
-          approvedByAsk: initialApprovedByAsk,
-          deniedReason: initialDeniedReason,
-        } = execHostShared.createExecApprovalDecisionState({
-          decision: preResolvedDecision,
-          askFallback,
-        });
-        let approvedByAsk = initialApprovedByAsk;
-        let deniedReason = initialDeniedReason;
-        const currentFallback = baseDecision.timedOut
-          ? await resolveCurrentTimeoutFallback()
-          : null;
-        if (currentFallback) {
-          approvedByAsk = currentFallback.approvedByAsk;
-          deniedReason = currentFallback.deniedReason;
-        }
-        const strictInlineEvalDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
-          baseDecision,
-          approvedByAsk,
-          deniedReason,
-          requiresInlineEvalApproval:
-            currentFallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
-          requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
-        });
-        if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
+      } = approvalRoute;
+      if (approvalRoute.kind === "inline") {
+        const inlineDecision = approvalRoute.state;
+        const currentFallback = inlineDecision.timeoutContext;
+        if (inlineDecision.deniedReason || !inlineDecision.approvedByAsk) {
           throw new Error(
             execHostShared.buildHeadlessExecApprovalDeniedMessage({
               trigger: params.trigger,
@@ -455,20 +436,46 @@ export async function executeNodeHostCommand(
             }),
           );
         }
-        inlineApprovedByAsk = strictInlineEvalDecision.approvedByAsk;
-        inlineApprovalSource = preResolvedDecision === null ? "ask-fallback" : undefined;
-        if (inlineApprovalSource) {
-          inlineDispatchAuthority = "ask-fallback";
-          inlineFallbackPolicy = currentFallback ?? undefined;
-        } else {
-          inlineDispatchAuthority = "human-approval";
-        }
-        inlineApprovalDecision = inlineApprovalSource
-          ? null
-          : strictInlineEvalDecision.approvedByAsk
-            ? "allow-once"
-            : null;
+        inlineApprovedByAsk = inlineDecision.approvedByAsk;
+        inlineApprovalSource = "ask-fallback";
+        inlineDispatchAuthority = "ask-fallback";
+        inlineFallbackPolicy = currentFallback;
+        inlineApprovalDecision = null;
         inlineApprovalId = approvalId;
+      } else if (unavailableReason === null && shouldAwaitExecApprovalInline(params)) {
+        // Keep the admitted turn alive while its approval is pending. Returning
+        // approval-pending here closes the authority before the operator can act.
+        const outcome = await execHostShared.resolveExecApprovalWaitOutcome({
+          approvalId,
+          preResolvedDecision,
+          signal: params.signal,
+          askFallback,
+          resolveTimedOut: async () => {
+            const fallback = await resolveCurrentTimeoutFallback();
+            return { ...fallback, context: fallback };
+          },
+          requiresExplicitApproval: (fallback) =>
+            fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
+          requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+        });
+        params.signal?.throwIfAborted();
+        if (outcome.kind !== "resolved") {
+          throw new Error(`exec denied: ${outcome.kind}`);
+        }
+        if (outcome.state.deniedReason || !outcome.state.approvedByAsk) {
+          throw new Error(`exec denied: ${outcome.state.deniedReason ?? "approval-required"}`);
+        }
+        inlineApprovedByAsk = true;
+        inlineApprovalId = approvalId;
+        inlineApprovalDecision =
+          outcome.decision === "allow-always" && inlineEvalHit === null
+            ? "allow-always"
+            : outcome.decision === "allow-once" || outcome.decision === "allow-always"
+              ? "allow-once"
+              : null;
+        inlineApprovalSource = outcome.decision === null ? "ask-fallback" : undefined;
+        inlineDispatchAuthority = inlineApprovalSource ?? "human-approval";
+        inlineFallbackPolicy = outcome.state.timeoutContext;
       } else {
         const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
           approvalId,
@@ -494,66 +501,43 @@ export async function executeNodeHostCommand(
         let nodeInvocationCompleted = false;
 
         void (async () => {
-          let decision: string | null | undefined;
-          try {
-            decision = await execHostShared.resolveApprovalDecisionOrUndefined({
-              approvalId,
-              preResolvedDecision,
-              onFailure: () => void sendApprovalRequestFailedFollowup(),
-            });
-          } catch (error) {
-            // Detached run cancellation has no awaiting tool caller to catch it.
-            if (isExecApprovalRunAbortedError(error)) {
-              return;
-            }
-            await sendApprovalRequestFailedFollowup();
-            return;
-          }
-          if (decision === undefined || params.signal?.aborted) {
-            return;
-          }
-
-          const {
-            baseDecision,
-            approvedByAsk: initialApprovedByAsk,
-            deniedReason: baseDeniedReason,
-          } = execHostShared.createExecApprovalDecisionState({
-            decision,
+          const approvalOutcome = await execHostShared.resolveExecApprovalWaitOutcome({
+            approvalId,
+            preResolvedDecision,
+            signal: params.signal,
             askFallback,
-          });
-          let approvedByAsk = initialApprovedByAsk;
-          let approvalDecision: "allow-once" | "allow-always" | null = null;
-          const approvalSource = decision === null ? "ask-fallback" : undefined;
-          let deniedReason = baseDeniedReason;
-          const currentFallback = baseDecision.timedOut
-            ? await resolveCurrentTimeoutFallback()
-            : null;
-
-          if (currentFallback) {
-            approvedByAsk = currentFallback.approvedByAsk;
-            deniedReason = currentFallback.deniedReason;
-            approvalDecision = approvedByAsk ? "allow-once" : null;
-          } else if (decision === "allow-once") {
-            approvedByAsk = true;
-            approvalDecision = "allow-once";
-          } else if (decision === "allow-always") {
-            approvedByAsk = true;
-            approvalDecision = "allow-always";
-          }
-
-          const strictBoundaryDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
-            baseDecision,
-            approvedByAsk,
-            deniedReason,
-            requiresInlineEvalApproval:
-              currentFallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
+            resolveTimedOut: async () => {
+              const fallback = await resolveCurrentTimeoutFallback();
+              return {
+                approvedByAsk: fallback.approvedByAsk,
+                deniedReason: fallback.deniedReason,
+                context: fallback,
+              };
+            },
+            requiresExplicitApproval: (fallback) =>
+              fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
             requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
           });
-          approvedByAsk = strictBoundaryDecision.approvedByAsk;
-          deniedReason = strictBoundaryDecision.deniedReason;
-          if (deniedReason) {
-            approvalDecision = null;
+          if (approvalOutcome.kind !== "resolved") {
+            if (approvalOutcome.kind === "request-failed") {
+              await sendApprovalRequestFailedFollowup();
+            }
+            return;
           }
+
+          const { decision, state: resolvedDecision } = approvalOutcome;
+          const { approvedByAsk, deniedReason } = resolvedDecision;
+          const currentFallback = resolvedDecision.timeoutContext;
+          const approvalSource = decision === null ? "ask-fallback" : undefined;
+          const approvalDecision: "allow-once" | "allow-always" | null = deniedReason
+            ? null
+            : currentFallback
+              ? approvedByAsk
+                ? "allow-once"
+                : null
+              : decision === "allow-once" || decision === "allow-always"
+                ? decision
+                : null;
 
           if (deniedReason) {
             await execHostShared.sendExecApprovalFollowupResult(
@@ -645,17 +629,19 @@ export async function executeNodeHostCommand(
               `Exec denied (node=${target.nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
             );
           }
-        })().catch(async (error: unknown): Promise<void> => {
-          // Once dispatch starts, a delivery failure cannot mean execution was denied.
-          if (
-            nodeInvocationStarted ||
-            params.signal?.aborted ||
-            isExecApprovalRunAbortedError(error)
-          ) {
-            return;
-          }
-          await sendApprovalRequestFailedFollowup();
-        });
+        })()
+          .catch(async (error: unknown): Promise<void> => {
+            // Once dispatch starts, a delivery failure cannot mean execution was denied.
+            if (
+              nodeInvocationStarted ||
+              params.signal?.aborted ||
+              isExecApprovalRunAbortedError(error)
+            ) {
+              return;
+            }
+            await sendApprovalRequestFailedFollowup();
+          })
+          .catch(() => undefined);
 
         return execHostShared.buildExecApprovalPendingToolResult({
           host: "node",
@@ -670,12 +656,12 @@ export async function executeNodeHostCommand(
           unavailableReason,
           allowedDecisions,
           nodeId: target.nodeId,
+          processContinuationAvailable: params.processContinuationAvailable,
         });
       }
     }
   }
 
-  const startedAt = Date.now();
   params.signal?.throwIfAborted();
   const invoke = buildNodeSystemRunInvoke({
     target,
@@ -684,6 +670,10 @@ export async function executeNodeHostCommand(
     cwd: prepared.cwd,
     agentId: prepared.agentId,
     sessionKey: prepared.sessionKey,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
     approved: inlineApprovalSource ? undefined : inlineApprovedByAsk,
     approvalDecision: inlineApprovalSource ? null : inlineApprovalDecision,
     approvalSource: inlineApprovalSource,
@@ -703,32 +693,19 @@ export async function executeNodeHostCommand(
         allowlistSatisfied,
         durableApprovalSatisfied,
       }) &&
+      (current.hostSecurity !== "allowlist" ||
+        durableApprovalSatisfied ||
+        (analysisOk && allowlistSatisfied)) &&
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval,
   });
   params.signal?.throwIfAborted();
-  const invocation = await invokeNodeSystemRun({
-    invokeWaitMs: target.invokeWaitMs,
+  return dispatchNodeSystemRun({
+    request: params,
+    target,
     invoke,
-    signal: params.signal,
     ...((inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
       ? { scopes: APPROVED_NODE_INVOKE_SCOPES }
       : {}),
-  });
-  if (!invocation.ok) {
-    return formatNodeInvokeFailureToolResult({
-      failure: invocation.failure,
-      nodeId: target.nodeId,
-      command: params.command,
-      startedAt,
-      cwd: params.workdir,
-      warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],
-    });
-  }
-  return formatNodeRunToolResult({
-    raw: invocation.raw,
-    startedAt,
-    cwd: params.workdir,
-    warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],
   });
 }

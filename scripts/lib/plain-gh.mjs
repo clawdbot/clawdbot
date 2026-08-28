@@ -45,6 +45,51 @@ function pathEntries(env) {
 }
 
 /**
+ * Credential-injecting PATH wrappers may be the only authenticated gh entry
+ * point even though writes need the unwrapped CLI. Forward its token only to
+ * the selected plain CLI process; never persist it in process.env.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {NodeJS.ProcessEnv}
+ */
+export function plainGhAuthenticatedEnv(env) {
+  const next = plainGhEnv(env);
+  if (
+    next.GH_TOKEN ||
+    next.GITHUB_TOKEN ||
+    next.GH_ENTERPRISE_TOKEN ||
+    next.GITHUB_ENTERPRISE_TOKEN
+  ) {
+    return next;
+  }
+
+  const tokenEnv = { ...next };
+  delete tokenEnv.OPENCLAW_GH_BIN;
+  const args = ["auth", "token"];
+  if (tokenEnv.GH_HOST) {
+    args.push("--hostname", tokenEnv.GH_HOST);
+  }
+  try {
+    const token = execFileSync("gh", args, {
+      encoding: "utf8",
+      env: tokenEnv,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    }).trim();
+    if (token) {
+      if (tokenEnv.GH_HOST && tokenEnv.GH_HOST !== "github.com") {
+        next.GH_ENTERPRISE_TOKEN = token;
+      } else {
+        next.GH_TOKEN = token;
+      }
+    }
+  } catch {
+    // The selected CLI may have usable credentials in its own config.
+  }
+  return next;
+}
+
+/**
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {NodeJS.ProcessEnv}
  */
@@ -128,7 +173,7 @@ export function resolvePlainGhBin(
  * @returns {string | Uint8Array<ArrayBuffer>}
  */
 export function execPlainGh(args, options = {}) {
-  const env = plainGhEnv(options.env ?? process.env);
+  const env = plainGhAuthenticatedEnv(options.env ?? process.env);
   const ghBin = resolvePlainGhBin(env);
   return execFileSync(ghBin, args, {
     ...options,
@@ -184,6 +229,28 @@ export function execGhRead(args, options = {}, params = {}) {
  */
 export function execGhJson(args, options = {}, params = {}) {
   return JSON.parse(execGhRead(args, { ...options, encoding: "utf8" }, params));
+}
+
+/**
+ * @param {string} repo
+ * @param {string} sha
+ * @param {string} event
+ * @param {number} perPage
+ * @returns {string[]}
+ */
+export function workflowRunsApiArgs(repo, sha, event, perPage) {
+  return [
+    "api",
+    "--method",
+    "GET",
+    `repos/${repo}/actions/workflows/ci.yml/runs`,
+    "-f",
+    `event=${event}`,
+    "-f",
+    `head_sha=${sha}`,
+    "-f",
+    `per_page=${perPage}`,
+  ];
 }
 
 /**

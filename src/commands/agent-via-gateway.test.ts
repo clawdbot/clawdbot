@@ -10,6 +10,7 @@ import {
   configureExecutionIdentityAdmissionSink,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
+import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
@@ -360,10 +361,27 @@ describe("agentCliCommand", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
   });
 
-  it("clamps oversized gateway timeout seconds", () => {
-    expect(agentViaGatewayTesting.resolveGatewayAgentTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
+  it("rejects a blank agent before selecting a local or Gateway target", async () => {
+    await expect(agentCliCommand({ message: "hi", agent: "" }, runtime)).rejects.toThrow(
+      "--agent must not be blank",
     );
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("clamps oversized gateway timeout seconds at the command boundary", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        { message: "hi", to: "+1555", timeout: String(Number.MAX_SAFE_INTEGER) },
+        runtime,
+      );
+
+      const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
+      expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    });
   });
 
   it("rejects partial gateway timeout values", async () => {
@@ -1980,35 +1998,46 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("exits for local runs that resolve after SIGTERM aborts them", async () => {
-    await withTempStore(async () => {
-      const signals = createSignalProcess();
-      agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
-        return await new Promise((resolve) => {
-          opts.abortSignal?.addEventListener(
-            "abort",
-            () => {
-              resolve({
-                payloads: [],
-                meta: { aborted: true },
-              } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
-            },
-            { once: true },
-          );
+  it.each([
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ] as const)(
+    "preserves %s when a local run returns a failed outcome",
+    async (signal, exitCode) => {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+          return await new Promise((resolve) => {
+            opts.abortSignal?.addEventListener(
+              "abort",
+              () => {
+                resolve(
+                  recordAgentRunTerminalOutcome(
+                    {
+                      payloads: [],
+                      meta: { aborted: true },
+                    },
+                    "failed",
+                  ) as unknown as Awaited<ReturnType<typeof AgentCommand>>,
+                );
+              },
+              { once: true },
+            );
+          });
         });
-      });
 
-      const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
-        process: signals.processLike,
-      });
-      await waitForAgentCommandCall();
-      signals.emit("SIGTERM");
+        const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+          process: signals.processLike,
+        });
+        await waitForAgentCommandCall();
+        signals.emit(signal);
 
-      await expect(run).resolves.toBeUndefined();
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(143);
-    });
-  });
+        await expect(run).resolves.toBeUndefined();
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+      });
+    },
+  );
 
   it("does not classify abort errors as gateway transport failures", async () => {
     await withTempStore(async () => {
@@ -2127,18 +2156,23 @@ describe("agentCliCommand", () => {
 
   it("surfaces duplicate in-flight gateway runs without pretending a reply arrived", async () => {
     await withTempStore(async () => {
+      const signals = createSignalProcess();
       callGateway.mockResolvedValue({
         runId: "idem-1",
         status: "in_flight",
         sessionKey: "agent:main:main",
       });
 
-      await agentCliCommand({ message: "hi", to: "+1555", runId: "idem-1" }, runtime);
+      await agentCliCommand({ message: "hi", to: "+1555", runId: "idem-1" }, runtime, {
+        process: signals.processLike,
+      });
 
       expect(runtime.error).toHaveBeenCalledWith(
         "Agent run idem-1 is already in flight; not starting a duplicate run.",
       );
       expect(runtime.log).not.toHaveBeenCalledWith("No reply from agent.");
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(signals.processLike.exitCode).toBe(1);
     });
   });
 
@@ -2451,6 +2485,30 @@ describe("agentCliCommand", () => {
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts.oneShotCliRun).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it.each([
+    ["failed", 1],
+    ["completed", 0],
+  ] as const)("maps a %s local terminal outcome to exit %s", async (outcome, exitCode) => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      agentCommand.mockResolvedValueOnce(
+        recordAgentRunTerminalOutcome(
+          {
+            payloads: [{ text: "provider failed", isError: true }],
+            meta: { error: new Error("provider failed") },
+          },
+          outcome,
+        ),
+      );
+
+      await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+        process: signals.processLike,
+      });
+
+      expect(signals.processLike.exitCode).toBe(exitCode);
     });
   });
 

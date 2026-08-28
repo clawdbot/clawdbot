@@ -1,5 +1,10 @@
 // User-turn transcript type contracts shared by runtime and queue option types.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
+import type {
+  SessionTranscriptTurnMutation,
+  SessionTranscriptTurnMutationResult,
+} from "../config/sessions/goals-operations.types.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -30,9 +35,14 @@ export type PersistedUserTurnMediaInput = Pick<
   workspaceDir?: string | null;
 };
 
-export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
+export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> & {
+  display?: false;
+  __openclaw?: Record<string, unknown>;
+};
 
 export type UserTurnInput = {
+  /** Internal continuation input stays in model history without impersonating a human chat row. */
+  display?: false;
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
   /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
@@ -51,8 +61,13 @@ export type UserTurnInput = {
   replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
-  /** Durable participant attribution. Callers must opt in at the product boundary. */
-  sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
+  /** Identity is producer-owned attribution; labels remain editable display metadata. */
+  sender?: {
+    id?: string | null;
+    name?: string | null;
+    username?: string | null;
+    identity?: TranscriptSenderIdentity;
+  } | null;
   /** Durable transport correlation; stored privately and never rendered into model input. */
   transport?: {
     channel?: string;
@@ -86,6 +101,7 @@ type UserTurnBeforeMessageWrite = (params: {
 type UserTurnTranscriptPersistenceTarget = {
   sessionId: string;
   expectedSessionId?: string;
+  initialSessionEntry?: SessionEntry;
   sessionKey: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   sessionStore?: Record<string, UserTurnSessionEntry>;
@@ -102,6 +118,7 @@ export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 export type UserTurnTranscriptAdmissionReceipt = TranscriptTurnAdmission;
 
 export type UserTurnTranscriptPersistResult = {
+  sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   /** True only when this call inserted the transcript message. */
   appended?: boolean;
   sessionFile: string;
@@ -116,10 +133,12 @@ export type UserTurnTranscriptTargetResolver =
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type PersistUserTurnTranscriptParams = {
+  sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
   sessionId: string;
   expectedSessionId?: string;
+  initialSessionEntry?: SessionEntry;
   sessionKey: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   sessionStore?: Record<string, UserTurnSessionEntry>;
@@ -138,6 +157,7 @@ export type PersistUserTurnTranscriptParams = {
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
   resolveInput?: UserTurnInputResolver;
@@ -156,6 +176,8 @@ export type UserTurnTranscriptRecorder = {
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
+  /** Confirms exact-run steering provenance after transcript commitment is proven. */
+  confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;

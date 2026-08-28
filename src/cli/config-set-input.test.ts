@@ -123,6 +123,17 @@ describe("config set input parsing", () => {
     ).toThrow("--batch-file not found: /nonexistent/path/batch.json5");
   });
 
+  it("rejects a directory passed as --batch-file", () => {
+    const batchPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-set-directory-"));
+    try {
+      expect(() => parseBatchSource({ batchFile: batchPath })).toThrow(
+        `--batch-file must be a regular file: ${batchPath}. Choose a JSON5 input file and try again.`,
+      );
+    } finally {
+      fs.rmSync(batchPath, { recursive: true, force: true });
+    }
+  });
+
   it("rejects malformed --batch-file payloads", () => {
     withBatchFile("openclaw-config-set-input-invalid-", "{}", (batchPath) => {
       expect(() =>
@@ -159,5 +170,13 @@ describe("config set input parsing", () => {
       const parsed = parseBatchSource({ batchFile: batchPath });
       expect(parsed).toEqual([{ path: "gateway.port", value: 19000 }]);
     });
+  });
+
+  it("rejects batch entries with non-finite numbers", () => {
+    expect(() =>
+      parseBatchSource({
+        batchJson: '[{"path":"channels.custom.timeout","value":1e999}]',
+      }),
+    ).toThrow("Value must be a finite number");
   });
 });

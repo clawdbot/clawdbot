@@ -165,6 +165,13 @@
   margin-top: 16px;
 }
 
+.model-providers__utility-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+}
+
 .model-providers__fallbacks {
   margin-top: 16px;
 }

@@ -108,7 +108,7 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
         self.routeClearReleaseGate.open()
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {
         self.stopCount += 1
         self.stopGate.open()
@@ -120,6 +120,40 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
 
     func stops() -> Int {
         self.stopCount
+    }
+}
+
+private actor CoordinatorFailingStartWorkerProbe: MacNodeHostWorking {
+    static let failureReason = "worker exited with status exited(1)"
+    static let failureDiagnostic = "[openclaw] state database uses newer schema version 10"
+    private var startCalls = 0
+
+    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
+        self.startCalls += 1
+        throw MacNodeHostWorker.WorkerError.unavailable(
+            reason: Self.failureReason,
+            diagnostic: Self.failureDiagnostic)
+    }
+
+    func supports(_: String) async -> Bool {
+        false
+    }
+
+    func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        BridgeInvokeResponse(id: request.id, ok: false)
+    }
+
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool {
+        true
+    }
+
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func stop() async {}
+
+    func startCallCount() -> Int {
+        self.startCalls
     }
 }
 
@@ -213,6 +247,21 @@ struct MacNodeModeCoordinatorTests {
         await coordinator.stopAndWait()
     }
 
+    @Test @MainActor func `ordinary gateway reconnect preserves the startup scoped worker`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        coordinator.enqueueRouteInvalidationForTesting()
+        await coordinator.waitForRouteInvalidationForTesting()
+
+        #expect(await worker.stops() == 0)
+        await coordinator.stopAndWait()
+    }
+
     @Test @MainActor func `terminal stop owns cleanup after coordinator release`() async {
         let worker = CoordinatorNodeHostWorkerProbe()
         let session = GatewayNodeSession()
@@ -287,6 +336,121 @@ struct MacNodeModeCoordinatorTests {
         await coordinator.waitForNodeHostWorkerRetryForTesting()
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
         await coordinator.stopAndWait()
+    }
+
+    @Test @MainActor func `queued failure from replaced worker does not penalize replacement`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+        let command = ["/usr/local/bin/openclaw", "node", "worker"]
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+
+        // Generation zero belongs to the replaced process. Handle it only after
+        // the successor input is installed so the ordering is deterministic.
+        coordinator.handleNodeHostWorkerFailureForTesting(configurationGeneration: .zero)
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.stopAndWait()
+    }
+
+    // Regression: an exhausted node-host worker must degrade the connect to
+    // native capabilities with a visible reason. Before this, retry exhaustion
+    // (and any startup-scoped worker failure) aborted the whole connection
+    // attempt, so the node channel never dialed and the operator saw nothing.
+    @Test @MainActor func `worker retry exhaustion degrades the node connect instead of blocking it`() async throws {
+        let worker = CoordinatorFailingStartWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            notificationCenter: NotificationCenter(),
+            nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy(maximumRetryCount: 0))
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(
+            command: ["/usr/local/bin/openclaw", "node", "worker"])
+        let initialFailure = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        #expect(initialFailure.unavailable?.reason == CoordinatorFailingStartWorkerProbe.failureReason)
+        #expect(initialFailure.unavailable?.diagnostic == CoordinatorFailingStartWorkerProbe.failureDiagnostic)
+
+        coordinator.handleNodeHostWorkerFailureForTesting()
+        await coordinator.waitForRouteInvalidationForTesting()
+
+        let resolved = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        #expect(resolved.manifest == nil)
+        #expect(resolved.unavailable?.reason.contains("unexpected exits") == true)
+        #expect(resolved.unavailable?.reason.contains(CoordinatorFailingStartWorkerProbe.failureReason) == true)
+        #expect(resolved.unavailable?.diagnostic == initialFailure.unavailable?.diagnostic)
+        // The exhausted budget must also stop worker respawn attempts.
+        #expect(await worker.startCallCount() == 1)
+        await coordinator.stopAndWait()
+    }
+
+    @Test func `node channel states map to operator status lines`() {
+        #expect(MacNodeChannelState.idle.operatorStatusLine == nil)
+        #expect(MacNodeChannelState.connected(workerUnavailableReason: nil).operatorStatusLine == nil)
+
+        let degraded = MacNodeChannelState
+            .connected(workerUnavailableReason: "worker exited: schema mismatch")
+            .operatorStatusLine
+        #expect(degraded?.label == "Mac node degraded — worker exited: schema mismatch")
+        #expect(degraded?.diagnostic == nil)
+        #expect(degraded?.isDegraded == true)
+
+        let unavailable = MacNodeChannelState
+            .unavailable(reason: "state database uses newer schema version 10\nTry: openclaw doctor")
+            .operatorStatusLine
+        #expect(unavailable?.label == "Mac node unavailable — state database uses newer schema version 10")
+        #expect(unavailable?.diagnostic == nil)
+        #expect(unavailable?.isDegraded == false)
+    }
+
+    @Test func `worker stderr never becomes part of the operator status headline`() throws {
+        let diagnostic = "[openclaw] bootstrap failed: state database uses a newer schema"
+        let reason = "worker exited with status exited(1)"
+        let states: [MacNodeChannelState] = [
+            .unavailable(reason: reason, diagnostic: diagnostic),
+            .connected(workerUnavailableReason: reason, diagnostic: diagnostic),
+        ]
+
+        for state in states {
+            let line = try #require(state.operatorStatusLine)
+            #expect(line.label.contains(reason))
+            #expect(!line.label.contains(diagnostic))
+            #expect(line.diagnostic == diagnostic)
+        }
+    }
+
+    @Test func `operator diagnostics preserve complete lines within their display budget`() throws {
+        let inputLines = (0..<10).map { index in
+            "[openclaw] line \(index): " + String(repeating: "bootstrap failure details ", count: 5)
+        }
+        let input = inputLines.joined(separator: "\n")
+        let line = try #require(MacNodeChannelState.unavailable(
+            reason: "worker exited",
+            diagnostic: input).operatorStatusLine)
+        let diagnostic = try #require(line.diagnostic)
+        let completeLines = String(diagnostic.dropLast()).split(separator: "\n").map(String.init)
+
+        #expect(diagnostic.count <= 360)
+        #expect(completeLines.count <= 4)
+        #expect(diagnostic.hasSuffix("…"))
+        #expect(completeLines.elementsEqual(inputLines.prefix(completeLines.count)))
+
+        let longLine = Array(repeating: "bootstrap", count: 100).joined(separator: " ")
+        let singleLine = try #require(MacNodeChannelState.unavailable(
+            reason: "worker exited",
+            diagnostic: longLine).operatorStatusLine?.diagnostic)
+
+        #expect(singleLine.count <= 360)
+        #expect(singleLine.hasSuffix("…"))
+        #expect(String(singleLine.dropLast()).split(separator: " ").allSatisfy { $0 == "bootstrap" })
     }
 
     @Test func `paused node state requires route disconnect`() {
@@ -630,7 +794,11 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(!caps.contains(OpenClawCapability.browser.rawValue))
         #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
-        #expect(commands.contains(OpenClawCanvasCommand.present.rawValue))
+        #expect(commands.filter { $0.hasPrefix("canvas.") } == [
+            OpenClawCanvasCommand.present.rawValue,
+            OpenClawCanvasCommand.hide.rawValue,
+            OpenClawCanvasCommand.navigate.rawValue,
+        ])
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
         #expect(!commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
         #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))

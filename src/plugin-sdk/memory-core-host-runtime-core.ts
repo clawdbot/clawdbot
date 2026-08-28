@@ -1,6 +1,7 @@
 // Memory core host runtime exports bridge memory host runtime-core APIs into the SDK.
 export { SILENT_REPLY_TOKEN } from "../../packages/memory-host-sdk/src/runtime-core.js";
 export { resolveRememberAcrossConversations } from "../../packages/memory-host-sdk/src/host/config-utils.js";
+export { resolveEffectiveCompactionReserveTokens } from "../agents/agent-compaction-constants.js";
 export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/agent-settings.js";
 export {
   asToolParamsRecord,
@@ -13,6 +14,7 @@ export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
 export {
   listAgentIds,
+  resolveConfiguredAgentId,
   resolveDefaultAgentId,
   resolveSessionAgentIds,
 } from "../agents/agent-scope.js";
@@ -22,6 +24,7 @@ export { parseNonNegativeByteSize } from "../config/byte-size.js";
 export { getRuntimeConfig } from "../config/config.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
+export { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
 
@@ -31,6 +34,14 @@ export type {
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
+export {
+  listMemoryArtifactProvenance,
+  readMemoryArtifactProvenance,
+} from "../memory/memory-artifact-provenance.js";
+export type {
+  MemoryArtifactOriginClass,
+  MemoryArtifactProvenance,
+} from "../memory/memory-artifact-provenance.js";
 export {
   clearMemoryPluginState,
   listMemoryCorpusSupplements,

@@ -123,14 +123,19 @@ describe("pw-session refLocator", () => {
     expect(mocks.frameLocator).not.toHaveBeenCalled();
   });
 
-  it("uses page getByRole for role refs by default", () => {
+  it.each([
+    { ref: "e1", name: "OK" },
+    { ref: "e1", name: "" },
+    { ref: "ax12", name: "OK" },
+    { ref: "ax12", name: "" },
+  ])("matches the exact name for unmarked $ref with name '$name'", ({ ref, name }) => {
     const { page, mocks } = fakePage();
     const state = ensurePageState(page);
-    state.roleRefs = { e1: { role: "button", name: "OK" } };
+    state.roleRefs = { [ref]: { role: "button", name } };
 
-    refLocator(page, "e1");
+    refLocator(page, ref);
 
-    expect(mocks.getByRole).toHaveBeenCalled();
+    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name, exact: true });
   });
 
   it("uses aria-ref locators when refs mode is aria", () => {
@@ -151,16 +156,6 @@ describe("pw-session refLocator", () => {
     refLocator(page, "ax12");
 
     expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="ax12"]`);
-  });
-
-  it("falls back to role heuristics for ax refs without backend markers", () => {
-    const { page, mocks } = fakePage();
-    const state = ensurePageState(page);
-    state.roleRefs = { ax12: { role: "button", name: "OK" } };
-
-    refLocator(page, "ax12");
-
-    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name: "OK", exact: true });
   });
 
   it("rejects unknown ax refs instead of timing out on aria-ref locators", () => {
@@ -662,15 +657,20 @@ describe("pw-session ensurePageState", () => {
     ensurePageState(page);
     const capture = beginActionDownloadCaptureOnPage(page);
     const error = new Error("action download save failed");
+    const cancel = vi.fn(async () => {
+      throw new Error("browser disconnected during cancellation");
+    });
 
     handlers.get("download")?.[0]?.({
       suggestedFilename: () => "failed.txt",
       saveAs: vi.fn(async () => {
         throw error;
       }),
+      cancel,
     });
 
     await expect(capture.drain()).rejects.toBe(error);
+    expect(cancel).toHaveBeenCalledOnce();
     capture.dispose();
   });
 
@@ -764,15 +764,25 @@ describe("pw-session ensurePageState", () => {
     expect(isDownloadStartingNavigationError(new Error("Navigation failed"))).toBe(false);
   });
 
-  it("tracks page errors and network requests (best-effort)", () => {
+  it("bounds page-controlled text while tracking network requests", () => {
     const { page, handlers } = fakePage();
     const state = ensurePageState(page);
 
+    const oversized = `${"x".repeat(2047)}😀tail`;
+    const consoleMessage = {
+      type: () => oversized,
+      text: () => oversized,
+      location: () => ({ url: oversized, lineNumber: 1, columnNumber: 2 }),
+    } as unknown as import("playwright-core").ConsoleMessage;
+    const pageError = new Error(oversized);
+    pageError.name = oversized;
+    pageError.stack = oversized;
+
     const req = {
       method: () => "GET",
-      url: () => "https://example.com/api",
+      url: () => oversized,
       resourceType: () => "xhr",
-      failure: () => ({ errorText: "net::ERR_FAILED" }),
+      failure: () => ({ errorText: oversized }),
     } as unknown as import("playwright-core").Request;
 
     const resp = {
@@ -784,16 +794,30 @@ describe("pw-session ensurePageState", () => {
     handlers.get("request")?.[0]?.(req);
     handlers.get("response")?.[0]?.(resp);
     handlers.get("requestfailed")?.[0]?.(req);
-    handlers.get("pageerror")?.[0]?.(new Error("boom"));
+    handlers.get("console")?.[0]?.(consoleMessage);
+    handlers.get("pageerror")?.[0]?.(pageError);
 
-    expect(state.errors.at(-1)?.message).toBe("boom");
+    const consoleEntry = state.console.at(-1);
+    const errorEntry = state.errors.at(-1);
     const request = state.requests.at(-1);
+    for (const value of [
+      consoleEntry?.type,
+      consoleEntry?.text,
+      consoleEntry?.location?.url,
+      errorEntry?.message,
+      errorEntry?.name,
+      errorEntry?.stack,
+      request?.url,
+      request?.failureText,
+    ]) {
+      expect(value?.length).toBeLessThanOrEqual(2048);
+      expect(value).not.toContain("tail");
+      expect(value?.charCodeAt((value?.length ?? 0) - 1)).not.toBe(0xd83d);
+    }
     expect(request?.method).toBe("GET");
-    expect(request?.url).toBe("https://example.com/api");
     expect(request?.resourceType).toBe("xhr");
     expect(request?.status).toBe(500);
     expect(request?.ok).toBe(false);
-    expect(request?.failureText).toBe("net::ERR_FAILED");
   });
 
   it("drops state on page close", () => {

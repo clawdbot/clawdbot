@@ -294,6 +294,7 @@ describe("subagent registry steer restarts", () => {
       aborted?: boolean;
       error?: string;
       stopReason?: string;
+      terminalReply?: { disposition: "visible"; text: string } | { disposition: "empty" };
     } = {},
   ) => {
     lifecycleHandler?.({
@@ -301,6 +302,7 @@ describe("subagent registry steer restarts", () => {
       runId,
       data: {
         phase: "end",
+        terminalReply: { disposition: "visible", text: "final completion reply" },
         ...data,
       },
     });

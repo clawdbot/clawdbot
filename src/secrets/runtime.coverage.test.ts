@@ -236,7 +236,7 @@ vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
 
 type SecretRegistryEntry = {
   id: string;
-  configFile: "openclaw.json" | "auth-profiles.json";
+  configFile: "openclaw.json" | "auth-profile-store";
   pathPattern: string;
   refPathPattern?: string;
   secretShape: "secret_input" | "sibling_ref";
@@ -247,7 +247,7 @@ type SecretRegistryEntry = {
 type SecretRefCredentialMatrix = {
   entries: Array<{
     id: string;
-    configFile: "openclaw.json" | "auth-profiles.json";
+    configFile: "openclaw.json" | "auth-profile-store";
     path: string;
     refPath?: string;
     secretShape: SecretRegistryEntry["secretShape"];
@@ -418,7 +418,7 @@ function addCoveragePluginLoadPath(config: OpenClawConfig, pluginId: string): vo
     return;
   }
   const nextIndex = Array.isArray(existing) ? existing.length : 0;
-  setPathCreateStrict(config, ["plugins", "load", "paths", String(nextIndex)], loadPath);
+  setPathCreateStrict(config, ["plugins", "load", "paths", nextIndex], loadPath);
 }
 
 function resolveCoverageLoadablePluginOrigins(
@@ -578,7 +578,7 @@ function applyConfigForOpenClawTarget(
     }
   }
   if (entry.id === "memory.search.remote.apiKey") {
-    setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
+    setPathCreateStrict(config, ["agents", "list", 0, "id"], "sample-agent");
   }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
@@ -848,7 +848,7 @@ async function expectOpenClawCoverageBatchResolved(
 ): Promise<void> {
   logCoverageBatch(label, batch);
   const config = {} as OpenClawConfig;
-  const env: Record<string, string> = {};
+  const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
   for (const [index, entry] of batch.entries()) {
     const envId = toCoverageEnvRefId("OPENCLAW_SECRET_TARGET", entry.id);
     const runtimeEnvId = resolveCoverageEnvId(entry, envId);
@@ -880,7 +880,7 @@ const OPENCLAW_PLUGIN_COVERAGE_BATCHES = buildCoverageBatches(
   collectOpenClawCoverageEntries({ includePluginEntries: true }),
 );
 const AUTH_PROFILE_COVERAGE_BATCHES = buildCoverageBatches(
-  COVERAGE_REGISTRY_ENTRIES.filter((entry) => entry.configFile === "auth-profiles.json"),
+  COVERAGE_REGISTRY_ENTRIES.filter((entry) => entry.configFile === "auth-profile-store"),
 );
 
 function toCoverageBatchCase(batch: SecretRegistryEntry[]) {

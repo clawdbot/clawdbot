@@ -1,12 +1,6 @@
 // Prepares declaration and entry-shim artifacts that prove plugin package
 // boundary imports resolve through public package surfaces.
-import {
-  spawn,
-  spawnSync,
-  type SpawnOptionsWithStdioTuple,
-  type StdioNull,
-  type StdioPipe,
-} from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -16,11 +10,17 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { acquireExtensionPackageBoundaryArtifactLockSync } from "./lib/extension-package-boundary-artifact-lock.mts";
 import {
   ensureRepoToolNodeModulesLink,
   isLocalCheckEnabled,
   resolveRepoToolBinPath,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
+import {
+  createManagedCommandInvocation,
+  runManagedCommand,
+  signalExitCode,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   listPluginSdkDeclarationOutputs,
@@ -28,24 +28,25 @@ import {
   productionPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
-const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
+const TYPE_INPUT_EXTENSIONS = new Set([
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".json",
+]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
-const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
+const ROOT_BOUNDARY_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
 const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
   process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
-type NodeStepSignal = "SIGHUP" | "SIGINT" | "SIGKILL" | "SIGTERM";
-const NODE_STEP_PARENT_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] satisfies NodeStepSignal[];
-const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
-  ["SIGHUP", 129],
-  ["SIGINT", 130],
-  ["SIGTERM", 143],
-]);
 type NodeStep = Pick<NodeStepParams, "abortKillGraceMs" | "env"> & {
   args: string[];
   label: string;
@@ -60,39 +61,13 @@ type ArtifactFreshParams = {
   hashStampPath?: string;
 };
 type ArtifactStamp = Pick<ArtifactFreshParams, "includeFile" | "inputPaths"> & { path: string };
-type NodeStepOutput = {
-  on(event: "data", listener: (chunk: string) => void): unknown;
-  setEncoding(encoding: "utf8"): void;
-};
-type NodeStepChild = {
-  kill(signal: NodeStepSignal): void;
-  on(event: "close", listener: (code: number | null) => void): unknown;
-  on(event: "error", listener: (error: Error) => void): unknown;
-  pid?: number;
-  stderr: NodeStepOutput;
-  stdout: NodeStepOutput;
-};
-type SpawnNodeStep = (
-  command: string,
-  args: string[],
-  options: SpawnOptionsWithStdioTuple<StdioNull, StdioPipe, StdioPipe>,
-) => NodeStepChild;
 type NodeStepParams = {
   abortController?: AbortController;
   abortKillGraceMs?: number;
   env?: NodeJS.ProcessEnv;
-  spawnImpl?: SpawnNodeStep;
 };
-type RunTaskkill = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: Error; status: number | null };
-const ACTIVE_NODE_STEP_KILLERS = new Map<(signal: NodeStepSignal) => void, number>();
-let nodeStepParentSignalForwardersInstalled = false;
-let exitingAfterParentSignal = false;
-let parentSignalExitCode = 1;
-let parentSignalExitTimer: ReturnType<typeof setTimeout> | undefined;
+const activeNodeSteps = new Set<Promise<number>>();
+let nodeStepParentSignal: NodeJS.Signals | undefined;
 
 /** Resolve tsx's loader through the selected checkout toolchain. */
 export function resolveTsxImportSpecifier({
@@ -158,29 +133,97 @@ function listSourceDtsOutputs(sourceDir: string, outputPrefix: string) {
   return outputs.toSorted((a, b) => a.localeCompare(b));
 }
 
-const PLUGIN_SDK_TYPE_INPUTS = [
+type TypeScriptBuildInfo = {
+  fileNames?: unknown;
+  packageJsons?: unknown;
+};
+
+function collapsePluginSdkTypeInput(relativePath: string) {
+  const parts = relativePath.split("/");
+  if (parts[0] === "src" && parts.length > 2) {
+    return `src/${parts[1]}`;
+  }
+  if (parts[0] === "packages" && parts.length > 3) {
+    return `packages/${parts[1]}/${parts[2]}`;
+  }
+  if ((parts[0] === "scripts" || parts[0] === "test") && parts.length > 2) {
+    return `${parts[0]}/${parts[1]}`;
+  }
+  return relativePath;
+}
+
+function derivePluginSdkTypeInputs(entries: string[], baseDir: string, rootDir: string) {
+  const inputs = new Set<string>();
+  for (const entry of entries) {
+    const relativePath = path.relative(rootDir, resolve(baseDir, entry)).replaceAll("\\", "/");
+    if (
+      relativePath.startsWith("../") ||
+      relativePath === ".." ||
+      relativePath.startsWith("node_modules/") ||
+      relativePath.includes("/node_modules/") ||
+      relativePath.startsWith("dist/") ||
+      relativePath.startsWith("packages/plugin-sdk/dist/")
+    ) {
+      continue;
+    }
+    inputs.add(collapsePluginSdkTypeInput(relativePath));
+  }
+  if (fs.existsSync(resolve(rootDir, "package.json"))) {
+    inputs.add("package.json");
+  }
+  for (const input of inputs) {
+    const packageName = input.match(/^packages\/([^/]+)\//u)?.[1];
+    if (packageName && fs.existsSync(resolve(rootDir, `packages/${packageName}/package.json`))) {
+      inputs.add(`packages/${packageName}/package.json`);
+    }
+  }
+  return [...inputs].toSorted((a, b) => a.localeCompare(b));
+}
+
+/** Derives repository-owned declaration inputs from TypeScript's build record. */
+export function derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath: string, rootDir = repoRoot) {
+  const parsed = JSON.parse(fs.readFileSync(buildInfoPath, "utf8")) as TypeScriptBuildInfo;
+  const fileNames = Array.isArray(parsed.fileNames) ? parsed.fileNames : [];
+  const packageJsons = Array.isArray(parsed.packageJsons) ? parsed.packageJsons : [];
+  const buildInfoDir = path.dirname(buildInfoPath);
+  const entries = [...fileNames, ...packageJsons];
+  if (entries.some((entry) => typeof entry !== "string")) {
+    throw new Error(`Invalid TypeScript build input in ${buildInfoPath}`);
+  }
+  return derivePluginSdkTypeInputs(entries as string[], buildInfoDir, rootDir);
+}
+
+/** Resolves declaration inputs from build metadata or the compiler on cold cache. */
+export function resolvePluginSdkTypeInputs(rootDir = repoRoot) {
+  const buildInfoPath = resolve(rootDir, "dist/plugin-sdk/.tsbuildinfo");
+  if (fs.existsSync(buildInfoPath)) {
+    return derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath, rootDir);
+  }
+  const tsgoPath = resolveRepoToolBinPath("tsgo");
+  ensureRepoToolNodeModulesLink(tsgoPath);
+  const tsgo = createManagedCommandInvocation({
+    args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+    bin: tsgoPath,
+  });
+  const result = spawnSync(tsgo.command, tsgo.args, {
+    cwd: rootDir,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    shell: tsgo.shell,
+    windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
+  });
+  if (result.status !== 0 || result.error) {
+    throw new Error(`Failed to derive plugin SDK type inputs: ${result.stderr || result.error}`);
+  }
+  return derivePluginSdkTypeInputs(result.stdout.trim().split("\n"), rootDir, rootDir);
+}
+
+// Compiler configuration is not part of .tsbuildinfo's file input record.
+const resolveDtsInputs = (configPath: string) => [
   "tsconfig.json",
-  "src/plugin-sdk",
-  "src/plugins/provider-runtime-model.types.ts",
-  "src/plugins/types.ts",
-  "src/auto-reply",
-  "packages/ai/src",
-  "packages/llm-core/src",
-  "packages/markdown-core/src",
-  "packages/media-core/src",
-  "packages/model-catalog-core/src",
-  "packages/memory-host-sdk/src",
-  "packages/media-generation-core/src",
-  "packages/media-understanding-common/src",
-  "packages/normalization-core/src",
-  "packages/retry/src",
-  "packages/acp-core/src",
-  "packages/terminal-core/src",
-  "src/video-generation/dashscope-compatible.ts",
-  "src/video-generation/types.ts",
-  "src/types",
+  configPath,
+  ...resolvePluginSdkTypeInputs(),
 ];
-const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
 const ACP_CORE_REQUIRED_DTS_OUTPUTS = listPackageDtsOutputsFromExports(
   "acp-core",
@@ -255,7 +298,6 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/provider-auth.d.ts",
   "dist/plugin-sdk/video-generation.d.ts",
 ];
-const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
 const ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS = listPackageDtsOutputsFromExports(
   "acp-core",
@@ -414,7 +456,7 @@ export function parseMode(argv: string[] = process.argv.slice(2)) {
 }
 
 /**
- * Reads the root shim timeout override for long package-boundary builds.
+ * Reads the root boundary timeout override for long declaration and shim builds.
  */
 export function resolveBoundaryRootShimsTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS?.trim();
@@ -437,6 +479,10 @@ function collectInputFiles(
       return;
     }
     if (fs.statSync(entryPath).isDirectory()) {
+      const basename = path.basename(entryPath);
+      if (basename === "dist" || basename === "node_modules") {
+        return;
+      }
       for (const child of fs.readdirSync(entryPath)) {
         visit(path.join(entryPath, child));
       }
@@ -500,6 +546,40 @@ export function computeArtifactInputsDigest(
   return digest.digest("hex");
 }
 
+// These affect artifact generation or plugin compilation but TypeScript does
+// not record them as declaration-program file inputs.
+const EXTENSION_BOUNDARY_NON_TYPE_INPUTS = [
+  "tsconfig.json",
+  "tsconfig.plugin-sdk.dts.json",
+  "packages/plugin-sdk/package.json",
+  "packages/plugin-sdk/tsconfig.json",
+  "scripts/check-extension-package-tsc-boundary.mts",
+  "scripts/prepare-extension-package-boundary-artifacts.mts",
+  "scripts/write-plugin-sdk-entry-dts.ts",
+  "scripts/lib/plugin-sdk-entrypoints.json",
+  "scripts/lib/plugin-sdk-entries.mts",
+  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
+  "pnpm-lock.yaml",
+];
+
+/** Computes the single content fingerprint used by every boundary artifact cache. */
+export function computeExtensionBoundaryInputsFingerprint(rootDir = repoRoot) {
+  const digest = createHash("sha256");
+  digest.update(
+    computeArtifactInputsDigest({
+      rootDir,
+      inputPaths: resolvePluginSdkTypeInputs(rootDir),
+      includeFile: isRelevantTypeInput,
+    }),
+  );
+  digest.update(computeArtifactInputsDigest({ rootDir, inputPaths: ["extensions"] }));
+  digest.update(
+    computeArtifactInputsDigest({ rootDir, inputPaths: EXTENSION_BOUNDARY_NON_TYPE_INPUTS }),
+  );
+  digest.update(`\nnode=${process.versions.node}\n`);
+  return digest.digest("hex");
+}
+
 function collectOldestMtime(paths: string[], params: Pick<ArtifactFreshParams, "rootDir"> = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   let oldestMtimeMs = Number.POSITIVE_INFINITY;
@@ -551,8 +631,12 @@ export function isArtifactSetFresh(params: ArtifactFreshParams) {
     return false;
   }
   // Repair the mtime fast path so later invocations in this checkout skip
-  // without re-reading every input byte.
-  const now = new Date();
+  // without re-reading every input byte. The extra millisecond is required,
+  // not cosmetic: landing exactly on the newest input leaves no headroom for
+  // sub-millisecond write rounding or lagging metadata on CI filesystems, and
+  // an output that lands at or below its input silently keeps every later
+  // invocation on the expensive full-hash path this repair exists to avoid.
+  const now = new Date(Math.max(Date.now(), Math.ceil(newestInputMtimeMs)) + 1);
   for (const relativePath of params.outputPaths) {
     const outputPath = resolve(rootDir, relativePath);
     if (fs.existsSync(outputPath)) {
@@ -613,247 +697,72 @@ export function createPrefixedOutputWriter(label: string, target: { write(chunk:
   };
 }
 
-function abortSiblingSteps(abortController: AbortController | undefined) {
-  if (abortController && !abortController.signal.aborted) {
-    abortController.abort();
-  }
-}
-
-export function signalNodeStep(
-  child: Pick<NodeStepChild, "kill" | "pid">,
-  signal: NodeStepSignal,
-  {
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: NodeJS.Platform;
-    runTaskkill?: RunTaskkill;
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // The child process group can already be gone by the time cleanup runs.
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal);
-}
-
-function signalActiveNodeSteps(signal: NodeStepSignal) {
-  for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS.keys()) {
-    killNodeStep(signal);
-  }
-}
-
-function activeNodeStepKillGraceMs() {
-  return ACTIVE_NODE_STEP_KILLERS.size > 0
-    ? Math.max(...ACTIVE_NODE_STEP_KILLERS.values())
-    : DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS;
-}
-
-function installNodeStepParentSignalForwarders() {
-  if (nodeStepParentSignalForwardersInstalled) {
-    return;
-  }
-  nodeStepParentSignalForwardersInstalled = true;
-  for (const signal of NODE_STEP_PARENT_SIGNALS) {
-    process.on(signal, () => {
-      const exitCode = NODE_STEP_PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1;
-      if (exitingAfterParentSignal) {
-        signalActiveNodeSteps("SIGKILL");
-        process.exit(exitCode);
-      }
-      exitingAfterParentSignal = true;
-      parentSignalExitCode = exitCode;
-      signalActiveNodeSteps(signal);
-      parentSignalExitTimer ??= setTimeout(
-        () => process.exit(parentSignalExitCode),
-        activeNodeStepKillGraceMs(),
-      );
-    });
-  }
-  process.on("exit", () => {
-    signalActiveNodeSteps("SIGKILL");
-  });
-}
-
-/**
- * Runs one artifact step with timeout, abort propagation, and prefixed output.
- */
-export function runNodeStep(
+/** Runs a declaration step through the shared managed lifecycle with prefixed output. */
+export async function runNodeStep(
   label: string,
   args: string[],
   timeoutMs: number,
   params: NodeStepParams = {},
 ) {
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
-  const abortKillGraceMs = Math.max(
-    0,
-    Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
-  );
-  const abortController = params.abortController;
-  const spawnImpl: SpawnNodeStep = params.spawnImpl ?? spawn;
-  installNodeStepParentSignalForwarders();
-  return new Promise<void>((resolvePromise, rejectPromise) => {
-    const child = spawnImpl(process.execPath, args, {
-      cwd: repoRoot,
-      detached: process.platform !== "win32",
-      env: params.env ? { ...process.env, ...params.env } : process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let settled = false;
-    let canceled = false;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-    let killDeadlineAt = 0;
-    const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
-    const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
-    const useProcessGroup = process.platform !== "win32";
-    const killNodeStep = (signal: NodeStepSignal) =>
-      signalNodeStep(child, signal, { useProcessGroup });
-    const processGroupAlive = () => {
-      if (!useProcessGroup || !child.pid) {
-        return false;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return Boolean(
-          error && typeof error === "object" && "code" in error && error.code === "EPERM",
-        );
-      }
-    };
-    const waitForProcessGroupExit = async (waitMs: number) => {
-      const deadlineAt = Date.now() + waitMs;
-      while (Date.now() < deadlineAt) {
-        if (!processGroupAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, 25);
-        });
-      }
-      return !processGroupAlive();
-    };
-    const waitForCanceledStepTeardown = async () => {
-      const remainingGraceMs = Math.max(0, killDeadlineAt - Date.now());
-      if (remainingGraceMs > 0) {
-        await waitForProcessGroupExit(remainingGraceMs);
-      }
-      if (processGroupAlive()) {
-        killNodeStep("SIGKILL");
-        await waitForProcessGroupExit(100);
-      }
-    };
-    ACTIVE_NODE_STEP_KILLERS.set(killNodeStep, abortKillGraceMs);
-    const abortStep = () => {
-      if (settled || canceled) {
-        return;
-      }
-      canceled = true;
-      killNodeStep("SIGTERM");
-      killDeadlineAt = Date.now() + abortKillGraceMs;
-      killTimer = setTimeout(() => {
-        killTimer = undefined;
-        killNodeStep("SIGKILL");
-      }, abortKillGraceMs);
-      killTimer.unref?.();
-    };
-    function cleanup() {
-      clearTimeout(timer);
-      clearTimeout(killTimer);
-      ACTIVE_NODE_STEP_KILLERS.delete(killNodeStep);
-      abortController?.signal.removeEventListener("abort", abortStep);
-    }
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      killNodeStep("SIGKILL");
-      cleanup();
-      stdoutWriter.flush();
-      stderrWriter.flush();
-      abortSiblingSteps(abortController);
-      rejectPromise(new Error(`${label} timed out after ${resolvedTimeoutMs}ms`));
-    }, resolvedTimeoutMs);
-    abortController?.signal.addEventListener("abort", abortStep, { once: true });
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdoutWriter.write(chunk);
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderrWriter.write(chunk);
-    });
-    child.on("error", (error: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      stdoutWriter.flush();
-      stderrWriter.flush();
-      if (exitingAfterParentSignal) {
-        killNodeStep("SIGKILL");
-        cleanup();
-        return;
-      }
-      cleanup();
-      abortSiblingSteps(abortController);
-      rejectPromise(new Error(`${label} failed to start: ${error.message}`));
-    });
-    child.on("close", (code: number | null) => {
-      if (settled) {
-        return;
-      }
-      void (async () => {
-        settled = true;
-        stdoutWriter.flush();
-        stderrWriter.flush();
-        if (exitingAfterParentSignal) {
-          killNodeStep("SIGKILL");
-          cleanup();
-          return;
-        }
-        if (canceled) {
-          await waitForCanceledStepTeardown();
-          cleanup();
-          rejectPromise(new Error(`${label} canceled after sibling failure`));
-          return;
-        }
-        cleanup();
-        if (code === 0) {
-          resolvePromise();
-          return;
-        }
-        abortSiblingSteps(abortController);
-        rejectPromise(new Error(`${label} failed with exit code ${code ?? 1}`));
-      })();
-    });
+  const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
+  const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
+  const command = runManagedCommand({
+    bin: process.execPath,
+    args,
+    cwd: repoRoot,
+    env: params.env ? { ...process.env, ...params.env } : process.env,
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    // Artifact writers must finish before stamps, dependent readers, or lock release.
+    requireProcessTreeExit: process.platform !== "win32",
+    timeoutMs: resolvedTimeoutMs,
+    signal: params.abortController?.signal,
+    abortKillGraceMs: Math.max(
+      0,
+      Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
+    ),
+    onSignal(signal) {
+      nodeStepParentSignal ??= signal;
+    },
+    onReady(child) {
+      // This invocation explicitly requests both output pipes above.
+      child.stdout!.setEncoding("utf8");
+      child.stderr!.setEncoding("utf8");
+      child.stdout!.on("data", (chunk: string) => stdoutWriter.write(chunk));
+      child.stderr!.on("data", (chunk: string) => stderrWriter.write(chunk));
+    },
   });
+  activeNodeSteps.add(command);
+  try {
+    const code = await command;
+    if (code !== 0) {
+      throw new Error(`${label} failed with exit code ${code}`);
+    }
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const failure =
+      code === "ETIMEDOUT"
+        ? new Error(`${label} timed out after ${resolvedTimeoutMs}ms`, { cause: error })
+        : code === "ABORT_ERR"
+          ? new Error(`${label} canceled after sibling failure`, { cause: error })
+          : error;
+    if (nodeStepParentSignal && code === "EPROCESSGROUP_CLEANUP_FAILED") {
+      console.error(failure);
+    }
+    if (params.abortController && !params.abortController.signal.aborted) {
+      params.abortController.abort(failure);
+    }
+    throw failure;
+  } finally {
+    stdoutWriter.flush();
+    stderrWriter.flush();
+    activeNodeSteps.delete(command);
+    // The last sibling exits only after all managed cancellation has joined.
+    if (nodeStepParentSignal && activeNodeSteps.size === 0) {
+      process.exit(signalExitCode(nodeStepParentSignal));
+    }
+  }
 }
 
 /**
@@ -870,14 +779,31 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
       }),
     ),
   );
-  const firstFailure = results.find((result) => result.status === "rejected");
-  if (firstFailure) {
-    throw firstFailure.reason;
+  const failures: unknown[] = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    const primary = abortController.signal.reason ?? failures[0];
+    const cleanupFailures = failures.filter(
+      (error: unknown) =>
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "EPROCESSGROUP_CLEANUP_FAILED" &&
+        error !== primary,
+    );
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        [primary, ...cleanupFailures],
+        `${primary instanceof Error ? primary.message : String(primary)}; sibling cleanup could not be verified`,
+      );
+    }
+    throw primary;
   }
 }
 
 /**
- * Chooses serial or parallel artifact execution based on local heavy-check policy.
+ * Chooses serial or parallel artifact execution based on local check policy.
  */
 export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = process.env) {
   if (!isLocalCheckEnabled(env)) {
@@ -892,18 +818,28 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
 
 async function main(argv: string[] = process.argv.slice(2)) {
   try {
+    if (argv.includes("--print-input-fingerprint")) {
+      process.stdout.write(`${computeExtensionBoundaryInputsFingerprint()}\n`);
+      return;
+    }
     const mode = parseMode(argv);
+    const rootDtsInputs = resolveDtsInputs("tsconfig.plugin-sdk.dts.json");
+    const packageDtsInputs = resolveDtsInputs("packages/plugin-sdk/tsconfig.json");
     const rootDtsFresh =
       isArtifactSetFresh({
-        inputPaths: ROOT_DTS_INPUTS,
-        outputPaths: [ROOT_DTS_STAMP, ...ROOT_DTS_REQUIRED_OUTPUTS],
+        inputPaths: rootDtsInputs,
+        outputPaths: [ROOT_DTS_STAMP, "dist/plugin-sdk/.tsbuildinfo", ...ROOT_DTS_REQUIRED_OUTPUTS],
         hashStampPath: ROOT_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(ROOT_DTS_REQUIRED_OUTPUTS);
     const packageDtsFresh =
       isArtifactSetFresh({
-        inputPaths: PACKAGE_DTS_INPUTS,
-        outputPaths: [PACKAGE_DTS_STAMP, ...PACKAGE_DTS_REQUIRED_OUTPUTS],
+        inputPaths: packageDtsInputs,
+        outputPaths: [
+          PACKAGE_DTS_STAMP,
+          "packages/plugin-sdk/dist/.tsbuildinfo",
+          ...PACKAGE_DTS_REQUIRED_OUTPUTS,
+        ],
         hashStampPath: PACKAGE_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(PACKAGE_DTS_REQUIRED_OUTPUTS);
@@ -986,11 +922,10 @@ async function main(argv: string[] = process.argv.slice(2)) {
         prerequisiteSteps.push({
           label: "plugin-sdk boundary dts",
           args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
-          timeoutMs: 300_000,
+          timeoutMs: ROOT_BOUNDARY_TIMEOUT_MS,
           stamp: {
             path: ROOT_DTS_STAMP,
-            inputPaths: ROOT_DTS_INPUTS,
+            inputPaths: rootDtsInputs,
             includeFile: isRelevantTypeInput,
           },
         });
@@ -1005,11 +940,10 @@ async function main(argv: string[] = process.argv.slice(2)) {
       prerequisiteSteps.push({
         label: "plugin-sdk package boundary dts",
         args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
-        env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
-        timeoutMs: 300_000,
+        timeoutMs: ROOT_BOUNDARY_TIMEOUT_MS,
         stamp: {
           path: PACKAGE_DTS_STAMP,
-          inputPaths: PACKAGE_DTS_INPUTS,
+          inputPaths: packageDtsInputs,
           includeFile: isRelevantTypeInput,
         },
       });
@@ -1040,7 +974,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: QA_CHANNEL_DTS_STAMP,
@@ -1074,7 +1007,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: MEMORY_CORE_DTS_STAMP,
@@ -1108,7 +1040,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: MATRIX_DTS_STAMP,
@@ -1142,7 +1073,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: DISCORD_DTS_STAMP,
@@ -1176,7 +1106,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: SLACK_DTS_STAMP,
@@ -1210,7 +1139,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: WHATSAPP_DTS_STAMP,
@@ -1244,7 +1172,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: TELEGRAM_DTS_STAMP,
@@ -1274,7 +1201,7 @@ async function main(argv: string[] = process.argv.slice(2)) {
           resolveTsxImportSpecifier(),
           resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts"),
         ],
-        ROOT_SHIMS_TIMEOUT_MS,
+        ROOT_BOUNDARY_TIMEOUT_MS,
         {
           env: {
             NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS,
@@ -1299,10 +1226,15 @@ async function main(argv: string[] = process.argv.slice(2)) {
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
 if (import.meta.main) {
-  await main();
+  const releaseArtifactLock = acquireExtensionPackageBoundaryArtifactLockSync(repoRoot);
+  try {
+    await main();
+  } finally {
+    releaseArtifactLock();
+  }
 }

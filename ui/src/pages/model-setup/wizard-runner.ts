@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupAuthStartResult, WizardNextResult } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
@@ -56,16 +57,21 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "starting", authChoice });
     try {
       const agentId = this.options.getAgentId();
-      const started = await client.request<SystemAgentSetupAuthStartResult>(
+      const request = client.request<SystemAgentSetupAuthStartResult>(
         startMethod,
         {
           sessionId,
           authChoice,
           ...(agentId ? { agentId } : {}),
         },
-        { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS, signal: abortController.signal },
+        { timeoutMs: null },
       );
+      const started = await this.awaitWizardStart(client, request, sessionId, startMethod);
       if (generation !== this.generation) {
+        if (!started.done) {
+          // Admission can finish after cancellation; release only this generation's original session.
+          await this.cancelSession(client, sessionId);
+        }
         return null;
       }
       if (started.done) {
@@ -107,15 +113,7 @@ export class ModelSetupWizardRunner {
     if (!client || !sessionId) {
       return;
     }
-    try {
-      await client.request(
-        "wizard.cancel",
-        { sessionId },
-        { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
-      );
-    } catch {
-      // The gateway may have already completed or purged the session.
-    }
+    await this.cancelSession(client, sessionId);
   }
 
   close(): void {
@@ -130,6 +128,40 @@ export class ModelSetupWizardRunner {
     this.sessionId = null;
     this.abortController = null;
     this.setState({ phase: "error", message });
+  }
+
+  private async awaitWizardStart(
+    client: GatewayBrowserClient,
+    request: Promise<SystemAgentSetupAuthStartResult>,
+    sessionId: string,
+    startMethod: ModelSetupWizardStartMethod,
+  ): Promise<SystemAgentSetupAuthStartResult> {
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Gateway request abort/deadline retirement discards the late session needed for cleanup.
+    const retainedRequest = request.then(async (result) => {
+      if (timedOut && !result.done) {
+        await this.cancelSession(client, sessionId);
+      }
+      return result;
+    });
+    try {
+      return await Promise.race([
+        retainedRequest,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            reject(
+              new Error(
+                `gateway request timed out after ${MODEL_SETUP_AUTH_START_TIMEOUT_MS}ms: ${startMethod}`,
+              ),
+            );
+          }, MODEL_SETUP_AUTH_START_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async requestNext(
@@ -201,18 +233,24 @@ export class ModelSetupWizardRunner {
     this.abortController = null;
     const sessionExpired = isWizardNotFoundError(error);
     if (!sessionExpired && client && sessionId) {
-      void client
-        .request("wizard.cancel", { sessionId }, { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS })
-        .catch(() => {
-          // The failed request may have already completed or purged the session.
-        });
+      void this.cancelSession(client, sessionId);
     }
     const message = sessionExpired
       ? this.options.sessionExpiredMessage()
-      : error instanceof Error && error.message.trim()
-        ? error.message
-        : this.options.requestFailedMessage();
+      : formatUiError(error, this.options.requestFailedMessage());
     this.setState({ phase: "error", message });
+  }
+
+  private async cancelSession(client: GatewayBrowserClient, sessionId: string): Promise<void> {
+    try {
+      await client.request(
+        "wizard.cancel",
+        { sessionId },
+        { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+      );
+    } catch {
+      // The Gateway may already have completed or purged the session.
+    }
   }
 
   private setState(state: ModelSetupWizardState): void {

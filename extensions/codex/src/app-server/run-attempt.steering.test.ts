@@ -1,9 +1,15 @@
 // Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readSessionTranscriptEvents,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import {
   createParams,
   createStartedThreadHarness,
@@ -145,6 +151,27 @@ describe("runCodexAppServerAttempt steering", () => {
     });
   });
 
+  it("threads the core run start time onto the active-turn handle", async () => {
+    const { waitForMethod, completeTurn } = createStartedThreadHarness();
+    const startedAtMs = 1_750_000_000_000;
+    const params = { ...createSteeringParams(), startedAtMs };
+    activeRunRegistrationMocks.setActiveEmbeddedRun.mockClear();
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    let handle: { startedAtMs?: number } | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle).toBeDefined();
+    }, fastWait);
+    expect(handle?.startedAtMs).toBe(startedAtMs);
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("exposes pending-question cancellation for queued image fallback", async () => {
     const harness = createStartedThreadHarness();
     const params = createSteeringParams();
@@ -170,64 +197,216 @@ describe("runCodexAppServerAttempt steering", () => {
     await run;
   });
 
-  it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
-    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
-    const params = createSteeringParams();
-    params.taskSuggestionDeliveryMode = "gateway";
+  it.each(["none", "sleep", "dynamicToolCall", "commandExecution"])(
+    "persists every completed answer before Gateway steering across a %s barrier",
+    async (barrierType) => {
+      const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+      const params = createSteeringParams();
+      const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
+      const sessionTarget = {
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey!,
+        storePath,
+      };
+      params.taskSuggestionDeliveryMode = "gateway";
+      params.sessionTarget = sessionTarget;
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: params.sessionKey!,
+        storePath,
+        entry: {
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          updatedAt: Date.now(),
+        },
+      });
+      let steerPersisted = false;
+      const userTurnTranscriptRecorder = {
+        persistApproved: vi.fn(async () => {
+          if (steerPersisted) {
+            return undefined;
+          }
+          steerPersisted = true;
+          return await appendSessionTranscriptMessageByIdentity({
+            ...sessionTarget,
+            message: {
+              role: "user",
+              content: "steer this active turn",
+              timestamp: Date.now(),
+              idempotencyKey: `${params.runId}:steer:user`,
+            },
+          });
+        }),
+        hasPersisted: () => steerPersisted,
+      } as unknown as NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
 
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await waitForMethod("turn/start");
-    const onQueueAccepted = vi.fn();
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { mode: "yolo" } },
+      });
+      await waitForMethod("turn/start");
+      const onQueueAccepted = vi.fn();
+      await notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id: "pre-steer-commentary",
+            phase: "commentary",
+            text: "PRE-STEER-COMMENTARY",
+          },
+        },
+      });
+      for (const id of ["answer-a", "answer-b"]) {
+        await notify({
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { type: "agentMessage", id, phase: "final_answer", text: "" },
+          },
+        });
+        await notify({
+          method: "item/agentMessage/delta",
+          params: { threadId: "thread-1", turnId: "turn-1", itemId: id, delta: id },
+        });
+        await notify({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { type: "agentMessage", id, phase: "final_answer", text: id },
+          },
+        });
+      }
+      if (barrierType !== "none") {
+        const barrier: JsonObject =
+          barrierType === "commandExecution"
+            ? {
+                type: barrierType,
+                id: "barrier",
+                command: "true",
+                cwd: params.workspaceDir,
+                status: "inProgress",
+                commandActions: [],
+              }
+            : barrierType === "dynamicToolCall"
+              ? { type: barrierType, id: "barrier", tool: "memory_search", status: "inProgress" }
+              : { type: barrierType, id: "barrier", durationMs: 250 };
+        await notify({
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: barrier,
+          },
+        });
+      }
 
-    await vi.waitFor(() => {
-      expect(
-        activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
-          (call) => call[0] === params.sessionId,
-        )?.[1],
-      ).toMatchObject({ taskSuggestionDeliveryMode: "gateway" });
-    }, fastWait);
+      await vi.waitFor(() => {
+        expect(
+          activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+            (call) => call[0] === params.sessionId,
+          )?.[1],
+        ).toMatchObject({ taskSuggestionDeliveryMode: "gateway" });
+      }, fastWait);
 
-    // This public queue returns immediate eligibility; the handle's delivery
-    // promise stays pending until the matching item/completed notification below.
-    await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
-      debounceMs: 0,
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-      taskSuggestionDeliveryMode: "gateway",
-      waitForTranscriptCommit: true,
-      onQueueAccepted,
-    });
-    await vi.waitFor(
-      () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
-      fastWait,
-    );
-    const steer = requests.find((entry) => entry.method === "turn/steer");
-    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
-      ?.clientUserMessageId;
-    if (!clientUserMessageId) {
-      throw new Error("turn/steer clientUserMessageId missing");
-    }
-    await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true), fastWait);
+      // This public queue returns immediate eligibility; the handle's delivery
+      // promise stays pending until the matching item/completed notification below.
+      await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
+        debounceMs: 0,
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+        taskSuggestionDeliveryMode: "gateway",
+        waitForTranscriptCommit: true,
+        onQueueAccepted,
+        userTurnTranscriptRecorder,
+      });
+      await vi.waitFor(
+        () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
+        fastWait,
+      );
+      const steer = requests.find((entry) => entry.method === "turn/steer");
+      const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+        ?.clientUserMessageId;
+      if (!clientUserMessageId) {
+        throw new Error("turn/steer clientUserMessageId missing");
+      }
+      await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true), fastWait);
 
-    await notify({
-      method: "item/completed",
-      params: {
+      await notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
+        },
+      });
+      const readTextRows = async () =>
+        (await readSessionTranscriptEvents(sessionTarget)).flatMap((event) => {
+          const message = (
+            event as {
+              message?: {
+                role: string;
+                content: string | Array<{ type: string; text?: string }>;
+                __openclaw?: { mirrorIdentity?: string };
+              };
+            }
+          ).message;
+          if (!message || (message.role !== "assistant" && message.role !== "user")) {
+            return [];
+          }
+          const text =
+            typeof message.content === "string"
+              ? message.content
+              : message.content
+                  .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                  .join("");
+          return text
+            ? [{ role: message.role, text, mirrorIdentity: message["__openclaw"]?.mirrorIdentity }]
+            : [];
+        });
+      const prefix = await readTextRows();
+      await notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id: "final-answer",
+            phase: "final_answer",
+            text: "Steering completed.",
+          },
+        },
+      });
+      await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+
+      expect(steer?.params).toMatchObject({
         threadId: "thread-1",
-        turnId: "turn-1",
-        item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
-      },
-    });
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    expect(steer?.params).toMatchObject({
-      threadId: "thread-1",
-      expectedTurnId: "turn-1",
-      input: [{ type: "text", text: "steer this active turn" }],
-    });
-  });
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "steer this active turn" }],
+      });
+      expect(prefix).toEqual([
+        { role: "user", text: params.prompt, mirrorIdentity: "turn-1:prompt" },
+        {
+          role: "assistant",
+          text: "PRE-STEER-COMMENTARY",
+          mirrorIdentity: "turn-1:commentary:pre-steer-commentary",
+        },
+        { role: "assistant", text: "answer-a", mirrorIdentity: "turn-1:assistant:answer-a" },
+        { role: "assistant", text: "answer-b", mirrorIdentity: "turn-1:assistant:answer-b" },
+        { role: "user", text: "steer this active turn", mirrorIdentity: undefined },
+      ]);
+      expect(await readTextRows()).toEqual([
+        ...prefix,
+        { role: "assistant", text: "Steering completed.", mirrorIdentity: "turn-1:assistant" },
+      ]);
+    },
+  );
 
   it("forwards queued text and images to the active app-server turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();

@@ -9,7 +9,6 @@ import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
-import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   fingerprintCliRuntimeArtifact,
   resolveCliRuntimeOwnerFingerprint,
@@ -20,11 +19,14 @@ import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
+import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
-import { buildClaudeOwnerKey, closeClaudeSession } from "./claude-live-registry.js";
-import { acceptsClaudeLive } from "./claude-live-session-policy.js";
-import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import {
+  acceptsCliLiveSession,
+  buildCliLiveOwnerKey,
+  closeCliLiveSession,
+} from "./cli-live-session-registry.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
@@ -60,7 +62,6 @@ import {
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
-import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function normalizeCliBackendThinkingLevel(
@@ -117,18 +118,25 @@ type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
 };
 
+type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
+  mediaImageLayout?: MediaImageLayout;
+};
+
 /** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
-  const params = context.params;
+  const params = context.params as PreparedCliRunInternalParams;
   if (params.abortSignal?.aborted) {
     throw createCliAbortError();
   }
   const backend = context.preparedBackend.backend;
   const nodePlacement = resolveNodeClaudeTarget(context);
+  const usePluginOwnedExecution = Boolean(
+    context.preparedBackend.execute && !nodePlacement && params.controlOperation !== "compact",
+  );
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
     cliSessionId: cliSessionIdToUse,
@@ -146,7 +154,7 @@ export async function executePreparedCliRun(
     systemPromptArg &&
     (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume);
   const systemPromptFile =
-    !nodePlacement && shouldSendSystemPrompt
+    !nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt
       ? await executeDeps.writeCliSystemPromptFile({ backend, systemPrompt: systemPromptArg })
       : undefined;
   const nodeSystemPrompt = nodePlacement && shouldSendSystemPrompt ? systemPromptArg : undefined;
@@ -157,16 +165,13 @@ export async function executePreparedCliRun(
   let prompt =
     params.controlOperation !== undefined
       ? basePrompt
-      : applyPluginTextReplacements(
-          appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
-            preserveExactPrompt: context.heartbeatPrompt,
-          }),
-          context.backendResolved.textTransforms?.input,
-        );
+      : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
-      hasHydratableMediaImages(params.media) ||
+      (params.mediaImageLayout
+        ? params.mediaImageLayout.slots.length > 0
+        : hasHydratableMediaImages(params.media)) ||
       (params.imagePrompt ? detectImageReferences(params.imagePrompt).length > 0 : false))
   ) {
     throw new Error("paired-node Claude CLI sessions do not support attachments or images");
@@ -181,6 +186,7 @@ export async function executePreparedCliRun(
         localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
         images: params.images,
         imageOrder: params.imageOrder,
+        mediaImageLayout: params.mediaImageLayout,
         media: params.media,
       });
   prompt = imagePayload.prompt;
@@ -193,19 +199,10 @@ export async function executePreparedCliRun(
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
-  const fallbackClaudeSkillsPlugin =
-    !nodePlacement && context.claudeSkillsPluginArgs === undefined
-      ? await prepareClaudeCliSkillsPlugin({
-          backendId: context.backendResolved.id,
-          skillsSnapshot: params.skillsSnapshot,
-        })
-      : undefined;
-  let fallbackClaudeSkillsPluginCleanupOwned = false;
-  const claudeSkillsPluginArgs = nodePlacement
-    ? []
-    : (context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? []);
   const baseArgsWithSkills =
-    claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
+    !nodePlacement && context.claudeSkillsPluginArgs.length > 0
+      ? [...resolvedArgs, ...context.claudeSkillsPluginArgs]
+      : resolvedArgs;
   const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
     config: params.config,
     workspaceDir: context.workspaceDir,
@@ -216,13 +213,10 @@ export async function executePreparedCliRun(
     executionMode: params.executionMode ?? "agent",
     // Node runs project the native subset only: gateway-loopback MCP tools do
     // not exist on the node, and auto-approval must not cross that boundary.
-    toolAvailability: params.cliToolAvailability
-      ? buildCliBackendToolAvailability(
-          nodePlacement
-            ? { native: params.cliToolAvailability.native, openClaw: [] }
-            : params.cliToolAvailability,
-        )
-      : undefined,
+    toolAvailability:
+      params.cliToolAvailability && nodePlacement
+        ? { native: params.cliToolAvailability.native, openClaw: [] }
+        : params.cliToolAvailability,
     useResume,
     baseArgs: baseArgsWithSkills,
   });
@@ -245,7 +239,7 @@ export async function executePreparedCliRun(
     baseArgs: Array.from(executionBaseArgs),
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
-    systemPrompt: nodePlacement ? undefined : systemPromptArg,
+    systemPrompt: nodePlacement || usePluginOwnedExecution ? undefined : systemPromptArg,
     systemPromptFilePath: systemPromptFile?.filePath,
     imagePaths: imagePayload.imagePaths,
     promptArg: argsPrompt,
@@ -255,7 +249,7 @@ export async function executePreparedCliRun(
     sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
-  const claudeOwnerKey = buildClaudeOwnerKey({
+  const cliLiveOwnerKey = buildCliLiveOwnerKey({
     agentAccountId: params.agentAccountId,
     agentId: params.agentId,
     authProfileId: context.effectiveAuthProfileId,
@@ -269,9 +263,12 @@ export async function executePreparedCliRun(
     runId: params.runId,
     workspaceDir: context.workspaceDir,
     cliSessionId: useResume ? resolvedSessionId : undefined,
-    ownerKey: claudeOwnerKey,
+    ownerKey: cliLiveOwnerKey,
   });
-  const useManagedClaudeLiveSession = acceptsClaudeLive(context) && !params.onSuccessfulAuthBinding;
+  // Plugin-owned transports own their child/session lifecycle; their MCP grant
+  // still needs the per-turn capture key used by other non-live executions.
+  const useManagedClaudeLiveSession =
+    usePluginOwnedExecution && acceptsCliLiveSession(context) && !params.onSuccessfulAuthBinding;
   // Fresh-session retries invoke this function again. Keep one helper per
   // observable CLI attempt so every started call retains its own terminal event.
   const diagnostics = createClaudeCliModelCallDiagnostics({
@@ -378,9 +375,7 @@ export async function executePreparedCliRun(
         isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
       const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
       const initialGatewayCaptureKey =
-        useManagedClaudeLiveSession || nodePlacement || !context.mcpDeliveryCapture
-          ? undefined
-          : crypto.randomUUID();
+        nodePlacement || !context.mcpDeliveryCapture ? undefined : crypto.randomUUID();
       const mcpCaptureAttempt = nodePlacement
         ? { env: {}, cleanup: undefined }
         : await prepareCliBundleMcpCaptureAttempt({
@@ -410,6 +405,12 @@ export async function executePreparedCliRun(
             ...resolveNodeClaudeAuthEnv(context),
           }
         : undefined;
+      const nodeRuntimeClearEnv = nodePlacement
+        ? [...NODE_CLAUDE_FORWARD_ENV_KEYS].filter((key) => backend.clearEnv?.includes(key))
+        : [];
+      const nodeClearEnv = [...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv].filter(
+        (key, index, values) => values.indexOf(key) === index,
+      );
       const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
       const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
       for (const key of backend.clearEnv ?? []) {
@@ -523,7 +524,9 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
-      toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
+      if (!useManagedClaudeLiveSession) {
+        toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
+      }
       runOutput = await executeCliProcess({
         context,
         backend,
@@ -534,8 +537,10 @@ export async function executePreparedCliRun(
         nodePlacement,
         nodeSystemPrompt,
         nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
-        nodeClearEnv: selectedClaudeClearEnv ? [...selectedClaudeClearEnv] : undefined,
+        nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
         useManagedClaudeLiveSession,
+        usePluginOwnedExecution,
+        initialGatewayCaptureKey,
         useResume,
         cliSessionIdToUse,
         resolvedSessionId,
@@ -550,10 +555,6 @@ export async function executePreparedCliRun(
         outputMode,
         logOutputText,
         cliTurnStartedAt,
-        fallbackCleanup: fallbackClaudeSkillsPlugin?.cleanup,
-        claimFallbackCleanup: () => {
-          fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
-        },
         observeForkSuccessor,
         options,
       });
@@ -606,7 +607,7 @@ export async function executePreparedCliRun(
         }
         // The fork argument only applies at process startup; a cached warm child
         // would run inside the source session. Force a fresh spawn.
-        await closeClaudeSession(context, "restart");
+        await closeCliLiveSession(context, "restart");
       }
       return await executeAttempt();
     });
@@ -637,9 +638,6 @@ export async function executePreparedCliRun(
     throw failure;
   } finally {
     try {
-      if (!fallbackClaudeSkillsPluginCleanupOwned) {
-        await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
-      }
       await cleanupOuterResource(systemPromptFile?.cleanup);
       await cleanupOuterResource(imagePayload.cleanupImages);
     } catch (error) {

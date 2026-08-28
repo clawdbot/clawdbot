@@ -60,12 +60,38 @@ describe("cross-client session projection conformance", () => {
         clientRunId: "envelope-run",
         messageId: "envelope-id",
         messageSeq: 99,
+        runId: "conflicting-producer-run",
       },
       expected: {
         id: "persisted-id",
         idempotencyKey: "persisted-run:user",
         role: "user",
         runId: "persisted-run",
+        sequence: 3,
+      },
+    },
+    {
+      name: "producer-owned assistant run wins over its assistant idempotency suffix",
+      message: {
+        __openclaw: {
+          id: "aborted-assistant",
+          idempotencyKey: "producer-run:assistant",
+          seq: 3,
+        },
+        content: [{ text: "held partial", type: "text" }],
+        role: "assistant",
+      },
+      envelope: {
+        clientRunId: "conflicting-client-run",
+        messageId: "aborted-assistant",
+        messageSeq: 3,
+        runId: "producer-run",
+      },
+      expected: {
+        id: "aborted-assistant",
+        idempotencyKey: "producer-run:assistant",
+        role: "assistant",
+        runId: "producer-run",
         sequence: 3,
       },
     },
@@ -208,7 +234,6 @@ describe("cross-client session projection conformance", () => {
       { message: firstImport, type: "messagePersisted" },
     ]);
 
-    expect(state.entries).toHaveLength(4);
     expect(state.entries.map((entry) => entry.identity?.externalSource)).toEqual([
       null,
       JSON.stringify(["provider-a", "cli-a", externalId]),

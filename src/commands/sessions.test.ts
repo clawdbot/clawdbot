@@ -1,5 +1,11 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../cli/failure-output.js";
+import {
+  assignSessionOwner,
+  recordSessionParticipant,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
@@ -10,9 +16,6 @@ import {
   setMockSessionsConfig,
   writeStore,
 } from "./sessions.test-helpers.js";
-
-// Disable colors for deterministic snapshots.
-process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
@@ -26,6 +29,7 @@ describe("sessionsCommand", () => {
 
   afterEach(() => {
     resetMockSessionsConfig();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -52,8 +56,30 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/32k (6%)        id:abc123",
+      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/200k (1%)       visibility:shared id:abc123",
     );
+  });
+
+  it("shows recorded totals without a percentage when freshness provenance is missing", async () => {
+    // Regression: sessions rendered `unknown/... (?%)` for totals `status`
+    // still displayed, because the table dropped non-fresh recorded totals.
+    const store = await writeStore({
+      "agent:main:+15555550123": {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 45 * 60_000,
+        totalTokens: 2000,
+        totalTokensFresh: true,
+        model: "test:opus",
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
+    expect(row).toContain("2.0k/200k (?%)");
   });
 
   it("renders the agent runtime in the tabular view", async () => {
@@ -64,7 +90,6 @@ describe("sessionsCommand", () => {
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
-          contextTokens: 200_000,
         },
       },
     }));
@@ -89,7 +114,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    visibility:shared id:main-session",
     );
   });
 
@@ -101,7 +126,6 @@ describe("sessionsCommand", () => {
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
-          contextTokens: 200_000,
         },
       },
     }));
@@ -124,8 +148,53 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    visibility:shared id:main-session",
     );
+  });
+
+  it("renders recorded runtime with current context after a same-model runtime change", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
+          },
+        },
+      },
+    }));
+    const store = await writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "stale-openclaw-window",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+          totalTokens: 11,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        },
+      },
+      "sessions-current-runtime-table",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("OpenClaw Default");
+    expect(row).toContain("0.0k/1000k (0%)");
   });
 
   it("shows placeholder rows when tokens are missing", async () => {
@@ -144,8 +213,38 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("id:xyz")) ?? "";
     expect(row).toContain("group");
-    expect(row).toContain("unknown/32k (?%)");
+    expect(row).toContain("unknown/200k (?%)");
     expect(row).toContain("think:high");
+  });
+
+  it("sanitizes persisted identifiers only for terminal output", async () => {
+    const key = "agent:main:\u001B[31mpeer\nrow";
+    const sessionId = "session-\u001B[31mid\r\nforged-id";
+    const model = "model-\u001B]0;session-model\u0007🦞\tvariant";
+    const store = await writeStore({
+      [key]: {
+        sessionId,
+        updatedAt: Date.now() - 60_000,
+        model,
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    const textOutput = logs.join("\n");
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nrow");
+    expect(textOutput).toContain("peer\\nrow");
+    expect(textOutput).toContain("\\r\\nforged-id");
+    expect(textOutput).toContain("🦞\\tvariant");
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ key: string; sessionId?: string; model?: string }>;
+    }>(sessionsCommand, store);
+    cleanupStore(store);
+
+    expect(payload.sessions?.[0]).toMatchObject({ key, sessionId, model });
   });
 
   it("exports freshness metadata in JSON output", async () => {
@@ -184,6 +283,92 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("defaults missing collaboration visibility to shared in JSON output", async () => {
+    const sessionKey = "agent:main:legacy-shared";
+    const store = await writeStore(
+      {
+        [sessionKey]: {
+          sessionId: "legacy-shared-session",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+        },
+      },
+      "sessions-default-visibility",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ key: string; visibility?: SessionEntry["visibility"] }>;
+    }>(sessionsCommand, store);
+    expect(payload.sessions?.find((entry) => entry.key === sessionKey)).toMatchObject({
+      visibility: "shared",
+    });
+  });
+
+  it("preserves collaboration metadata in JSON and human output", async () => {
+    const sessionKey = "agent:main:shared";
+    const store = await writeStore(
+      {
+        [sessionKey]: {
+          sessionId: "shared-session",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+          visibility: "suggest",
+          createdActor: { type: "human", id: "profile-creator", label: "Creator" },
+        },
+      },
+      "sessions-collaboration",
+    );
+    const scope = { agentId: "main", sessionKey, storePath: store };
+    assignSessionOwner(scope, {
+      owner: { type: "human", id: "profile-owner", label: "Grace" },
+      assignedBy: { type: "human", id: "profile-admin", label: "Admin" },
+      assignedAt: Date.now() - 30_000,
+    });
+    for (const id of ["profile-ada", "profile-ben", "profile-cam", "profile-dee", "profile-eli"]) {
+      recordSessionParticipant(scope, {
+        identity: { type: "profile", id },
+      });
+    }
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    const row = logs.find((line) => line.includes(sessionKey)) ?? "";
+    expect(row).toContain(
+      "visibility:suggest owner:profile-owner participants:profile:profile-ada,profile:profile-ben,profile:profile-cam,profile:profile-dee,+1",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<
+        Pick<
+          SessionEntry,
+          "visibility" | "createdActor" | "owner" | "participants" | "participantCount"
+        > & {
+          key: string;
+          sharingRole?: unknown;
+        }
+      >;
+    }>(sessionsCommand, store);
+    const shared = payload.sessions?.find((entry) => entry.key === sessionKey);
+    expect(shared).toMatchObject({
+      visibility: "suggest",
+      createdActor: { type: "human", id: "profile-creator" },
+      owner: {
+        actor: { type: "human", id: "profile-owner" },
+        assignedBy: { type: "human", id: "profile-admin" },
+        assignedAt: Date.now() - 30_000,
+      },
+      participantCount: 5,
+      participants: [
+        { identity: { type: "profile", id: "profile-ada" } },
+        { identity: { type: "profile", id: "profile-ben" } },
+        { identity: { type: "profile", id: "profile-cam" } },
+        { identity: { type: "profile", id: "profile-dee" } },
+        { identity: { type: "profile", id: "profile-eli" } },
+      ],
+    });
+    expect(shared).not.toHaveProperty("sharingRole");
+  });
+
   it("reports the SQLite database and omits the retired sessionFile field", async () => {
     const store = await writeStore({
       "agent:main:main": {
@@ -203,6 +388,21 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.find((row) => row.key === "agent:main:main")).not.toHaveProperty(
       "sessionFile",
     );
+  });
+
+  it("reports an existing empty SQLite store as an empty successful list", async () => {
+    const store = await writeStore({}, "sessions-empty");
+    const { runtime, logs, errors } = makeRuntime();
+
+    await sessionsCommand({ store }, runtime);
+    cleanupStore(store);
+
+    expect(errors).toEqual([]);
+    expect(logs).toEqual([
+      expect.stringContaining(`Session store: ${store}`),
+      expect.stringContaining("Sessions listed: 0"),
+      "No sessions found.",
+    ]);
   });
 
   it("exports subagent lineage metadata in JSON output", async () => {
@@ -346,6 +546,8 @@ describe("sessionsCommand", () => {
         global: {
           sessionId: "telegram-global",
           updatedAt: Date.now() - 60_000,
+          modelProvider: "claude-cli",
+          model: "opus",
           delivery: normalizeSessionDeliveryState({
             origin: {
               provider: "telegram",
@@ -364,21 +566,29 @@ describe("sessionsCommand", () => {
       agents: {
         ownership: "explicit",
         defaults: {
-          model: { primary: "test:opus" },
-          models: { "test:opus": {} },
-          contextTokens: 32000,
+          model: { primary: "anthropic/opus" },
+          models: { "anthropic/opus": {} },
           sessionStore: { agentId: "ops" },
         },
-        entries: { ops: {}, research: {} },
+        entries: {
+          ops: { models: { "custom/opus": {} } },
+          research: {},
+        },
       },
     }));
 
     const payload = await runSessionsJson<{
-      sessions?: Array<{ agentId?: string; key: string; runtimePolicySessionKey?: string }>;
+      sessions?: Array<{
+        agentId?: string;
+        key: string;
+        modelProvider?: string;
+        runtimePolicySessionKey?: string;
+      }>;
     }>(sessionsCommand, store, { active: "10" });
 
     expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
       agentId: "ops",
+      modelProvider: "custom",
       runtimePolicySessionKey: "agent:ops:telegram:default:direct:42",
     });
   });
@@ -509,63 +719,45 @@ describe("sessionsCommand", () => {
     ]);
   });
 
-  it("rejects invalid --active values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-active-invalid",
+  it.each([
+    {
+      name: "invalid active minutes",
+      options: { active: "0" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "partially numeric active minutes",
+      options: { active: "10m" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "an invalid limit",
+      options: { limit: "0" },
+      message: '--limit must be a positive integer or "all", for example --limit 25.',
+    },
+    {
+      name: "active minutes before an invalid limit",
+      options: { active: "0", limit: "0" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+  ])("rejects $name before reading session stores", async ({ options, message }) => {
+    const listSessionEntries = vi.spyOn(
+      await import("../config/sessions/session-accessor.js"),
+      "listSessionEntriesReadOnly",
     );
-    const { runtime, errors } = makeRuntime();
+    const { runtime, logs, errors } = makeRuntime();
+    const runtimeExit = vi.spyOn(runtime, "exit");
+    const execution = sessionsCommand(options, runtime);
 
-    await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      "--active must be a positive number of minutes, for example --active 30.",
-    ]);
-
-    cleanupStore(store);
-  });
-
-  it("rejects partial --active values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-active-partial",
-    );
-    const { runtime, errors } = makeRuntime();
-
-    await expect(sessionsCommand({ store, active: "10m" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      "--active must be a positive number of minutes, for example --active 30.",
-    ]);
-
-    cleanupStore(store);
-  });
-
-  it("rejects invalid --limit values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-limit-invalid",
-    );
-    const { runtime, errors } = makeRuntime();
-
-    await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      '--limit must be a positive integer or "all", for example --limit 25.',
-    ]);
-
-    cleanupStore(store);
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toMatchObject({
+      message,
+      humanOutput: message,
+      machineOutput: message,
+    });
+    expect(logs).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(runtimeExit).not.toHaveBeenCalled();
+    expect(listSessionEntries).not.toHaveBeenCalled();
   });
 });

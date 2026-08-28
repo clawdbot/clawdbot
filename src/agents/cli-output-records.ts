@@ -235,6 +235,7 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
     (parsed.type === "result" && (subtype.startsWith("error_") || parsed.status === "error"));
   if (isResultError) {
     const text =
+      readClaudeResultErrorsText(parsed) ||
       collectCliText(parsed.result) ||
       collectCliText(parsed.message) ||
       collectCliText(parsed.content);
@@ -303,13 +304,17 @@ function readClaudeMaxTurnsFailure(
   return { reason: "max_turns" };
 }
 
-function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | undefined {
+// Claude Code error results carry the user-facing failure in `errors[]`;
+// `[ede_diagnostic] ...` entries are CLI-internal telemetry that the CLI hides
+// from its own UI, so they never become the operator-visible error.
+function readClaudeResultErrorsText(parsed: Record<string, unknown>): string | undefined {
   if (!Array.isArray(parsed.errors)) {
     return undefined;
   }
   for (const error of parsed.errors) {
-    if (typeof error === "string" && error.trim()) {
-      return error.trim();
+    const text = typeof error === "string" ? error.trim() : "";
+    if (text && !text.startsWith("[ede_diagnostic]")) {
+      return text;
     }
   }
   return undefined;
@@ -319,9 +324,8 @@ function resolveCliTerminalErrorText(
   parsed: Record<string, unknown>,
   terminalFailure: CliTerminalFailure | undefined,
 ): string {
-  const explicitErrorText = collectExplicitCliErrorText(parsed);
   return (
-    ((terminalFailure ? readClaudeMaxTurnsErrorText(parsed) : undefined) ?? explicitErrorText) ||
+    collectExplicitCliErrorText(parsed) ||
     (terminalFailure ? "Reached maximum number of turns." : "")
   );
 }
@@ -345,6 +349,14 @@ export function pickCliSessionId(
   return undefined;
 }
 
+// Claude Code forwards subagent (Agent tool) traffic with `parent_tool_use_id`
+// set to the spawning tool call; only records with a null/absent parent belong
+// to the parent conversation. Subagent output reaches the parent through the
+// Agent tool result, so parent-lane consumers must skip these records.
+export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean {
+  return parsed.parent_tool_use_id != null;
+}
+
 export function pickCliResumeCheckpointId(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -353,7 +365,7 @@ export function pickCliResumeCheckpointId(params: {
   if (
     !isClaudeStreamJsonDialect(params) ||
     params.parsed.type !== "assistant" ||
-    params.parsed.parent_tool_use_id != null
+    isClaudeSubagentRecord(params.parsed)
   ) {
     return undefined;
   }
@@ -524,25 +536,42 @@ export function parseClaudeCliStreamingDelta(params: {
   backend: CliBackendConfig;
   providerId: string;
   parsed: Record<string, unknown>;
+  previousText: string;
 }): string | null {
   if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
-  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
+  if (params.parsed.type === "stream_event" && isRecord(params.parsed.event)) {
+    const event = params.parsed.event;
+    if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+      return null;
+    }
+    const delta = event.delta;
+    return delta.type === "text_delta" && typeof delta.text === "string" && delta.text
+      ? delta.text
+      : null;
+  }
+  if (
+    // `--include-partial-messages` marks cumulative assistant snapshots with an explicit null.
+    !isClaudeStreamJsonDialect(params) ||
+    params.parsed.type !== "assistant" ||
+    isClaudeSubagentRecord(params.parsed) ||
+    !isRecord(params.parsed.message) ||
+    params.parsed.message.stop_reason !== null
+  ) {
     return null;
   }
-  const event = params.parsed.event;
-  if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
-    return null;
-  }
-  const delta = event.delta;
-  if (delta.type !== "text_delta" || typeof delta.text !== "string") {
-    return null;
-  }
-  if (!delta.text) {
-    return null;
-  }
-  return delta.text;
+  const content = Array.isArray(params.parsed.message.content) ? params.parsed.message.content : [];
+  const snapshot = content
+    .map((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string" ? block.text : "",
+    )
+    .join("");
+  // The delivery lane is append-only. Emit only cumulative suffixes and let
+  // a divergent revision defer to the terminal result instead of duplicating text.
+  return snapshot.startsWith(params.previousText)
+    ? snapshot.slice(params.previousText.length) || null
+    : null;
 }
 
 const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";

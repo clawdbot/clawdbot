@@ -3,14 +3,17 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./tasks-page.ts";
 
 type TasksPageTestElement = HTMLElement & {
   context: ApplicationContext;
   tasks: TaskSummary[];
   error: string | null;
+  copyResultError: string | null;
   cancellingTaskIds: Set<string>;
   cancelTask: (taskId: string) => Promise<void>;
+  copyTaskResult: (taskId: string) => Promise<void>;
   recoverTask: (taskId: string, action: "retry" | "dismiss") => Promise<void>;
   refreshTasks: () => Promise<void>;
 };
@@ -95,14 +98,14 @@ async function createDeferredTaskRefresh(initialTasks: TaskSummary[]) {
       if (method !== "tasks.list" || !deferRefresh) {
         return Promise.resolve({ tasks: currentTasks });
       }
-      return params?.status ? active.promise : recent.promise;
+      return params?.status?.includes("completed") ? recent.promise : active.promise;
     },
   );
   const source = createGateway({ request } as unknown as GatewayBrowserClient);
   const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
   page.context = createContext(source.gateway);
   document.body.append(page);
-  await vi.waitFor(() => expect(page.tasks).toHaveLength(initialTasks.length));
+  await waitForFast(() => expect(page.tasks).toHaveLength(initialTasks.length));
 
   return {
     active,
@@ -161,15 +164,16 @@ function createContext(
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("TasksPage concurrent refresh events", () => {
-  it("keeps the later recent page's equally current running progress", async () => {
+  it("keeps the later recent snapshot when a task transitions to terminal", async () => {
     const initial = createTask("task-progress", "running", {
       toolUseCount: 2,
       progressSummary: "Preparing the concurrent task report",
     });
-    const recent = createTask("task-progress", "running", {
+    const recent = createTask("task-progress", "completed", {
       toolUseCount: 2,
       progressSummary: "Finishing the concurrent task report",
     });
@@ -178,7 +182,9 @@ describe("TasksPage concurrent refresh events", () => {
 
     const refreshCalls = refresh.request.mock.calls.slice(-2);
     expect(refreshCalls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
-    expect(refreshCalls[1]?.[1]).not.toHaveProperty("status");
+    expect(refreshCalls[1]?.[1]).toMatchObject({
+      status: ["completed", "failed", "timed_out", "cancelled"],
+    });
     refresh.active.resolve({ tasks: [initial] });
     refresh.recent.resolve({ tasks: [recent] });
     await pending;
@@ -305,6 +311,16 @@ describe("TasksPage concurrent refresh events", () => {
 });
 
 describe("TasksPage active pagination", () => {
+  it("redacts secrets in displayed list failures", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+
+    await waitForFast(() => expect(page.error).toBe("OPENAI_API_KEY=sk-123...cdef"));
+  });
+
   it("drains active pages with the selected scope and merges each task once", async () => {
     const sharedPageOne = createTask("task-shared", "running", {
       progressSummary: "Page one progress",
@@ -325,10 +341,10 @@ describe("TasksPage active pagination", () => {
         },
       ) => {
         expect(method).toBe("tasks.list");
-        if (!params?.status) {
+        if (params?.status?.includes("completed")) {
           return Promise.resolve({ tasks: [createTask("task-recent", "completed")] });
         }
-        if (params.cursor === "active-page-2") {
+        if (params?.cursor === "active-page-2") {
           return Promise.resolve({
             tasks: [sharedPageTwo, createTask("task-page-2")],
           });
@@ -344,7 +360,7 @@ describe("TasksPage active pagination", () => {
     page.context = createContext(source.gateway, "writer");
     document.body.append(page);
 
-    await vi.waitFor(() => expect(page.tasks).toHaveLength(4));
+    await waitForFast(() => expect(page.tasks).toHaveLength(4));
 
     expect(request).toHaveBeenCalledWith(
       "tasks.list",
@@ -357,15 +373,26 @@ describe("TasksPage active pagination", () => {
       { signal: expect.any(AbortSignal) },
     );
     expect(
-      request.mock.calls.filter(([, params]) => !(params as { status?: unknown })?.status),
+      request.mock.calls.filter(([, params]) =>
+        (params as { status?: readonly string[] } | undefined)?.status?.includes("completed"),
+      ),
     ).toHaveLength(1);
+    expect(request).toHaveBeenCalledWith(
+      "tasks.list",
+      expect.objectContaining({
+        agentId: "writer",
+        limit: 200,
+        status: ["completed", "failed", "timed_out", "cancelled"],
+      }),
+      { signal: expect.any(AbortSignal) },
+    );
     expect(page.tasks.filter((task) => task.id === "task-shared")).toEqual([sharedPageTwo]);
   });
 
   it("fails visibly when an active page repeats its cursor", async () => {
     let activeCalls = 0;
     const request = vi.fn((_method: string, params?: { status?: readonly string[] }) => {
-      if (!params?.status) {
+      if (!params?.status || params.status.length !== 2) {
         return Promise.resolve({ tasks: [] });
       }
       activeCalls += 1;
@@ -379,7 +406,7 @@ describe("TasksPage active pagination", () => {
     page.context = createContext(source.gateway);
     document.body.append(page);
 
-    await vi.waitFor(() => expect(page.error).toBe("The gateway returned an invalid task list."));
+    await waitForFast(() => expect(page.error).toBe("The gateway returned an invalid task list."));
 
     expect(activeCalls).toBe(2);
     expect(request).toHaveBeenCalledTimes(3);
@@ -390,7 +417,7 @@ describe("TasksPage active pagination", () => {
     const finalPage = deferred<{ tasks: TaskSummary[] }>();
     const request = vi.fn(
       (_method: string, params?: { cursor?: string; status?: readonly string[] }) => {
-        if (!params?.status) {
+        if (!params?.status || params.status.includes("completed")) {
           return Promise.resolve({ tasks: [] });
         }
         if (params.cursor === "active-page-2") {
@@ -416,13 +443,56 @@ describe("TasksPage active pagination", () => {
       task: { ...stale, status: "completed", updatedAt: 200 },
     });
     finalPage.resolve({ tasks: [stale] });
-    await vi.waitFor(() => expect(page.tasks[0]?.status).toBe("completed"));
+    await waitForFast(() => expect(page.tasks[0]?.status).toBe("completed"));
 
     expect(page.tasks).toHaveLength(1);
   });
 });
 
 describe("TasksPage cancellation lifecycle", () => {
+  it("does not clear an unrelated task error when a result copy succeeds", async () => {
+    const blocked = createTask("task-copy-independent-error", "completed", {
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    const clipboardWrite = deferred<void>();
+    const writeText = vi.fn(() => clipboardWrite.promise);
+    const request = vi.fn((method: string) => {
+      if (method === "tasks.get") {
+        return Promise.resolve({ task: { ...blocked, result: "Retained result" } });
+      }
+      if (method === "tasks.retry") {
+        return Promise.resolve({
+          results: [
+            {
+              taskId: blocked.taskId,
+              ok: false,
+              reason: "Independent recovery failed",
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ tasks: [blocked] });
+    });
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(page.tasks).toHaveLength(1));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const copying = page.copyTaskResult(blocked.taskId);
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("Retained result"));
+    await page.recoverTask(blocked.taskId, "retry");
+    expect(page.error).toBe("Independent recovery failed");
+
+    clipboardWrite.resolve(undefined);
+    await copying;
+
+    expect(page.error).toBe("Independent recovery failed");
+    expect(page.copyResultError).toBeNull();
+  });
+
   it("lets a read-only operator copy a retained result without mutation controls", async () => {
     const retained = createTask("task-read-only-retained", "completed", {
       deliveryStatus: "failed",
@@ -453,7 +523,7 @@ describe("TasksPage cancellation lifecycle", () => {
     });
     try {
       document.body.append(page);
-      await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+      await waitForFast(() => expect(page.tasks).toHaveLength(1));
 
       const copyButton = [...page.querySelectorAll("button")].find(
         (button) => button.textContent?.trim() === "Copy result",
@@ -492,7 +562,7 @@ describe("TasksPage cancellation lifecycle", () => {
     page.context = createContext(source.gateway, "research");
     document.body.append(page);
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
         "/chat/research/telegram/12345",
       ),
@@ -518,7 +588,11 @@ describe("TasksPage cancellation lifecycle", () => {
     );
     expect(request).toHaveBeenCalledWith(
       "tasks.list",
-      expect.objectContaining({ agentId: "writer", limit: 200 }),
+      expect.objectContaining({
+        agentId: "writer",
+        limit: 200,
+        status: ["completed", "failed", "timed_out", "cancelled"],
+      }),
       { signal: expect.any(AbortSignal) },
     );
   });
@@ -586,7 +660,7 @@ describe("TasksPage cancellation lifecycle", () => {
     const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
     page.context = createContext(source.gateway);
     document.body.append(page);
-    await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+    await waitForFast(() => expect(page.tasks).toHaveLength(1));
 
     await page.recoverTask(blocked.taskId, "retry");
 
@@ -615,7 +689,7 @@ describe("TasksPage cancellation lifecycle", () => {
     const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
     page.context = createContext(source.gateway);
     document.body.append(page);
-    await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+    await waitForFast(() => expect(page.tasks).toHaveLength(1));
 
     const recovery = page.recoverTask(blocked.taskId, "retry");
     await vi.waitFor(() => expect(page.cancellingTaskIds.has(blocked.taskId)).toBe(true));
@@ -650,7 +724,7 @@ describe("TasksPage cancellation lifecycle", () => {
     const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
     page.context = createContext(source.gateway);
     document.body.append(page);
-    await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+    await waitForFast(() => expect(page.tasks).toHaveLength(1));
 
     const text = page.textContent ?? "";
     expect(text).toContain("Completed; result delivery was dismissed.");

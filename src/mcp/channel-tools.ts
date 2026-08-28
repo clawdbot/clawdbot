@@ -4,7 +4,6 @@ import { z } from "zod";
 import type { OpenClawChannelBridge } from "./channel-bridge.js";
 import {
   extractAttachmentsFromMessage,
-  resolveMessageId,
   summarizeResult,
   summarizeStructuredResult,
   toText,
@@ -94,8 +93,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
       limit: z.number().int().min(1).max(200).optional(),
     },
     async ({ session_key, message_id, limit }) => {
-      const messages = await bridge.readMessages(session_key, limit ?? 100);
-      const message = messages.find((entry) => resolveMessageId(entry) === message_id);
+      const message = await bridge.readMessage(session_key, message_id, limit ?? 100);
       if (!message) {
         return {
           content: [{ type: "text", text: `message not found: ${message_id}` }],
@@ -119,13 +117,17 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
       limit: z.number().int().min(1).max(200).optional(),
     },
     async ({ after_cursor, session_key, limit }) => {
-      const { events, nextCursor } = bridge.pollEvents(
+      const { events, nextCursor, gap } = bridge.pollEvents(
         { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
         limit ?? 20,
       );
       return {
         ...summarizeResult("events", events.length),
-        structuredContent: { events, next_cursor: nextCursor },
+        structuredContent: {
+          events,
+          next_cursor: nextCursor,
+          ...(gap ? { gap } : {}),
+        },
       };
     },
   );
@@ -138,14 +140,24 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
       session_key: z.string().optional(),
       timeout_ms: z.number().int().min(1).max(300_000).optional(),
     },
-    async ({ after_cursor, session_key, timeout_ms }) => {
-      const event = await bridge.waitForEvent(
+    async ({ after_cursor, session_key, timeout_ms }, extra) => {
+      const { event, gap } = await bridge.waitForEvent(
         { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
         timeout_ms ?? 30_000,
+        extra.signal,
       );
       return {
-        content: [{ type: "text", text: event ? `event ${event.cursor}` : "timeout" }],
-        structuredContent: { event },
+        content: [
+          {
+            type: "text",
+            text: event
+              ? `event ${event.cursor}`
+              : gap
+                ? `event gap before ${gap.oldest_available_cursor}`
+                : "timeout",
+          },
+        ],
+        structuredContent: { event, ...(gap ? { gap } : {}) },
       };
     },
   );

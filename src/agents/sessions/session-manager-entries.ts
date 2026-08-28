@@ -2,12 +2,18 @@ import {
   readActiveTranscriptEntryAnchor,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import {
   buildSessionContext as buildCoreSessionContext,
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
+import {
+  copyCodeModeSourceAppend,
+  getCodeModeSourceAppend,
+  copyCodeModeSourceAppendOptions,
+} from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { isIndexedSessionEntry, isSessionContextMetadataEntry } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -42,14 +48,25 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (!isIndexedSessionEntry(canonicalEntry)) {
       throw new Error(`Invalid session transcript entry: ${entry.type}`);
     }
+    if (entry.type === "message" && canonicalEntry.type === "message") {
+      copyCodeModeSourceAppend(
+        entry.message,
+        canonicalEntry.message,
+        getCodeModeSourceAppend(options),
+        (source) => source,
+      );
+    }
     const activeBranchAppend =
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
-    const persistenceResult = this.persist(canonicalEntry, {
-      ...options,
-      ...(activeBranchAppend ? { appendIntent: "active-branch" } : {}),
-    });
+    const persistenceResult = this.persist(
+      canonicalEntry,
+      copyCodeModeSourceAppendOptions(options, {
+        ...options,
+        ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
+      }),
+    );
     if (persistenceResult && typeof persistenceResult === "object") {
       if (persistenceResult.adoptedMessageId) {
         this.reloadPersistedTranscript();
@@ -135,6 +152,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): { entryId: string; anchor?: TranscriptEntryAnchor } {
+    if (message.role === "assistant") {
+      applyAssistantDeliveryDirectives(message);
+    }
     if (options?.idempotencyLookup !== "caller-checked") {
       const currentUserId = this.resolveCurrentKeyedUserId(message);
       if (currentUserId) {
@@ -212,6 +232,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
+    if (this.persistedBoundaryCount !== undefined) {
+      this.persistedBoundaryCount += 1;
+    }
     return entry.id;
   }
 
@@ -225,6 +248,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
     };
     this.appendEntry(entry);
+    if (this.persistedBoundaryCount !== undefined) {
+      this.persistedBoundaryCount += 1;
+    }
     return entry.id;
   }
 
@@ -389,8 +415,11 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   getBoundaryCount(): number {
-    return this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
-      .length;
+    return (
+      this.persistedBoundaryCount ??
+      this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
+        .length
+    );
   }
 
   getHeader(): SessionHeader | null {
@@ -442,6 +471,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   branch(branchFromId: string): void {
+    if (!this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
     const branchTargetId = this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
@@ -465,6 +497,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     details?: unknown,
     fromHook?: boolean,
   ): string {
+    if (branchFromId !== null && !this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
     const branchTargetId = branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);

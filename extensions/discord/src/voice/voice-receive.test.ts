@@ -1,9 +1,10 @@
 import type { Readable } from "node:stream";
-import type { MockCallSource, TestRealtimeSessionEntry } from "./manager.e2e.test-support.js";
+import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
   ({
+    PassThrough,
     VoiceOpcodes,
     expect,
     it,
@@ -22,10 +23,12 @@ defineDiscordVoiceTests(
     createClient,
     createManager,
     makeVoiceConfig,
+    configureVoiceStateGateway,
     createAgentProxyManager,
     createFollowManager,
     expectConnectedStatus,
     getSessionEntry,
+    getLastAudioPlayer,
     getVoiceReceive,
     getVoiceFollowing,
     emitDecryptFailure,
@@ -78,7 +81,7 @@ defineDiscordVoiceTests(
         throw new Error("expected voice session for guild g1");
       }
       expect(entry.player.state.status).toBe("idle");
-      entry.player.state.status = "playing";
+      getLastAudioPlayer().state.status = "playing";
 
       await handleSpeakingStart(manager, entry, "u-denied");
 
@@ -206,9 +209,7 @@ defineDiscordVoiceTests(
       const manager = createManager();
 
       await manager.join({ guildId: "g1", channelId: "1001" });
-      const entry = getSessionEntry(manager) as TestRealtimeSessionEntry & {
-        sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
-      };
+      const entry = getSessionEntry(manager);
       entry.sessionLifecycle = { status: "stopped", reason: "test" };
 
       emitDecryptFailure(manager);
@@ -627,6 +628,42 @@ defineDiscordVoiceTests(
       expect(manager.status()).toEqual([]);
     });
 
+    it("preserves occupied auto-join ownership through DAVE receive recovery", async () => {
+      const firstConnection = createConnectionMock();
+      joinVoiceChannelMock
+        .mockReturnValueOnce(firstConnection)
+        .mockReturnValueOnce(createConnectionMock());
+      const client = createClient();
+      const humanState = {
+        guild_id: "g1",
+        user_id: "u-owner",
+        channel_id: "1001",
+        member: { user: { id: "u-owner", bot: false } },
+      };
+      let voiceStates: Array<Record<string, unknown>> = [humanState];
+      configureVoiceStateGateway(client, () => voiceStates);
+      const manager = createManager(
+        makeVoiceConfig({
+          autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
+        }),
+        client,
+        {},
+        "default",
+        "bot-user",
+      );
+      await manager.autoJoin();
+
+      emitDecryptFailure(manager);
+      emitDecryptFailure(manager);
+      emitDecryptFailure(manager);
+      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
+
+      voiceStates = [];
+      await updateVoiceState(manager, "u-owner", null, humanState.member);
+
+      expect(manager.status()).toEqual([]);
+    });
+
     it("resets DAVE receive recovery after realtime audio decodes", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
@@ -802,7 +839,8 @@ defineDiscordVoiceTests(
 
         const entry = getSessionEntry(manager);
 
-        const firstStream = { destroy: vi.fn() };
+        const firstStream = new PassThrough();
+        const destroyFirstStream = vi.spyOn(firstStream, "destroy");
         entry.capture.activeSpeakers.add("u1");
         entry.capture.captureGenerations.set("u1", 1);
         entry.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
@@ -811,7 +849,7 @@ defineDiscordVoiceTests(
 
         await vi.advanceTimersByTimeAsync(2_500);
 
-        expect(firstStream.destroy).toHaveBeenCalledTimes(1);
+        expect(destroyFirstStream).toHaveBeenCalledTimes(1);
         expect(entry?.capture.activeSpeakers.has("u1")).toBe(false);
 
         const secondStream = {

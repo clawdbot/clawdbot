@@ -3,7 +3,6 @@
  */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -34,19 +33,8 @@ type AgentAvatarPublicSourceInput = {
 const PUBLIC_AVATAR_SOURCE_MAX_CHARS = 256;
 const PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS = 64;
 
-function resolveAvatarSource(
-  cfg: OpenClawConfig,
-  agentId: string,
-  opts?: { includeUiOverride?: boolean },
-): string | null {
+function resolveAvatarSource(cfg: OpenClawConfig, agentId: string): string | null {
   const normalizedAgentId = normalizeAgentId(agentId);
-  const fromUiConfig = normalizeOptionalString(cfg.ui?.assistant?.avatar) ?? null;
-  if (opts?.includeUiOverride) {
-    // The shared UI avatar belongs only to the sole or retained compatibility owner.
-    if (normalizedAgentId === tryResolveLegacyCompatibilityAgentId(cfg) && fromUiConfig) {
-      return fromUiConfig;
-    }
-  }
   const fromConfig =
     normalizeOptionalString(resolveAgentIdentity(cfg, normalizedAgentId)?.avatar) ?? null;
   if (fromConfig) {
@@ -100,12 +88,8 @@ export function resolvePublicAgentAvatarSource(
 }
 
 /** Resolve the effective avatar for an agent, including config and IDENTITY.md. */
-export function resolveAgentAvatar(
-  cfg: OpenClawConfig,
-  agentId: string,
-  opts?: { includeUiOverride?: boolean },
-): AgentAvatarResolution {
-  const source = resolveAvatarSource(cfg, agentId, opts);
+export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentAvatarResolution {
+  const source = resolveAvatarSource(cfg, agentId);
   if (!source) {
     return { kind: "none", reason: "missing" };
   }

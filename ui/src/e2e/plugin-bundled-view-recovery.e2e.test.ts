@@ -7,7 +7,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/plugin-bundled-view-recovery");
-const bundledChunk = /\/assets\/[^/]+\.js(?:\?.*)?$/;
+const bundledChunk = /\/assets\/logbook-view-[^/]+\.js(?:\?.*)?$/;
 
 const suite = createControlUiE2eSuite({
   name: "Control UI bundled plugin lazy-view recovery",
@@ -100,10 +100,10 @@ suite.define(() => {
           path: path.join(artifactDir, "failure.png"),
         });
 
-        let navigationCount = 0;
-        page.on("framenavigated", (frame) => {
-          if (frame === page.mainFrame()) {
-            navigationCount += 1;
+        let documentRequestCount = 0;
+        page.on("request", (request) => {
+          if (request.resourceType() === "document") {
+            documentRequestCount += 1;
           }
         });
         markDocumentReachable();
@@ -112,13 +112,13 @@ suite.define(() => {
         await alert.waitFor();
         await page.waitForTimeout(500);
         expect(await alert.count()).toBe(1);
-        expect(navigationCount).toBe(1);
+        expect(documentRequestCount).toBe(1);
 
         await alert.getByRole("button", { name: "Reload" }).click();
         await page.locator(".logbook").waitFor();
         expect(await alert.count()).toBe(0);
         expect(assetRequests).toBeGreaterThan(2);
-        expect(navigationCount).toBe(2);
+        expect(documentRequestCount).toBe(2);
         await gateway.waitForRequest("logbook.status");
         await page.screenshot({
           fullPage: true,

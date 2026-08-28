@@ -306,7 +306,7 @@
 .dreams__phase-dot--on {
   background: var(--ok);
   opacity: 1;
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.3);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 30%, transparent);
 }
 
 .dreams__phase-name {
@@ -362,7 +362,7 @@
 .dreams__phase-toggle--on .dreams__phase-toggle-dot {
   background: var(--ok);
   opacity: 1;
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.3);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 30%, transparent);
 }
 
 .dreams__phase-toggle--on {
@@ -417,11 +417,11 @@
   0%,
   100% {
     opacity: 1;
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 40%, transparent);
   }
   50% {
     opacity: 0.7;
-    box-shadow: 0 0 8px 2px rgba(34, 197, 94, 0.2);
+    box-shadow: 0 0 8px 2px color-mix(in srgb, var(--ok) 20%, transparent);
   }
 }
 

@@ -14,8 +14,13 @@ import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  type GatewayRootWorkAdmissionContinuationScope,
+} from "../process/gateway-work-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -128,6 +133,16 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  /** Cron-context allow-always requests mint a scoped standing grant in the
+   * durable resolution transaction. Returning null keeps the decision
+   * grant-free (non-cron requests, aborted runs, missing bindings). */
+  resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null;
+  /** Default grant terms frozen at resolve time: config-driven expiry stamp,
+   * or null for until-revoked. A per-resolve override wins over this default. */
+  resolveStandingGrantExpiresAtMs?: (nowMs: number) => number | null;
+  /** Durable timeout expiry can be first observed by a timer, lookup, or replay.
+   * Publish from the local settlement owner so every ordering reaches reviewers. */
+  onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
   validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
 };
 
@@ -157,13 +172,13 @@ type ExecApprovalDurableLookup =
 type PendingEntry<TPayload = ExecApprovalRequestPayload> = {
   record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
-  reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   handoffRetainCount: number;
   handoffReleasedAtMs: number | null;
   retainForManagerLifetime: boolean;
   promise: Promise<ExecApprovalDecision | null>;
+  admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
 };
 
 export type ExecApprovalIdLookupResult =
@@ -354,22 +369,20 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }
 
     let resolvePromise: (decision: ExecApprovalDecision | null) => void;
-    let rejectPromise: (err: Error) => void;
-    const promise = new Promise<ExecApprovalDecision | null>((resolve, reject) => {
+    const promise = new Promise<ExecApprovalDecision | null>((resolve) => {
       resolvePromise = resolve;
-      rejectPromise = reject;
     });
     // Create entry first so we can capture it in the closure (not re-fetch from map)
     const entry: PendingEntry<TPayload> = {
       record,
       resolve: resolvePromise!,
-      reject: rejectPromise!,
-      timer: null as unknown as ReturnType<typeof setTimeout>,
+      timer: null,
       cleanupTimer: null,
       handoffRetainCount: 0,
       handoffReleasedAtMs: null,
       retainForManagerLifetime: false,
       promise,
+      admissionContinuation: captureGatewayRootWorkAdmissionContinuationScope(),
     };
     this.pending.set(record.id, entry);
     this.scheduleExpiryTimer(entry);
@@ -441,6 +454,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     resolver: OperatorApprovalResolver,
     localResolvedBy: string | null = null,
     localResolutionSource: ExecApprovalResolutionSource = "operator",
+    options: {
+      /** Explicit grant expiry override; undefined defers to the configured default. */
+      grantExpiresAtMs?: number | null;
+    } = {},
   ): ExecApprovalResolveResult<TPayload> {
     if (decision !== "deny") {
       const closed = this.forceDenyIfDelegatedAuthorityClosed(recordId);
@@ -514,6 +531,19 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { outcome: "not-found" };
     }
 
+    const standingGrantSpec =
+      decision === "allow-always" && localEntry
+        ? (this.options.resolveStandingGrantMint?.(localEntry.record.request) ?? undefined)
+        : undefined;
+    const standingGrant = standingGrantSpec
+      ? {
+          ...standingGrantSpec,
+          expiresAtMs:
+            options.grantExpiresAtMs !== undefined
+              ? options.grantExpiresAtMs
+              : (this.options.resolveStandingGrantExpiresAtMs?.(Date.now()) ?? null),
+        }
+      : undefined;
     let result: ResolveOperatorApprovalResult;
     try {
       result = resolveOperatorApproval({
@@ -523,6 +553,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         expectedKind: this.approvalKind,
         runtimeEpoch: persistence.runtimeEpoch,
         databaseOptions: persistence.databaseOptions,
+        ...(standingGrant ? { standingGrant } : {}),
       });
     } catch (error) {
       this.settleLocalStorageFailure(recordId);
@@ -623,6 +654,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     localResolutionSource: ExecApprovalResolutionSource = "operator",
   ): boolean {
     const persistence = this.options.persistence;
+    const liveRecord = this.pending.get(record.id)?.record;
     if (
       record.kind !== this.approvalKind ||
       (persistence && record.runtimeEpoch !== persistence.runtimeEpoch) ||
@@ -651,6 +683,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     });
     if (settled) {
       this.emitLifecycle({ phase: "terminal", record });
+      if (record.status === "expired" && liveRecord) {
+        try {
+          this.options.onExpired?.(record, liveRecord);
+        } catch (error) {
+          this.reportError(error, { approvalId: record.id, operation: "expire" });
+        }
+      }
     }
     return settled;
   }
@@ -746,7 +785,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (!pending || pending.record.resolvedAtMs !== undefined) {
       return false;
     }
-    clearTimeout(pending.timer);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
     pending.record.resolvedAtMs = params.resolvedAtMs;
     if (params.decision === null) {
       delete pending.record.decision;
@@ -764,6 +805,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     pending.record.consumedAtMs = params.consumedAtMs ?? null;
     pending.record.consumedBy = params.consumedBy ?? null;
     pending.retainForManagerLifetime ||= params.retainForManagerLifetime === true;
+    pending.admissionContinuation?.release();
+    pending.admissionContinuation = null;
     // Keep resolved entries briefly so late waitDecision and system.run replay
     // validation see the same durable verdict that released this waiter.
     pending.resolve(params.decision);
@@ -864,12 +907,16 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   }
 
   private scheduleExpiryTimer(entry: PendingEntry<TPayload>): void {
-    const timerDelayMs = resolveApprovalTimeoutMs(entry.record.expiresAtMs - Date.now());
-    entry.timer = setTimeout(() => {
+    entry.timer = this.createExpiryTimer(entry.record);
+  }
+
+  private createExpiryTimer(record: ExecApprovalRecord<TPayload>): ReturnType<typeof setTimeout> {
+    const timerDelayMs = resolveApprovalTimeoutMs(record.expiresAtMs - Date.now());
+    return setTimeout(() => {
       try {
-        this.expireDue(entry.record.id);
+        this.expireDue(record.id);
       } catch (error) {
-        this.reportError(error, { approvalId: entry.record.id, operation: "expire" });
+        this.reportError(error, { approvalId: record.id, operation: "expire" });
       }
     }, timerDelayMs);
   }
@@ -946,7 +993,12 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     });
   }
 
-  resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
+  resolve(
+    recordId: string,
+    decision: ExecApprovalDecision,
+    resolvedBy?: string | null,
+    options: { grantExpiresAtMs?: number | null } = {},
+  ): boolean {
     if (!this.options.persistence) {
       return this.resolveLocal(recordId, decision, resolvedBy ?? null);
     }
@@ -959,6 +1011,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
           id: resolvedBy ?? null,
         },
         resolvedBy ?? null,
+        "operator",
+        options,
       ).outcome === "resolved"
     );
   }
@@ -1003,7 +1057,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       record.resolvedAtMs === undefined ||
       record.decision !== undefined ||
       record.consumedDecision !== undefined ||
-      record.askFallbackConsumed === true
+      record.askFallbackConsumed === true ||
+      // Only unanswered approvals (timeout or no delivery route) are
+      // re-admissible. Cancelled/fenced records also end decision-less, but
+      // their authority closed deliberately — never replay through them.
+      (record.status !== "expired" && record.terminalReason !== "no-route")
     ) {
       return false;
     }
@@ -1065,6 +1123,19 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return null;
     }
     return entry.record;
+  }
+
+  /** Re-enters the exact admitted request root only while this approval is pending. */
+  runPendingContinuation<T>(recordId: string, run: () => Promise<T>): Promise<T> | null {
+    const entry = this.pending.get(recordId);
+    if (
+      !entry?.admissionContinuation ||
+      entry.record.resolvedAtMs !== undefined ||
+      entry.record.expiresAtMs <= Date.now()
+    ) {
+      return null;
+    }
+    return entry.admissionContinuation.run(run);
   }
 
   listPendingRecords(): ExecApprovalRecord<TPayload>[] {
@@ -1238,10 +1309,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { kind: "ambiguous", ids: matches };
     }
     return { kind: "none" };
-  }
-
-  lookupPendingId(input: string): ExecApprovalIdLookupResult {
-    return this.lookupApprovalId(input);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

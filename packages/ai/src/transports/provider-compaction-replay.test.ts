@@ -109,4 +109,32 @@ describe("compaction replay owner rewrites", () => {
     expect(input.some((item) => item.type === "compaction")).toBe(false);
     expect(JSON.stringify(input)).toContain("full history prefix");
   });
+
+  it("keeps a compaction-only checkpoint through an unchanged empty-content projection", () => {
+    const owner = createAssistant([], 0);
+    const projected = replaceCompactionReplayOwnerContent(owner, []);
+
+    expect(projected.providerReplay).toBe(owner.providerReplay);
+  });
+
+  it("keeps retained-user checkpoints independent of owner content indexes", () => {
+    const retained = createAssistant([{ type: "text", text: "removed owner output" }], 0);
+    const providerReplay = retained.providerReplay;
+    if (!providerReplay) {
+      throw new Error("expected replay state");
+    }
+    retained.providerReplay = {
+      ...providerReplay,
+      type: "openai-responses-retained-compaction",
+    };
+    delete retained.providerReplay.replayIndex;
+
+    const rewritten = replaceCompactionReplayOwnerContent(retained, []);
+
+    expect(rewritten.providerReplay).toMatchObject({
+      type: "openai-responses-retained-compaction",
+      data: "opaque-replay-compaction",
+    });
+    expect(rewritten.providerReplay).not.toHaveProperty("replayIndex");
+  });
 });

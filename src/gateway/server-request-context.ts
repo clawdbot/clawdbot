@@ -7,15 +7,16 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { upsertPresence } from "../infra/system-presence.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
-import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
+import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import { recordClientPresenceActivity, refreshClientPresence } from "./server/client-presence.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
 
@@ -28,11 +29,13 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
+  configRevisionProjector: GatewayRequestContext["configRevisionProjector"];
   runtimeState: Pick<
     GatewayServerLiveState,
     "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  getGatewayMethodRegistry: NonNullable<GatewayRequestContext["getGatewayMethodRegistry"]>;
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
@@ -42,6 +45,7 @@ type GatewayRequestContextParams = {
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  questionManager?: GatewayRequestContext["questionManager"];
   cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
@@ -67,27 +71,23 @@ type GatewayRequestContextParams = {
   nodeUnsubscribe: GatewayRequestContext["nodeUnsubscribe"];
   nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
   hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
-  clients: Set<GatewayRequestContextClient>;
+  clients: Set<GatewayWsClient>;
+  isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
   invalidateDeviceTransports?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },
   ) => void;
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   nodeDesktopService?: import("./desktop/node-source.js").NodeDesktopService;
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   hostDesktopService?: GatewayRequestContext["hostDesktopService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
   workerPlacementDiskSpaceReader?: GatewayRequestContext["workerPlacementDiskSpaceReader"];
+  workerPlacementRunnerAvailabilityReader?: GatewayRequestContext["workerPlacementRunnerAvailabilityReader"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
+  githubPublicationService?: GatewayRequestContext["githubPublicationService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
@@ -172,6 +172,7 @@ export function createGatewayRequestContext(
   const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
+    configRevisionProjector: params.configRevisionProjector,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
     get cron() {
@@ -181,6 +182,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    getGatewayMethodRegistry: params.getGatewayMethodRegistry,
     gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
@@ -195,6 +197,7 @@ export function createGatewayRequestContext(
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    questionManager: params.questionManager,
     scopeUpgradeCoordinator,
     cancelRunBoundApprovals: params.cancelRunBoundApprovals
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)
@@ -227,8 +230,12 @@ export function createGatewayRequestContext(
     nodeUnsubscribe: params.nodeUnsubscribe,
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
     hasConnectedTalkNode: params.hasConnectedTalkNode,
-    isConnectionActive: (connId) =>
-      [...params.clients].some((client) => client.connId === connId && !client.invalidated),
+    isConnectionActive: params.isConnectionActive,
+    recordClientActivity: (client) => {
+      if (recordClientPresenceActivity(params.clients, client)) {
+        broadcastPresenceSnapshot(params);
+      }
+    },
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
@@ -283,6 +290,12 @@ export function createGatewayRequestContext(
     refreshConnectedUserProfile: (profile) => {
       let presenceChanged = false;
       for (const gatewayClient of params.clients) {
+        if (
+          gatewayClient.invalidated ||
+          gatewayClient.socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+        ) {
+          continue;
+        }
         const authenticatedUserProfile = gatewayClient.authenticatedUserProfile;
         if (!authenticatedUserProfile) {
           continue;
@@ -301,22 +314,7 @@ export function createGatewayRequestContext(
           hasAvatar: profile.hasAvatar,
           updatedAt: profile.updatedAt,
         });
-        if (!gatewayClient.presenceKey || !gatewayClient.authenticatedUserId) {
-          continue;
-        }
-        upsertPresence(gatewayClient.presenceKey, {
-          user: buildAuthenticatedPresenceUser({
-            authenticatedUserId: gatewayClient.authenticatedUserId,
-            authenticatedUserIsTailscaleProvider:
-              gatewayClient.authenticatedUserIsTailscaleProvider,
-            authenticatedUserProfile: {
-              profileId: profile.id,
-              displayName: profile.displayName,
-              avatarRevision: profile.avatarRevision,
-            },
-          }),
-        });
-        presenceChanged = true;
+        presenceChanged = refreshClientPresence(params.clients, gatewayClient) || presenceChanged;
       }
       if (presenceChanged) {
         broadcastPresenceSnapshot({
@@ -366,14 +364,26 @@ export function createGatewayRequestContext(
       }
       params.disconnectDeviceTransports?.(deviceId, opts);
     },
+    disconnectClientsForUserProfile: (profileId: string) => {
+      for (const gatewayClient of params.clients) {
+        if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
+          continue;
+        }
+        // Invalidate before closing so buffered requests cannot retain revoked role scopes.
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason = "operator-role-changed";
+        try {
+          gatewayClient.socket.close(4001, "operator role changed");
+        } catch {
+          /* ignore */
+        }
+      }
+    },
     disconnectClientsUsingSharedGatewayAuth: () => {
       disconnectAllSharedGatewayAuthClients(params.clients);
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
-    claimControlUiDeviceAuthMigration: params.claimControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
-    completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
     ...(params.nodeDesktopService
       ? { [NODE_DESKTOP_SERVICE_CONTEXT]: params.nodeDesktopService }
@@ -388,9 +398,15 @@ export function createGatewayRequestContext(
     ...(params.workerPlacementDiskSpaceReader
       ? { workerPlacementDiskSpaceReader: params.workerPlacementDiskSpaceReader }
       : {}),
+    ...(params.workerPlacementRunnerAvailabilityReader
+      ? { workerPlacementRunnerAvailabilityReader: params.workerPlacementRunnerAvailabilityReader }
+      : {}),
     validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     ...(params.workerPlacementDispatchService
       ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
+      : {}),
+    ...(params.githubPublicationService
+      ? { githubPublicationService: params.githubPublicationService }
       : {}),
     terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,

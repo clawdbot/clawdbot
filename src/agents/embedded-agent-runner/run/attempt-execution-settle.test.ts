@@ -122,7 +122,9 @@ function createFixture() {
   };
   const sessionManager = {
     kind: "session-manager",
+    appendMessage: vi.fn((message) => messages.push(message)),
     buildSessionContext: vi.fn(() => ({ messages: [] })),
+    getSessionTarget: vi.fn(() => undefined),
   };
   const hookRunner = { hasHooks: vi.fn(() => false) };
   const cacheTrace = { recordStage: vi.fn() };
@@ -130,6 +132,7 @@ function createFixture() {
   const toolResultPromptProjectionState = { kind: "tool-result-projection" };
   const sessionPromptState = { toolResults: toolResultPromptProjectionState };
   const sessionRuntimeState = {
+    currentTurnImageFailureCount: 0,
     prePromptMessageCount: 2,
     promptCache: undefined,
     systemPromptText: "system prompt",
@@ -170,8 +173,11 @@ function createFixture() {
     agentSession: {
       activeSession,
       clientToolCallSlots: [],
+      coreReadAuthorized: true,
+      getCodeModeReconciliationCandidate: vi.fn(() => false),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
+      setCodeModeReconciliationReadAuthorized: vi.fn(),
       setActiveSessionSystemPrompt: vi.fn(),
       settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
     },
@@ -318,6 +324,7 @@ function createFixture() {
     order,
     queueHandle,
     result,
+    sessionManager,
     sessionRuntimeState,
     state,
     subscription,
@@ -395,6 +402,32 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       fixture.queueHandle,
       "agent:main",
       "/tmp/session.jsonl",
+    );
+  });
+
+  it("persists image failure notes after after-turn transcript reconciliation", async () => {
+    const fixture = createFixture();
+    fixture.sessionRuntimeState.currentTurnImageFailureCount = 1;
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    expect(fixture.sessionManager.appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "openclaw.system-note",
+        display: true,
+        content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+      }),
+    );
+    expect(fixture.sessionManager.appendMessage.mock.calls[0]?.[0]).not.toHaveProperty(
+      "excludeFromContext",
+    );
+    expect(mocks.completeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          messagesSnapshot: expect.arrayContaining([
+            expect.objectContaining({ customType: "openclaw.system-note", display: true }),
+          ]),
+        }),
+      }),
     );
   });
 

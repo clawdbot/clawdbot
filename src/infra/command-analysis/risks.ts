@@ -44,14 +44,14 @@ function isCommandCarrierExecutable(executable: string, options?: { includeExec?
   );
 }
 
-/** Builds candidate command payload strings from nested carriers and shell wrappers. */
-export function buildCommandPayloadCandidates(
+/** Builds candidate command argv arrays from nested carriers and shell wrappers. */
+export function buildCommandPayloadArgvCandidates(
   argv: string[],
   seenArgv = new Set<string>(),
-): string[] {
+): string[][] {
   const key = commandArgvKey(argv);
   if (seenArgv.has(key)) {
-    return argv.length > 0 ? [argv.join(" ")] : [];
+    return argv.length > 0 ? [argv] : [];
   }
   seenArgv.add(key);
   const assignmentStrippedArgv = stripLeadingEnvAssignments(argv);
@@ -59,21 +59,33 @@ export function buildCommandPayloadCandidates(
     includeExec: true,
   });
   const executableArgv = carriedArgv ?? assignmentStrippedArgv;
-  const carriedCandidates = carriedArgv ? buildCommandPayloadCandidates(carriedArgv, seenArgv) : [];
+  const carriedCandidates = carriedArgv
+    ? buildCommandPayloadArgvCandidates(carriedArgv, seenArgv)
+    : [];
   const shellWrapperPayload = extractShellWrapperInlineCommand(executableArgv);
   const shellWrapperCandidates = shellWrapperPayload
     ? (() => {
         const innerArgv = splitShellArgs(shellWrapperPayload);
         return innerArgv
-          ? buildCommandPayloadCandidates(innerArgv, seenArgv)
-          : [shellWrapperPayload];
+          ? buildCommandPayloadArgvCandidates(innerArgv, seenArgv)
+          : [[shellWrapperPayload]];
       })()
     : [];
-  return uniqueCommandPayloadCandidates([
-    ...(executableArgv.length > 0 ? [executableArgv.join(" ")] : []),
+  return uniqueCommandPayloadArgvCandidates([
+    ...(executableArgv.length > 0 ? [executableArgv] : []),
     ...carriedCandidates,
     ...shellWrapperCandidates,
   ]);
+}
+
+/** Builds candidate command payload strings from nested carriers and shell wrappers. */
+export function buildCommandPayloadCandidates(
+  argv: string[],
+  seenArgv = new Set<string>(),
+): string[] {
+  return uniqueStrings(
+    buildCommandPayloadArgvCandidates(argv, seenArgv).map((candidate) => candidate.join(" ")),
+  );
 }
 
 function stripLeadingEnvAssignments(argv: string[]): string[] {
@@ -84,8 +96,19 @@ function stripLeadingEnvAssignments(argv: string[]): string[] {
   return index > 0 ? argv.slice(index) : argv;
 }
 
-function uniqueCommandPayloadCandidates(candidates: string[]): string[] {
-  return uniqueStrings(candidates.filter((candidate) => candidate.trim().length > 0));
+function uniqueCommandPayloadArgvCandidates(candidates: string[][]): string[][] {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (candidate.length === 0) {
+      return false;
+    }
+    const key = commandArgvKey(candidate);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 type ShellPositionalCarrierPlan = { kind: "all" } | { kind: "indexes"; indexes: number[] };

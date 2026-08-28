@@ -88,6 +88,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private(set) var currentURL: URL
     var auth: DashboardWindowAuth
     var gatewaySnapshot: DashboardGatewaySnapshot?
+    var notificationPermission = "notDetermined"
+    var notificationTestOutcome: TestNotificationOutcome?
     let tlsParams: GatewayTLSParams?
     private let dashboardFrameAutosaveName: String
     private let updater: UpdaterProviding?

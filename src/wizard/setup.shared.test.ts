@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { WizardPrompter } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
   currentConfig: {} as OpenClawConfig,
@@ -11,7 +13,49 @@ vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
   transformConfigWithPendingPluginInstalls: mocks.transformConfigWithPendingPluginInstalls,
 }));
 
-import { resolveQuickstartGatewayDefaults, writeWizardConfigFile } from "./setup.shared.js";
+import {
+  requestTelemetryConsent,
+  resolveQuickstartGatewayDefaults,
+  writeWizardConfigFile,
+} from "./setup.shared.js";
+
+describe("requestTelemetryConsent", () => {
+  it.each([false, true])("records the interactive operator's %s choice once", async (enabled) => {
+    const select = vi.fn(async () => enabled) as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({ select });
+
+    const config = await requestTelemetryConsent({ opts: {}, prompter, config: {} });
+
+    expect(config.telemetry).toEqual({ enabled, consentedAt: expect.any(String) });
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("Never messages, never identifiers"),
+      "Help make OpenClaw better?",
+    );
+    expect(select).toHaveBeenCalledWith({
+      message: "Help make OpenClaw better?",
+      options: [
+        { value: false, label: "No thanks" },
+        { value: true, label: "Yes, share feature stats" },
+      ],
+      initialValue: false,
+    });
+
+    await expect(requestTelemetryConsent({ opts: {}, prompter, config })).resolves.toBe(config);
+    expect(select).toHaveBeenCalledOnce();
+  });
+
+  it("leaves telemetry unset without prompting during non-interactive onboarding", async () => {
+    const prompter = createWizardPrompter();
+    const config: OpenClawConfig = {};
+
+    await expect(
+      requestTelemetryConsent({ opts: { nonInteractive: true }, prompter, config }),
+    ).resolves.toBe(config);
+    expect(config.telemetry).toBeUndefined();
+    expect(prompter.note).not.toHaveBeenCalled();
+    expect(prompter.select).not.toHaveBeenCalled();
+  });
+});
 
 describe("resolveQuickstartGatewayDefaults", () => {
   const storedConfig: OpenClawConfig = {
@@ -26,7 +70,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       },
       tailscale: {
         mode: "serve",
-        resetOnExit: true,
       },
     },
   };
@@ -39,7 +82,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       gatewayToken: "explicit-token",
       gatewayPassword: "explicit-password",
       tailscale: "off",
-      tailscaleResetOnExit: false,
     });
 
     expect(result).toEqual({
@@ -51,7 +93,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       token: "explicit-token",
       password: "explicit-password",
       customBindHost: "192.0.2.10",
-      tailscaleResetOnExit: false,
     });
   });
 
@@ -65,7 +106,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       token: "stored-token",
       password: "stored-password",
       customBindHost: "192.0.2.10",
-      tailscaleResetOnExit: true,
     });
   });
 

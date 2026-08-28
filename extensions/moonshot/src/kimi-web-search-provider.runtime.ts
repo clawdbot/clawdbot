@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
-  DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
@@ -17,7 +16,6 @@ import {
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
-  resolveSearchCount,
   resolveSearchTimeoutSeconds,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
@@ -333,11 +331,9 @@ async function runKimiSearch(params: {
     }
   }
 
-  return {
-    content: "Search completed but no final answer was produced.",
-    citations: [...collectedCitations],
-    grounded: hasGroundingEvidence,
-  };
+  throw new Error(
+    "Kimi web search exhausted its tool-call rounds without producing a final answer. Retry the query or choose another search provider.",
+  );
 }
 
 export async function executeKimiWebSearchProviderTool(
@@ -345,6 +341,7 @@ export async function executeKimiWebSearchProviderTool(
   args: Record<string, unknown>,
   opts?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
+  opts?.signal?.throwIfAborted();
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
     "kimi",
@@ -367,23 +364,15 @@ export async function executeKimiWebSearchProviderTool(
   }
 
   const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
+  void readPositiveIntegerParam(args, "count", {
+    max: MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+  });
   const model = resolveKimiModel(kimiConfig);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
-  const cacheKey = buildSearchCacheKey([
-    "kimi",
-    query,
-    resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-    baseUrl,
-    model,
-  ]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, model]);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -397,6 +386,7 @@ export async function executeKimiWebSearchProviderTool(
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
     signal: opts?.signal,
   });
+  opts?.signal?.throwIfAborted();
   if (!result.grounded) {
     return {
       error: "kimi_web_search_ungrounded",
@@ -423,7 +413,7 @@ export async function executeKimiWebSearchProviderTool(
     content: wrapWebContent(result.content),
     citations: result.citations,
   };
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
 

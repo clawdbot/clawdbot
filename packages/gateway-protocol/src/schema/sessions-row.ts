@@ -3,7 +3,18 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
+import {
+  SessionParticipantSchema,
+  SessionParticipantIdentitySchema,
+} from "./session-participant.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
+
+export const SessionPermissionModeSchema = Type.Union([
+  Type.Literal("read-only"),
+  Type.Literal("guarded"),
+  Type.Literal("workspace"),
+  Type.Literal("full"),
+]);
 
 export const SessionToolOverridesSchema = closedObject({
   mcpServers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
@@ -21,6 +32,15 @@ export const SessionCreatedActorSchema = closedObject({
   label: Type.Optional(NonEmptyString),
   /** Durable profile avatar route; absent for actors without a stored profile avatar. */
   avatarUrl: Type.Optional(NonEmptyString),
+  /** Display identity is separate from the actor fields used by ownership policy. */
+  identity: Type.Optional(SessionParticipantIdentitySchema),
+});
+
+/** Mutable responsibility for one session; actor display data is projected at read time. */
+export const SessionOwnerSchema = closedObject({
+  actor: SessionCreatedActorSchema,
+  assignedBy: Type.Optional(SessionCreatedActorSchema),
+  assignedAt: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
 /** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
@@ -36,6 +56,8 @@ export const SessionRowSchema = Type.Object(
       Type.Literal("unknown"),
     ]),
     label: Type.Optional(Type.String()),
+    icon: Type.Optional(Type.String()),
+    channelAvatarUrl: Type.Optional(NonEmptyString),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
@@ -59,10 +81,12 @@ export const SessionRowSchema = Type.Object(
     pinnedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
+    markedUnreadAt: Type.Optional(Type.Number()),
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(
       Type.Union([
+        Type.Literal("queued"),
         Type.Literal("running"),
         Type.Literal("done"),
         Type.Literal("failed"),
@@ -71,6 +95,8 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     lastRunError: Type.Optional(Type.String()),
+    /** Exact run that produced the latest terminal lifecycle projection. */
+    lastRunId: Type.Optional(NonEmptyString),
     restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
@@ -95,6 +121,8 @@ export const SessionRowSchema = Type.Object(
     execCwd: Type.Optional(Type.String()),
     spawnedWorkspaceDir: Type.Optional(Type.String()),
     spawnedCwd: Type.Optional(Type.String()),
+    permissionMode: Type.Optional(SessionPermissionModeSchema),
+    sessionRoot: Type.Optional(Type.String()),
     createdVia: Type.Optional(
       Type.Union([
         Type.Literal("operator"),
@@ -108,6 +136,9 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
+    owner: Type.Optional(SessionOwnerSchema),
+    participants: Type.Optional(Type.Array(SessionParticipantSchema, { maxItems: 4 })),
+    participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     createdAt: Type.Optional(Type.Number()),
@@ -127,12 +158,18 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    /** Persisted override provenance; null means inherited, omission means not projected. */
+    modelOverrideSource: Type.Optional(
+      Type.Union([Type.Literal("user"), Type.Literal("auto"), Type.Null()]),
+    ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
   { additionalProperties: true },
 );
 
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
+export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
+export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
 export type SessionRunStatus = NonNullable<SessionRow["status"]>;

@@ -33,8 +33,7 @@ export function isCriticalObserverHealth(health: unknown): health is "stuck" | "
   return health === "stuck" || health === "waiting-on-user";
 }
 
-/** Local live run id wins; otherwise the row's server-reported active runs
- * identify the run, preferring the one the digest belongs to. */
+/** Local live run id wins; otherwise the observer must still own an exact active run. */
 export function resolveChatPaneObserverRunId(params: {
   localRunId: string | null;
   session: { hasActiveRun?: boolean; activeRunIds?: readonly string[] } | undefined;
@@ -43,13 +42,10 @@ export function resolveChatPaneObserverRunId(params: {
   if (params.localRunId) {
     return params.localRunId;
   }
-  if (!params.session?.hasActiveRun) {
+  if (!params.session?.hasActiveRun || !params.digest?.runId) {
     return null;
   }
-  const activeRunIds = params.session.activeRunIds ?? [];
-  return params.digest?.runId && activeRunIds.includes(params.digest.runId)
-    ? params.digest.runId
-    : (activeRunIds[0] ?? null);
+  return params.session.activeRunIds?.includes(params.digest.runId) ? params.digest.runId : null;
 }
 
 export function pickFreshestObserverDigest<T extends ComparableObserverDigest>(

@@ -25,6 +25,8 @@ import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "./princi
 import type { AgentTurnIo } from "./types.js";
 
 type InternalAgentTurnFacadeOptions = {
+  // Authorization can await; the lifecycle owner must still be current before dispatch.
+  assertContextCurrent?: () => void;
   client: NonNullable<GatewayRequestOptions["client"]>;
   getContext: () => GatewayRequestOptions["context"];
   getMethodRegistry?: () => GatewayMethodRegistry;
@@ -34,6 +36,7 @@ type InternalAgentTurnFacadeOptions = {
 type InternalAgentTurnDispatchOptions = {
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -73,6 +76,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     if (validationError) {
       return { ok: false, error: validationError };
     }
+    options.assertContextCurrent?.();
     let acceptance: GatewayMethodDispatchResponse | undefined;
     let final: GatewayMethodDispatchResponse | undefined;
     let resolveAcceptance: ((response: GatewayMethodDispatchResponse) => void) | undefined;
@@ -88,9 +92,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
       new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
         resolveFinal = resolve;
         rejectFinal = reject;
-        if (postAcceptanceError) {
-          reject(postAcceptanceError);
-        } else if (final) {
+        if (final) {
           resolve(final);
         }
       });
@@ -104,6 +106,15 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
             ...(meta ? { meta } : {}),
           };
           resolveAcceptance?.(acceptance);
+          const acceptedRunId =
+            typeof meta?.runId === "string" && meta.runId.trim() ? meta.runId.trim() : undefined;
+          if (
+            meta?.cached === true &&
+            acceptedRunId &&
+            context.chatAbortControllers.get(acceptedRunId)?.executionStarted === true
+          ) {
+            dispatchOptions.onExecutionStarted?.();
+          }
         }
       },
       emitFinal: (frame, meta) => {
@@ -117,6 +128,9 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
           resolveFinal?.(final);
         }
       },
+      ...(dispatchOptions.onExecutionStarted
+        ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
+        : {}),
     };
     const operation = runWithGatewayRequestEnvelope(
       method,
@@ -136,12 +150,10 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
           principal,
           registerToolEventRecipient: context.registerToolEventRecipient,
         });
-        await createAgentTurnService({ context, isWebchatConnect }).startTurn({
-          preflight,
-          principal,
-          io,
-          onRunObserved,
-        });
+        await createAgentTurnService(
+          { context, isWebchatConnect },
+          options.assertContextCurrent,
+        ).startTurn({ preflight, principal, io, onRunObserved });
       },
       {
         context,
@@ -225,6 +237,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     if (validationError) {
       return throwEnvelopeRejection(method, validationError);
     }
+    options.assertContextCurrent?.();
     const result = runWithGatewayRequestEnvelope(
       method,
       options.client,

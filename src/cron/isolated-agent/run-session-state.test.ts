@@ -19,6 +19,7 @@ import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
+  markCronSessionPreRun,
   resolveCronLifecycleRevisionIdentity,
   syncCronSessionLiveSelection,
   type MutableCronSession,
@@ -66,7 +67,69 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
   );
 }
 
+describe("markCronSessionPreRun", () => {
+  it("clears model-derived state when the selected model changes", () => {
+    const entry = makeSessionEntry({
+      modelProvider: "openai",
+      model: "gpt-5.3",
+      contextTokens: 272_000,
+      contextTokensSource: "runtime",
+      contextBudgetStatus: {} as NonNullable<SessionEntry["contextBudgetStatus"]>,
+    });
+
+    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+
+    expect(entry.modelProvider).toBe("openai");
+    expect(entry.model).toBe("gpt-5.4");
+    expect(entry.contextTokens).toBeUndefined();
+    expect(entry.contextTokensSource).toBeUndefined();
+    expect(entry.contextBudgetStatus).toBeUndefined();
+  });
+
+  it("preserves model-derived state when the selected model is unchanged", () => {
+    const contextBudgetStatus = {} as NonNullable<SessionEntry["contextBudgetStatus"]>;
+    const entry = makeSessionEntry({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 272_000,
+      contextTokensSource: "runtime",
+      contextBudgetStatus,
+    });
+
+    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+
+    expect(entry.contextTokens).toBe(272_000);
+    expect(entry.contextTokensSource).toBe("runtime");
+    expect(entry.contextBudgetStatus).toBe(contextBudgetStatus);
+  });
+});
+
 describe("syncCronSessionLiveSelection", () => {
+  it("clears model-derived state when only the agent runtime changes", () => {
+    const entry = makeSessionEntry({
+      modelProvider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntimeOverride: "openclaw",
+      contextTokens: 272_000,
+      contextTokensSource: "runtime",
+      contextBudgetStatus: {} as NonNullable<SessionEntry["contextBudgetStatus"]>,
+    });
+
+    syncCronSessionLiveSelection({
+      entry,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntimeOverride: "codex",
+      },
+    });
+
+    expect(entry.agentRuntimeOverride).toBe("codex");
+    expect(entry.contextTokens).toBeUndefined();
+    expect(entry.contextTokensSource).toBeUndefined();
+    expect(entry.contextBudgetStatus).toBeUndefined();
+  });
+
   it("stamps a source-less live profile as a user pin", () => {
     const entry = makeSessionEntry({
       compactionCount: 4,
@@ -205,14 +268,22 @@ describe("createPersistCronSessionEntry", () => {
     const continuation = createCronRunContinuationSession({
       cronSession,
       runSessionKey,
+      createdActor: { type: "human", id: "profile-ada" },
       thinkingLevel: "high",
-      toolsAllow: ["image_generate", "write"],
+      toolsAllow: ["image_generate", "exec", "write"],
       toolsAllowIsDefault: true,
       scheduledToolPolicy: {
         version: 1,
         mode: "account",
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "work",
+      },
+      scheduledToolCallerOrigin: { kind: "local" },
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+      toolsAllowExecTargetRequirement: {
+        version: 1,
+        target: { version: 1, host: "gateway", ask: "always" },
+        grantIndex: 1,
       },
       persistSessionEntry,
     });
@@ -226,9 +297,28 @@ describe("createPersistCronSessionEntry", () => {
     });
     expect(store[runSessionKey]?.previousSessionId).toBeUndefined();
     expect(store[runSessionKey]?.forkSource).toBeUndefined();
+    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTarget).toEqual({
+      version: 1,
+      host: "gateway",
+      ask: "always",
+    });
+    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTargetRequirement).toEqual({
+      version: 1,
+      target: { version: 1, host: "gateway", ask: "always" },
+      grantIndex: 1,
+    });
+    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
+    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolCallerOrigin).toEqual({
+      kind: "local",
+    });
     expect(store[runSessionKey]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
       sessionId: "run-session-id",
       modelProvider: "claude-cli",
@@ -239,12 +329,6 @@ describe("createPersistCronSessionEntry", () => {
         phase: "running",
         toolsAllow: ["image_generate", "write"],
         toolsAllowIsDefault: true,
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "work",
-        },
       },
     });
 
@@ -301,6 +385,31 @@ describe("createPersistCronSessionEntry", () => {
     );
   });
 
+  it("retains the required base creator when a continuation is created after job ownership changes", async () => {
+    const creator = { type: "human", id: "profile-original-creator" } as const;
+    const lifecycleRevision = crypto.randomUUID();
+    const cronSession = makeCronSession(
+      makeSessionEntry({
+        createdVia: "cron",
+        createdActor: creator,
+        sandbox: "required",
+        lifecycleRevision,
+      }),
+    );
+    cronSession.lifecycleRevision = lifecycleRevision;
+    const runSessionKey = "agent:main:cron:job:run:required";
+    const store: Record<string, SessionEntry> = {};
+    const continuation = createCronRunContinuationSession({
+      cronSession,
+      runSessionKey,
+      createdActor: { type: "human", id: "profile-current-job-owner" },
+      persistSessionEntry: makeGuardedPersistSessionEntry(store),
+    });
+    await continuation.initialize();
+    await continuation.sync();
+    expect(store[runSessionKey]).toMatchObject({ createdActor: creator, sandbox: "required" });
+  });
+
   it("persists isolated cron state only under the stable cron session key", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({
@@ -318,6 +427,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:job",
+      createdActor: { type: "human", id: "profile-ada" },
       persistSessionEntry,
     });
 
@@ -325,12 +435,12 @@ describe("createPersistCronSessionEntry", () => {
 
     expect(cronSession.store["agent:main:cron:job"]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
     expect(persistedStore["agent:main:cron:job"]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
     expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();

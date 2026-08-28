@@ -4,12 +4,14 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
+  PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,
@@ -29,8 +31,10 @@ const updateScreenshots = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/plugins");
 const desktopViewport = { height: 1000, width: 1440 };
 const mobileViewport = { height: 852, width: 393 };
+const restartWarningPattern = /restarts the Gateway immediately[\s\S]*interrupts active sessions/u;
 const pluginMethods = [
   "plugins.list",
+  "plugins.inspect",
   "plugins.search",
   "plugins.install",
   "plugins.setEnabled",
@@ -72,6 +76,17 @@ const lobsterPlugin = {
   featured: true,
   order: 50,
   install: { source: "clawhub", packageName: "@openclaw/lobster" },
+} satisfies PluginCatalogItem;
+
+const installedLobsterPlugin = {
+  ...lobsterPlugin,
+  packageName: "@openclaw/lobster",
+  version: "2026.8.10",
+  origin: "global",
+  installed: true,
+  enabled: true,
+  state: "enabled",
+  removable: true,
 } satisfies PluginCatalogItem;
 
 const remoteIconPlugin = {
@@ -138,6 +153,22 @@ const calendarSearchResponse = {
   ],
 } satisfies PluginsSearchResult;
 
+const lobsterSearchResponse = {
+  results: [
+    {
+      score: 1,
+      package: {
+        name: "@openclaw/lobster",
+        displayName: "Lobster",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        runtimeId: "lobster",
+      },
+    },
+  ],
+} satisfies PluginsSearchResult;
+
 const uninstallResult = {
   ok: true,
   pluginId: "calendar-plus",
@@ -151,11 +182,94 @@ const installResult = {
   restartRequired: true,
 } satisfies PluginMutationResult;
 
+const installPolicyWarning = {
+  installPolicyCode: "install_policy_warning_acknowledgement_required",
+  targetName: "@openclaw/lobster",
+  targetType: "plugin",
+  requestMode: "install",
+  reason: "ClawScan found issues to review.",
+  findings: [
+    {
+      ruleId: "semgrep-finding",
+      severity: "warn",
+      message: "Semgrep found a risky command.",
+      file: "index.ts",
+      line: 12,
+    },
+  ],
+};
+
+const changedInstallPolicyWarning = {
+  ...installPolicyWarning,
+  reason: "ClawScan returned a changed warning after the fresh check.",
+  findings: [
+    {
+      ruleId: "dependency-finding",
+      severity: "critical",
+      message: "The freshly checked warning changed and requires review.",
+      file: "package-lock.json",
+      line: 24,
+    },
+  ],
+};
+
 const enableWorkboardResult = {
   ok: true,
   plugin: workboardEnabled,
   restartRequired: false,
 } satisfies PluginMutationResult;
+
+const workboardInspection = {
+  ok: true,
+  reviewToken: "a".repeat(64),
+  plugin: {
+    id: workboardDisabled.id,
+    name: workboardDisabled.name,
+    origin: workboardDisabled.origin,
+    installed: true,
+    enabled: false,
+  },
+  source: { kind: "npm", packageName: workboardDisabled.packageName },
+  declared: {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+  },
+  grants: {
+    hooks: {
+      allowPromptInjection: { effective: true },
+      allowConversationAccess: { effective: true },
+    },
+  },
+} satisfies PluginsInspectResult;
+
+const lobsterInspection = {
+  ...workboardInspection,
+  reviewToken: "b".repeat(64),
+  plugin: {
+    id: lobsterPlugin.id,
+    name: lobsterPlugin.name,
+    origin: lobsterPlugin.origin,
+    installed: false,
+    enabled: false,
+  },
+  source: { kind: "npm", packageName: "@openclaw/lobster" },
+} satisfies PluginsInspectResult;
+
+const calendarInspection = {
+  ...workboardInspection,
+  reviewToken: "c".repeat(64),
+  plugin: { ...calendarPlugin, installed: false, enabled: false },
+  source: { kind: "clawhub", packageName: "calendar-plus" },
+  declared: { ...workboardInspection.declared, tools: ["calendar_create"] },
+} satisfies PluginsInspectResult;
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -207,6 +321,27 @@ function readOnlyConnectResponse() {
   };
 }
 
+function enabledWorkboardConnectResponse() {
+  return {
+    ...readOnlyConnectResponse(),
+    auth: {
+      deviceToken: "plugins-workboard-device-token",
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    },
+    controlUiTabs: [
+      {
+        group: "control",
+        icon: "kanban",
+        id: "workboard",
+        label: "Workboard",
+        placement: "route:workboard",
+        pluginId: "workboard",
+      },
+    ],
+  };
+}
+
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
@@ -238,6 +373,12 @@ async function clickRowAction(page: Page, rowSelector: string, buttonName: strin
   await page.locator(rowSelector).getByRole("button", { name: buttonName, exact: true }).click();
 }
 
+async function confirmPluginLifecycle(page: Page, action: "Install" | "Remove"): Promise<void> {
+  const dialog = page.locator("openclaw-modal-dialog");
+  await dialog.waitFor({ state: "visible" });
+  await dialog.getByRole("button", { name: action, exact: true }).click();
+}
+
 async function captureScreenshot(page: Page, name: string): Promise<void> {
   if (!updateScreenshots) {
     return;
@@ -262,6 +403,13 @@ function pluginMethodResponses() {
   return {
     "config.get": configSnapshot(false),
     "plugins.list": initialInventory,
+    "plugins.inspect": {
+      cases: [
+        { match: { pluginId: "workboard" }, response: workboardInspection },
+        { match: { pluginId: "lobster" }, response: lobsterInspection },
+        { match: { pluginId: "calendar-plus" }, response: calendarInspection },
+      ],
+    },
     "plugins.search": {
       cases: [
         {
@@ -276,8 +424,7 @@ function pluginMethodResponses() {
           match: {
             source: "clawhub",
             packageName: "calendar-plus",
-            version: "1.2.3",
-            acknowledgeClawHubRisk: true,
+            acknowledgeCapabilities: { reviewToken: calendarInspection.reviewToken },
           },
           response: installResult,
         },
@@ -452,45 +599,56 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await captureScreenshot(page, "04-search-desktop.png");
 
       await gateway.deferNext("plugins.install");
+      const installCountBeforeConfirmation = (await gateway.getRequests("plugins.install")).length;
       await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
+      const installRestartConfirm = page.locator("openclaw-modal-dialog");
+      await installRestartConfirm.waitFor({ state: "visible" });
+      expect(await installRestartConfirm.textContent()).toMatch(restartWarningPattern);
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(
+        installCountBeforeConfirmation,
+      );
+      await installRestartConfirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      await installRestartConfirm.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(
+        installCountBeforeConfirmation,
+      );
+      await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
+      await installRestartConfirm.waitFor({ state: "visible" });
+      await installRestartConfirm.getByRole("button", { name: "Install", exact: true }).click();
       const firstInstallRequest = await gateway.waitForRequest("plugins.install");
+      expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
       expect(requestParams(firstInstallRequest)).toEqual({
         source: "clawhub",
         packageName: "calendar-plus",
       });
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",
-        message: "ClawHub requires acknowledgement before installing this release.",
-        details: {
-          clawhubTrustCode: "clawhub_risk_acknowledgement_required",
-          version: "1.2.3",
-          warning: "REVIEW REQUIRED - ClawHub found behavior that needs operator review.",
-        },
+        message: "Capability consent required",
+        details: buildCapabilityConsentErrorDetails({
+          pluginId: "calendar-plus",
+          reviewToken: calendarInspection.reviewToken,
+        }),
       });
-
-      const acknowledgeButton = searchRow.getByRole("button", {
-        name: "Acknowledge risk and install",
-      });
-      await acknowledgeButton.waitFor({ state: "visible" });
-      expect(await searchRow.getByRole("alert").textContent()).toContain("REVIEW REQUIRED");
-
+      const consent = page.locator('[data-plugin-consent="install"]');
+      await consent.getByText("calendar_create", { exact: true }).waitFor();
+      await captureScreenshot(page, "artifact-consent-desktop.png");
       const listCountBeforeInstall = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeInstall = (await gateway.getRequests("config.get")).length;
-      const installCountBeforeRetry = (await gateway.getRequests("plugins.install")).length;
       await gateway.deferNext("plugins.list");
       await gateway.deferNext("config.get");
-      await acknowledgeButton.click();
-
-      const retryInstallRequest = await waitForNextRequest(
-        gateway,
-        "plugins.install",
-        installCountBeforeRetry,
-      );
-      expect(requestParams(retryInstallRequest)).toEqual({
+      await gateway.setMethodResponse("plugins.install", installResult);
+      const installCountBeforeConsent = (await gateway.getRequests("plugins.install")).length;
+      const confirm = consent.getByRole("button", { name: "Install Calendar Plus", exact: true });
+      await expect.poll(() => confirm.isEnabled()).toBe(true);
+      await confirm.click();
+      expect(
+        requestParams(
+          await waitForNextRequest(gateway, "plugins.install", installCountBeforeConsent),
+        ),
+      ).toEqual({
         source: "clawhub",
         packageName: "calendar-plus",
-        version: "1.2.3",
-        acknowledgeClawHubRisk: true,
+        acknowledgeCapabilities: { reviewToken: calendarInspection.reviewToken },
       });
       // The mutation boundary refreshes config before the page refreshes the
       // plugin catalog; release the deferred requests in that contract order.
@@ -543,6 +701,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(postEnableConfigRequest)).toEqual({});
       await gateway.setMethodResponse("plugins.list", finalInventory);
       await gateway.setMethodResponse("config.get", configSnapshot(true));
+      await gateway.setMethodResponse("connect", enabledWorkboardConnectResponse());
       await gateway.resolveDeferred("config.get", configSnapshot(true));
       const postEnableListRequest = await waitForNextRequest(
         gateway,
@@ -561,16 +720,25 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await calendarRow.waitFor({ state: "visible" });
       await captureScreenshot(page, "05-enabled-installed-desktop.png");
 
-      // Removable installs expose a confirm-guarded uninstall behind the trash button.
-      await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
+      // Removable installs disclose the restart before the uninstall request.
       const uninstallCountBefore = (await gateway.getRequests("plugins.uninstall")).length;
+      await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
+      const uninstallRestartConfirm = page.locator("openclaw-modal-dialog");
+      await uninstallRestartConfirm.waitFor({ state: "visible" });
+      expect(await uninstallRestartConfirm.textContent()).toMatch(restartWarningPattern);
+      expect(await gateway.getRequests("plugins.uninstall")).toHaveLength(uninstallCountBefore);
+      await uninstallRestartConfirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      await uninstallRestartConfirm.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("plugins.uninstall")).toHaveLength(uninstallCountBefore);
+      await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
+      await uninstallRestartConfirm.waitFor({ state: "visible" });
       const listCountBeforeRemove = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeRemove = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("plugins.list");
       // Keep the authoritative config refresh on the workboard-enabled snapshot
       // so the conditional sidebar route assertion below stays meaningful.
       await gateway.deferNext("config.get");
-      await calendarRow.getByRole("button", { name: "Remove", exact: true }).click();
+      await uninstallRestartConfirm.getByRole("button", { name: "Remove", exact: true }).click();
       const uninstallRequest = await waitForNextRequest(
         gateway,
         "plugins.uninstall",
@@ -596,6 +764,43 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         "Removed calendar-plus",
       );
 
+      await gateway.setMethodResponse("plugins.list", uninstalledInventory);
+      await page.getByRole("tab", { name: /^Discover/u }).click();
+      const searchCountBeforeReinstall = (await gateway.getRequests("plugins.search")).length;
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
+      await waitForNextRequest(gateway, "plugins.search", searchCountBeforeReinstall);
+      const reinstallRow = page.locator(
+        '[data-package-name="calendar-plus"][data-plugin-status="not-installed"]',
+      );
+      await reinstallRow.waitFor({ state: "visible" });
+      await gateway.setMethodResponse("plugins.install", installResult);
+      await gateway.setMethodResponse("plugins.list", finalInventory);
+      const installCountBeforeReinstall = (await gateway.getRequests("plugins.install")).length;
+      await reinstallRow
+        .getByRole("button", { name: "Install Calendar Plus", exact: true })
+        .click();
+      await confirmPluginLifecycle(page, "Install");
+      const reinstallRequest = await waitForNextRequest(
+        gateway,
+        "plugins.install",
+        installCountBeforeReinstall,
+      );
+      expect(requestParams(reinstallRequest)).toEqual({
+        source: "clawhub",
+        packageName: "calendar-plus",
+      });
+      const reinstalledRow = page.locator(
+        '[data-package-name="calendar-plus"][data-plugin-status="enabled"]',
+      );
+      await reinstalledRow.waitFor({ state: "attached" });
+      await captureScreenshot(page, "11-reinstalled-feedback-desktop.png");
+      expect(await page.locator(".plugins-page-notice").count()).toBe(0);
+      expect(await reinstalledRow.getByRole("status").textContent()).toContain(
+        "Installed Calendar Plus",
+      );
+
+      await page.getByRole("tab", { name: /^Installed/u }).click();
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("");
       await page.setViewportSize(mobileViewport);
       await expect
         .poll(() =>
@@ -622,7 +827,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.waitFor({ state: "visible" });
       const workboardSidebarItem = sidebar.locator(
-        '.sidebar-zone-entry[data-sidebar-entry="route:workboard"] > .nav-item',
+        '.sidebar-zone-entry[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
       );
       await workboardSidebarItem.waitFor({ state: "visible" });
       expect(await workboardSidebarItem.getAttribute("href")).toBe("/workboard");
@@ -634,6 +839,155 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           path: path.join(artifactDir, "07-workboard-sidebar.png"),
         });
       }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reviews an install policy warning before sending an acknowledged retry", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.search": lobsterSearchResponse,
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}settings/plugins`);
+      await page.getByRole("tab", { name: /^Discover/u }).click();
+      const row = page.locator('[data-plugin-id="lobster"]');
+      await row.waitFor({ state: "visible" });
+
+      await gateway.deferNext("plugins.install");
+      await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      await confirmPluginLifecycle(page, "Install");
+      expect(requestParams(await gateway.waitForRequest("plugins.install"))).toEqual({
+        source: "clawhub",
+        packageName: "@openclaw/lobster",
+      });
+      await gateway.rejectDeferred("plugins.install", {
+        code: "INVALID_REQUEST",
+        message: "raw terminal install-policy output",
+        details: installPolicyWarning,
+      });
+
+      const review = row.getByRole("alert");
+      await review.waitFor({ state: "visible" });
+      expect(await review.textContent()).toContain("Security review needed");
+      await review
+        .getByText("ClawScan found issues to review.", { exact: true })
+        .waitFor({ state: "visible" });
+      expect(await review.textContent()).toContain("Policy warnings: 1");
+      expect(await review.textContent()).toContain("Not installed");
+      expect(await review.textContent()).toContain(
+        "Install anyway approves every install-policy warning encountered during this install",
+      );
+      expect(await review.textContent()).toContain("Warning");
+      expect(await review.textContent()).toContain("Semgrep found a risky command.");
+      expect(await review.textContent()).not.toContain("raw terminal install-policy output");
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("lobster");
+      await gateway.waitForRequest("plugins.search");
+      const searchRow = page.locator('[data-package-name="@openclaw/lobster"]');
+      const searchReview = searchRow.getByRole("alert");
+      await searchReview.waitFor({ state: "visible" });
+      expect(
+        await searchRow.getByRole("button", { name: "Install Lobster", exact: true }).count(),
+      ).toBe(0);
+      await captureScreenshot(page, "09-policy-review-desktop.png");
+
+      await page.setViewportSize(mobileViewport);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) -
+              window.innerWidth,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+      await review.waitFor({ state: "visible" });
+      await captureScreenshot(page, "09-policy-review-mobile.png");
+
+      const installCountBeforeCancel = (await gateway.getRequests("plugins.install")).length;
+      await searchReview.getByRole("button", { name: "Cancel", exact: true }).click();
+      await review.waitFor({ state: "detached" });
+      await searchReview.waitFor({ state: "detached" });
+      expect((await gateway.getRequests("plugins.install")).length).toBe(installCountBeforeCancel);
+      await page.setViewportSize(desktopViewport);
+
+      const installCountBeforeSecondAttempt = (await gateway.getRequests("plugins.install")).length;
+      await gateway.deferNext("plugins.install");
+      await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      await confirmPluginLifecycle(page, "Install");
+      await waitForNextRequest(gateway, "plugins.install", installCountBeforeSecondAttempt);
+      await gateway.rejectDeferred("plugins.install", {
+        code: "INVALID_REQUEST",
+        message: "raw terminal install-policy output",
+        details: installPolicyWarning,
+      });
+      await review.waitFor({ state: "visible" });
+
+      const installCountBeforeRetry = (await gateway.getRequests("plugins.install")).length;
+      await gateway.deferNext("plugins.install");
+      await searchReview.getByRole("button", { name: "Install anyway", exact: true }).click();
+      const retry = await waitForNextRequest(gateway, "plugins.install", installCountBeforeRetry);
+      expect(requestParams(retry)).toEqual({
+        source: "clawhub",
+        packageName: "@openclaw/lobster",
+        acknowledgeInstallPolicyWarning: true,
+      });
+      const pendingRetry = review.getByRole("button", { name: "Installing…", exact: true });
+      await pendingRetry.waitFor({ state: "visible" });
+      expect(await pendingRetry.isDisabled()).toBe(true);
+      expect(await review.textContent()).toContain("Semgrep found a risky command.");
+      await gateway.rejectDeferred("plugins.install", {
+        code: "INVALID_REQUEST",
+        message: "raw dependency policy output",
+        details: changedInstallPolicyWarning,
+      });
+
+      await review.waitFor({ state: "visible" });
+      expect(await review.textContent()).toContain("Critical");
+      expect(await review.textContent()).toContain(
+        "The freshly checked warning changed and requires review.",
+      );
+      expect(await review.textContent()).not.toContain("raw dependency policy output");
+      await captureScreenshot(page, "10-dependency-policy-review-desktop.png");
+
+      const installCountBeforeSecondRetry = (await gateway.getRequests("plugins.install")).length;
+      await gateway.deferNext("plugins.install");
+      await review.getByRole("button", { name: "Install anyway", exact: true }).click();
+      const secondRetry = await waitForNextRequest(
+        gateway,
+        "plugins.install",
+        installCountBeforeSecondRetry,
+      );
+      expect(requestParams(secondRetry)).toEqual({
+        source: "clawhub",
+        packageName: "@openclaw/lobster",
+        acknowledgeInstallPolicyWarning: true,
+      });
+
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([workboardDisabled, installedLobsterPlugin, remoteIconPlugin]),
+      );
+      await gateway.resolveDeferred("plugins.install", {
+        ok: true,
+        plugin: installedLobsterPlugin,
+        restartRequired: true,
+      } satisfies PluginMutationResult);
+      await page
+        .locator('[data-plugin-id="lobster"][data-plugin-status="enabled"]')
+        .waitFor({ state: "visible" });
+      await review.waitFor({ state: "detached" });
+      await searchReview.waitFor({ state: "detached" });
+      expect(await page.getByRole("button", { name: "Install anyway", exact: true }).count()).toBe(
+        0,
+      );
     } finally {
       await context.close();
     }

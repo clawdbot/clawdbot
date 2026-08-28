@@ -436,35 +436,51 @@ describe("setupSkills", () => {
     );
   });
 
-  it("uses the requested node manager for selected node-backed installs", async () => {
-    mockMissingBrewStatus([
-      createBundledSkill({
-        name: "node-helper",
-        description: "Node helper",
-        bins: ["node-helper"],
-        installLabel: "Install node-helper",
-        installKind: "node",
-      }),
-    ]);
+  it.each([
+    [undefined, undefined, "npm"],
+    ["npm", undefined, "npm"],
+    ["pnpm", undefined, "pnpm"],
+    ["bun", undefined, "bun"],
+    ["yarn", undefined, "yarn"],
+    ["yarn", "npm", "npm"],
+    ["bun", "pnpm", "pnpm"],
+    ["pnpm", "bun", "bun"],
+  ] as const)(
+    "installs with saved %s and requested %s using %s",
+    async (saved, requested, expected) => {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "node-helper",
+          description: "Node helper",
+          bins: ["node-helper"],
+          installLabel: "Install node-helper",
+          installKind: "node",
+        }),
+      ]);
 
-    const { prompter } = createPrompter({ multiselect: ["node-helper"] });
-    const next = await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter, {
-      nodeManager: "pnpm",
-    });
+      const { prompter } = createPrompter({ multiselect: ["node-helper"] });
+      const next = await setupSkills(
+        { skills: { install: { nodeManager: saved } } },
+        "/tmp/ws",
+        runtime,
+        prompter,
+        { nodeManager: requested },
+      );
 
-    expect(next.skills?.install?.nodeManager).toBe("pnpm");
-    expect(mocks.installSkill).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skillName: "node-helper",
-        installId: "node",
-        config: expect.objectContaining({
-          skills: expect.objectContaining({
-            install: expect.objectContaining({ nodeManager: "pnpm" }),
+      expect(next.skills?.install?.nodeManager).toBe(expected);
+      expect(mocks.installSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skillName: "node-helper",
+          installId: "node",
+          config: expect.objectContaining({
+            skills: expect.objectContaining({
+              install: expect.objectContaining({ nodeManager: expected }),
+            }),
           }),
         }),
-      }),
-    );
-  });
+      );
+    },
+  );
 
   it("does not show Homebrew guidance when a missing brew dependency is not selected", async () => {
     if (!supportsHomebrewPrompt) {

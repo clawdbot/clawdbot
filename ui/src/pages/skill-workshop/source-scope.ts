@@ -10,7 +10,6 @@ export type SkillWorkshopSourceScope = {
   gateway: SkillWorkshopPageContext["gateway"];
   agentSelection: SkillWorkshopPageContext["agentSelection"];
   sessions: SkillWorkshopPageContext["sessions"];
-  revision: SkillWorkshopPageContext["skillWorkshopRevision"];
   navigate: SkillWorkshopPageContext["navigate"];
 };
 
@@ -28,7 +27,6 @@ export function captureSkillWorkshopSourceScope(params: {
         gateway: context.gateway,
         agentSelection: context.agentSelection,
         sessions: context.sessions,
-        revision: context.skillWorkshopRevision,
         navigate: context.navigate,
       }
     : null;
@@ -50,7 +48,6 @@ export function isCurrentSkillWorkshopSourceScope(
     context?.gateway === scope.gateway &&
     context.agentSelection === scope.agentSelection &&
     context.sessions === scope.sessions &&
-    context.skillWorkshopRevision === scope.revision &&
     context.navigate === scope.navigate
   );
 }

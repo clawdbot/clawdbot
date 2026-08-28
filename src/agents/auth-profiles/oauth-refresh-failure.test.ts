@@ -17,6 +17,22 @@ import {
 } from "./oauth-refresh-failure.js";
 
 describe("buildAuthProfileUnusableHint", () => {
+  it.each(["auth", "auth_permanent"] as const)(
+    "gives re-authentication guidance for canonical %s cooldowns",
+    (reason) => {
+      expect(
+        buildAuthProfileUnusableHint({
+          kind: "cooldown",
+          reason,
+          provider: "openai",
+          profileId: "openai:default",
+        }),
+      ).toContain(
+        "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:default'`.",
+      );
+    },
+  );
+
   it("keeps Claude subscription and Anthropic API-key recovery distinct", () => {
     expect(
       buildAuthProfileUnusableHint({
@@ -131,6 +147,34 @@ describe("oauth refresh failure hints", () => {
       ),
     ).toEqual({
       provider: "openai",
+      reason: "token_invalidated",
+    });
+  });
+
+  it("classifies provider requests to log in again", () => {
+    expect(
+      classifyOAuthRefreshFailure(
+        "OAuth token refresh failed for openai: Your session ended. Please log in again.",
+      ),
+    ).toEqual({
+      provider: "openai",
+      reason: "sign_in_again",
+    });
+  });
+
+  it("classifies refresh failures preserved in failover raw error metadata", () => {
+    expect(
+      classifyOAuthRefreshFailureError(
+        new FailoverError("Authentication refresh failed", {
+          reason: "auth_permanent",
+          provider: "openai",
+          profileId: "openai:work",
+          rawError: "OAuth token refresh failed for openai: refresh_token_invalidated",
+        }),
+      ),
+    ).toEqual({
+      provider: "openai",
+      profileId: "openai:work",
       reason: "token_invalidated",
     });
   });

@@ -207,6 +207,7 @@ function normalizedEvidence(options: {
   validationInputs?: Record<string, string> | null;
   verifierSha?: string | null;
   workflowRef?: string;
+  trustedWorkflowRef?: string;
 }): NormalizedEvidence {
   const runId = options.runId ?? "111";
   const producerSha = options.producerSha ?? PRODUCER_SHA;
@@ -215,6 +216,11 @@ function normalizedEvidence(options: {
   const workflowRef = options.workflowRef ?? "main";
   const workflowFullRef = `refs/heads/${workflowRef}`;
   const shaPinned = workflowRef.startsWith("release-ci/");
+  const trustedWorkflowRef = options.trustedWorkflowRef ?? "main";
+  const protectedTagRoute = trustedWorkflowRef.startsWith("release-publish/");
+  const trustedWorkflowFullRef = protectedTagRoute
+    ? `refs/tags/${trustedWorkflowRef}`
+    : "refs/heads/main";
   const validationInputs =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
   const npmTelegramRequired =
@@ -222,7 +228,7 @@ function normalizedEvidence(options: {
     (validationInputs.npmTelegramPackageSpec.length > 0 ||
       validationInputs.releasePackageSpec.length > 0);
   const manifest = {
-    version: shaPinned ? 3 : 2,
+    version: 4,
     workflowName: "Full Release Validation",
     workflowRef,
     workflowSha: producerSha,
@@ -244,8 +250,10 @@ function normalizedEvidence(options: {
     childRuns: {
       normalCi: "201",
       npmTelegram: npmTelegramRequired ? "205" : "",
-      pluginPrerelease: "202",
-      releaseChecks: "203",
+      pluginPrereleaseIndependent: "202",
+      pluginPrereleaseCandidate: "206",
+      releaseChecksIndependent: "203",
+      releaseChecksCandidate: "207",
       productPerformance: {
         blocking: true,
         conclusion: "success",
@@ -263,20 +271,22 @@ function normalizedEvidence(options: {
     },
     conclusion: "success",
     manifest,
-    manifestVersion: shaPinned ? 3 : 2,
+    manifestVersion: 4,
     runAttempt: 2,
     runId,
     status: "completed",
     targetSha: options.targetSha,
     url: `https://example.test/runs/${runId}`,
-    producerOnTrustedMainLineage: true,
+    producerOnTrustedMainLineage: !protectedTagRoute,
     workflowFullRef,
     workflowPath: ".github/workflows/full-release-validation.yml",
     workflowQualifiedPath: `.github/workflows/full-release-validation.yml@${workflowFullRef}`,
     workflowRef,
-    workflowRefProof: shaPinned
-      ? "manifest-v3-sha-pinned-main-ancestry"
-      : "legacy-v2-main-ancestry",
+    workflowRefProof: protectedTagRoute
+      ? "manifest-v3-protected-tag-exact-sha"
+      : shaPinned
+        ? "manifest-v3-sha-pinned-main-ancestry"
+        : "manifest-v3-branch",
     workflowRefType: "branch",
     workflowRunPath: shaPinned
       ? `.github/workflows/full-release-validation.yml@${workflowFullRef}`
@@ -286,22 +296,40 @@ function normalizedEvidence(options: {
   const roles = [
     ["normalCi", "201", 1, 1, "CI", "ci.yml", "-ci"],
     [
-      "pluginPrerelease",
+      "pluginPrereleaseIndependent",
       "202",
       2,
       1,
       "Plugin Prerelease",
       "plugin-prerelease.yml",
-      "-plugin-prerelease",
+      "-plugin-prerelease-independent",
     ],
     [
-      "releaseChecks",
+      "pluginPrereleaseCandidate",
+      "206",
+      1,
+      2,
+      "Plugin Prerelease",
+      "plugin-prerelease.yml",
+      "-plugin-prerelease-candidate",
+    ],
+    [
+      "releaseChecksIndependent",
       "203",
+      1,
+      1,
+      "OpenClaw Release Checks",
+      "openclaw-release-checks.yml",
+      "-release-checks-independent",
+    ],
+    [
+      "releaseChecksCandidate",
+      "207",
       1,
       2,
       "OpenClaw Release Checks",
       "openclaw-release-checks.yml",
-      "-release-checks",
+      "-release-checks-candidate",
     ],
     ...(npmTelegramRequired
       ? ([
@@ -361,10 +389,10 @@ function normalizedEvidence(options: {
     rerunGroup: "all",
     root,
     runReleaseSoak: soak,
-    schema: "openclaw.release-validation-evidence/v3",
-    producerOnTrustedMainLineage: true,
-    trustedWorkflowFullRef: "refs/heads/main",
-    trustedWorkflowRef: "main",
+    schema: "openclaw.release-validation-evidence/v4",
+    producerOnTrustedMainLineage: !protectedTagRoute,
+    trustedWorkflowFullRef,
+    trustedWorkflowRef,
     valid: true,
     validationInputs,
     verifier: {
@@ -404,16 +432,22 @@ import { join } from "node:path";
 const runIndex = process.argv.indexOf("--validate-run");
 const repoIndex = process.argv.indexOf("--repo");
 const trustedRefIndex = process.argv.indexOf("--trusted-workflow-ref");
+const trustedFullRefIndex = process.argv.indexOf("--trusted-workflow-full-ref");
+const trustedShaIndex = process.argv.indexOf("--trusted-workflow-sha");
 const verifierShaIndex = process.argv.indexOf("--verifier-source-sha");
 const verifierFileIndex = process.argv.indexOf("--verifier-source-file");
 if (
   runIndex < 0 ||
   repoIndex < 0 ||
   trustedRefIndex < 0 ||
+  trustedFullRefIndex < 0 ||
+  trustedShaIndex < 0 ||
   verifierShaIndex < 0 ||
   verifierFileIndex < 0 ||
   process.argv[repoIndex + 1] !== "openclaw/openclaw" ||
-  process.argv[trustedRefIndex + 1] !== "main" ||
+  process.argv[trustedRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_REF ||
+  process.argv[trustedFullRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_FULL_REF ||
+  process.argv[trustedShaIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_SHA ||
   process.argv[verifierShaIndex + 1] !== process.env.FAKE_VERIFIER_SHA ||
   process.argv[verifierFileIndex + 1] !== process.argv[1] ||
   !process.argv.includes("--json")
@@ -481,12 +515,22 @@ function runResolver(args: {
   repoDir: string;
   runReleaseSoak?: string;
   targetSha: string;
+  trustedTagSha?: string;
+  trustedTagType?: string;
+  trustedWorkflowFullRef?: string;
+  trustedWorkflowRef?: string;
+  trustedWorkflowSha?: string;
   validatorPath: string;
   verifierOnMain?: boolean;
   verifierSha?: string;
   workflowRef?: string;
 }) {
   const verifierSha = args.verifierSha ?? VERIFIER_SHA;
+  const trustedWorkflowRef = args.trustedWorkflowRef ?? "main";
+  const trustedWorkflowFullRef =
+    args.trustedWorkflowFullRef ??
+    (trustedWorkflowRef === "main" ? "refs/heads/main" : `refs/tags/${trustedWorkflowRef}`);
+  const trustedWorkflowSha = args.trustedWorkflowSha ?? verifierSha;
   writeFileSync(
     fixtureName(args.fixtures, `repos/${REPOSITORY}/compare/${verifierSha}...main`),
     JSON.stringify({
@@ -494,6 +538,17 @@ function runResolver(args: {
       status: args.verifierOnMain === false ? "diverged" : "ahead",
     }),
   );
+  if (trustedWorkflowRef !== "main") {
+    writeFileSync(
+      fixtureName(args.fixtures, `repos/${REPOSITORY}/git/ref/tags/${trustedWorkflowRef}`),
+      JSON.stringify({
+        object: {
+          sha: args.trustedTagSha ?? trustedWorkflowSha,
+          type: args.trustedTagType ?? "commit",
+        },
+      }),
+    );
+  }
   if (args.compareBaseSha) {
     writeFileSync(
       fixtureName(
@@ -525,6 +580,12 @@ function runResolver(args: {
       verifierSha,
       "--workflow-ref",
       args.workflowRef ?? "main",
+      "--trusted-workflow-ref",
+      trustedWorkflowRef,
+      "--trusted-workflow-full-ref",
+      trustedWorkflowFullRef,
+      "--trusted-workflow-sha",
+      trustedWorkflowSha,
       "--release-profile",
       args.releaseProfile ?? "full",
       "--run-release-soak",
@@ -542,6 +603,9 @@ function runResolver(args: {
       env: {
         ...process.env,
         FAKE_GH_FIXTURES: args.fixtures,
+        FAKE_TRUSTED_WORKFLOW_FULL_REF: trustedWorkflowFullRef,
+        FAKE_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
+        FAKE_TRUSTED_WORKFLOW_SHA: trustedWorkflowSha,
         FAKE_VALIDATOR_FIXTURES: args.fixtures,
         FAKE_VERIFIER_SHA: verifierSha,
         GITHUB_OUTPUT: "",
@@ -591,6 +655,147 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       evidence_run_id: "111",
       reuse: "true",
     });
+  });
+
+  it("reuses strict evidence through the exact lightweight protected tooling tag", () => {
+    const { clone, priorSha } = getSharedRepo();
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha: VERIFIER_SHA,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      workflowRef: producerRef,
+    });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      validatorPath,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      evidence_run_id: "111",
+      reuse: "true",
+    });
+  });
+
+  it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
+    const { clone, priorSha } = getSharedRepo();
+    const producerSha = "d".repeat(40);
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      workflowRef: producerRef,
+    });
+    record.current.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
+    record.root.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      validatorPath,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      evidence_run_id: "111",
+      reuse: "true",
+    });
+  });
+
+  it.each(["manifest-v3-protected-tag-diverged", "protected-tag-tooling-lineage"])(
+    "rejects unrecognized protected tooling proof %s",
+    (workflowRefProof) => {
+      const { clone, priorSha } = getSharedRepo();
+      const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+      const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+      const record = normalizedEvidence({
+        producerSha: VERIFIER_SHA,
+        targetSha: priorSha,
+        trustedWorkflowRef,
+        workflowRef: producerRef,
+      });
+      record.current.workflowRefProof = workflowRefProof;
+      record.root.workflowRefProof = workflowRefProof;
+      const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+      const result = runResolver({
+        binDir,
+        fixtures,
+        repoDir: clone,
+        targetSha: priorSha,
+        trustedWorkflowRef,
+        validatorPath,
+        verifierOnMain: false,
+        workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+      });
+
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    },
+  );
+
+  it.each([
+    {
+      label: "moved protected tag",
+      options: {
+        trustedTagSha: "d".repeat(40),
+      },
+    },
+    {
+      label: "annotated protected tag",
+      options: {
+        trustedTagType: "tag",
+      },
+    },
+    {
+      label: "same-name branch",
+      options: {
+        trustedWorkflowFullRef: `refs/heads/release-publish/${VERIFIER_SHA.slice(0, 12)}-456`,
+      },
+    },
+  ])("rejects protected tooling identity drift: $label", ({ options }) => {
+    const { clone, priorSha } = getSharedRepo();
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha: VERIFIER_SHA,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      workflowRef: producerRef,
+    });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      validatorPath,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+      ...options,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
   });
 
   it("reuses npm Telegram evidence only when its selectors match exactly", () => {

@@ -29,51 +29,6 @@ extension ExecApprovalsSecurity {
     }
 }
 
-enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
-    case deny
-    case ask
-    case allow
-
-    var id: String {
-        rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .deny: "Deny"
-        case .ask: "Always Ask"
-        case .allow: "Always Allow"
-        }
-    }
-
-    var security: ExecSecurity {
-        switch self {
-        case .deny: .deny
-        case .ask: .allowlist
-        case .allow: .full
-        }
-    }
-
-    var ask: ExecAsk {
-        switch self {
-        case .deny: .off
-        case .ask: .onMiss
-        case .allow: .off
-        }
-    }
-
-    static func from(security: ExecSecurity, ask _: ExecAsk) -> ExecApprovalQuickMode {
-        switch security {
-        case .deny:
-            .deny
-        case .full:
-            .allow
-        case .allowlist:
-            .ask
-        }
-    }
-}
-
 extension ExecApprovalsAsk {
     var title: String {
         switch self {

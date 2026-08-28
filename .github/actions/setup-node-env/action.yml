@@ -23,24 +23,16 @@ inputs:
     description: Whether to use --frozen-lockfile for install.
     required: false
     default: "true"
-  use-actions-cache:
-    description: Whether to restore the pnpm store with actions/cache.
+  cache-mode:
+    description: Cache authority for this setup action (off, restore, or read-write).
     required: false
-    default: "true"
-  save-actions-cache:
-    description: Whether to save the pnpm store with actions/cache after install when no exact cache restored.
-    required: false
-    default: "false"
+    default: "off"
   dependency-cache:
     description: Whether to restore workspace node_modules and its local pnpm store from the exact semantic dependency cache.
     required: false
     default: "false"
-  save-dependency-cache:
-    description: Whether to save workspace node_modules and its local pnpm store after a successful install on an exact cache miss.
-    required: false
-    default: "false"
   vitest-fs-cache:
-    description: Whether to persist Vitest's experimental filesystem module cache.
+    description: Whether to restore Vitest's experimental filesystem module cache.
     required: false
     default: "false"
   restore-test-caches:
@@ -48,30 +40,75 @@ inputs:
     required: false
     default: "false"
   node-compile-cache:
-    description: Whether to persist Node's on-disk V8 compile cache.
+    description: Whether to restore Node's on-disk V8 compile cache.
     required: false
     default: "false"
   node-compile-cache-scope:
     description: Cache namespace for isolating workloads with different writer ownership.
     required: false
     default: "test"
-  save-node-compile-cache:
-    description: Whether this job may save the Node compile cache.
-    required: false
-    default: "false"
-  save-vitest-fs-cache:
-    description: Whether this job may save the shared Vitest filesystem module cache.
-    required: false
-    default: "false"
   build-all-cache-scope:
     description: >
-      Namespace for restoring and saving build-all's content-addressed step cache.
+      Namespace for restoring build-all's content-addressed step cache.
       Leave empty to disable; use only for declaration builds with public inputs.
     required: false
     default: ""
+outputs:
+  cache-mode:
+    description: Validated cache authority selected by the caller.
+    value: ${{ inputs.cache-mode }}
+  node-toolchain-cache-key:
+    description: Exact key for saving a newly downloaded Node toolchain.
+    value: openclaw-node-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ steps.setup-node.outputs.resolved-version }}
+  node-toolchain-cache-matched-key:
+    description: Node toolchain cache key restored by this run.
+    value: ${{ steps.node-toolchain-restore.outputs.cache-matched-key }}
+  node-toolchain-cache-path:
+    description: Runner-local Node toolchain cache path.
+    value: ${{ runner.temp }}/openclaw-node-toolchain/node
+  node-toolchain-populated:
+    description: Whether setup downloaded a Node toolchain into the cache path.
+    value: ${{ steps.setup-node.outputs.toolchain-populated }}
+  dependency-cache-hit:
+    description: Whether the exact semantic dependency cache restored.
+    value: ${{ steps.dependency-cache.outputs.cache-hit }}
+  dependency-cache-key:
+    description: Exact semantic dependency cache key.
+    value: ${{ steps.dependency-cache-key.outputs.key }}
+  pnpm-store-cache-hit:
+    description: Whether the pnpm store restored an exact key.
+    value: ${{ steps.setup-pnpm.outputs.store-cache-hit }}
+  pnpm-store-cache-key:
+    description: Exact pnpm store key used for restore or save.
+    value: ${{ steps.setup-pnpm.outputs.store-cache-primary-key }}
+  pnpm-store-cache-path:
+    description: Resolved pnpm store path.
+    value: ${{ steps.setup-pnpm.outputs.store-path }}
+  vitest-cache-key:
+    description: Exact Vitest transform cache key.
+    value: ${{ steps.vitest-cache.outputs.cache-primary-key }}
+  node-compile-cache-key:
+    description: Exact Node compile cache key.
+    value: ${{ steps.node-compile-cache.outputs.cache-primary-key }}
+  build-all-cache-key:
+    description: Exact build-all cache key.
+    value: ${{ steps.build-all-cache.outputs.cache-primary-key }}
 runs:
   using: composite
   steps:
+    - name: Validate cache mode
+      shell: bash
+      env:
+        CACHE_MODE: ${{ inputs.cache-mode }}
+      run: |
+        case "$CACHE_MODE" in
+          off|restore|read-write) ;;
+          *)
+            echo "::error::Invalid cache-mode input: '$CACHE_MODE' (expected off, restore, or read-write)"
+            exit 2
+            ;;
+        esac
+
     - name: Normalize container toolcache
       shell: bash
       run: |
@@ -81,17 +118,54 @@ runs:
           ln -s /__t /opt/hostedtoolcache
         fi
 
+    # Blacksmith's image tracks an older runner-images snapshot whose toolcache
+    # Node patches sit just under this repo's engines floor (measured 2026-08-16:
+    # 20.20.0/22.22.0/24.13.0 against >=22.22.3 and >=24.15.0), so every job
+    # falls through to a nodejs.org download. That is ~2.6s normally but tail-
+    # spikes past 110s when the mirror throttles our ~46 simultaneous fetches,
+    # and it lands on every job at once. Keep the payload in the Actions cache,
+    # which Blacksmith serves from its colocated backend. A stale or corrupt
+    # entry is self-healing: ensure-node probes each candidate's version and
+    # falls back to the download when none satisfies the floor.
+    # Restore by prefix, never by exact key: cache entries are immutable and an
+    # exact key would pin the first Node it ever saw. Once the floor advances
+    # past it every job would restore the rejected payload and re-download
+    # forever. The trusted cache warmer publishes the resolved version as a new
+    # exact key, so later prefix restores pick it up.
+    # GitHub-hosted images carry a Node that already clears the floor, so they
+    # resolve from /opt/hostedtoolcache and would only ever miss here. Scope the
+    # restore to self-hosted runners.
+    - name: Restore Node toolchain cache
+      if: inputs.cache-mode != 'off' && runner.os != 'Windows' && runner.environment != 'github-hosted'
+      id: node-toolchain-restore
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/openclaw-node-toolchain/node
+        key: openclaw-node-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-
+        restore-keys: |
+          openclaw-node-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-
+
     - name: Setup Node.js
+      id: setup-node
       shell: bash
       env:
         REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
+        OPENCLAW_NODE_TOOLCHAIN_ROOT: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' && format('{0}/openclaw-node-toolchain/node', runner.temp) || '' }}
       run: |
         set -euo pipefail
         source "$GITHUB_ACTION_PATH/../setup-pnpm-store-cache/ensure-node.sh"
         openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+        echo "resolved-version=$(node -p 'process.versions.node')" >> "$GITHUB_OUTPUT"
+        # Only a download populates the cached root. An image whose toolcache
+        # already clears the floor leaves it absent, and saving a missing path
+        # warns without producing an entry.
+        if [ -n "${OPENCLAW_NODE_TOOLCHAIN_ROOT:-}" ] && [ -d "${OPENCLAW_NODE_TOOLCHAIN_ROOT}" ]; then
+          echo "toolchain-populated=true" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Configure dependency cache store
-      if: inputs.dependency-cache == 'true'
+      if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -101,7 +175,7 @@ runs:
 
     - name: Resolve dependency cache key
       id: dependency-cache-key
-      if: inputs.dependency-cache == 'true'
+      if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       shell: bash
       env:
         FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
@@ -113,7 +187,7 @@ runs:
         echo "key=$cache_key" >> "$GITHUB_OUTPUT"
 
     - name: Prepare dependency cache restore
-      if: inputs.dependency-cache == 'true'
+      if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       shell: bash
       run: |
         rm -rf "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
@@ -127,9 +201,9 @@ runs:
 
     - name: Restore exact dependency cache
       id: dependency-cache
-      if: inputs.dependency-cache == 'true'
+      if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       continue-on-error: true
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           node_modules
@@ -140,7 +214,7 @@ runs:
         key: ${{ steps.dependency-cache-key.outputs.key }}
 
     - name: Prepare dependency cache miss fallback
-      if: inputs.dependency-cache == 'true' && steps.dependency-cache.outputs.cache-hit != 'true'
+      if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true' && steps.dependency-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         # actions/cache treats service, download, and extraction failures as
@@ -162,28 +236,17 @@ runs:
         # On an exact dependency-cache hit, the same archive already restored
         # the complete store. Every miss can seed it from the coarser cache,
         # including legacy Blacksmith callers that disabled that old fallback.
-        use-actions-cache: ${{ ((inputs.dependency-cache == 'true' && steps.dependency-cache.outputs.cache-hit != 'true') || (inputs.dependency-cache != 'true' && inputs.use-actions-cache == 'true')) && 'true' || 'false' }}
+        cache-mode: ${{ inputs.cache-mode != 'off' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && 'restore' || 'off' }}
 
     - name: Setup TruffleHog
       if: inputs.install-trufflehog == 'true'
       shell: bash
       run: bash scripts/install-trufflehog.sh
 
-    - name: Restore and save Vitest transform cache
-      if: inputs.vitest-fs-cache == 'true' && inputs.save-vitest-fs-cache == 'true' && runner.os != 'Windows'
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-      with:
-        path: /var/tmp/openclaw-vitest-fs-cache
-        # Blacksmith transparently accelerates the upstream Actions cache API.
-        # The scheduled/dispatch warmer writes one immutable protected archive;
-        # all CI shards restore it into isolated runner-local directories.
-        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-
-
     - name: Restore Vitest transform cache
-      if: (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && inputs.save-vitest-fs-cache != 'true' && runner.os != 'Windows'
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      id: vitest-cache
+      if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
         key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -191,10 +254,10 @@ runs:
           ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-
 
     - name: Configure Vitest transform cache
-      if: (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
+      if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       env:
         CACHE_GENERATION: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}
-        CACHE_WRITER: ${{ inputs.save-vitest-fs-cache == 'true' && '1' || '0' }}
+        CACHE_WRITER: "0"
       shell: bash
       run: |
         set -euo pipefail
@@ -220,7 +283,7 @@ runs:
 
     - name: Select Node compile cache epoch
       id: node-compile-cache-epoch
-      if: (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
+      if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       env:
         CACHE_SCOPE: ${{ inputs.node-compile-cache-scope }}
@@ -232,18 +295,10 @@ runs:
           echo "value=${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}" >> "$GITHUB_OUTPUT"
         fi
 
-    - name: Restore and save Node compile cache
-      if: inputs.node-compile-cache == 'true' && inputs.save-node-compile-cache == 'true' && runner.os != 'Windows'
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-      with:
-        path: /var/tmp/openclaw-node-compile-cache
-        key: ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.node-compile-cache-epoch.outputs.value }}
-        restore-keys: |
-          ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
-
     - name: Restore Node compile cache
-      if: (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && inputs.save-node-compile-cache != 'true' && runner.os != 'Windows'
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      id: node-compile-cache
+      if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-node-compile-cache
         key: ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.node-compile-cache-epoch.outputs.value }}
@@ -251,9 +306,7 @@ runs:
           ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Configure Node compile cache
-      if: (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
-      env:
-        CACHE_WRITER: ${{ inputs.save-node-compile-cache == 'true' && '1' || '0' }}
+      if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
         set -euo pipefail
@@ -261,14 +314,14 @@ runs:
         mkdir -p "$cache_root"
         echo "NODE_COMPILE_CACHE=$cache_root" >> "$GITHUB_ENV"
         echo "NODE_COMPILE_CACHE_PORTABLE=1" >> "$GITHUB_ENV"
-        echo "OPENCLAW_NODE_COMPILE_CACHE_WRITER=$CACHE_WRITER" >> "$GITHUB_ENV"
+        echo "OPENCLAW_NODE_COMPILE_CACHE_WRITER=0" >> "$GITHUB_ENV"
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
       shell: bash
       run: |
         set -euo pipefail
-        npm install -g bun@1.3.14
+        npm install -g bun@1.4.0
 
     - name: Runtime versions
       shell: bash
@@ -294,7 +347,7 @@ runs:
       shell: bash
       env:
         CI: "true"
-        DEPENDENCY_CACHE: ${{ inputs.dependency-cache }}
+        DEPENDENCY_CACHE: ${{ inputs.cache-mode != 'off' && inputs.dependency-cache == 'true' && 'true' || 'false' }}
         DEPENDENCY_CACHE_HIT: ${{ steps.dependency-cache.outputs.cache-hit }}
         FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
       run: |
@@ -401,22 +454,10 @@ runs:
           echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"
         fi
 
-    - name: Save exact dependency cache
-      if: inputs.install-deps == 'true' && inputs.dependency-cache == 'true' && inputs.save-dependency-cache == 'true' && steps.dependency-cache.outputs.cache-hit != 'true' && steps.dependency-cache.outcome != 'failure'
-      continue-on-error: true
-      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-      with:
-        path: |
-          node_modules
-          ui/node_modules
-          packages/*/node_modules
-          examples/*/node_modules
-          .cache/openclaw-pnpm-store
-        key: ${{ steps.dependency-cache-key.outputs.key }}
-
-    - name: Restore and save build-all cache
-      if: inputs.build-all-cache-scope != ''
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+    - name: Restore build-all cache
+      id: build-all-cache
+      if: inputs.cache-mode != 'off' && inputs.build-all-cache-scope != ''
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .artifacts/build-all-cache
         # Exact keys deduplicate concurrent jobs. Coarse restore supplies the
@@ -424,10 +465,3 @@ runs:
         key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'tsconfig*.json', 'tsdown*.config.ts', 'scripts/build-all.mts', 'scripts/tsdown-build.mts', 'scripts/lib/tsdown-*.mts', 'scripts/lib/plugin-sdk-*', 'scripts/lib/bundled-plugin-*', 'scripts/lib/optional-bundled-clusters.mjs', 'src/**', 'packages/**', 'extensions/**') }}
         restore-keys: |
           ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
-
-    - name: Save pnpm store cache
-      if: ${{ inputs.install-deps == 'true' && inputs.use-actions-cache == 'true' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && inputs.save-actions-cache == 'true' && runner.os != 'Windows' && steps.setup-pnpm.outputs.store-cache-hit != 'true' }}
-      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-      with:
-        path: ${{ steps.setup-pnpm.outputs.store-path }}
-        key: ${{ steps.setup-pnpm.outputs.store-cache-primary-key }}

@@ -1,5 +1,7 @@
 // @vitest-environment node
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import {
   agentEvent,
@@ -14,166 +16,55 @@ import {
   type ToolStreamEntry,
 } from "./tool-stream.ts";
 
+const globalWithWindow = globalThis as typeof globalThis & {
+  window?: Window & typeof globalThis;
+};
+let installedTestWindow = false;
+
 beforeAll(() => {
-  const globalWithWindow = globalThis as typeof globalThis & {
-    window?: Window & typeof globalThis;
-  };
   if (!globalWithWindow.window) {
     globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+    installedTestWindow = true;
   }
 });
 
-describe("app-tool-stream plan snapshots", () => {
-  it("stores a normalized snapshot and drops malformed entries", () => {
-    const requestUpdate = vi.fn();
-    const host = createHost({ requestUpdate });
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "plan", {
-        phase: "update",
-        explanation: "  Shipping the focused change  ",
-        steps: [
-          { step: "Inspect the route", status: "completed" },
-          "  Wire the checklist  ",
-          { step: "Run focused tests", status: "in_progress" },
-          { step: "", status: "pending" },
-          { step: "Missing status" },
-          { step: "Unknown status", status: "blocked" },
-          null,
-          42,
-        ],
-      }),
-    );
-
-    expect(host.planStatus).toEqual({
-      runId: "run-1",
-      explanation: "Shipping the focused change",
-      steps: [
-        { step: "Inspect the route", status: "completed" },
-        { step: "Wire the checklist", status: "pending" },
-        { step: "Run focused tests", status: "in_progress" },
-      ],
-    });
-    expect(requestUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("replaces the full snapshot and clears on an empty snapshot", () => {
-    const host = createHost();
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "plan", {
-        phase: "update",
-        steps: [
-          { step: "First", status: "completed" },
-          { step: "Second", status: "in_progress" },
-        ],
-      }),
-    );
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 2, "plan", {
-        phase: "update",
-        steps: [{ step: "Replacement", status: "pending" }],
-      }),
-    );
-
-    expect(host.planStatus).toEqual({
-      runId: "run-1",
-      steps: [{ step: "Replacement", status: "pending" }],
-    });
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 3, "plan", {
-        phase: "update",
-        explanation: "No actionable steps",
-        steps: [],
-      }),
-    );
-
-    expect(host.planStatus).toBeNull();
-  });
-
-  it("demotes duplicate in-progress steps to pending", () => {
-    const host = createHost();
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "plan", {
-        phase: "update",
-        steps: [
-          { step: "First active", status: "in_progress" },
-          { step: "Second active", status: "in_progress" },
-        ],
-      }),
-    );
-
-    expect(host.planStatus).toEqual({
-      runId: "run-1",
-      steps: [
-        { step: "First active", status: "in_progress" },
-        { step: "Second active", status: "pending" },
-      ],
-    });
-  });
-
-  it("ignores plan snapshots from another run while a run is active", () => {
-    const host = createHost({
-      chatRunId: "run-1",
-      planStatus: {
-        steps: [{ step: "Active step", status: "in_progress" }],
-      },
-    });
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-2", 1, "plan", {
-        phase: "update",
-        steps: [{ step: "Spawned run step", status: "in_progress" }],
-      }),
-    );
-
-    expect(host.planStatus).toEqual({
-      steps: [{ step: "Active step", status: "in_progress" }],
-    });
-  });
-
-  it("filters plan snapshots for another session", () => {
-    const host = createHost();
-
-    handleAgentEvent(
-      host,
-      agentEvent(
-        "run-1",
-        1,
-        "plan",
-        {
-          phase: "update",
-          steps: [{ step: "Wrong session", status: "in_progress" }],
-        },
-        "agent:other:main",
-      ),
-    );
-
-    expect(host.planStatus).toBeNull();
-  });
-
-  it("clears plan state with the rest of a new run's transient stream", () => {
-    const host = createHost({
-      planStatus: {
-        steps: [{ step: "Stale step", status: "in_progress" }],
-      },
-    });
-
-    resetToolStream(host);
-
-    expect(host.planStatus).toBeNull();
-  });
+afterAll(() => {
+  if (installedTestWindow) {
+    Reflect.deleteProperty(globalWithWindow, "window");
+  }
 });
 
 describe("app-tool-stream approval lifecycle", () => {
+  it("carries browser tab details through the completed live result, including empty text", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("browser-run", 1, "tool", {
+        phase: "start",
+        name: "browser",
+        toolCallId: "browser-call",
+        args: { action: "open" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("browser-run", 2, "tool", {
+        phase: "result",
+        name: "browser",
+        toolCallId: "browser-call",
+        result: { content: [], details: { browserTab: { targetId: "tab-1", title: "Example" } } },
+      }),
+    );
+    const entry = [...host.toolStreamById.values()][0];
+    const [card] = extractToolCardsCached(entry?.message);
+    expect(card).toMatchObject({
+      completed: true,
+      live: true,
+      preview: { kind: "browser-tab", targetId: "tab-1", title: "Example" },
+    });
+    resetToolStream(host);
+  });
+
   const approval = (runId: string | undefined, sessionKey = "main") => ({
     id: "approval-1",
     kind: "exec" as const,
@@ -387,6 +278,194 @@ describe("app-tool-stream throttled projections", () => {
 });
 
 describe("app-tool-stream result blocks", () => {
+  it("retains out-of-order review identities and lets a result fence every older review", () => {
+    const host = createHost();
+    const toolCallId = "call-reviewed";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 4, "tool", {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "approved",
+        review: {
+          id: "review-b",
+          label: "Guardian",
+          status: "approved",
+          riskLevel: "low",
+          userAuthorization: "high",
+          rationale: "Newer live review.",
+        },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: "git status --short" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "approved",
+        review: {
+          id: "review-a",
+          label: "Guardian",
+          status: "approved",
+          rationale: "Older snapshot review.",
+        },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "tool", {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "denied",
+        review: { id: "review-b", label: "Guardian", status: "denied" },
+      }),
+    );
+
+    const identity = buildToolStreamIdentity("run-1", toolCallId);
+    const reviewed = host.toolStreamById.get(identity);
+    expect(readToolApprovalReviews(reviewed?.details).map((review) => review.id)).toEqual([
+      "review-a",
+      "review-b",
+    ]);
+    expect(reviewed?.details).toMatchObject({
+      approvalReviewOutcome: "approved",
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 5, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId,
+        result: { details: { runtime: "native" } },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "tool", {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "denied",
+        review: { id: "review-c", label: "Guardian", status: "denied" },
+      }),
+    );
+
+    const completed = host.toolStreamById.get(identity);
+    expect(completed?.resultReceived).toBe(true);
+    expect(readToolApprovalReviews(completed?.details).map((review) => review.id)).toEqual([
+      "review-a",
+      "review-b",
+    ]);
+    expect(completed?.details).toMatchObject({
+      runtime: "native",
+      approvalReviewOutcome: "approved",
+    });
+  });
+
+  it("keeps an early denial after live review rows exceed the display cap", () => {
+    const host = createHost();
+    const toolCallId = "call-many-reviews";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: "printf reviewed" },
+      }),
+    );
+    for (let index = 0; index < 18; index += 1) {
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", index + 2, "tool", {
+          phase: "review",
+          toolCallId,
+          approvalReviewOutcome: "denied",
+          review: {
+            id: `review-${index}`,
+            label: "Guardian",
+            status: index === 0 ? "denied" : "approved",
+          },
+        }),
+      );
+    }
+
+    const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId));
+    expect(readToolApprovalReviews(entry?.details).map((review) => review.id)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `review-${index + 2}`),
+    );
+    expect(entry?.details).toMatchObject({ approvalReviewOutcome: "denied" });
+  });
+
+  it("keeps an out-of-order denial after newer reviews fill the display cap", () => {
+    const host = createHost();
+    const toolCallId = "call-out-of-order-denial";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: "printf reviewed" },
+      }),
+    );
+    for (let index = 0; index < 16; index += 1) {
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", index + 3, "tool", {
+          phase: "review",
+          toolCallId,
+          approvalReviewOutcome: "approved",
+          review: {
+            id: `newer-review-${index}`,
+            label: "Guardian",
+            status: "approved",
+          },
+        }),
+      );
+    }
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "denied",
+        review: { id: "older-denied-review", label: "Guardian", status: "denied" },
+      }),
+    );
+
+    const identity = buildToolStreamIdentity("run-1", toolCallId);
+    const reviewed = host.toolStreamById.get(identity);
+    expect(readToolApprovalReviews(reviewed?.details).map((review) => review.id)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `newer-review-${index}`),
+    );
+    expect(reviewed?.details).toMatchObject({ approvalReviewOutcome: "denied" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 19, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId,
+        approvalReviewOutcome: "approved",
+        result: { details: { runtime: "native", approvalReviewOutcome: "approved" } },
+      }),
+    );
+    expect(host.toolStreamById.get(identity)?.details).toMatchObject({
+      runtime: "native",
+      approvalReviewOutcome: "denied",
+    });
+  });
+
   it("projects live edit counts and lets the resolved result replace them without flicker", () => {
     useToolStreamFakeTimers();
     try {
@@ -531,13 +610,15 @@ describe("app-tool-stream result blocks", () => {
             details: {
               changedModel: true,
               sessionKey: "main",
+              agentId: "main",
               modelOverride: "openai/gpt-5.6-luna",
             },
           },
         }),
       );
 
-      expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5.6-luna");
+      expect(host.sessions.refreshReplacement).toHaveBeenCalledOnce();
+      expect(host.sessions.state.modelOverrides).toEqual({});
     },
   );
 

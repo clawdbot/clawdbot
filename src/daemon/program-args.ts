@@ -2,11 +2,15 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
+import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import {
   buildGatewayDistEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
   isGatewayDistEntrypointPath,
 } from "./gateway-entrypoint.js";
+import { resolveGatewayHeapExecArgv } from "./gateway-heap.js";
+import type { GatewayServiceCommandConfig } from "./service-types.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
@@ -179,7 +183,8 @@ export async function resolveOpenClawWrapperPath(
 async function resolveCliProgramArguments(params: {
   args: string[];
   dev?: boolean;
-  nodePath?: string;
+  runtime: GatewayDaemonRuntime;
+  runtimePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const wrapperPath = await resolveOpenClawWrapperPath(params.wrapperPath);
@@ -187,42 +192,56 @@ async function resolveCliProgramArguments(params: {
     return { programArguments: [wrapperPath, ...params.args] };
   }
 
-  if (!params.nodePath?.trim()) {
+  if (!params.runtimePath?.trim()) {
     throw new Error(
-      "No supported Node runtime was selected for the daemon. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+), then retry.",
+      params.runtime === "bun"
+        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry."
+        : `No supported Node runtime was selected for the daemon. Install Node ${SUPPORTED_NODE_VERSIONS}, then retry.`,
     );
   }
-  const nodePath = params.nodePath;
+  const runtimePath = params.runtimePath;
 
   if (params.dev) {
     const repoRoot = resolveRepoRootForDev();
     const devCliPath = path.join(repoRoot, "src", "entry.ts");
     await fs.access(devCliPath);
     return {
-      programArguments: [nodePath, "--import", "tsx", devCliPath, ...params.args],
+      programArguments:
+        params.runtime === "bun"
+          ? [runtimePath, devCliPath, ...params.args]
+          : [runtimePath, "--import", "tsx", devCliPath, ...params.args],
       workingDirectory: repoRoot,
     };
   }
 
   const cliEntrypointPath = await resolveCliEntrypointPathForService();
   return {
-    programArguments: [nodePath, cliEntrypointPath, ...params.args],
+    programArguments: [runtimePath, cliEntrypointPath, ...params.args],
   };
 }
 
 export async function resolveGatewayProgramArguments(params: {
   port: number;
   dev?: boolean;
-  nodePath?: string;
+  runtime: GatewayDaemonRuntime;
+  runtimePath?: string;
   wrapperPath?: string;
+  existingCommand?: GatewayServiceCommandConfig | null;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
-  return resolveCliProgramArguments({
+  const result = await resolveCliProgramArguments({
     args: gatewayArgs,
     dev: params.dev,
-    nodePath: params.nodePath,
+    runtime: params.runtime,
+    runtimePath: params.runtimePath,
     wrapperPath: params.wrapperPath,
   });
+  if (params.runtime === "node" && !params.wrapperPath?.trim()) {
+    // Size only the managed Gateway, before Node loads its entrypoint. Keeping
+    // automatic flags out of NODE_OPTIONS leaves ordinary spawned Node children alone.
+    result.programArguments.splice(1, 0, ...resolveGatewayHeapExecArgv(params.existingCommand));
+  }
+  return result;
 }
 
 export async function resolveNodeProgramArguments(params: {
@@ -235,7 +254,9 @@ export async function resolveNodeProgramArguments(params: {
   displayName?: string;
   installedAppsSharing?: boolean;
   dev?: boolean;
-  nodePath?: string;
+  runtime: GatewayDaemonRuntime;
+  runtimePath?: string;
+  wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
   if (params.tls === false && !params.tlsFingerprint) {
@@ -263,6 +284,8 @@ export async function resolveNodeProgramArguments(params: {
   return resolveCliProgramArguments({
     args,
     dev: params.dev,
-    nodePath: params.nodePath,
+    runtime: params.runtime,
+    runtimePath: params.runtimePath,
+    wrapperPath: params.wrapperPath,
   });
 }

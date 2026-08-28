@@ -1,6 +1,10 @@
 // Qa Lab tests cover Crabbox runtime behavior.
 import { describe, expect, it } from "vitest";
-import { type CommandRunner, defaultCommandRunner, sshCommand } from "./crabbox-runtime.js";
+import {
+  type CommandRunner,
+  copyCrabboxArtifacts,
+  defaultCommandRunner,
+} from "./crabbox-runtime.js";
 
 describe("Crabbox command runner", () => {
   it("preserves UTF-8 split across child-process pipe chunks", async () => {
@@ -54,7 +58,7 @@ describe("Crabbox command runner", () => {
       }
       return { stderr: "", stdout: "" };
     };
-    const transport = await sshCommand({
+    await copyCrabboxArtifacts({
       cwd: "/repo",
       env: {},
       inspect: {
@@ -63,10 +67,10 @@ describe("Crabbox command runner", () => {
         sshKey: "/tmp/key",
         sshUser: "proof",
       },
+      outputDir: "/output",
+      remoteOutputDir: "/remote",
       runner,
     });
-
-    await runner("rsync", ["-e", transport.sshArgs], {});
 
     const expectedProbes = ports.length === 1 ? [] : ports;
     expect(calls.filter((call) => call.command === "ssh").map((call) => call.args[3])).toEqual(
@@ -75,9 +79,11 @@ describe("Crabbox command runner", () => {
     expect(calls.filter((call) => call.command === "ssh").map((call) => call.args[12])).toEqual(
       expectedProbes.map(() => `proof@${host}`),
     );
-    expect(transport.host).toBe(host);
     expect(calls.filter((call) => call.command === "rsync")).toEqual([
-      { args: ["-e", expect.stringContaining(`-p ${ports.at(-1)}`)], command: "rsync" },
+      {
+        args: expect.arrayContaining([expect.stringContaining(`-p ${ports.at(-1)}`)]),
+        command: "rsync",
+      },
     ]);
   });
 
@@ -92,7 +98,7 @@ describe("Crabbox command runner", () => {
     };
 
     await expect(
-      sshCommand({
+      copyCrabboxArtifacts({
         cwd: "/repo",
         env: {},
         inspect: {
@@ -102,6 +108,8 @@ describe("Crabbox command runner", () => {
           sshPort: "2222",
           sshUser: "proof",
         },
+        outputDir: "/output",
+        remoteOutputDir: "/remote",
         runner,
       }),
     ).rejects.toThrow("Permission denied");

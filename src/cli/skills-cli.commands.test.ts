@@ -1,7 +1,35 @@
 // Skills CLI command tests cover skill command registration and subcommand behavior.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import {
+  AgentSelectionRequiredError,
+  resolveConfiguredAgentId,
+  type AgentSelectionContext,
+} from "../agents/agent-scope-config.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import { registerSkillsCli } from "./skills-cli.js";
+
+const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+
+function setTty(value: boolean): void {
+  Object.defineProperty(process.stdin, "isTTY", { value, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value, configurable: true });
+}
+
+function restoreTty(): void {
+  if (ORIGINAL_STDIN_TTY) {
+    Object.defineProperty(process.stdin, "isTTY", ORIGINAL_STDIN_TTY);
+  } else {
+    Reflect.deleteProperty(process.stdin, "isTTY");
+  }
+  if (ORIGINAL_STDOUT_TTY) {
+    Object.defineProperty(process.stdout, "isTTY", ORIGINAL_STDOUT_TTY);
+  } else {
+    Reflect.deleteProperty(process.stdout, "isTTY");
+  }
+}
 
 const mocks = vi.hoisted(() => {
   const runtimeLogs: string[] = [];
@@ -74,9 +102,14 @@ const mocks = vi.hoisted(() => {
   return {
     callGatewayMock: vi.fn(),
     loadConfigMock: vi.fn((_options?: unknown) => ({})),
-    resolveDefaultAgentIdMock: vi.fn((_configForTest: unknown) => "main"),
+    resolveDefaultAgentIdMock: vi.fn(
+      (_configForTest: unknown, _context?: AgentSelectionContext) => "main",
+    ),
     resolveAgentIdByWorkspacePathMock: vi.fn(
       (_configForTest: unknown, _workspacePath: string): string | undefined => undefined,
+    ),
+    resolveConfiguredAgentIdMock: vi.fn(
+      (_configForTest: unknown, agentId: string): string => agentId,
     ),
     resolveAgentWorkspaceDirMock: vi.fn(
       (_configForTest: unknown, _agentId: string) => "/tmp/workspace",
@@ -91,7 +124,7 @@ const mocks = vi.hoisted(() => {
     readClawHubSkillsLockfileStatusSyncMock: vi.fn((..._args: unknown[]) => ({ kind: "missing" })),
     resolveClawHubSkillStatusLinkSyncMock: vi.fn(),
     resolveLocalSkillCardStatusSyncMock: vi.fn(),
-    fetchClawHubSkillVerificationMock: vi.fn(),
+    verifySkillWithClawHubMock: vi.fn(),
     fetchClawHubSkillCardMock: vi.fn(),
     buildWorkspaceSkillStatusMock,
     skillStatusReportFixture,
@@ -107,6 +140,7 @@ const {
   loadConfigMock,
   resolveDefaultAgentIdMock,
   resolveAgentIdByWorkspacePathMock,
+  resolveConfiguredAgentIdMock,
   resolveAgentWorkspaceDirMock,
   searchSkillsFromClawHubMock,
   installSkillFromClawHubMock,
@@ -118,7 +152,7 @@ const {
   readClawHubSkillsLockfileStatusSyncMock,
   resolveClawHubSkillStatusLinkSyncMock,
   resolveLocalSkillCardStatusSyncMock,
-  fetchClawHubSkillVerificationMock,
+  verifySkillWithClawHubMock,
   fetchClawHubSkillCardMock,
   buildWorkspaceSkillStatusMock,
   skillStatusReportFixture,
@@ -129,22 +163,30 @@ const {
 } = mocks;
 
 function primeSkillVerification(overrides: Record<string, unknown> = {}) {
-  return fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-    schema: "clawhub.skill.verify.v1",
+  return verifySkillWithClawHubMock.mockResolvedValueOnce({
     ok: true,
-    decision: "pass",
-    reasons: [],
-    skill: { slug: "agentreceipt" },
-    publisher: null,
-    version: { version: "1.2.3" },
-    card: { available: true },
-    artifact: null,
-    provenance: null,
-    security: { status: "clean" },
-    signature: { status: "unsigned" },
-    ...overrides,
+    value: {
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: { slug: "agentreceipt" },
+      publisher: null,
+      version: { version: "1.2.3" },
+      card: { available: true },
+      artifact: null,
+      provenance: null,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+      ...overrides,
+    },
   });
 }
+
+afterEach(() => {
+  restoreTty();
+  vi.unstubAllEnvs();
+});
 
 function mockCall(mock: unknown, index = 0): Array<unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -177,6 +219,14 @@ function expectLogger(value: unknown): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected logger object");
   }
+}
+
+function requireCommand(parent: Command, name: string): Command {
+  const command = parent.commands.find((candidate) => candidate.name() === name);
+  if (!command) {
+    throw new Error(`missing command: ${name}`);
+  }
+  return command;
 }
 
 function expectStatusWorkspaceCall(workspaceDir: string): void {
@@ -214,6 +264,12 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
+  isGatewayClientRequestError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayClientRequestError",
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
+  isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
+    !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
 
 vi.mock("../utils.js", async (importOriginal) => ({
@@ -229,7 +285,10 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentIdByWorkspacePath: (config: unknown, workspacePath: string) =>
     mocks.resolveAgentIdByWorkspacePathMock(config, workspacePath),
-  resolveDefaultAgentId: (config: unknown) => mocks.resolveDefaultAgentIdMock(config),
+  resolveConfiguredAgentId: (config: unknown, agentId: string) =>
+    mocks.resolveConfiguredAgentIdMock(config, agentId),
+  resolveDefaultAgentId: (config: unknown, context?: AgentSelectionContext) =>
+    mocks.resolveDefaultAgentIdMock(config, context),
   resolveAgentWorkspaceDir: (config: unknown, agentId: string) =>
     mocks.resolveAgentWorkspaceDirMock(config, agentId),
 }));
@@ -250,13 +309,13 @@ vi.mock("../skills/lifecycle/clawhub.js", () => ({
     mocks.resolveClawHubSkillStatusLinkSyncMock(...args),
   resolveLocalSkillCardStatusSync: (...args: unknown[]) =>
     mocks.resolveLocalSkillCardStatusSyncMock(...args),
+  verifySkillWithClawHub: (...args: unknown[]) => mocks.verifySkillWithClawHubMock(...args),
 }));
 
 vi.mock("../infra/clawhub-skills.js", () => ({
+  CLAWHUB_SKILLS_SH_REF_PREFIX: "skills-sh:",
   CLAWHUB_SKILLS_SH_TRUST_LABEL: "Not scanned by ClawHub",
   CLAWHUB_SKILLS_SH_TRUST_STATE: "not-scanned-by-clawhub",
-  fetchClawHubSkillVerification: (...args: unknown[]) =>
-    mocks.fetchClawHubSkillVerificationMock(...args),
   fetchClawHubSkillCard: (...args: unknown[]) => mocks.fetchClawHubSkillCardMock(...args),
 }));
 
@@ -303,6 +362,7 @@ describe("skills cli commands", () => {
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentIdByWorkspacePathMock.mockReset();
+    resolveConfiguredAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     searchSkillsFromClawHubMock.mockReset();
     installSkillFromClawHubMock.mockReset();
@@ -314,14 +374,27 @@ describe("skills cli commands", () => {
     readClawHubSkillsLockfileStatusSyncMock.mockReset();
     resolveClawHubSkillStatusLinkSyncMock.mockReset();
     resolveLocalSkillCardStatusSyncMock.mockReset();
-    fetchClawHubSkillVerificationMock.mockReset();
+    verifySkillWithClawHubMock.mockReset();
     fetchClawHubSkillCardMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
 
-    callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
+    callGatewayMock.mockRejectedValue(
+      new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        message: "gateway closed (1006): abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+      }),
+    );
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
+    resolveConfiguredAgentIdMock.mockImplementation((_config, agentId: string) => agentId);
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     searchSkillsFromClawHubMock.mockResolvedValue([]);
     installSkillFromClawHubMock.mockResolvedValue({
@@ -352,25 +425,28 @@ describe("skills cli commands", () => {
         installedVersion: "1.2.3",
       },
     });
-    fetchClawHubSkillVerificationMock.mockResolvedValue({
-      schema: "clawhub.skill.verify.v1",
+    verifySkillWithClawHubMock.mockResolvedValue({
       ok: true,
-      decision: "pass",
-      reasons: [],
-      skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
-      publisher: { handle: "openclaw" },
-      version: { version: "1.2.3" },
-      card: {
-        available: true,
-        url: "https://private.example.com/clawhub/api/v1/skills/agentreceipt/card?version=1.2.3",
+      value: {
+        schema: "clawhub.skill.verify.v1",
+        ok: true,
+        decision: "pass",
+        reasons: [],
+        skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
+        publisher: { handle: "openclaw" },
+        version: { version: "1.2.3" },
+        card: {
+          available: true,
+          url: "https://private.example.com/clawhub/api/v1/skills/agentreceipt/card?version=1.2.3",
+        },
+        artifact: {
+          sourceFingerprint: "source-fingerprint",
+          bundleFingerprints: ["generated-bundle-fingerprint"],
+        },
+        provenance: null,
+        security: { status: "clean" },
+        signature: { status: "unsigned" },
       },
-      artifact: {
-        sourceFingerprint: "source-fingerprint",
-        bundleFingerprints: ["generated-bundle-fingerprint"],
-      },
-      provenance: null,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
     });
     fetchClawHubSkillCardMock.mockResolvedValue("# Agent Receipt\n\nGenerated by ClawHub.\n");
     buildWorkspaceSkillStatusMock.mockReturnValue(skillStatusReportFixture);
@@ -518,6 +594,7 @@ describe("skills cli commands", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      config: {},
     });
     expectLogger(installArgs.logger);
     expect(
@@ -619,6 +696,7 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/workspace",
       spec: "git:owner/tools",
       force: false,
+      config: {},
     });
     expect(installArgs.slug).toBeUndefined();
     expectLogger(installArgs.logger);
@@ -642,6 +720,54 @@ describe("skills cli commands", () => {
 
     expect(mockFirstObjectArg(installSkillFromSourceMock).spec).toBe("git:owner/tools@main");
     expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("passes an install-policy warning prompt to interactive skill installs", async () => {
+    setTty(true);
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "tools",
+      targetDir: "/tmp/workspace/skills/tools",
+      source: "git",
+    });
+
+    await runCommand(["skills", "install", "git:owner/tools"]);
+
+    expect(mockFirstObjectArg(installSkillFromSourceMock).onInstallPolicyWarning).toEqual(
+      expect.any(Function),
+    );
+  });
+
+  it("passes a generic install confirmation to interactive ClawHub skill installs", async () => {
+    setTty(true);
+    primeCalendarInstall();
+
+    await runCommand(["skills", "install", "calendar"]);
+
+    expect(mockFirstObjectArg(installSkillFromClawHubMock).confirmInstall).toEqual(
+      expect.any(Function),
+    );
+  });
+
+  it("passes noninteractive install-policy acknowledgement to skill installs", async () => {
+    setTty(false);
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "tools",
+      targetDir: "/tmp/workspace/skills/tools",
+      source: "git",
+    });
+
+    await runCommand([
+      "skills",
+      "install",
+      "git:owner/tools",
+      "--acknowledge-install-policy-warning",
+    ]);
+
+    expect(mockFirstObjectArg(installSkillFromSourceMock).onInstallPolicyWarning).toEqual(
+      expect.any(Function),
+    );
   });
 
   it("installs a skill from a local directory", async () => {
@@ -686,12 +812,44 @@ describe("skills cli commands", () => {
     });
   });
 
+  it("declares inherited options on every applicable nested leaf", () => {
+    const program = new Command().enablePositionalOptions();
+    registerSkillsCli(program);
+    const skills = requireCommand(program, "skills");
+    const workshop = requireCommand(skills, "workshop");
+    const curator = requireCommand(skills, "curator");
+
+    for (const command of workshop.commands) {
+      expect(
+        command.options.some((option) => option.long === "--agent"),
+        command.name(),
+      ).toBe(true);
+    }
+    for (const command of curator.commands) {
+      expect(
+        command.options.some((option) => option.long === "--json"),
+        command.name(),
+      ).toBe(true);
+    }
+  });
+
   it("rejects --version for git and local source installs", async () => {
     await expect(
       runCommand(["skills", "install", "git:owner/tools", "--version", "1.2.3"]),
     ).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors).toContain("--version is only supported for ClawHub skill installs.");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { spec: "git:owner/tools", flag: "--force-install" },
+    { spec: "./local-skill", flag: "--force-install" },
+  ])("rejects ClawHub-only $flag for source install $spec", async ({ spec, flag }) => {
+    await expect(runCommand(["skills", "install", spec, flag])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(`${flag} is only supported for ClawHub skill installs.`);
     expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
     expect(installSkillFromSourceMock).not.toHaveBeenCalled();
   });
@@ -757,38 +915,22 @@ describe("skills cli commands", () => {
     );
   });
 
-  it.each([
-    { flag: "--force-install", option: "forceInstall" },
-    { flag: "--acknowledge-clawhub-risk", option: "acknowledgeClawHubRisk" },
-  ])("passes $flag through for ClawHub skill installs", async ({ flag, option }) => {
-    primeCalendarInstall();
+  it.each([{ flag: "--force-install", option: "forceInstall" }])(
+    "passes $flag through for ClawHub skill installs",
+    async ({ flag, option }) => {
+      primeCalendarInstall();
 
-    await runCommand(["skills", "install", "calendar", flag]);
+      await runCommand(["skills", "install", "calendar", flag]);
 
-    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
-        slug: "calendar",
-        [option]: true,
-      }),
-    );
-  });
-
-  it("prints acknowledgement guidance for unacknowledged ClawHub skill installs", async () => {
-    installSkillFromClawHubMock.mockResolvedValue({
-      ok: false,
-      code: "clawhub_risk_acknowledgement_required",
-      error:
-        "Install cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
-      warning: "WARNING - ClawHub found security risks in this release",
-    });
-
-    await expect(runCommand(["skills", "install", "calendar"])).rejects.toThrow("__exit__:1");
-
-    expect(runtimeErrors).toContain(
-      "Install cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
-    );
-  });
+      expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: "/tmp/workspace",
+          slug: "calendar",
+          [option]: true,
+        }),
+      );
+    },
+  );
 
   it("prints blocked ClawHub skill install failures when no trust warning was emitted", async () => {
     installSkillFromClawHubMock.mockResolvedValue({
@@ -859,8 +1001,8 @@ describe("skills cli commands", () => {
   });
 
   it.each([
+    { flag: "--force", option: "force" },
     { flag: "--force-install", option: "forceInstall" },
-    { flag: "--acknowledge-clawhub-risk", option: "acknowledgeClawHubRisk" },
   ])("passes $flag through for ClawHub skill updates", async ({ flag, option }) => {
     primeCalendarUpdate();
 
@@ -875,22 +1017,21 @@ describe("skills cli commands", () => {
     );
   });
 
-  it("prints acknowledgement guidance for unacknowledged ClawHub skill updates", async () => {
+  it("prints --force retry guidance for blocked ClawHub skill updates", async () => {
     readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
     updateSkillsFromClawHubMock.mockResolvedValue([
       {
         ok: false,
-        code: "clawhub_risk_acknowledgement_required",
+        code: "force_required",
         error:
-          "Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
-        warning: "WARNING - ClawHub found security risks in this release",
+          'Skill "calendar" has local file changes. Updating replaces the installed skill directory.',
       },
     ]);
 
     await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors).toContain(
-      "Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
+      'Skill "calendar" has local file changes. Updating replaces the installed skill directory. Re-run with --force to update it anyway.',
     );
   });
 
@@ -998,7 +1139,7 @@ describe("skills cli commands", () => {
       version: undefined,
       tag: undefined,
     });
-    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+    expect(verifySkillWithClawHubMock).toHaveBeenCalledWith({
       slug: "agentreceipt",
       version: "1.2.3",
       tag: undefined,
@@ -1039,7 +1180,7 @@ describe("skills cli commands", () => {
 
     await runCommand(["skills", "verify", "weather"]);
 
-    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+    expect(verifySkillWithClawHubMock).toHaveBeenCalledWith({
       slug: "weather",
       ownerHandle: "demo-owner",
       version: "1.2.3",
@@ -1073,7 +1214,7 @@ describe("skills cli commands", () => {
       version: undefined,
       tag: "latest",
     });
-    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+    expect(verifySkillWithClawHubMock).toHaveBeenCalledWith({
       slug: "weather",
       ownerHandle: "demo-owner",
       version: undefined,
@@ -1209,8 +1350,28 @@ describe("skills cli commands", () => {
 
     await expect(runCommand(["skills", "verify", "agentreceipt"])).rejects.toThrow("__exit__:1");
 
-    const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as Record<string, unknown>;
-    expect(payload.ok).toBe(false);
+    expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
+      schema: "clawhub.skill.verify.v1",
+      ok: false,
+      decision: "fail",
+      reasons: ["security.status_not_clean"],
+      skill: { slug: "agentreceipt" },
+      publisher: null,
+      version: { version: "1.2.3" },
+      card: { available: true },
+      artifact: null,
+      provenance: null,
+      security: { status: "malicious" },
+      signature: { status: "unsigned" },
+      openclaw: {
+        resolution: {
+          source: "installed",
+          selector: "installed-version",
+          registry: "https://private.example.com/clawhub",
+          installedVersion: "1.2.3",
+        },
+      },
+    });
     expect(runtimeErrors).toStrictEqual([]);
   });
 
@@ -1235,31 +1396,17 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
   });
 
-  it("fails before fetching when verification target resolution fails", async () => {
-    resolveClawHubSkillVerificationTargetMock.mockResolvedValueOnce({
-      ok: false,
-      error: "Use either --version or --tag.",
-    });
-
-    await expect(
-      runCommand(["skills", "verify", "agentreceipt", "--version", "1.0.0", "--tag", "latest"]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: "Use either --version or --tag.",
-    });
-    expect(runtimeErrors).toStrictEqual([]);
-    expect(fetchClawHubSkillVerificationMock).not.toHaveBeenCalled();
-    expect(fetchClawHubSkillCardMock).not.toHaveBeenCalled();
-  });
-
   it("returns JSON when verify workspace selection fails", async () => {
     defaultRuntime.exit.mockImplementationOnce(() => undefined);
 
     await runCommand(["skills", "verify", "agentreceipt", "--global", "--agent", "main"]);
 
     expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: "Use either --global or --agent, not both.",
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: "Use either --global or --agent, not both.",
+      },
     });
     expect(runtimeErrors).toStrictEqual([]);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
@@ -1333,6 +1480,47 @@ describe("skills cli commands", () => {
   });
 
   it.each([
+    {
+      label: "human",
+      argv: ["skills", "info", "missing-skill"],
+      expected:
+        'Skill "missing-skill" not found. Run `openclaw skills list` to see available skills.\n\nTip: use `openclaw skills search`, `openclaw skills install`, and `openclaw skills update` for ClawHub-backed skills.',
+    },
+    {
+      label: "JSON",
+      argv: ["skills", "info", "missing-skill", "--json"],
+      expected: JSON.stringify(
+        {
+          ok: false,
+          error: { type: "cli_error", message: 'Skill "missing-skill" not found.' },
+          skill: "missing-skill",
+        },
+        null,
+        2,
+      ),
+    },
+  ])("exits nonzero for missing skill info in $label mode", async ({ argv, expected }) => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+
+    await expect(runCommand(argv)).rejects.toThrow("__exit__:1");
+
+    expect(runtimeStdout).toEqual([expected]);
+    expect(runtimeErrors).toStrictEqual([]);
+    expect(defaultRuntime.exit).toHaveBeenCalledOnce();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps successful human skill info output at exit zero", async () => {
+    await runCommand(["skills", "info", "calendar"]);
+
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(runtimeStdout).toHaveLength(1);
+    expect(runtimeStdout.at(-1)).toContain("📅 calendar ✓ Ready");
+    expect(runtimeStdout.at(-1)).toContain("Calendar helpers");
+  });
+
+  it.each([
     ["list", ["skills", "list", "--json"]],
     ["info", ["skills", "info", "calendar", "--json"]],
     ["check", ["skills", "check", "--json"]],
@@ -1345,6 +1533,7 @@ describe("skills cli commands", () => {
       await runCommand(argv);
     });
 
+    expect(resolveConfiguredAgentIdMock).not.toHaveBeenCalled();
     expectStatusWorkspaceCall("/tmp/workspace-writer");
   });
 
@@ -1402,6 +1591,177 @@ describe("skills cli commands", () => {
     expect(output.missingRequirements).toEqual([]);
   });
 
+  const explicitGatewaySkillFailures = [
+    {
+      label: "configured remote missing URL",
+      config: { gateway: { mode: "remote" as const } },
+      message: "gateway remote mode misconfigured: gateway.remote.url missing",
+    },
+    {
+      label: "configured remote transport failure",
+      config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
+      message: "Gateway not reachable: ws://127.0.0.1:9",
+    },
+    {
+      label: "configured remote auth failure",
+      config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
+      message: "gateway authentication failed",
+    },
+    {
+      label: "environment-selected transport failure",
+      config: {},
+      url: "ws://127.0.0.1:9",
+      message: "Gateway not reachable: ws://127.0.0.1:9",
+    },
+    {
+      label: "environment-selected auth failure",
+      config: {},
+      url: "ws://127.0.0.1:9",
+      message: "gateway authentication failed",
+    },
+  ];
+  const skillReadCommands = [
+    { label: "default", argv: ["skills"] },
+    { label: "list", argv: ["skills", "list"] },
+    { label: "info", argv: ["skills", "info", "calendar"] },
+    { label: "check", argv: ["skills", "check"] },
+  ];
+
+  it.each(
+    explicitGatewaySkillFailures.flatMap((target) =>
+      skillReadCommands.flatMap((command) =>
+        [false, true].map((json) => ({
+          target,
+          command,
+          json,
+          label: `${command.label} ${json ? "JSON" : "human"}: ${target.label}`,
+        })),
+      ),
+    ),
+  )("does not substitute local skills after $label", async ({ target, command, json }) => {
+    loadConfigMock.mockReturnValue(target.config);
+    if (target.url) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", target.url);
+    }
+    callGatewayMock.mockRejectedValue(new Error(target.message));
+
+    await expect(runCommand([...command.argv, ...(json ? ["--json"] : [])])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toEqual([target.message]);
+    expect(runtimeStdout).toEqual([]);
+    expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "request validation",
+      outcome: "command",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: 'invalid skills.status params: unknown agent id "retired"',
+      }),
+    },
+    {
+      label: "internal server failure",
+      outcome: "command",
+      error: new GatewayClientRequestError({
+        code: "INTERNAL_ERROR",
+        message: "inventory crashed",
+      }),
+    },
+    {
+      label: "authentication close",
+      outcome: "root",
+      error: new GatewayTransportError({
+        kind: "closed",
+        code: 1008,
+        reason: "pairing required",
+        message: "gateway closed (1008): pairing required",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+      }),
+    },
+    {
+      label: "plain pairing close",
+      outcome: "command",
+      error: new Error("gateway closed (1008): pairing required"),
+    },
+    { label: "unknown failure", outcome: "command", error: new Error("gateway unavailable") },
+  ])("does not substitute implicit-local skills after $label", async ({ error, outcome }) => {
+    callGatewayMock.mockRejectedValue(error);
+
+    // Root-owned credential/transport errors propagate; ordinary command errors log and exit.
+    const command = runCommand(["skills", "list", "--json"]);
+    if (outcome === "root") {
+      await expect(command).rejects.toBe(error);
+      expect(runtimeErrors).toEqual([]);
+    } else {
+      await expect(command).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors).toEqual([error.message]);
+    }
+    expect(runtimeStdout).toEqual([]);
+    expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "missing credentials before connecting",
+      error: Object.assign(new Error("gateway requires credentials"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "skills.status",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
+    {
+      label: "typed timeout",
+      error: new GatewayTransportError({
+        kind: "timeout",
+        timeoutMs: 1_500,
+        message: "gateway timeout after 1500ms",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+      }),
+    },
+    { label: "pending-request close", error: new Error("gateway closed (1006): abnormal closure") },
+    { label: "pending-request timeout", error: new Error("gateway timeout after 1500ms") },
+    {
+      label: "older unknown method",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: skills.status",
+      }),
+    },
+    {
+      label: "older unsupported agent selector",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "invalid skills.status params: unexpected property agentId",
+      }),
+    },
+    {
+      label: "older standard agent-selector validation",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "invalid skills.status params: at root: unexpected property 'agentId'",
+      }),
+    },
+  ])("retains implicit-local skills recovery after $label", async ({ error }) => {
+    callGatewayMock.mockRejectedValue(error);
+
+    await runCommand(["skills", "list", "--json"]);
+
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledOnce();
+    expect(runtimeErrors).toEqual([]);
+  });
+
   it.each([
     ["list", ["skills", "list", "--agent", "writer", "--json"]],
     ["info", ["skills", "info", "calendar", "--agent", "writer", "--json"]],
@@ -1416,7 +1776,57 @@ describe("skills cli commands", () => {
     });
 
     expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredAgentIdMock).toHaveBeenCalledWith({}, "writer");
     expectStatusWorkspaceCall("/tmp/workspace-writer");
+  });
+
+  it.each([
+    ["list", ["skills", "list", "--agent", "nope-agent"]],
+    ["check", ["skills", "check", "--agent", "nope-agent"]],
+    ["default parent option", ["skills", "--agent", "nope-agent"]],
+    ["install", ["skills", "install", "calendar", "--agent", "nope-agent"]],
+    ["verify", ["skills", "verify", "calendar", "--card", "--agent", "nope-agent"]],
+    ["workshop list", ["skills", "workshop", "list", "--agent", "nope-agent"]],
+    ["workshop inspect", ["skills", "workshop", "inspect", "proposal-id", "--agent", "nope-agent"]],
+    [
+      "workshop proposal",
+      [
+        "skills",
+        "workshop",
+        "propose-create",
+        "--name",
+        "calendar-helper",
+        "--description",
+        "Calendar helper",
+        "--proposal",
+        "/missing/proposal.md",
+        "--agent",
+        "nope-agent",
+      ],
+    ],
+  ])("rejects an unknown agent before skills %s work", async (_label, argv) => {
+    resolveConfiguredAgentIdMock.mockImplementation((_config, agentId: string) =>
+      resolveConfiguredAgentId({ agents: { list: [{ id: "main" }, { id: "writer" }] } }, agentId),
+    );
+
+    await expect(runCommand(argv)).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toStrictEqual([
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    ]);
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["empty", ["skills", "check", "--agent", ""]],
+    ["whitespace-only", ["skills", "check", "--agent", "   "]],
+    ["empty with --global", ["skills", "install", "calendar", "--global", "--agent", ""]],
+  ])("rejects a blank explicit skills agent (%s)", async (_label, argv) => {
+    await expect(runCommand(argv)).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toStrictEqual(["--agent must not be blank"]);
+    expect(resolveConfiguredAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
   });
 
   it("falls back to the default agent outside configured workspaces", async () => {
@@ -1429,8 +1839,38 @@ describe("skills cli commands", () => {
     });
 
     expect(resolveAgentIdByWorkspacePathMock).toHaveBeenCalledWith({}, "/tmp/unrelated");
-    expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith({});
+    expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ hint: "Pass --agent <id>." }),
+    );
+    expect(resolveConfiguredAgentIdMock).not.toHaveBeenCalled();
     expectStatusWorkspaceCall("/tmp/workspace-main");
+  });
+
+  it("renders the supported skills escape without advertising --all-agents", async () => {
+    resolveDefaultAgentIdMock.mockImplementationOnce((_config, context) => {
+      throw new AgentSelectionRequiredError(["main", "helper", "third"], context);
+    });
+
+    await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toStrictEqual([
+      "Multiple agents are configured, but the skills command has no explicit owner. Pass --agent <id>.",
+    ]);
+    expect(runtimeErrors[0]).not.toContain("--all-agents");
+  });
+
+  it("redacts secrets from rendered skills CLI errors", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    resolveDefaultAgentIdMock.mockImplementationOnce(() => {
+      throw new Error(`Skill lookup failed with token=${secret}`);
+    });
+
+    await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0]).toContain("Skill lookup failed");
+    expect(runtimeErrors[0]).not.toContain(secret);
   });
 
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {

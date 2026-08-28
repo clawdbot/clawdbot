@@ -177,6 +177,45 @@ describe("pending-final delivery completion", () => {
     });
   });
 
+  it.each(["owed", "unresolved", "acknowledged"] as const)(
+    "preserves %s notice history while another delivery remains unknown",
+    async (noticeState) => {
+      await installContextOnPendingFinal();
+      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...entry,
+          pendingFinalDelivery: {
+            ...entry.pendingFinalDelivery!,
+            deliveries: [
+              { id: completion.deliveryId, state: "unknown" },
+              { id: "delivery-2", state: "queued" },
+            ],
+          },
+          pendingDeliveryNotice: {
+            createdAt: entry.pendingFinalDelivery!.createdAt,
+            context: noticeContext,
+            intentId: completion.intentId,
+            state: noticeState,
+          },
+        },
+      );
+      await settlePendingFinalDelivery({ ...completion, deliveryId: "delivery-2" }, "delivered");
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        noticeState,
+      );
+      await settlePendingFinalDelivery(completion, "unknown");
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        noticeState,
+      );
+      await settlePendingFinalDelivery(completion, "delivered");
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        noticeState === "acknowledged" ? "acknowledged" : undefined,
+      );
+    },
+  );
+
   it("carries the custom queue root when a terminal sibling wakes recovery", async () => {
     const entry = loadSessionEntry({ sessionKey, storePath })!;
     await replaceSessionEntry(

@@ -68,7 +68,7 @@ vi.mock("../../cli/prompt.js", () => ({
 }));
 
 vi.mock("../../plugins/enable.js", () => ({
-  enablePluginInConfig: mocks.enablePluginInConfig,
+  enablePluginWithCapabilityConsent: mocks.enablePluginInConfig,
 }));
 
 vi.mock("../codex-runtime-plugin-install.js", () => ({
@@ -436,19 +436,22 @@ describe("promosClaimCommand", () => {
     );
   });
 
-  it("refuses to claim when the provider plugin is blocked by policy", async () => {
-    mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
-      config: cfg,
-      enabled: false,
-      pluginId,
-      reason: "denylisted",
-    }));
+  it.each(["denylisted", "requires capability consent"])(
+    "refuses to claim when the provider plugin %s",
+    async (reason) => {
+      mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
+        config: cfg,
+        enabled: false,
+        pluginId,
+        reason,
+      }));
 
-    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
-      /plugin policy/,
-    );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
+      await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
+        /plugin policy/,
+      );
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("maps 404 responses to a friendly not-found error", async () => {
     const requestError = new ClawHubRequestError({

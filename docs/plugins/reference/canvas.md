@@ -1,5 +1,5 @@
 ---
-summary: "Experimental Canvas control and A2UI rendering surfaces for paired nodes."
+summary: "Presents hosted widget documents on paired macOS panels."
 read_when:
   - You are installing, configuring, or auditing the canvas plugin
 title: "Canvas plugin"
@@ -7,7 +7,7 @@ title: "Canvas plugin"
 
 # Canvas plugin
 
-Experimental Canvas control and A2UI rendering surfaces for paired nodes.
+Presents hosted widget documents on paired macOS panels.
 
 ## Distribution
 

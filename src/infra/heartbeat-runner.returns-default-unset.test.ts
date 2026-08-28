@@ -23,6 +23,7 @@ import {
 } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
@@ -337,6 +338,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
+  resetHeartbeatEventsForTest();
   if (testRegistry) {
     setActivePluginRegistry(testRegistry);
   }
@@ -372,6 +374,43 @@ describe("resolveHeartbeatIntervalMs", () => {
 
     expect(resolveHeartbeatSummaryForAgent(cfg, "main").session).toBe("telegram:alerts");
   });
+
+  it.each([
+    {
+      label: "global",
+      cfg: {
+        agents: {
+          defaults: {
+            heartbeat: { every: "0m", target: "last", session: "telegram:default" },
+          },
+        },
+      },
+      session: "telegram:default",
+    },
+    {
+      label: "per-agent",
+      cfg: {
+        agents: {
+          defaults: {
+            heartbeat: { every: "30m", target: "last", session: "telegram:default" },
+          },
+          list: [{ id: "main", heartbeat: { every: "0m", session: "telegram:alerts" } }],
+        },
+      },
+      session: "telegram:alerts",
+    },
+  ] satisfies Array<{ label: string; cfg: OpenClawConfig; session: string }>)(
+    "reports a disabled $label heartbeat as disabled",
+    ({ cfg, session }) => {
+      expect(resolveHeartbeatSummaryForAgent(cfg, "main")).toMatchObject({
+        enabled: false,
+        every: "disabled",
+        everyMs: null,
+        target: "last",
+        session,
+      });
+    },
+  );
 
   it("returns default when unset", () => {
     expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
@@ -813,6 +852,49 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("runs an exec-event wake for a configured agent when cadence is disabled", async () => {
+    const tmpDir = await createCaseDir("hb-disabled-exec-event");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "0m", target: "none" },
+        },
+        list: [{ id: "main" }],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedWhatsAppSession(storePath, sessionKey);
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.fn();
+    replySpy.mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey,
+      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+    });
+
+    expect(res.status).toBe("ran");
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(replyBody(replySpy).Provider).toBe("exec-event");
+  });
+
   it.each([
     ["the heartbeat main session", (cfg: OpenClawConfig) => resolveMainSessionKey(cfg)],
     ["another session for the same agent", () => "agent:main:telegram:alerts"],
@@ -862,6 +944,8 @@ describe("runHeartbeatOnce", () => {
     if (res.status === "skipped") {
       expect(res.reason).toBe("quiet-hours");
     }
+    // Documented observable skip: `system heartbeat last` must show the window.
+    expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "quiet-hours" });
   });
 
   it("skips a routeless interval poll before the agent run", async () => {

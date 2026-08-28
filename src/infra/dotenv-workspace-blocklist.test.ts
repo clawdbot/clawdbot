@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -66,19 +66,21 @@ function createManifestBackedProviderSnapshot(
   plugin: PluginManifestRecord,
 ): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash,
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [plugin], diagnostics: [] },
     plugins: [plugin],
@@ -137,7 +139,7 @@ describe("workspace .env blocklist completeness", () => {
 
           expect(process.env.RUNTIME_CLOUD_API_KEY).toBe("global-plugin-key");
         } finally {
-          clearCurrentPluginMetadataSnapshot();
+          clearPluginMetadataLifecycleCaches();
         }
       });
     });
@@ -194,6 +196,7 @@ describe("workspace .env blocklist completeness", () => {
           "HOMEBREW_BREW_FILE",
           "HOMEBREW_PREFIX",
           "IRC_HOST",
+          "APPDATA",
           "LOCALAPPDATA",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",

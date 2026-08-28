@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 
 export type PanelRefreshStatus = Readonly<{
   error: string | null;
@@ -27,7 +28,7 @@ export function completePanelRefresh(): PanelRefreshStatus {
 
 export function failPanelRefresh(status: PanelRefreshStatus, error: string): PanelRefreshStatus {
   return {
-    error,
+    error: formatUiError(error),
     hasLoaded: status.hasLoaded,
     stale: status.hasLoaded,
   };
@@ -37,10 +38,12 @@ export function renderPanelRefreshStatus(params: {
   status: PanelRefreshStatus;
   errorMessage?: string;
   onRetry: () => void;
+  retryDisabled?: boolean;
   className?: string;
 }): TemplateResult | typeof nothing {
   const { status } = params;
-  const error = params.errorMessage ?? status.error;
+  const rawError = params.errorMessage ?? status.error;
+  const error = rawError ? formatUiError(rawError) : rawError;
   if (!error && !status.stale) {
     return nothing;
   }
@@ -58,7 +61,9 @@ export function renderPanelRefreshStatus(params: {
         <span>${error}</span>
         ${status.stale ? html`<br /><strong>${t("common.staleData")}</strong>` : nothing}
       </span>
-      <button class="btn btn--sm" @click=${params.onRetry}>${t("common.retry")}</button>
+      <button class="btn btn--sm" ?disabled=${params.retryDisabled} @click=${params.onRetry}>
+        ${t("common.retry")}
+      </button>
     </div>
   `;
 }

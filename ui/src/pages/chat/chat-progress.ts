@@ -1,18 +1,109 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 
 type WorkingProgress = {
   key: string;
+  runId: string | null;
   startedAt: number;
 };
 
-type WorkingProgressCache = WorkingProgress & {
-  runId: string | null;
-};
+type WorkingProgressCache = WorkingProgress;
+
+const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
+
+export function isContextCompactionActivity(message: unknown): boolean {
+  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
+}
+
+export function projectContextCompactionActivity(message: unknown): unknown {
+  const record = asRecord(message);
+  if (record?.role !== "custom" || record.customType !== CONTEXT_COMPACTION_CUSTOM_TYPE) {
+    return message;
+  }
+  const metadata = asRecord(record["__openclaw"]);
+  const details = asRecord(record.details);
+  const { idempotencyKey: _activityId, ...activity } = record;
+  return {
+    ...activity,
+    role: "assistant",
+    content: [{ type: "text", text: t("chat.composer.contextCompacted") }],
+    ...(typeof metadata?.runId === "string"
+      ? { runId: metadata.runId }
+      : typeof details?.runId === "string"
+        ? { runId: details.runId }
+        : {}),
+    __openclaw: {
+      ...metadata,
+      runtimeActivityKind: "context_compaction",
+    },
+  };
+}
 
 const workingProgressBySession = new Map<string, WorkingProgressCache>();
 let anonymousWorkingProgressId = 0;
+
+export function buildGuardianNoticeItem(
+  notice: ChatGuardianNotice,
+): Extract<ChatItem, { kind: "notice" }> {
+  const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  if (notice.source === "system") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "cpu",
+      label: t("common.system"),
+      text: notice.message ?? "",
+      timestamp: notice.timestamp,
+    };
+  }
+  if (notice.kind === "approved") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.approvedSummary", { action }),
+      text: "",
+      timestamp: notice.timestamp,
+    };
+  }
+  if (notice.kind === "warning") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.warningLabel"),
+      text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
+      timestamp: notice.timestamp,
+      tone: "danger",
+    };
+  }
+  if (notice.kind === "reviewing" || notice.kind === "strict-review-required") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.strictReviewRequiredLabel"),
+      text: t("chat.systemNotice.guardian.strictReviewRequiredSummary"),
+      timestamp: notice.timestamp,
+      tone: "danger",
+    };
+  }
+  return {
+    kind: "notice",
+    key: notice.key,
+    icon: "shieldCheck",
+    label: t("chat.systemNotice.guardian.deniedLabel"),
+    text: t("chat.systemNotice.guardian.deniedSummary", {
+      action,
+      risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
+      rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
+    }),
+    timestamp: notice.timestamp,
+    tone: "danger",
+  };
+}
 
 export function buildCompactionDividerItem(
   marker: Record<string, unknown>,
@@ -68,14 +159,32 @@ export function buildResetDividerItem(
   };
 }
 
-export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
-  // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
-  const sendStarted = typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
+function queuedSendStarted(item: ChatQueueItem): boolean {
+  return typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
+}
+
+export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
   return (
-    sendStarted &&
+    queuedSendStarted(item) &&
+    !item.localCommandName &&
+    (item.sendState === "failed" ||
+      item.sendState === "unconfirmed" ||
+      (item.sendState === "waiting-idle" && Boolean(item.sendError)))
+  );
+}
+
+export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
+  return !item.localCommandName && !item.pendingRunId;
+}
+
+function isStartedQueuedSend(item: ChatQueueItem): boolean {
+  // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
+  return (
+    queuedSendStarted(item) &&
     (item.sendState === "waiting-model" ||
       item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect")
+      item.sendState === "waiting-reconnect" ||
+      isQueuedSendInlineState(item))
   );
 }
 
@@ -84,18 +193,26 @@ export function resolveWorkingProgress(
   runId: string | null,
   streamStartedAt: number | null,
   queue: ChatQueueItem[],
-  streamSegments: Array<{ ts: number }>,
+  streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
-  const queuedRunId =
-    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item))
-      ?.sendRunId ?? queue.find(shouldRenderQueuedSendInThread)?.sendRunId;
-  const toolRunId = toolMessages
-    .map((message) => (message as Record<string, unknown> | null)?.runId)
-    .find(
+  const queuedProgress =
+    queue.find((item) => item.sendState === "sending" && isStartedQueuedSend(item)) ??
+    queue.find(isStartedQueuedSend);
+  const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
+  const segmentRunId = streamSegments
+    .map((segment) => segment.runId)
+    .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const explicitRunId = queuedRunId ?? runId ?? toolRunId;
+  const toolRunId = toolMessages
+    .map((message) => (message as Record<string, unknown> | null)?.runId)
+    .findLast(
+      (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+    );
+  // Stream and tool facts describe work already observed in this row. Queue
+  // identity is only a pre-run fallback and must not claim an active tail.
+  const explicitRunId = runId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =
     cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId) ? cached : null;
@@ -103,7 +220,7 @@ export function resolveWorkingProgress(
     compatibleCached?.startedAt,
     streamStartedAt,
     ...queue
-      .filter(shouldRenderQueuedSendInThread)
+      .filter(isStartedQueuedSend)
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
     ...streamSegments.map((segment) => segment.ts),
@@ -126,7 +243,7 @@ export function resolveWorkingProgress(
     runId: explicitRunId ?? compatibleCached?.runId ?? null,
     startedAt,
   });
-  return { key, startedAt };
+  return { key, runId: explicitRunId ?? compatibleCached?.runId ?? null, startedAt };
 }
 
 export function clearWorkingProgress(sessionKey: string): void {
@@ -155,6 +272,15 @@ type TurnRecapWatch = {
    * run's, so such a watch is consumed unresolved at settle. */
   baselineKnown: boolean;
   baselineEndedAt: number | null;
+  /** The previous run's persisted token count. The terminal stamp and the
+   * usage persist are separate gateway writes, so a fresh-endedAt row can
+   * still carry the PREVIOUS turn's outputTokens; an unchanged value at
+   * resolve is treated as that lag, not this turn's count. */
+  baselineOutputTokens: number | null;
+  /** Highest live usage-stream counter observed for the watched run. Fills
+   * in when the row's outputTokens hasn't been rewritten yet (see above);
+   * attributed by chatRunId upstream, so it cannot be another run's. */
+  liveOutputTokens: number | null;
   /** A terminal stamp changed while the claw was still up: some run's
    * terminal (this one's early, or an interleaved older patch) already
    * passed, so settle cannot attribute later stamps and must consume the
@@ -187,6 +313,10 @@ type TurnRecapSessionRow = {
   outputTokens?: number;
 };
 
+function rowOutputTokens(row: TurnRecapSessionRow | undefined): number | null {
+  return typeof row?.outputTokens === "number" ? row.outputTokens : null;
+}
+
 /** Post-turn recap for the bottom-of-thread status row. While the working
  * indicator is visible the session is "watched" (and any older recap hides);
  * once it settles, the first session row carrying a fresh terminal stamp
@@ -196,15 +326,23 @@ export function resolveTurnRecap(
   sessionKey: string,
   indicatorVisible: boolean,
   row: TurnRecapSessionRow | undefined,
+  liveOutputTokens: number | null = null,
 ): TurnRecap | null {
   const watch = turnRecapWatchBySession.get(sessionKey);
   const rowEndedAt = typeof row?.endedAt === "number" ? row.endedAt : null;
+  if (watch && liveOutputTokens !== null && liveOutputTokens > (watch.liveOutputTokens ?? -1)) {
+    // Monotonic max: the usage map entry is dropped at lifecycle end, so the
+    // last counter seen while watching/settling is the run's final total.
+    watch.liveOutputTokens = liveOutputTokens;
+  }
   if (indicatorVisible) {
     if (!watch || !watch.watching) {
       turnRecapWatchBySession.set(sessionKey, {
         watching: true,
         baselineKnown: row !== undefined,
         baselineEndedAt: rowEndedAt,
+        baselineOutputTokens: rowOutputTokens(row),
+        liveOutputTokens,
         absorbedTerminal: false,
         settleStartedAt: null,
         settled: null,
@@ -213,6 +351,7 @@ export function resolveTurnRecap(
       if (row !== undefined) {
         watch.baselineKnown = true;
         watch.baselineEndedAt = rowEndedAt;
+        watch.baselineOutputTokens = rowOutputTokens(row);
       }
     } else if (rowEndedAt !== null && rowEndedAt !== watch.baselineEndedAt) {
       watch.baselineEndedAt = rowEndedAt;
@@ -254,9 +393,17 @@ export function resolveTurnRecap(
   if (row?.status !== "done" || typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs)) {
     return null;
   }
+  // The terminal stamp and the usage persist are separate gateway writes, so
+  // this fresh-endedAt row can still carry the previous turn's outputTokens.
+  // An unchanged-from-baseline value is that lag: fall back to the watched
+  // run's live counter (or show none) rather than the stale number.
+  const rowTokens = rowOutputTokens(row);
   const settled: TurnRecap = {
     runtimeMs,
-    outputTokens: typeof row.outputTokens === "number" ? row.outputTokens : null,
+    outputTokens:
+      rowTokens !== null && rowTokens !== watch.baselineOutputTokens
+        ? rowTokens
+        : watch.liveOutputTokens,
   };
   turnRecapWatchBySession.set(sessionKey, { ...watch, settled });
   return settled;

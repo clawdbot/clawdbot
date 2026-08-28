@@ -3,13 +3,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
-import { PluginLruCache } from "./plugin-cache-primitives.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  pluginCacheStatSync,
+  readPluginCacheDirectory,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
+import {
+  getPluginSdkHostFacts,
+  type PluginRuntimeModuleResolution,
+  type PluginSdkPackageJson,
+  type WorkspacePackageAliasEntry,
+} from "./plugin-cache-sdk.js";
+import { getPluginCache } from "./plugin-cache.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
 export type PluginSdkResolutionPreference = "auto" | "dist" | "src";
@@ -23,30 +37,33 @@ type LoaderModuleResolveParams = {
   pluginSdkResolution?: PluginSdkResolutionPreference;
 };
 
-export type PluginRuntimeModuleResolution = {
-  modulePath?: string;
-  packageRoot: string | null;
-  candidates: string[];
-  resolvedPath: string | null;
-  error?: string;
-};
-
-type PluginSdkPackageJson = {
-  exports?: Record<string, unknown>;
-  bin?: string | Record<string, unknown>;
-  version?: string;
-};
-
-type WorkspacePackageAliasEntry = {
-  packageName: string;
-  packageDir: string;
-  subpath: string;
-  srcFile: string;
-  distFile: string;
-};
+export type { PluginRuntimeModuleResolution } from "./plugin-cache-sdk.js";
 
 const STARTUP_ARGV1 = process.argv[1];
-const pluginSdkPackageJsonByRoot = new Map<string, PluginSdkPackageJson | null>();
+
+function sdkHost(packageRoot: string) {
+  return getPluginSdkHostFacts(getPluginCache().sdk, path.resolve(packageRoot));
+}
+
+function sdkAliasFacts(aliasMap: Record<string, string>) {
+  const cache = getPluginCache().sdk.aliasFacts;
+  let facts = cache.get(aliasMap);
+  if (!facts) {
+    facts = {};
+    cache.set(aliasMap, facts);
+  }
+  return facts;
+}
+
+function readSdkJsonFile(filePath: string): unknown {
+  const file = readPluginCacheFile({
+    rootDir: path.dirname(filePath),
+    relativePath: path.basename(filePath),
+    rejectHardlinks: false,
+  });
+  const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
+  return parsed?.ok ? parsed.value : null;
+}
 
 function sanitizeJitiCachePathSegment(value: string): string {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
@@ -106,17 +123,20 @@ function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string
 }
 
 function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | null {
-  const cacheKey = path.resolve(packageRoot);
-  if (pluginSdkPackageJsonByRoot.has(cacheKey)) {
-    return pluginSdkPackageJsonByRoot.get(cacheKey) ?? null;
+  const facts = sdkHost(packageRoot);
+  if (facts.packageJson !== undefined) {
+    return facts.packageJson;
   }
-  const parsed = tryReadJsonSync<PluginSdkPackageJson>(path.join(packageRoot, "package.json"));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    pluginSdkPackageJsonByRoot.set(cacheKey, null);
-    return null;
-  }
-  pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
-  return parsed;
+  const parsed = readSdkJsonFile(path.join(packageRoot, "package.json"));
+  facts.packageJson = isRecord(parsed)
+    ? {
+        ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
+        ...(isRecord(parsed.exports) ? { exports: parsed.exports } : {}),
+        ...(typeof parsed.bin === "string" || isRecord(parsed.bin) ? { bin: parsed.bin } : {}),
+        ...(typeof parsed.version === "string" ? { version: parsed.version } : {}),
+      }
+    : null;
+  return facts.packageJson;
 }
 
 function resolveJitiCacheModulePath(params: LoaderModuleResolveParams = {}): string {
@@ -139,11 +159,9 @@ function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {
     readPluginSdkPackageJson(packageRoot)?.version ?? "unknown",
   );
   let installMarker = "no-package-json";
-  try {
-    const stat = fs.statSync(packageJsonPath);
+  const stat = pluginCacheStatSync(packageJsonPath);
+  if (stat) {
     installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
-  } catch {
-    // Package installs should have package.json; keep cache setup best-effort.
   }
   return path.join(
     resolveJitiFsCacheRoot(),
@@ -176,12 +194,16 @@ function hasTrustedOpenClawRootIndicator(params: {
   packageRoot: string;
   packageJson: PluginSdkPackageJson;
 }): boolean {
+  const facts = sdkHost(params.packageRoot);
+  if (facts.trustedRoot !== undefined) {
+    return facts.trustedRoot;
+  }
   const packageExports = params.packageJson.exports ?? {};
   const hasPluginSdkSubpathExport = Object.keys(packageExports).some((key) =>
     key.startsWith("./plugin-sdk/"),
   );
   if (!hasPluginSdkSubpathExport) {
-    return false;
+    return (facts.trustedRoot = false);
   }
   const hasCliEntryExport = Object.hasOwn(packageExports, "./cli-entry");
   const hasOpenClawBin =
@@ -190,20 +212,26 @@ function hasTrustedOpenClawRootIndicator(params: {
     (typeof params.packageJson.bin === "object" &&
       params.packageJson.bin !== null &&
       typeof params.packageJson.bin.openclaw === "string");
-  const hasOpenClawEntrypoint = fs.existsSync(path.join(params.packageRoot, "openclaw.mjs"));
-  return hasCliEntryExport || hasOpenClawBin || hasOpenClawEntrypoint;
+  return (facts.trustedRoot =
+    hasCliEntryExport ||
+    hasOpenClawBin ||
+    pluginCacheExistsSync(path.join(params.packageRoot, "openclaw.mjs")));
 }
 
 function readPluginSdkSubpathsFromPackageRoot(packageRoot: string): string[] | null {
+  const facts = sdkHost(packageRoot);
+  if (facts.exportedSubpaths !== undefined) {
+    return facts.exportedSubpaths;
+  }
   const pkg = readPluginSdkPackageJson(packageRoot);
   if (!pkg) {
-    return null;
+    return (facts.exportedSubpaths = null);
   }
   if (!hasTrustedOpenClawRootIndicator({ packageRoot, packageJson: pkg })) {
-    return null;
+    return (facts.exportedSubpaths = null);
   }
   const subpaths = listPluginSdkSubpathsFromPackageJson(pkg);
-  return subpaths.length > 0 ? subpaths : null;
+  return (facts.exportedSubpaths = subpaths.length > 0 ? subpaths : null);
 }
 
 function resolveTrustedOpenClawRootFromArgvHint(params: {
@@ -344,8 +372,8 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
     starts.push(path.join(nodeModulesDir, binName));
   }
   try {
-    const resolved = fs.realpathSync(normalized);
-    if (resolved !== normalized) {
+    const resolved = pluginCacheRealpathSync(normalized);
+    if (resolved && resolved !== normalized) {
       starts.push(path.dirname(resolved));
     }
   } catch {
@@ -403,19 +431,6 @@ function resolvePluginSdkAliasCandidateOrder(params: {
   return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
 }
 
-const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
-const cachedPluginSdkExportedSubpaths = new PluginLruCache<string[]>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const cachedWorkspacePackageAliasMaps = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
 const CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH = "codex-session-transcript-runtime";
@@ -424,6 +439,7 @@ const CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-interna
 const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "agent-runtime-test-contracts",
   "channel-contract-testing",
+  "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
   "plugin-test-api",
@@ -617,12 +633,12 @@ function listRootPackagedWorkspacePackageAliasEntries(params: {
   packageDir: string;
 }): WorkspacePackageAliasEntry[] {
   const distRoot = path.join(params.packageRoot, "dist", params.packageDir);
-  if (!fs.existsSync(distRoot)) {
+  if (!pluginCacheExistsSync(distRoot)) {
     return [];
   }
   const entries: WorkspacePackageAliasEntry[] = [];
   const visit = (dir: string, prefix = "") => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    for (const entry of readPluginCacheDirectory(dir)) {
       const relativePath = prefix ? path.join(prefix, entry.name) : entry.name;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -656,16 +672,24 @@ export function listWorkspacePackageExportAliasEntries(params: {
   packageName: string;
   packageDir: string;
 }): WorkspacePackageAliasEntry[] {
+  const cache = sdkHost(params.packageRoot).workspaceExports;
+  const key = `${params.packageName}\0${params.packageDir}`;
+  const cached = cache.get(key);
+  if (cached) {
+    return cached;
+  }
   const packageJsonPath = path.join(
     params.packageRoot,
     "packages",
     params.packageDir,
     "package.json",
   );
-  const packageJson = tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath);
+  const packageJson = readPluginSdkPackageJson(path.dirname(packageJsonPath));
   const exports = packageJson?.exports;
   if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
-    return listRootPackagedWorkspacePackageAliasEntries(params);
+    const entries = listRootPackagedWorkspacePackageAliasEntries(params);
+    cache.set(key, entries);
+    return entries;
   }
   const entries: WorkspacePackageAliasEntry[] = [];
   for (const [exportKey, value] of Object.entries(exports)) {
@@ -684,13 +708,27 @@ export function listWorkspacePackageExportAliasEntries(params: {
       distFile,
     });
   }
-  return entries.length > 0
-    ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
-    : listRootPackagedWorkspacePackageAliasEntries(params);
+  const result =
+    entries.length > 0
+      ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
+      : listRootPackagedWorkspacePackageAliasEntries(params);
+  cache.set(key, result);
+  return result;
 }
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
-  if (!fs.existsSync(candidate)) {
+  const cache = getPluginCache().sdk.usableDistArtifacts;
+  const cached = cache.get(candidate);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const usable = checkDistPluginSdkArtifact(candidate);
+  cache.set(candidate, usable);
+  return usable;
+}
+
+function checkDistPluginSdkArtifact(candidate: string): boolean {
+  if (!pluginCacheExistsSync(candidate)) {
     return false;
   }
   switch (normalizeLowercaseStringOrEmpty(path.extname(candidate))) {
@@ -705,7 +743,7 @@ function isUsableDistPluginSdkArtifact(candidate: string): boolean {
     const source = fs.readFileSync(candidate, "utf-8");
     for (const match of source.matchAll(JS_STATIC_RELATIVE_DEPENDENCY_PATTERN)) {
       const specifier = match[1];
-      if (!specifier || fs.existsSync(path.resolve(path.dirname(candidate), specifier))) {
+      if (!specifier || pluginCacheExistsSync(path.resolve(path.dirname(candidate), specifier))) {
         continue;
       }
       return false;
@@ -717,23 +755,30 @@ function isUsableDistPluginSdkArtifact(candidate: string): boolean {
 }
 
 function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
-  const parsed = tryReadJsonSync(
+  const facts = sdkHost(packageRoot);
+  if (facts.privateSubpaths) {
+    return facts.privateSubpaths;
+  }
+  const parsed = readSdkJsonFile(
     path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
   );
-  return [
+  return (facts.privateSubpaths = [
     ...new Set([
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
       NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
       CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
-        ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
+        ? parsed.filter(
+            (subpath): subpath is string =>
+              typeof subpath === "string" && isSafePluginSdkSubpathSegment(subpath),
+          )
         : []),
     ]),
-  ];
+  ]);
 }
 
 function readBundledPluginPackageName(packageJsonPath: string): string | null {
-  const parsed = tryReadJsonSync<{ name?: unknown }>(packageJsonPath);
+  const parsed = readPluginSdkPackageJson(path.dirname(packageJsonPath));
   const name = typeof parsed?.name === "string" ? parsed.name.trim() : "";
   return name.startsWith("@openclaw/") ? name : null;
 }
@@ -753,8 +798,7 @@ function listBundledPluginPublicSurfaceSourceBasenames(params: {
   includePrivateQa: boolean;
 }): string[] {
   try {
-    return fs
-      .readdirSync(params.extensionSourceRoot, { withFileTypes: true })
+    return readPluginCacheDirectory(params.extensionSourceRoot)
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .flatMap((fileName) => {
@@ -793,7 +837,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
         params.dirName,
         `${params.basename}.js`,
       );
-      if (fs.existsSync(candidate)) {
+      if (pluginCacheExistsSync(candidate)) {
         return candidate;
       }
       continue;
@@ -805,7 +849,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
         params.dirName,
         `${params.basename}${ext}`,
       );
-      if (fs.existsSync(candidate)) {
+      if (pluginCacheExistsSync(candidate)) {
         return candidate;
       }
     }
@@ -830,6 +874,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
     pluginSdkResolution: params.pluginSdkResolution,
   });
   const includePrivateQa = shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  const cachedBundledPluginPublicSurfaceAliasMaps = sdkHost(packageRoot).bundledAliasesByMode;
   const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${includePrivateQa ? "1" : "0"}`;
   const cached = cachedBundledPluginPublicSurfaceAliasMaps.get(cacheKey);
   if (cached) {
@@ -838,7 +883,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
   const extensionsRoot = path.join(packageRoot, "extensions");
   let extensionDirs: fs.Dirent[];
   try {
-    extensionDirs = fs.readdirSync(extensionsRoot, { withFileTypes: true });
+    extensionDirs = readPluginCacheDirectory(extensionsRoot);
   } catch {
     cachedBundledPluginPublicSurfaceAliasMaps.set(cacheKey, {});
     return {};
@@ -894,6 +939,7 @@ function resolveWorkspacePackageAliasMap(params: {
   // Raw modes with the same effective preference order resolve identical targets.
   // Key the process-stable cache by that target-affecting order, not the caller spelling.
   const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cachedWorkspacePackageAliasMaps = sdkHost(packageRoot).workspaceAliasesByMode;
   const cached = cachedWorkspacePackageAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
@@ -928,7 +974,7 @@ function resolveWorkspacePackageAliasMap(params: {
               path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile),
             ]
           : [path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile)];
-      const candidate = candidates.find((candidatePath) => fs.existsSync(candidatePath));
+      const candidate = candidates.find((candidatePath) => pluginCacheExistsSync(candidatePath));
       if (candidate) {
         aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
         break;
@@ -985,7 +1031,7 @@ function isOfficialInstalledPluginPackageRoot(params: {
 function isOfficialInstalledPluginModulePath(params: { modulePath: string; packageName: string }) {
   let cursor = path.dirname(path.resolve(params.modulePath));
   for (let depth = 0; depth < 12; depth += 1) {
-    const packageJson = tryReadJsonSync<{ name?: unknown }>(path.join(cursor, "package.json"));
+    const packageJson = readPluginSdkPackageJson(cursor);
     if (packageJson) {
       return (
         packageJson.name === params.packageName &&
@@ -1083,7 +1129,7 @@ function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
     return true;
   }
   return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
-    fs.existsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
+    pluginCacheExistsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
   );
 }
 
@@ -1091,8 +1137,7 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   try {
     const distPluginSdkDir = path.join(packageRoot, "dist", "plugin-sdk");
     return new Set(
-      fs
-        .readdirSync(distPluginSdkDir, { withFileTypes: true })
+      readPluginCacheDirectory(distPluginSdkDir)
         .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
         .map((entry) => entry.name.slice(0, -".js".length))
         .filter((subpath) => isSafePluginSdkSubpathSegment(subpath)),
@@ -1146,7 +1191,11 @@ function listPluginSdkExportedSubpaths(
     packageRoot: ownerPackageRoot,
     modulePath,
   });
-  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
+  // Generic bundled helpers and named private owners have distinct authority.
+  // Sharing their key lets installed plugins borrow a bundled plugin's aliases.
+  const bundled = isAnyBundledPluginModulePath({ packageRoot: ownerPackageRoot, modulePath });
+  const cacheKey = `bundled=${bundled}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
+  const cachedPluginSdkExportedSubpaths = sdkHost(packageRoot).subpathsByOwner;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
@@ -1195,7 +1244,9 @@ function resolvePluginSdkScopedAliasMap(
     packageRoot: ownerPackageRoot,
     modulePath,
   });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
+  const bundled = isAnyBundledPluginModulePath({ packageRoot: ownerPackageRoot, modulePath });
+  const cacheKey = `${orderedKinds.join(",")}::bundled=${bundled}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
+  const cachedPluginSdkScopedAliasMaps = sdkHost(packageRoot).aliasesByOwner;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
@@ -1227,7 +1278,7 @@ function resolvePluginSdkScopedAliasMap(
       }
       for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
-        if (!fs.existsSync(candidate)) {
+        if (!pluginCacheExistsSync(candidate)) {
           continue;
         }
         for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
@@ -1248,41 +1299,19 @@ const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
 const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
 const JITI_CONCRETE_ALIAS_TARGET_PATTERN = /^(?:[A-Za-z]:[/\\]|[/\\])/;
 
-// Memoize loader alias/config by effective resolution context so repeated
-// loader setup avoids rebuilding the same filesystem-derived map and cache key.
-// Include cwd/env inputs because the fallback root and private QA alias
-// surfaces depend on them.
-const aliasMapCache = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const normalizedJitiAliasMapByInput = new WeakMap<Record<string, string>, Record<string, string>>();
-const pluginLoaderModuleCacheKeyByAliasMap = new WeakMap<Record<string, string>, string>();
-const pluginLoaderModuleConfigCache = new PluginLruCache<{
-  tryNative: boolean;
-  aliasMap: Record<string, string>;
-  cacheKey: string;
-}>(MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES);
-const normalizedAliasTargetsByInput = new WeakMap<Record<string, string>, Record<string, string>>();
-const mergedAliasMapsByComponent = new WeakMap<
-  Record<string, string>,
-  WeakMap<Record<string, string>, WeakMap<Record<string, string>, Record<string, string>>>
->();
-
 function normalizeAliasTargets(aliasMap: Record<string, string>): Record<string, string> {
   if (process.platform !== "win32") {
     return aliasMap;
   }
-  const cached = normalizedAliasTargetsByInput.get(aliasMap);
+  const facts = sdkAliasFacts(aliasMap);
+  const cached = facts.normalizedTargets;
   if (cached) {
     return cached;
   }
   const normalized = Object.fromEntries(
     Object.entries(aliasMap).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
   );
-  normalizedAliasTargetsByInput.set(aliasMap, normalized);
+  facts.normalizedTargets = normalized;
   return normalized;
 }
 
@@ -1291,6 +1320,7 @@ function mergeAliasMaps(
   workspace: Record<string, string>,
   pluginSdk: Record<string, string>,
 ): Record<string, string> {
+  const mergedAliasMapsByComponent = getPluginCache().sdk.mergedAliases;
   let byWorkspace = mergedAliasMapsByComponent.get(bundled);
   if (!byWorkspace) {
     byWorkspace = new WeakMap();
@@ -1366,14 +1396,16 @@ function normalizePluginLoaderAliasMapForJiti(
   if (hasJitiNormalizedAliasMarker(aliasMap)) {
     return aliasMap;
   }
-  const cachedByInput = normalizedJitiAliasMapByInput.get(aliasMap);
+  const facts = sdkAliasFacts(aliasMap);
+  const cachedByInput = facts.normalizedJiti;
   if (cachedByInput) {
     return cachedByInput;
   }
   const cacheKey = createJitiAliasContentCacheKey(aliasMap);
+  const normalizedJitiAliasMapCache = getPluginCache().sdk.normalizedJitiAliases;
   const cached = normalizedJitiAliasMapCache.get(cacheKey);
   if (cached) {
-    normalizedJitiAliasMapByInput.set(aliasMap, cached);
+    facts.normalizedJiti = cached;
     return cached;
   }
   const aliasDepth = new Map<string, number>();
@@ -1407,7 +1439,7 @@ function normalizePluginLoaderAliasMapForJiti(
     enumerable: false,
   });
   normalizedJitiAliasMapCache.set(cacheKey, normalizedAliasMap);
-  normalizedJitiAliasMapByInput.set(aliasMap, normalizedAliasMap);
+  facts.normalizedJiti = normalizedAliasMap;
   return normalizedAliasMap;
 }
 
@@ -1465,7 +1497,8 @@ export function buildPluginLoaderAliasMap(
     pluginSdkResolution,
     devSourceRoot,
   });
-  const cached = aliasMapCache.get(cacheKey);
+  const contexts = getPluginCache().sdk.contexts;
+  const cached = contexts.get(cacheKey)?.aliasMap;
   if (cached) {
     return cached;
   }
@@ -1496,12 +1529,35 @@ export function buildPluginLoaderAliasMap(
   // Different plugin entrypoints commonly resolve the same process-stable SDK surface.
   // Reuse one merged map so plugin count does not multiply identical alias objects.
   const result = mergeAliasMaps(bundledAliases, workspaceAliases, pluginSdkAliases);
-  aliasMapCache.set(cacheKey, result);
+  contexts.set(cacheKey, { ...contexts.get(cacheKey), aliasMap: result });
   return result;
 }
 
 export function resolvePluginRuntimeModulePathWithDiagnostics(
   params: LoaderModuleResolveParams = {},
+): PluginRuntimeModuleResolution {
+  const cache = getPluginCache().sdk.runtimeModules;
+  const key = JSON.stringify([
+    params.modulePath,
+    params.argv1 ?? process.argv[1],
+    params.cwd,
+    params.moduleUrl,
+    resolveDevSourceRootParam(params),
+    params.pluginSdkResolution,
+    process.cwd(),
+    process.env.NODE_ENV,
+  ]);
+  const cached = cache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const result = resolvePluginRuntimeModuleCandidates(params);
+  cache.set(key, result);
+  return result;
+}
+
+function resolvePluginRuntimeModuleCandidates(
+  params: LoaderModuleResolveParams,
 ): PluginRuntimeModuleResolution {
   let modulePath: string | undefined;
   let packageRoot: string | null = null;
@@ -1533,7 +1589,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
     }
     const dedupedCandidates = dedupeResolvedPaths(candidates);
     for (const candidate of dedupedCandidates) {
-      if (fs.existsSync(candidate)) {
+      if (pluginCacheExistsSync(candidate)) {
         return {
           modulePath,
           packageRoot,
@@ -1628,10 +1684,8 @@ export function createPluginLoaderModuleCacheKey(params: {
   tryNative: boolean;
   aliasMap: Record<string, string>;
 }): string {
-  const aliasMapKey =
-    pluginLoaderModuleCacheKeyByAliasMap.get(params.aliasMap) ??
-    createJitiAliasContentCacheKey(params.aliasMap);
-  pluginLoaderModuleCacheKeyByAliasMap.set(params.aliasMap, aliasMapKey);
+  const facts = sdkAliasFacts(params.aliasMap);
+  const aliasMapKey = (facts.moduleKey ??= createJitiAliasContentCacheKey(params.aliasMap));
   return `${params.tryNative ? "native" : "transform"}\0${aliasMapKey}`;
 }
 
@@ -1648,7 +1702,8 @@ export function resolvePluginLoaderModuleConfig(params: {
   cacheKey: string;
 } {
   const configCacheKey = buildPluginLoaderModuleConfigCacheKey(params);
-  const cached = pluginLoaderModuleConfigCache.get(configCacheKey);
+  const contexts = getPluginCache().sdk.contexts;
+  const cached = contexts.get(configCacheKey)?.moduleConfig;
   if (cached) {
     return cached;
   }
@@ -1672,7 +1727,7 @@ export function resolvePluginLoaderModuleConfig(params: {
       aliasMap,
     }),
   };
-  pluginLoaderModuleConfigCache.set(configCacheKey, result);
+  contexts.set(configCacheKey, { ...contexts.get(configCacheKey), moduleConfig: result });
   return result;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,11 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveSessionAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
   classifyCompactionReason,
@@ -106,9 +102,7 @@ function resolveManualCompactContextTokenBudget(params: {
     params.liveContextTokens > 0
       ? Math.floor(params.liveContextTokens)
       : undefined;
-  const liveContextTokens =
-    resolvePersistedContextTokens(resolveAgentConfig(params.cfg, params.agentId)?.contextTokens) ??
-    inheritedContextTokens;
+  const liveContextTokens = inheritedContextTokens;
 
   const model = normalizeOptionalString(params.model);
   const provider = normalizeOptionalString(params.provider);
@@ -293,8 +287,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (failure) {
     return failure;
   }
-  const result = await runtime.compactEmbeddedAgentSession({
+  const replyOperation = params.opts?.replyOperation;
+  replyOperation?.setPhase("preflight_compacting");
+  const compaction = runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
+    contextEngineAgentId: sessionAgentId,
     sessionId,
     sessionKey: params.sessionKey,
     sessionTarget: {
@@ -347,6 +344,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       senderIsOwner: params.command.senderIsOwner,
     }),
   });
+  const result = await compaction.finally(() => replyOperation?.setPhase("running"));
   failure = authorityFailure();
   if (failure) {
     return failure;

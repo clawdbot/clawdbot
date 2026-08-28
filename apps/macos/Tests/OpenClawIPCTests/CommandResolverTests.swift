@@ -22,6 +22,30 @@ import Testing
         return (tmp, pnpmPath)
     }
 
+    @Test func `named profiles do not inherit the default development checkout`() throws {
+        let home = try makeTempDirForTests()
+        let checkout = home.appendingPathComponent("Projects/openclaw")
+        try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        let defaults = self.makeDefaults()
+        let defaultProfile = AppProfile(environment: [:])
+        let namedProfile = AppProfile(environment: ["OPENCLAW_PROFILE": "isolated"])
+
+        #expect(CommandResolver.projectRoot(
+            defaults: defaults,
+            profile: defaultProfile,
+            homeDirectory: home).path == checkout.path)
+        #expect(CommandResolver.projectRoot(
+            defaults: defaults,
+            profile: namedProfile,
+            homeDirectory: home).path == home.appendingPathComponent(".openclaw-isolated").path)
+
+        defaults.set(checkout.path, forKey: "openclaw.gatewayProjectRootPath")
+        #expect(CommandResolver.projectRoot(
+            defaults: defaults,
+            profile: namedProfile,
+            homeDirectory: home).path == checkout.path)
+    }
+
     @Test func `prefers open claw binary`() async throws {
         let defaults = self.makeLocalDefaults()
 

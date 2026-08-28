@@ -10,7 +10,7 @@ import java.util.Locale
 const val actionAskOpenClaw = "ai.openclaw.app.action.ASK_OPENCLAW"
 
 /** Debug action that opens the Voice tab directly for Android E2E automation. */
-const val actionOpenVoiceE2e = "ai.openclaw.app.debug.OPEN_VOICE_E2E"
+val actionOpenVoiceE2e = "${BuildConfig.APPLICATION_ID}.OPEN_VOICE_E2E"
 
 /** Intent extra that carries an optional assistant prompt for app actions. */
 const val extraAssistantPrompt = "prompt"
@@ -22,7 +22,6 @@ enum class HomeDestination {
   Connect,
   Chat,
   Voice,
-  Screen,
   Settings,
 }
 
@@ -123,9 +122,13 @@ fun parseShareLaunchIntent(
   val action = intent?.action ?: return null
   if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return null
 
+  val indexedText =
+    if (action == Intent.ACTION_SEND_MULTIPLE) intent.getCharSequenceArrayListExtra(Intent.EXTRA_TEXT) else null
   val text =
-    listOf(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString())
-      .mapNotNull { value -> value?.trim()?.takeIf { it.isNotEmpty() } }
+    listOf(intent.getStringExtra(Intent.EXTRA_SUBJECT))
+      .plus(indexedText ?: listOfNotNull(intent.getCharSequenceExtra(Intent.EXTRA_TEXT)))
+      .plus(intent.clipData?.run { (0 until itemCount).map { getItemAt(it).text } }.orEmpty())
+      .mapNotNull { value -> value?.toString()?.trim()?.takeIf { it.isNotEmpty() } }
       .distinct()
       .joinToString(separator = "\n\n")
       .ifEmpty { null }

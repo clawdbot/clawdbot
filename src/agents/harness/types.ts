@@ -160,6 +160,8 @@ type AgentHarnessIsolatedCompletionParams = {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
+  outputTextPolicy?: "strict-visible";
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -206,6 +208,8 @@ export type AgentHarnessSideQuestionParams = {
   hostCapabilities?: AgentHarnessHostCapabilities;
   /** Host-resolved sandbox snapshot for this side execution. */
   sandbox?: import("../sandbox/types.js").SandboxContext | null;
+  /** Prepared plugin/model generation that owns this side execution. */
+  preparedModelRuntime?: import("../prepared-model-runtime.types.js").PreparedModelRuntimeSnapshot;
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
   provider: string;
@@ -270,6 +274,20 @@ export type AgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
+export type AgentHarnessNativeCompactionRequest = "after_context_engine" | "required_preflight";
+export type AgentHarnessNativeCompactionParams = AgentHarnessCompactParams & {
+  nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
+};
+export type AgentHarnessNativeCompaction = (
+  params: AgentHarnessNativeCompactionParams,
+) => Promise<AgentHarnessCompactResult | undefined>;
+export type AgentHarnessRegistrationOptions = {
+  /**
+   * Registers the Codex-only native preflight bridge in host-owned registry
+   * metadata. Arbitrary properties on the public harness never grant it.
+   */
+  nativeCompaction?: AgentHarnessNativeCompaction;
+};
 export type AgentHarnessResetParams = {
   agentId?: string;
   sessionId?: string;
@@ -286,6 +304,8 @@ export type AgentHarnessSessionForkFailureCode =
 
 export type AgentHarnessSessionForkParams = {
   targetKey: string;
+  /** Creator-owned isolation floor resolved by the trusted Gateway request. */
+  sandbox?: "required";
   source: {
     agentId: string;
     sessionId: string;
@@ -327,6 +347,12 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
+/** Exact node authority and worker capacity required by one paired-device runtime. */
+export type DevicePlacementRequirement = {
+  requiredNodeCommands: readonly string[];
+  consumesWorkerSlot: boolean;
+};
+
 type AgentHarnessRunCapability<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
 > = {
@@ -338,6 +364,8 @@ type AgentHarnessRunCapability<
    * dynamic probing; an empty list marks an explicit-only harness.
    */
   autoSelection?: { providerIds: readonly string[] };
+  /** Declares host-owned remote execution and its exact paired-device requirements. */
+  cloudPlacement?: { mode: "remote-exec"; devicePlacement?: DevicePlacementRequirement };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.
@@ -353,8 +381,8 @@ type AgentHarnessRunCapability<
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
   conversationToolPolicySupport?: "exact";
   /**
-   * Canonical OpenClaw tool names whose exact denies are fully enforced outside
-   * this harness's native surface. Every other deny remains fail-closed.
+   * Canonical OpenClaw tool names whose exact denies the harness can also enforce
+   * against native equivalents. Every other deny remains fail-closed.
    */
   conversationToolPolicySafeDenyTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
@@ -400,8 +428,30 @@ type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
 };
 
+export type AgentHarnessSessionDeletionParams = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  /** Revalidate the captured registry, harness, and operation before each side effect. */
+  assertCurrent: () => void;
+};
+
+export type AgentHarnessSessionDeletionMutation = {
+  /** Synchronously remove only the prepared owner's state at the session commit edge. */
+  commit: () => void;
+  /** Restore only that removal when the authoritative session transaction rolls back. */
+  rollback: () => void;
+};
+
 type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Prepare outside the session writer; release native resources after its commit completes. */
+  withSessionDeletion?<T>(
+    this: void,
+    params: AgentHarnessSessionDeletionParams,
+    run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+  ): Promise<T>;
   dispose?(): Promise<void> | void;
 };
 
@@ -458,6 +508,28 @@ type AgentHarnessMcpCatalogCapability = {
   loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
 };
 
+export type AgentHarnessModelCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+};
+
+type AgentHarnessModelCatalogCapability = {
+  /** Lists account-scoped models owned by this native runtime. */
+  loadModelCatalog?(
+    params: AgentHarnessModelCatalogParams,
+  ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+  /**
+   * Reads current, secret-free native account evidence for this exact catalog scope/model.
+   * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
+   * picker metadata only, never execution authorization or a host-route credential.
+   */
+  readModelCatalogReadiness?(
+    params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+  ): { accountType: string } | undefined;
+};
+
 /**
  * @deprecated Implement AgentHarnessV2. This registration contract remains
  * source-compatible for existing plugins through 2026-10-12.
@@ -469,6 +541,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;
@@ -481,6 +554,7 @@ export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParams
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;

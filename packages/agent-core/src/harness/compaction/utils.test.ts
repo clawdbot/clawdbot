@@ -5,6 +5,8 @@ import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
+  formatFileOperations,
+  MAX_FILE_OPS_SECTION_CHARS,
   mergeSummaryFileOperations,
   serializeConversation,
 } from "./utils.js";
@@ -130,6 +132,36 @@ describe("file operation provenance", () => {
 });
 
 describe("serializeConversation", () => {
+  it("omits provider thinking while preserving visible assistant state", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "PRIVATE_REASONING_SENTINEL" },
+          { type: "text", text: "Visible answer" },
+          { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/index.ts" } },
+        ],
+        api: "test-api",
+        provider: "test-provider",
+        model: "test-model",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+    ];
+
+    expect(serializeConversation(messages)).toBe(
+      '[Assistant]: Visible answer\n\n[Assistant tool calls]: read(path="src/index.ts")',
+    );
+  });
+
   it.each([
     {
       name: "Codex nested toolResult text",
@@ -277,5 +309,25 @@ describe("serializeConversation", () => {
 
     expect(serialized.split("ERROR: early failure")).toHaveLength(2);
     expect(serialized).toContain(`[... ${output.length - 2000} more characters truncated]`);
+  });
+});
+
+describe("formatFileOperations bounds", () => {
+  it("caps ratcheting file lists with an overflow line instead of growing unbounded", () => {
+    const files = Array.from({ length: 5_000 }, (_, i) => `src/deep/nested/path/file-${i}.ts`);
+
+    const section = formatFileOperations(files, files);
+
+    // File lists ratchet across compactions; the model-visible section must
+    // stay bounded no matter how many paths accumulated.
+    expect(section.length).toBeLessThanOrEqual(MAX_FILE_OPS_SECTION_CHARS);
+    expect(section).toContain("more");
+  });
+
+  it("emits full lists untouched when they fit the budget", () => {
+    const section = formatFileOperations(["a.ts"], ["b.ts"]);
+    expect(section).toBe(
+      "\n\n<read-files>\na.ts\n</read-files>\n\n<modified-files>\nb.ts\n</modified-files>",
+    );
   });
 });

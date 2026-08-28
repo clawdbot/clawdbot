@@ -61,7 +61,7 @@ class WearProxyControllerTest {
     }
 
   @Test
-  fun statusAdvertisesModelControlsOnlyWithOperatorAdminScope() =
+  fun statusAdvertisesModelCapabilitiesOnlyWithOperatorAdminScope() =
     runTest {
       var hasOperatorAdminScope = false
       val controller =
@@ -88,8 +88,10 @@ class WearProxyControllerTest {
 
       assertEquals(
         WearProxyCapability.entries
-          .filter { it != WearProxyCapability.ModelControls }
-          .map(WearProxyCapability::wireValue),
+          .filter {
+            it != WearProxyCapability.ModelControls &&
+              it != WearProxyCapability.ModelCatalogSearch
+          }.map(WearProxyCapability::wireValue),
         limitedCapabilities,
       )
       assertEquals(
@@ -414,6 +416,43 @@ class WearProxyControllerTest {
     }
 
   @Test
+  fun modelSearchFiltersTheFullCatalogBeforeApplyingTheTransportCap() =
+    runTest {
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          models = {
+            (0 until 80).map { index ->
+              WearProxyModel(ref = "provider/model-$index", name = "Model $index")
+            }
+          },
+        )
+
+      val listed =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsList,
+            buildJsonObject { put("query", "model-79") },
+          ),
+        )
+      val refs =
+        checkNotNull(listed.result)
+          .jsonObject
+          .getValue("models")
+          .jsonArray
+          .map { model ->
+            model.jsonObject
+              .getValue("ref")
+              .jsonPrimitive
+              .content
+          }
+
+      assertEquals(listOf("provider/model-79"), refs)
+    }
+
+  @Test
   fun modelListWindowKeepsAdjacentModelsReachableAcrossTheCap() =
     runTest {
       val controller =
@@ -613,7 +652,7 @@ class WearProxyControllerTest {
             requestedMethod = method
             requestedParams = params
             json.parseToJsonElement(
-              """{"sessions":[{"key":"agent:main","displayName":"Main","updatedAt":7,"modelProvider":"openai","model":"gpt-test","lastMessage":"hidden"}],"hasMore":true,"totalCount":9}""",
+              """{"sessions":[{"key":"agent:main","displayName":"Main","updatedAt":7,"modelProvider":"openai","model":"gpt-test","lastMessage":"hidden"}],"hasMore":true,"nextOffset":10,"totalCount":9}""",
             )
           },
           isGatewayConnected = { true },
@@ -625,14 +664,18 @@ class WearProxyControllerTest {
         controller.handle(
           request(
             WearRpcMethod.SessionsList,
-            buildJsonObject { put("limit", 5) },
+            buildJsonObject {
+              put("limit", 5)
+              put("offset", 5)
+              put("search", "older")
+            },
           ),
         )
 
       assertEquals("sessions.list", requestedMethod)
       assertEquals(
         json
-          .parseToJsonElement("""{"limit":5,"includeGlobal":false,"includeUnknown":false,"agentId":"main"}""")
+          .parseToJsonElement("""{"limit":5,"offset":5,"search":"older","includeGlobal":false,"includeUnknown":false,"agentId":"main"}""")
           .jsonObject,
         requestedParams,
       )
@@ -653,6 +696,14 @@ class WearProxyControllerTest {
           .jsonPrimitive
           .content
           .toBoolean(),
+      )
+      assertEquals(
+        10,
+        result
+          .getValue("nextOffset")
+          .jsonPrimitive
+          .content
+          .toInt(),
       )
     }
 

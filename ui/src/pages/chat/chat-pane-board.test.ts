@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -11,16 +12,33 @@ import {
   type BoardProvider,
 } from "../../lib/board/provider.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  detachPanelToColumn,
-  mergePanelIntoColumn,
-  openSlot,
-  type SidebarLayout,
-} from "./sidebar-layout.ts";
+import { activatePanel, openSlot } from "./sidebar-layout.ts";
+
+const swarmModuleImport = vi.hoisted(() => {
+  let markStarted!: () => void;
+  let release!: () => void;
+  return {
+    started: new Promise<void>((resolve) => {
+      markStarted = resolve;
+    }),
+    pending: new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    markStarted,
+    release,
+  };
+});
+
+vi.mock("../../lib/sessions/swarm-roster.ts", async (importOriginal) => {
+  swarmModuleImport.markStarted();
+  await swarmModuleImport.pending;
+  return importOriginal();
+});
 
 type TestChatPane = HTMLElement & {
   boardChatDockSize: { height: number };
@@ -31,11 +49,14 @@ type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
   paneId: string;
+  presented: boolean;
+  presentedChanged: (presented: boolean) => void;
   sessionKey: string;
   resetConfirmationOpen: boolean;
   routeFace: "chat" | "dashboard";
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   confirmConversationReset: () => Promise<boolean>;
+  commitSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
@@ -44,16 +65,11 @@ type TestChatPane = HTMLElement & {
     dock: "bottom" | "left" | "right",
     event: CustomEvent<{ splitRatio: number }>,
   ) => void;
-  commitSidebarPanelMove: (
-    layout: SidebarLayout,
-    panelId: string,
-    targetSide: "left" | "right",
-    board: ResolvedBoardView,
-  ) => void;
   syncChatSidebarForDock: (dock: "bottom" | "hidden" | "left" | "right") => boolean;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
+  refreshSwarmRoster: () => void;
 };
 
 type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
@@ -73,7 +89,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.context = {
     sessions,
-    gateway: { snapshot: { client, phase: "connected" } },
+    gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
   } as unknown as ApplicationContext;
   pane.state = {
     chatError: null,
@@ -158,6 +174,54 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
+  it("couples explicit side-panel visibility to the Board dock", () => {
+    const pane = createTestPane();
+    const provider = mockBoardProvider("agent:main:current");
+    const applyOps = vi.spyOn(provider, "applyOps");
+    pane.boardProvider = provider;
+    pane.routeFace = "dashboard";
+    pane.handleBoardDockChange("hidden");
+    applyOps.mockClear();
+
+    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
+    expect(applyOps).toHaveBeenLastCalledWith([
+      { kind: "tab_update", tabId: "main", chatDock: "right" },
+    ]);
+
+    pane.commitSidebarLayout({ ...pane.state.sidebarLayout, open: false });
+    expect(applyOps).toHaveBeenLastCalledWith([
+      { kind: "tab_update", tabId: "main", chatDock: "hidden" },
+    ]);
+  });
+
+  it("does not hydrate the swarm after becoming hidden during module loading", async () => {
+    vi.useFakeTimers();
+    const list = vi.fn().mockResolvedValue({ sessions: [] });
+    const sessions = { canonicalListRevision: 0, list } as unknown as SessionCapability;
+    const pane = createTestPane(sessions);
+    pane.context = {
+      ...pane.context,
+      runtimeConfig: {
+        state: { configSnapshot: { config: { tools: { swarm: { enabled: true } } } } },
+      },
+    } as unknown as ApplicationContext;
+    pane.presentedChanged = () => undefined;
+
+    try {
+      pane.refreshSwarmRoster();
+      await swarmModuleImport.started;
+      pane.presented = false;
+      swarmModuleImport.release();
+      await import("../../lib/sessions/swarm-roster.ts");
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
@@ -192,7 +256,7 @@ describe("chat pane board shell", () => {
     pane.state.client = client;
     pane.context = {
       ...pane.context,
-      gateway: { snapshot: { client, phase: "connected" } },
+      gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
     } as unknown as ApplicationContext;
     pane.connectedClient = client;
     pane.boardProvider = mockBoardProvider("agent:main:current");
@@ -329,53 +393,30 @@ describe("chat pane board shell", () => {
     });
   });
 
-  it("updates the board dock when chat is dragged across sides", () => {
+  it("does not publish a board dock failure after leaving and returning", async () => {
     const pane = createTestPane();
-    const provider = mockBoardProvider("agent:main:current");
+    const provider = mockBoardProvider("agent:main:stale-board-outcome");
+    const applied = createDeferred<never>();
+    const applyOps = vi.spyOn(provider, "applyOps").mockReturnValue(applied.promise);
     pane.boardProvider = provider;
-    const renderedLayout = openSlot({ columns: [] }, "chat", "left");
-    pane.state.sidebarLayout = { columns: [] };
-    const chatPanel = renderedLayout.columns[0]!.panels[0]!;
-    const moved = detachPanelToColumn(renderedLayout, chatPanel.id, "right", 0);
-    const board = { ...pane.resolveBoardView(), dock: "left" as const };
+    pane.presentedChanged = () => undefined;
 
-    pane.commitSidebarPanelMove(moved, chatPanel.id, "right", board);
+    pane.handleBoardDockChange("left");
+    pane.presented = false;
+    pane.presented = true;
+    applied.reject(new Error("stale board dock failed"));
+    await applied.promise.catch(() => undefined);
+    await vi.waitFor(() => expect(applyOps).toHaveBeenCalledOnce());
 
-    expect(pane.state.sidebarLayout.columns[0]?.side).toBe("right");
-    expect(pane.resolveBoardView().dock).toBe("right");
+    expect(pane.state.lastError).toBeNull();
+    expect(pane.state.chatError).toBeNull();
   });
-
-  it("persists the moved panel as the collapsed active panel", () => {
-    const pane = createTestPane();
-    const renderedLayout = openSlot(openSlot({ columns: [] }, "detail"), "discussion");
-    pane.state.sidebarLayout = renderedLayout;
-    const discussionPanel = renderedLayout.columns[1]!.panels[0]!;
-    const moved = mergePanelIntoColumn(
-      renderedLayout,
-      discussionPanel.id,
-      renderedLayout.columns[0]!.id,
-      0,
-    );
-
-    pane.commitSidebarPanelMove(moved, discussionPanel.id, "right", pane.resolveBoardView());
-
-    // The collapsed layout reads this separate selection, so a drag must update it
-    // or the narrow view foregrounds a stale panel after resizing.
-    expect(pane.state.sidebarFocusPanelId).toBe(discussionPanel.id);
-  });
-
   it("activates an existing tabbed chat panel when reopening a side dock", () => {
     const pane = createTestPane();
     const withChat = openSlot(openSlot({ columns: [] }, "chat"), "discussion");
     const chatPanel = withChat.columns[0]!.panels[0]!;
-    const discussionPanel = withChat.columns[1]!.panels[0]!;
-    pane.state.sidebarLayout = mergePanelIntoColumn(
-      withChat,
-      discussionPanel.id,
-      withChat.columns[0]!.id,
-      1,
-    );
-    pane.state.sidebarLayout.columns[0]!.activePanelId = discussionPanel.id;
+    const discussionPanel = withChat.columns[0]!.panels[1]!;
+    pane.state.sidebarLayout = activatePanel(withChat, discussionPanel.id);
 
     expect(pane.syncChatSidebarForDock("right")).toBe(true);
 

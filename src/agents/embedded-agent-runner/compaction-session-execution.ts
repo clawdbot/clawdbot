@@ -6,6 +6,12 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+  type DiagnosticEmbeddedRunOwner,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -22,7 +28,7 @@ import {
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
@@ -220,6 +226,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         attemptedThinking.add(thinkLevel);
         const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: AgentSession | undefined;
+        let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
         try {
           const createdSession = await createAgentSessionForEmbeddedRunner(
             {
@@ -272,6 +279,19 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
           });
+          diagnosticOwner = createDiagnosticEmbeddedRunOwner({
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            runId: diagnosticCompactionRunId,
+            workKey: diagnosticCompactionRunId,
+          });
+          markDiagnosticEmbeddedRunStarted({
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            runId: diagnosticCompactionRunId,
+            workKey: diagnosticCompactionRunId,
+            owner: diagnosticOwner,
+          });
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,
             {
@@ -282,10 +302,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               model: modelId,
               api: effectiveModel.api,
               transport: session.agent.transport,
+              requestTimeoutMs: compactionTimeoutMs,
               contextTokenBudget,
               trace: compactionModelCallTrace,
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
               nextCallId: nextDiagnosticModelCallId,
+              ownerGeneration: diagnosticOwner.generation,
             },
           );
 
@@ -331,14 +353,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           // limitHistoryTurns can orphan tool_result blocks by removing the
           // assistant message that contained the matching tool_use.
           const limited = transcriptPolicy.repairToolUseResultPairing
-            ? sanitizeToolUseResultPairing(truncated, {
-                erroredAssistantResultPolicy: "drop",
-                ...(effectiveModel.api === "openai-responses" ||
-                effectiveModel.api === "azure-openai-responses" ||
-                effectiveModel.api === "openai-chatgpt-responses"
-                  ? { missingToolResultText: "aborted" }
-                  : {}),
-              })
+            ? sanitizeToolUseResultPairingForModel(
+                truncated,
+                effectiveModel.api === "openai-responses" ||
+                  effectiveModel.api === "azure-openai-responses" ||
+                  effectiveModel.api === "openai-chatgpt-responses",
+              )
             : truncated;
           if (limited.length > 0) {
             session.agent.state.messages = limited;
@@ -541,6 +561,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
           throw err;
         } finally {
+          // Retire exact recovery authority before asynchronous session cleanup can yield.
+          if (diagnosticOwner) {
+            closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
+          }
           try {
             await flushPendingToolResultsAfterIdle({
               agent: session?.agent,

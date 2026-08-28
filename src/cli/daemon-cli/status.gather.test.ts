@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -10,6 +11,8 @@ import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
+import { registerGatewayCli } from "../gateway-cli/register.js";
+import { registerDaemonCli } from "./register.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus, renderPortDiagnosticsForCli } from "./status.gather.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -23,14 +26,14 @@ const callGatewayStatusProbe = vi.fn<
     ok: boolean;
     url?: string;
     error?: string | null;
-    server?: { version?: string | null; connId?: string | null };
+    server?: { version?: string | null; buildId?: string | null; connId?: string | null };
     version?: string | null;
   }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
-  server: { version: "2026.5.6", connId: "conn-1" },
+  server: { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
 }));
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
@@ -152,10 +155,13 @@ const resolveStateDir = vi.fn(
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
-const createConfigIOCalls = vi.fn((configPath: string, pluginValidation?: "full" | "skip") => ({
-  configPath,
-  pluginValidation,
-}));
+const createConfigIOCalls = vi.fn(
+  (configPath: string, pluginValidation?: "full" | "skip", observe?: boolean) => ({
+    configPath,
+    pluginValidation,
+    observe,
+  }),
+);
 const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
 const loadConfigCalls = vi.fn((configPath: string) => configPath);
 let daemonConfigWarnings: Array<{ path: string; message: string }> = [];
@@ -176,15 +182,17 @@ let cliLoadedConfig: Record<string, unknown> = {
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({
     configPath,
+    observe,
     pluginValidation,
   }: {
     configPath: string;
+    observe?: boolean;
     pluginValidation?: "full" | "skip";
   }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
     const runtimeConfig = isDaemon ? daemonLoadedConfig : cliLoadedConfig;
     const warnings = isDaemon ? daemonConfigWarnings : cliConfigWarnings;
-    createConfigIOCalls(configPath, pluginValidation);
+    createConfigIOCalls(configPath, pluginValidation, observe);
     return {
       readConfigFileSnapshot: async () => {
         readConfigFileSnapshotCalls(configPath);
@@ -355,6 +363,7 @@ describe("gatherDaemonStatus", () => {
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
     isGatewayExternallySupervised.mockReset().mockReturnValue(false);
+    auditGatewayServiceConfig.mockClear();
     callGatewayStatusProbe.mockClear();
     resolveAdvertisedControlUiLinks.mockClear();
     resolveAdvertisedControlUiLinks.mockResolvedValue({
@@ -437,6 +446,7 @@ describe("gatherDaemonStatus", () => {
       service: {
         label: "Scheduled Task",
         loaded: true,
+        loadState: { status: "loaded" as const },
         loadedText: "registered",
         notLoadedText: "not registered",
       },
@@ -473,13 +483,106 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.version).toBe("2026.5.6");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
-    expect(status.rpc?.server).toEqual({ version: "2026.5.6", connId: "conn-1" });
+    expect(status.rpc?.server).toEqual({
+      version: "2026.5.6",
+      buildId: "build-2026.5.6",
+      connId: "conn-1",
+    });
     expect(status.cli?.version).toBe(VERSION);
     if (process.argv[1]) {
       expect(status.cli?.entrypoint).toBe(process.argv[1]);
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    [
+      ["gateway", "status", "--port", "19002"],
+      ["gateway", "--port", "19002", "status"],
+      ["gateway", "--port", "19003", "status", "--port", "19002"],
+      ["daemon", "status", "--port", "19002"],
+    ].map((argv) => ({ name: argv.join(" "), argv })),
+  )("targets the selected local port for $name", async ({ argv }) => {
+    const program = new Command().enablePositionalOptions().exitOverride();
+    program.configureOutput({ writeErr: () => {} });
+    registerGatewayCli(program);
+    registerDaemonCli(program);
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    try {
+      await program.parseAsync([...argv, "--json"], { from: "user" });
+
+      expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "ws://127.0.0.1:19002",
+          localPortOverride: 19002,
+          config: cliLoadedConfig,
+          configPath: "/tmp/openclaw-cli/openclaw.json",
+        }),
+      );
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gateway: expect.objectContaining({
+            port: 19002,
+            portSource: "cli",
+            probeUrl: "ws://127.0.0.1:19002",
+          }),
+          rpc: expect.objectContaining({ url: "ws://127.0.0.1:19002" }),
+          service: expect.objectContaining({ targetRole: "diagnostic-only" }),
+        }),
+      );
+    } finally {
+      writeJson.mockRestore();
+    }
+  });
+
+  it.each([true, false])(
+    "keeps an explicit local port in remote config with probe=%s",
+    async (probe) => {
+      cliLoadedConfig = {
+        gateway: {
+          mode: "remote",
+          bind: "tailnet",
+          tls: { enabled: true },
+          auth: { token: "local-token" },
+          remote: { url: "wss://gateway.example", token: "remote-token" },
+        },
+      };
+      const status = await gatherStatus({ rpc: { localPortOverride: 19002 }, probe, deep: true });
+
+      expect(status.gateway).toMatchObject({
+        port: 19002,
+        portSource: "cli",
+        probeUrl: "wss://127.0.0.1:19002",
+      });
+      expect(inspectPortConnections).toHaveBeenCalledWith(19002);
+      expect(status.service.targetRole).toBe("diagnostic-only");
+      expect(inspectGatewayRestart).not.toHaveBeenCalled();
+      if (probe) {
+        expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url: "wss://127.0.0.1:19002",
+            token: "local-token",
+            tlsFingerprint: "sha256:11:22:33:44",
+          }),
+        );
+      } else {
+        expect(callGatewayStatusProbe).not.toHaveBeenCalled();
+        expect(status.rpc).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([
+    { rpc: { port: "65536" }, message: "--port must be an integer between 1 and 65535." },
+    {
+      rpc: { port: "19002", url: "ws://localhost:19002" },
+      message: "Use either --url or --port, not both.",
+    },
+  ])("rejects invalid status target $rpc before service reads", async ({ rpc, message }) => {
+    await expect(gatherStatus({ rpc })).rejects.toThrow(message);
+    expect(serviceReadCommand).not.toHaveBeenCalled();
+    expect(callGatewayStatusProbe).not.toHaveBeenCalled();
   });
 
   it("batches daemon and CLI port status inspection when ports differ", async () => {
@@ -496,7 +599,7 @@ describe("gatherDaemonStatus", () => {
 
   it("reports the heap limit from the installed Gateway service", async () => {
     serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      programArguments: ["/bin/node", "--max-heap-size=8192", "cli", "gateway", "--port", "19001"],
       environment: {
         OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
         OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
@@ -506,7 +609,10 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus({ probe: false });
 
-    expect(status.service.gatewayHeap).toMatchObject({ appliedMiB: 6144 });
+    expect(status.service.gatewayHeap).toMatchObject({
+      nodeOptions: "--max-old-space-size=6144",
+      execArgv: ["--max-heap-size=8192"],
+    });
     expect(status.service.gatewayHeap?.memorySource).toMatch(/^(constrained|physical)$/u);
   });
 
@@ -725,11 +831,12 @@ describe("gatherDaemonStatus", () => {
     expect(
       serviceReadRuntime.mock.calls.some(([env]) => env?.OPENCLAW_GATEWAY_PORT === "19001"),
     ).toBe(true);
+    expect(status.service.loaded).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
 
-  it("bounds both service-manager reads and still emits JSON after they time out", async () => {
+  it("renders Gateway-specific recovery in text and JSON after service reads time out", async () => {
     serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
       if (args?.timeoutMs === undefined) {
         return await new Promise<boolean>(() => {});
@@ -740,7 +847,7 @@ describe("gatherDaemonStatus", () => {
       if (opts?.timeoutMs === undefined) {
         return await new Promise<{ status: string }>(() => {});
       }
-      throw new Error("systemctl show timed out");
+      throw new Error("錯誤: 系統找不到指定的檔案。");
     });
 
     const status = await gatherStatus({
@@ -751,10 +858,21 @@ describe("gatherDaemonStatus", () => {
 
     expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
     expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
-    expect(status.service.loaded).toBe(false);
+    expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 100 }),
+    );
+    expect(status.service.loadState).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl is-enabled timed out",
+    });
+    expect(status.service.loaded).toBeNull();
     expect(status.service.runtime).toEqual({
       status: "unknown",
-      detail: "Error: systemctl show timed out",
+      detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
+      inspectionFailure: {
+        code: "service-runtime-inspection-failed",
+        detail: "錯誤: 系統找不到指定的檔案。",
+      },
     });
 
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -767,10 +885,18 @@ describe("gatherDaemonStatus", () => {
       }
       expect(JSON.parse(serialized)).toMatchObject({
         service: {
-          loaded: false,
+          loaded: null,
+          loadState: {
+            status: "unknown",
+            detail: "Error: systemctl is-enabled timed out",
+          },
           runtime: {
             status: "unknown",
-            detail: "Error: systemctl show timed out",
+            detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
+            inspectionFailure: {
+              code: "service-runtime-inspection-failed",
+              detail: "錯誤: 系統找不到指定的檔案。",
+            },
           },
         },
       });
@@ -783,12 +909,30 @@ describe("gatherDaemonStatus", () => {
     try {
       printDaemonStatus(status, { json: false, deep: true });
       const output = log.mock.calls.flat().join("\n");
-      expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
+      expect(output).toContain("Service: LaunchAgent (unknown)");
+      expect(output).not.toContain("Service: LaunchAgent (not loaded)");
+      expect(output).toContain(
+        "Runtime: unknown (service runtime inspection failed; retry with openclaw gateway status --deep)",
+      );
+      expect(output).not.toContain("系統找不到指定的檔案");
     } finally {
       log.mockRestore();
       error.mockRestore();
     }
   }, 1_000);
+
+  it.each(["bogus", "0", "-1", "1.5"])(
+    "rejects invalid status timeout %s before reading service state",
+    async (timeout) => {
+      await expect(gatherStatus({ rpc: { timeout } })).rejects.toThrow(
+        `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "${timeout}".`,
+      );
+
+      expect(serviceReadCommand).not.toHaveBeenCalled();
+      expect(serviceIsLoaded).not.toHaveBeenCalled();
+      expect(serviceReadRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps gateway status read-only when service management is unsupported", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);
@@ -802,6 +946,7 @@ describe("gatherDaemonStatus", () => {
 
     expect(status.service.command).toBeNull();
     expect(status.service.loaded).toBe(false);
+    expect(status.service.loadState).toEqual({ status: "not-loaded" });
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Gateway service install not supported on aix",
@@ -1002,7 +1147,7 @@ describe("gatherDaemonStatus", () => {
     try {
       const status = await gatherStatus({ probe: false, deep: true });
 
-      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full");
+      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
       expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
       expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
       expect(status.config?.daemon).toBe(status.config?.cli);

@@ -73,6 +73,7 @@ public struct OpenClawChatWindowShell: View {
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech,
                 mediaPlaybackAllowed: self.mediaPlaybackAllowed)
+                .environment(\.openClawChatDesktopLayout, true)
                 .navigationTitle(self.activeSessionTitle)
                 .navigationSubtitle(self.subtitle)
                 .toolbar { self.detailToolbar }
@@ -214,133 +215,7 @@ public struct OpenClawChatWindowShell: View {
                 }
             }
 
-            if self.viewModel.showsThinkingPicker {
-                self.thinkingPicker
-            }
-
-            self.verbosityPicker
-            if self.viewModel.selectedModelSupportsFastMode {
-                self.fastModeToggle
-            }
-
-            if self.viewModel.showsModelPicker {
-                self.modelPicker
-            }
-
             self.sessionActionsMenu
-        }
-    }
-
-    private var thinkingPicker: some View {
-        Picker(selection: Binding(
-            get: { self.viewModel.thinkingSelectionID },
-            set: { self.viewModel.selectThinkingLevel($0) }))
-        {
-            Text(String(localized: "Default (inherited)"))
-                .font(OpenClawChatTypography.body)
-                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(String(
-                    format: String(localized: "%@ (override)"),
-                    option.label))
-                    .font(OpenClawChatTypography.body)
-                    .tag(option.id)
-            }
-        } label: {
-            Text("Thinking")
-                .font(OpenClawChatTypography.body)
-        }
-        .pickerStyle(.menu)
-        .help(String(localized: "Thinking level"))
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-    }
-
-    private var verbosityPicker: some View {
-        Picker(selection: Binding(
-            get: { self.viewModel.verboseLevel },
-            set: { self.viewModel.selectVerboseLevel($0) }))
-        {
-            Text(String(localized: "Default (inherited)"))
-                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            Text(String(localized: "Off")).tag("off")
-            Text(String(localized: "On")).tag("on")
-            Text(String(localized: "Full")).tag("full")
-        } label: {
-            Text(String(localized: "Verbosity"))
-                .font(OpenClawChatTypography.body)
-        }
-        .pickerStyle(.menu)
-        .help(String(localized: "Verbosity"))
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-    }
-
-    private var fastModeToggle: some View {
-        Picker(selection: Binding(
-            get: { self.viewModel.fastModeSelectionID },
-            set: { self.viewModel.selectFastMode($0) }))
-        {
-            Text(String(localized: "Default (inherited)"))
-                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            Text(String(localized: "On")).tag("on")
-            Text(String(localized: "Off")).tag("off")
-        } label: {
-            Label(String(localized: "Fast"), systemImage: "bolt.fill")
-        }
-        .pickerStyle(.menu)
-        .help(String(localized: "Fast responses"))
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-    }
-
-    private var modelPicker: some View {
-        let sections = self.viewModel.modelPickerSections
-        return Picker(selection: Binding(
-            get: { self.viewModel.modelSelectionID },
-            set: { self.viewModel.selectModel($0) }))
-        {
-            Text(self.viewModel.defaultModelLabel)
-                .font(OpenClawChatTypography.body)
-                .tag(OpenClawChatViewModel.defaultModelSelectionID)
-            if !sections.pinned.isEmpty {
-                Section("Pinned") { self.modelOptions(sections.pinned) }
-            }
-            if !sections.recent.isEmpty {
-                Section("Recent") { self.modelOptions(sections.recent) }
-            }
-            ForEach(sections.providers) { provider in
-                Section {
-                    self.modelOptions(provider.models)
-                } header: {
-                    HStack(spacing: 4) {
-                        Text(provider.displayName)
-                        if provider.isDefaultProvider {
-                            Text(String(localized: "Default"))
-                                .font(OpenClawChatTypography.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-        } label: {
-            Text("Model")
-                .font(OpenClawChatTypography.body)
-        }
-        .pickerStyle(.menu)
-        .help("Model")
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-    }
-
-    private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
-        ForEach(models) { model in
-            HStack(spacing: 4) {
-                Text(model.displayLabel)
-                    .font(OpenClawChatTypography.body)
-                if self.viewModel.isDefaultModel(model) {
-                    Text(String(localized: "Default"))
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .tag(model.selectionID)
         }
     }
 
@@ -390,7 +265,10 @@ public struct OpenClawChatWindowShell: View {
                 Task { await self.viewModel.forkSession(key: self.activeSessionKey) }
             } label: {
                 chatWindowActionLabel(
-                    LocalizedStringKey(String(localized: "Fork")),
+                    LocalizedStringKey(
+                        self.activeSessionEntry?.hasActiveRun == true
+                            ? String(localized: "Fork from last completed message")
+                            : String(localized: "Fork")),
                     systemImage: "arrow.triangle.branch")
             }
 

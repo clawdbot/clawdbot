@@ -1,5 +1,7 @@
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+import { summarizeApprovalScope } from "../infra/approval-scope.js";
+import { normalizeApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
 import type { ApprovalRequest, PendingApprovalView } from "../infra/approval-view-model.types.js";
 import {
@@ -9,21 +11,16 @@ import {
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
-/**
- * @deprecated Compatibility subpath for shipped approval reaction helpers.
- * New plugin code should use the focused approval runtime/reply subpaths.
- */
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
 } from "./approval-renderers.js";
-export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 import type { ReplyPayload } from "./reply-payload.js";
+export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 export {
   approvalReactionDecisionSetsMatch,
-  extractApprovalReactionPromptBinding,
+  buildApprovalReactionDeliveredBindingMarker,
   normalizeApprovalReactionDecision,
   readApprovalReactionDecisionList,
   readApprovalReactionDeliveredBinding,
@@ -32,7 +29,6 @@ export {
   type ApprovalReactionDeliveryBinding,
 } from "./approval-reaction-binding.js";
 
-type ApprovalKind = "exec" | "plugin";
 type KeyedStore<TValue> = {
   register(key: string, value: TValue, opts?: { ttlMs?: number }): Promise<void>;
   lookup(key: string): Promise<TValue | undefined>;
@@ -74,7 +70,7 @@ export type ApprovalReactionDecisionResolution = {
 export type ApprovalReactionTargetRecord<TRoute = unknown> = {
   approvalId: string;
   /** Explicit ownership; omission is supported only by the deprecated resolver. */
-  approvalKind?: ApprovalKind;
+  approvalKind?: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   route?: TRoute;
   expiresAtMs?: number;
@@ -84,7 +80,7 @@ export type ApprovalReactionTargetRecord<TRoute = unknown> = {
 export type ApprovalReactionTargetResolution<TRoute = unknown> =
   ApprovalReactionDecisionResolution & {
     approvalId: string;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     route?: TRoute;
   };
 
@@ -256,7 +252,7 @@ function resolveApprovalReactionTargetInternal<TRoute>(params: {
 /** Resolve an explicitly typed target without deriving ownership from its id. */
 export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
   target:
-    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ApprovalKind })
+    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ChannelApprovalKind })
     | null
     | undefined;
   reactionKey: string;
@@ -276,7 +272,7 @@ function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[
 }
 
 function buildManualInstructionSection(params: {
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   approvalId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): string[] {
@@ -313,6 +309,7 @@ function buildApprovalReactionPromptText(params: {
   reactionHint: string | null;
 }): string {
   const { view } = params;
+  const scopeSummary = view.scope ? summarizeApprovalScope(view.scope) : undefined;
   const allowedDecisions = listDecisionActions(view.actions);
   const sections: string[] = [];
   if (view.approvalKind === "exec") {
@@ -352,6 +349,9 @@ function buildApprovalReactionPromptText(params: {
     if (view.nodeId) {
       info.push(`**Node:** ${view.nodeId}`);
     }
+    if (scopeSummary) {
+      info.push(`**Scope:** ${scopeSummary}`);
+    }
     if (view.agentId) {
       info.push(`**Agent:** ${view.agentId}`);
     }
@@ -367,6 +367,9 @@ function buildApprovalReactionPromptText(params: {
     const details = [`**Title:** ${view.title}`];
     if (view.description) {
       details.push(`**Description:** ${view.description}`);
+    }
+    if (scopeSummary) {
+      details.push(`**Scope:** ${scopeSummary}`);
     }
     details.push(`**Severity:** ${formatSeverity(view.severity)}`);
     if (view.toolName) {
@@ -411,10 +414,7 @@ function buildMetadataPayload(params: {
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): ReplyPayload {
-  const sessionKey =
-    params.request.request && "sessionKey" in params.request.request
-      ? params.request.request.sessionKey
-      : null;
+  const sessionKey = params.request.request.sessionKey ?? null;
   return withoutPresentation(
     buildApprovalPendingReplyPayload({
       approvalKind: params.view.approvalKind,
@@ -476,38 +476,49 @@ export function buildApprovalReactionPendingContent(params: {
   nowMs: number;
 }): ApprovalReactionPendingContent {
   const reactionPayload = buildApprovalPendingPromptPayload(params);
-  const manualFallbackPayload =
-    params.view.approvalKind === "plugin"
-      ? (() => {
-          const payload = buildPluginApprovalPendingReplyPayload({
-            request: params.request as PluginApprovalRequest,
-            nowMs: params.nowMs,
-            allowedDecisions: reactionPayload.allowedDecisions,
-          });
-          return withoutPresentation({
-            ...payload,
-            text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-          });
-        })()
-      : withoutPresentation(
-          buildExecApprovalPendingReplyPayload({
-            approvalId: params.request.id,
-            approvalSlug: params.request.id.slice(0, 8),
-            approvalCommandId: params.request.id,
-            warningText: params.view.warningText ?? undefined,
-            ask: params.view.ask ?? null,
-            agentId: params.view.agentId ?? null,
-            allowedDecisions: reactionPayload.allowedDecisions,
-            command: params.view.commandText,
-            cwd: params.view.cwd ?? undefined,
-            host: params.view.host === "node" ? "node" : "gateway",
-            nodeId: params.view.nodeId ?? undefined,
-            sessionKey: params.view.sessionKey ?? null,
-            expiresAtMs: params.request.expiresAtMs,
-            nowMs: params.nowMs,
-          } satisfies ExecApprovalPendingReplyParams),
-        );
-  return { reactionPayload, manualFallbackPayload };
+  const request = normalizeApprovalRequest(params.request);
+  if (params.view.approvalKind === "plugin") {
+    if (request.approvalKind !== "plugin") {
+      throw new Error("approval request and view kinds do not match");
+    }
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request,
+      nowMs: params.nowMs,
+      allowedDecisions: reactionPayload.allowedDecisions,
+    });
+    return {
+      reactionPayload,
+      manualFallbackPayload: withoutPresentation({
+        ...payload,
+        text: replaceApprovalIdPlaceholder(payload.text, request.id),
+      }),
+    };
+  }
+  if (request.approvalKind !== "exec") {
+    throw new Error("approval request and view kinds do not match");
+  }
+  return {
+    reactionPayload,
+    manualFallbackPayload: withoutPresentation(
+      buildExecApprovalPendingReplyPayload({
+        approvalId: request.id,
+        approvalSlug: request.id.slice(0, 8),
+        approvalCommandId: request.id,
+        warningText: params.view.warningText ?? undefined,
+        ask: params.view.ask ?? null,
+        agentId: params.view.agentId ?? null,
+        allowedDecisions: reactionPayload.allowedDecisions,
+        command: params.view.commandText,
+        cwd: params.view.cwd ?? undefined,
+        host: params.view.host === "node" ? "node" : "gateway",
+        nodeId: params.view.nodeId ?? undefined,
+        scope: params.view.scope ?? undefined,
+        sessionKey: params.view.sessionKey ?? null,
+        expiresAtMs: request.expiresAtMs,
+        nowMs: params.nowMs,
+      } satisfies ExecApprovalPendingReplyParams),
+    ),
+  };
 }
 
 /**

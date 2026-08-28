@@ -23,6 +23,14 @@ function entry(patch: Partial<SessionEntry>): SessionEntry {
 
 test("findDirectChildSessionsForParent matches direct lineage only", () => {
   vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+    agentIdBySessionKey: new Map([
+      ["agent:main:main", "main"],
+      ["agent:codex:acp:spawned", "codex"],
+      ["agent:codex:sub:parent", "codex"],
+      ["agent:codex:acp:grandchild", "codex"],
+      ["agent:codex:acp:unrelated", "codex"],
+    ]),
+    durableTargets: [],
     storePath: "(combined)",
     store: {
       "agent:main:main": entry({

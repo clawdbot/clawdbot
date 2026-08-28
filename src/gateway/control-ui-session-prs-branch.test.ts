@@ -152,6 +152,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 4,
       deletions: 1,
+      changedFiles: 3,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
@@ -191,6 +192,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
@@ -207,6 +209,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
@@ -216,6 +219,20 @@ describe("session branch diff stats", () => {
     const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
     expect(result.pullRequests[0]?.state).toBe("merged");
     // A squash-merged remote tip must not resurrect a duplicate Create PR invitation.
+    expect(result.branch).toBeUndefined();
+  });
+
+  it("suppresses the Create PR row when the merged PR falls outside the display cap", async () => {
+    const mergedHead = await initializeFeatureHead({ trackFeature: true });
+    const closedPull = (n: number) =>
+      pullListItem({ number: n, title: `closed ${n}`, state: "closed" });
+
+    const result = await loadBranchState({
+      // GitHub sorts by updated desc: three fresher closed-unmerged PRs push
+      // the merged PR past the MAX_PULL_REQUESTS display slice.
+      pullRequests: [closedPull(5), closedPull(4), closedPull(3), mergedPull(mergedHead)],
+    });
+    // A merged head that is not displayed still proves the pushed tip landed.
     expect(result.branch).toBeUndefined();
   });
 
@@ -231,6 +248,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
@@ -286,6 +304,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
@@ -326,6 +345,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
@@ -366,6 +386,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
@@ -426,6 +447,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 

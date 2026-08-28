@@ -63,8 +63,10 @@ describe("Web Awesome control ownership", () => {
     // sidebar, inspector, and responsive dock state across more than two panes.
     expect(await matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-shell-view.ts",
+      "components/dock-layout-controller.ts",
       "pages/chat/chat-page.ts",
       "pages/chat/components/chat-resizable-divider.ts",
+      "pages/skill-workshop/view.ts",
     ]);
   });
 });

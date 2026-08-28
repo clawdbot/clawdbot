@@ -5,7 +5,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { escapeRegExp as escapeRegExpLiteral } from "../shared/regexp.js";
 import { isInterpreterLikeAllowlistPattern } from "./command-analysis/inline-eval.js";
 import { detectInlineEvalArgv } from "./command-analysis/risks.js";
 import { explainShellCommand } from "./command-explainer/extract.js";
@@ -18,7 +17,7 @@ import {
 import {
   isWindowsPlatform,
   matchAllowlist,
-  buildHashedArgPatternFromArgv,
+  buildCwdBoundHashedArgPattern,
   resolveExecutableTrustPath,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
@@ -371,6 +370,7 @@ function matchExecutableAllowlistForSegment(params: {
   candidateResolution: ExecutableResolution | null;
   effectiveArgv: string[];
   platform?: string | null;
+  cwd?: string;
   inlineCommand: string | null;
   isShellWrapperInvocation: boolean;
   isPositionalCarrierInvocation: boolean;
@@ -384,6 +384,7 @@ function matchExecutableAllowlistForSegment(params: {
     params.candidateResolution,
     params.effectiveArgv,
     params.platform,
+    params.cwd,
   );
   const hasBoundArgPattern =
     typeof match?.argPattern === "string" && match.argPattern.trim().length > 0;
@@ -538,6 +539,7 @@ function resolveSegmentAllowlistMatch(params: {
     candidateResolution,
     effectiveArgv: matchArgv,
     platform: params.context.platform,
+    cwd: params.context.cwd,
     inlineCommand,
     isShellWrapperInvocation,
     isPositionalCarrierInvocation,
@@ -561,6 +563,7 @@ function resolveSegmentAllowlistMatch(params: {
           ? params.context.allowlist
           : params.context.allowlist.filter((entry) => entry.argPattern === undefined),
         {
+          kind: "executable",
           rawExecutable: shellPositionalArgvCandidate.path,
           resolvedPath: shellPositionalArgvCandidate.path,
           resolvedRealPath: resolveCandidateTrustPath(shellPositionalArgvCandidate.path),
@@ -568,6 +571,7 @@ function resolveSegmentAllowlistMatch(params: {
         },
         shellPositionalArgvCandidate.argv,
         params.context.platform,
+        params.context.cwd,
       )
     : null;
   const shellScriptCandidatePath =
@@ -591,6 +595,7 @@ function resolveSegmentAllowlistMatch(params: {
       ? matchAllowlist(
           params.context.allowlist,
           {
+            kind: "executable",
             rawExecutable: shellScriptCandidatePath,
             resolvedPath: shellScriptCandidatePath,
             resolvedRealPath: resolveCandidateTrustPath(shellScriptCandidatePath),
@@ -598,6 +603,7 @@ function resolveSegmentAllowlistMatch(params: {
           },
           shellScriptArgv,
           params.context.platform,
+          params.context.cwd,
         )
       : null;
   return {
@@ -1226,27 +1232,11 @@ function buildScriptArgPatternFromArgv(
     );
   }
   const scriptArgs = scriptIdx !== -1 ? argv.slice(scriptIdx + 1) : [];
-  if (!isWindowsPlatform(platform ?? process.platform)) {
-    return buildHashedArgPatternFromArgv([scriptPath, ...scriptArgs]);
-  }
-  const normalized = scriptArgs.map((a) => a.replace(/\//g, "\\"));
-  if (normalized.length === 0) {
-    return "^\x00\x00$";
-  }
-  return `^${normalized.map(escapeRegExpLiteral).join("\x00")}\x00$`;
+  return buildCwdBoundHashedArgPattern([scriptPath, ...scriptArgs], base, platform);
 }
 
-function buildArgPatternFromArgv(argv: string[], platform?: string | null): string | undefined {
-  const args = argv.slice(1);
-  if (!isWindowsPlatform(platform ?? process.platform)) {
-    return buildHashedArgPatternFromArgv(argv);
-  }
-  const normalized = args.map((a) => a.replace(/\//g, "\\"));
-  if (normalized.length === 0) {
-    return "^\x00\x00$";
-  }
-  const joined = normalized.join("\x00");
-  return `^${escapeRegExpLiteral(joined)}\x00$`;
+function buildArgPatternFromArgv(argv: string[], cwd: string, platform?: string | null): string {
+  return buildCwdBoundHashedArgPattern(argv, cwd, platform);
 }
 
 function addAllowAlwaysPattern(
@@ -1267,6 +1257,7 @@ function resolveCandidateTrustPath(candidatePath: string | undefined): string | 
     return undefined;
   }
   return resolveExecutableTrustPath({
+    kind: "executable",
     rawExecutable: candidatePath,
     resolvedPath: candidatePath,
     executableName: path.basename(candidatePath),
@@ -1338,7 +1329,11 @@ function collectAllowAlwaysPatterns(params: {
     }
   }
   if (!trustPlan.shellWrapperExecutable) {
-    const argPattern = buildArgPatternFromArgv(segment.argv, params.platform);
+    const argPattern = buildArgPatternFromArgv(
+      segment.argv,
+      params.cwd ?? process.cwd(),
+      params.platform,
+    );
     addAllowAlwaysPattern(params.out, candidatePath, argPattern);
     return;
   }
@@ -1365,7 +1360,11 @@ function collectAllowAlwaysPatterns(params: {
     }
     const positionalTrustPath =
       resolveCandidateTrustPath(positionalArgvCandidate.path) ?? positionalArgvCandidate.path;
-    const argPattern = buildArgPatternFromArgv(positionalArgvCandidate.argv, params.platform);
+    const argPattern = buildArgPatternFromArgv(
+      positionalArgvCandidate.argv,
+      params.cwd ?? process.cwd(),
+      params.platform,
+    );
     addAllowAlwaysPattern(params.out, positionalTrustPath, argPattern);
     return;
   }

@@ -1,5 +1,6 @@
 // Control UI chat module owns low-level WebRTC offer and media-message helpers.
 import { normalizeRealtimeVoiceResponseOutcome } from "../../../../src/talk/provider-types.js";
+import { readResponseTextWithLimit } from "../../lib/response-body.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
@@ -143,14 +144,23 @@ export class RealtimeTalkWebRtcOfferExchange {
         throw error;
       }
       if (!params.isCurrent()) {
+        void response.body?.cancel().catch(() => undefined);
         return undefined;
       }
       if (!response.ok) {
+        void response.body?.cancel().catch(() => undefined);
         throw new Error(`Realtime WebRTC setup failed (${response.status})`);
       }
       let answer: string;
       try {
-        answer = await response.text();
+        const maxBytes = params.session.offerResponseMaxBytes;
+        answer =
+          maxBytes === undefined
+            ? await response.text()
+            : await readResponseTextWithLimit(response, {
+                maxBytes,
+                tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${maxBytes} bytes`,
+              });
       } catch (error) {
         if (!params.isCurrent()) {
           return undefined;

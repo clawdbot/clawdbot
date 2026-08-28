@@ -39,7 +39,7 @@ const {
   runBeforeAgentRunMock,
   executePreparedCliRunMock,
   prepareCliRunContextMock,
-  closeClaudeSessionMock,
+  closeCliSessionMock,
   closeMcpLoopbackServerMock,
   retireSessionMcpRuntimeForSessionKeyMock,
   retireSessionMcpRuntimeMock,
@@ -56,7 +56,7 @@ const {
     (_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>
   >(async () => ({ text: "" })),
   prepareCliRunContextMock: vi.fn(),
-  closeClaudeSessionMock: vi.fn(),
+  closeCliSessionMock: vi.fn(),
   closeMcpLoopbackServerMock: vi.fn(),
   retireSessionMcpRuntimeForSessionKeyMock: vi.fn(),
   retireSessionMcpRuntimeMock: vi.fn(),
@@ -81,14 +81,11 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executePreparedCliRunMock,
 }));
 
-vi.mock("./cli-runner/claude-live-registry.js", () => ({
-  closeClaudeSession: closeClaudeSessionMock,
-  getClaudeGeneration: vi.fn(() => undefined),
-  hasClaudeSession: vi.fn(() => false),
-}));
-
-vi.mock("./cli-runner/claude-live-session-policy.js", () => ({
-  acceptsClaudeLive: vi.fn(() => false),
+vi.mock("./cli-runner/cli-live-session-registry.js", () => ({
+  closeCliLiveSession: closeCliSessionMock,
+  getCliLiveSessionGeneration: vi.fn(() => undefined),
+  hasCliLiveSession: vi.fn(() => false),
+  acceptsCliLiveSession: vi.fn(() => false),
 }));
 
 vi.mock("../gateway/mcp-http.js", () => ({
@@ -154,7 +151,6 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
     normalizedModel: params.model,
     systemPrompt: "",
     systemPromptReport: {},
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },
@@ -175,7 +171,7 @@ beforeEach(() => {
   prepareCliRunContextMock.mockImplementation(async (params) =>
     makeStubContext(params as typeof baseRunParams & { trigger?: string }),
   );
-  closeClaudeSessionMock.mockReset();
+  closeCliSessionMock.mockReset();
   closeMcpLoopbackServerMock.mockReset();
   retireSessionMcpRuntimeForSessionKeyMock.mockReset();
   retireSessionMcpRuntimeForSessionKeyMock.mockResolvedValue(true);
@@ -502,7 +498,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     });
 
     expect(error).toMatchObject({ message: "CLI process failed" });
-    expect(closeClaudeSessionMock).toHaveBeenCalledTimes(1);
+    expect(closeCliSessionMock).toHaveBeenCalledTimes(1);
     expect(events.find((event) => event.type === "harness.run.error")).toMatchObject({
       type: "harness.run.error",
       phase: "send",
@@ -529,7 +525,7 @@ describe("runCliAgent before_agent_reply seam", () => {
 
   it("classifies a surfaced outer cleanup failure as cleanup", async () => {
     executePreparedCliRunMock.mockResolvedValueOnce({ text: "real Claude reply" });
-    closeClaudeSessionMock.mockRejectedValueOnce(new Error("managed session cleanup failed"));
+    closeCliSessionMock.mockRejectedValueOnce(new Error("managed session cleanup failed"));
 
     const { error, events } = await captureRejectedClaudeRun({
       ...baseRunParams,
@@ -829,8 +825,8 @@ describe("runCliAgent before_agent_reply seam", () => {
     await runCliAgent({ ...baseRunParams, cleanupCliLiveSessionOnRunEnd: true });
 
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
-    expect(closeClaudeSessionMock).toHaveBeenCalledTimes(1);
-    expect(closeClaudeSessionMock).toHaveBeenCalledWith(
+    expect(closeCliSessionMock).toHaveBeenCalledTimes(1);
+    expect(closeCliSessionMock).toHaveBeenCalledWith(
       await expectDefined(
         prepareCliRunContextMock.mock.results[0],
         "prepareCliRunContextMock.mock.results[0] test invariant",

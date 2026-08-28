@@ -20,6 +20,7 @@ function backgroundTasks(task: TaskSummary): BackgroundTasksProps {
     loading: false,
     error: null,
     tasks: [task],
+    activeCount: task.status === "queued" || task.status === "running" ? 1 : 0,
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:main",

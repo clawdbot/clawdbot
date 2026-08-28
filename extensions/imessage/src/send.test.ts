@@ -88,6 +88,14 @@ function createApprovalText(id = "approval-123"): string {
   ].join("\n");
 }
 
+function createApprovalPrompt(id = "approval-123") {
+  return {
+    approvalId: id,
+    approvalKind: "exec" as const,
+    allowedDecisions: ["allow-once", "deny"] as const,
+  };
+}
+
 describe("sendMessageIMessage receipts", () => {
   let openClawState: OpenClawTestState;
 
@@ -631,6 +639,17 @@ describe("sendMessageIMessage receipts", () => {
         }
       }
 
+      const dunderReferenceRequestIndex = countNativeRequests();
+      await sendMessageIMessage(
+        "chat_id:10",
+        [
+          "[Class][docs] and [Type][docs] **done**",
+          "",
+          "[docs]: https://docs.python.org/3/library/stdtypes.html#instance.__class__",
+        ].join("\n"),
+        { config: cfg },
+      );
+
       const oversizedYaml = [
         "```yaml",
         ...Array.from({ length: 6 }, (_, index) =>
@@ -670,7 +689,7 @@ describe("sendMessageIMessage receipts", () => {
           );
       const requests = readRequests();
       const expectedFixedRequestCount =
-        1 + disguisedCases.length + 1 + channelContractRequestCount + embeddedRequestCount;
+        1 + disguisedCases.length + 1 + channelContractRequestCount + embeddedRequestCount + 1;
       expect(fixedRequestCount).toBe(expectedFixedRequestCount);
       const monitorRequests = requests.slice(
         expectedFixedRequestCount,
@@ -727,10 +746,27 @@ describe("sendMessageIMessage receipts", () => {
           (boldRange?.start ?? 0) + (boldRange?.length ?? 0),
         ),
       ).toBe("😀 styled");
+      expect(requests[dunderReferenceRequestIndex]?.params).toMatchObject({
+        text: [
+          "Class (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+          "and Type (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+          "done",
+        ].join(" "),
+        formatting: [{ start: 153, length: 4, styles: ["bold"] }],
+      });
 
       const { imessageActionsRuntime } = await import("./actions.runtime.js");
       const actionOptions = { cliPath, chatGuid: "iMessage;+;chat0000" };
       const fencedYaml = ["```yaml", ...roles.map((role) => `${role}:`), "```"].join("\n");
+      await imessageActionsRuntime.sendRichMessage({
+        chatGuid: actionOptions.chatGuid,
+        text: [
+          "[Class][obj.__class__] **done**",
+          "",
+          "[obj.__class__]: https://example.org/python",
+        ].join("\n"),
+        options: actionOptions,
+      });
       await imessageActionsRuntime.sendRichMessage({
         chatGuid: actionOptions.chatGuid,
         text: [
@@ -854,8 +890,9 @@ describe("sendMessageIMessage receipts", () => {
           .map((line) => JSON.parse(line) as string[]);
       const actionValue = (args: string[], flag: string) => args[args.indexOf(flag) + 1] ?? "";
       const actions = readActions();
-      expect(actions).toHaveLength(6);
+      expect(actions).toHaveLength(7);
       const [
+        dunderReferenceAction,
         replyAction,
         effectAction,
         attachmentAction,
@@ -864,6 +901,7 @@ describe("sendMessageIMessage receipts", () => {
         pollAction,
       ] = actions;
       if (
+        !dunderReferenceAction ||
         !replyAction ||
         !effectAction ||
         !attachmentAction ||
@@ -871,8 +909,14 @@ describe("sendMessageIMessage receipts", () => {
         !editAction ||
         !pollAction
       ) {
-        throw new Error("Expected all six native iMessage action subprocesses");
+        throw new Error("Expected all seven native iMessage action subprocesses");
       }
+      expect(actionValue(dunderReferenceAction, "--text")).toBe(
+        "Class (https://example.org/python) done",
+      );
+      expect(JSON.parse(actionValue(dunderReferenceAction, "--format"))).toEqual([
+        { start: 35, length: 4, styles: ["bold"] },
+      ]);
       expect(replyAction).toContain("--reply-to");
       expect(actionValue(replyAction, "--reply-to")).toBe("reply-message-guid");
       expect(actionValue(effectAction, "--effect")).toBe("com.apple.MobileSMS.expressivesend.loud");
@@ -3244,6 +3288,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt(),
       createClient: createClientLocal,
       runCliJson,
       service: "sms",
@@ -3272,6 +3317,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt("approval-default"),
       client,
       runCliJson,
       resolveSentMessageGuidImpl,
@@ -3296,6 +3342,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt("approval-homebrew"),
       client,
       cliPath: "/opt/homebrew/bin/imsg",
       runCliJson,
@@ -3331,6 +3378,7 @@ describe("sendMessageIMessage receipts", () => {
             },
           },
         },
+        approvalPrompt: createApprovalPrompt("approval-remote"),
         client,
         cliPath: "/Users/me/.openclaw/scripts/imsg",
         runCliJson,
@@ -3363,6 +3411,7 @@ describe("sendMessageIMessage receipts", () => {
       const rejection = expect(
         sendMessageIMessage("chat_id:42", approvalText, {
           config: IMESSAGE_TEST_CFG,
+          approvalPrompt: createApprovalPrompt("approval-ssh-wrapper"),
           client,
           cliPath: wrapperPath,
           runCliJson,
@@ -3474,6 +3523,7 @@ describe("sendMessageIMessage receipts", () => {
     const rejection = expect(
       sendMessageIMessage("chat_id:42", approvalText, {
         config: IMESSAGE_TEST_CFG,
+        approvalPrompt: createApprovalPrompt(),
         client,
         runCliJson,
         dbPath: "/Users/me/Library/Messages/chat.db",
@@ -3503,7 +3553,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
-      approvalKind: "exec",
+      approvalPrompt: createApprovalPrompt(),
       client,
       dbPath: "/Users/me/Library/Messages/chat.db",
       resolveSentMessageGuidImpl,
@@ -3538,6 +3588,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt(),
       client,
     });
 

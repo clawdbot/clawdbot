@@ -39,10 +39,11 @@ if [ "${1-}" = "--dev-wrapper" ]; then
 fi
 requested_subcommand="${1-}"
 
-# If invoked from a linked worktree copy of this script, re-exec the canonical
-# script from the repository root so behavior stays consistent across worktrees.
+# Select trusted wrapper code independently from the canonical repository root;
+# a linked wrapper may be removed by merge-run or gc before supervision ends.
 script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 script_parent_dir="$(dirname "$script_self")"
+canonical_repo_root="$script_parent_dir/.."
 pr_wrapper_components=(
   scripts/pr
   scripts/pr-lib
@@ -50,8 +51,15 @@ pr_wrapper_components=(
   scripts/lib/plain-gh.mjs
   scripts/lib/direct-run.mjs
   scripts/lib/tsx-cli-shim.mjs
+  scripts/lib/local-check-runtime.mts
+  scripts/tsx.mjs
+  scripts/crabbox-untrusted-bootstrap.sh
+  scripts/pr-crabbox-gate-publisher.mjs
+  scripts/verify-pr-hosted-gates.mjs
+  scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
+  .github/workflows/pr-crabbox-gate-publisher.yml
 )
 if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
@@ -101,6 +109,16 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
       else
         if [ "$dev_wrapper_opt_in" = "1" ] && [ -n "$requested_classification" ]; then
           echo "subcommand '$requested_subcommand' is classified $requested_classification; dev-wrapper opt-in is unavailable." >&2
+        fi
+        # Worktrees routinely sit on a base that predates (or carries) wrapper
+        # changes relative to main. When the canonical checkout is byte-identical
+        # to the fetched origin/main anchor, exec-ing it runs exactly the trusted
+        # anchor code; announce the substitution so it is never silent.
+        if [ -n "$anchor_wrapper_revision" ] &&
+          [ "$canonical_wrapper_revision" = "$anchor_wrapper_revision" ] &&
+          [ "$canonical_wrapper_clean" = "1" ]; then
+          echo "scripts/pr wrapper in this worktree differs from origin/main; running the canonical checkout's wrapper (matches the origin/main trust anchor): $canonical_repo_root" >&2
+          exec "$canonical_self" "$@"
         fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
         # already exited for any staged or unstaged edit to these paths, so
@@ -153,14 +171,15 @@ is_supervised_pr_process() {
 
 if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
   if is_supervised_pr_process; then
-    # Do not leak the one-shot marker to tools or nested wrapper calls.
-    unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
+    # operation-lock.sh consumes the one-shot marker when it installs the
+    # leader-only completion trap, before PR command tools can inherit it.
+    :
   else
     unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
     unset OPENCLAW_PR_LOCK_NOTIFY_FD
     unset OPENCLAW_PR_LOCK_SUPERVISOR_PID
     command -v node >/dev/null 2>&1 || { echo "Missing required command: node" >&2; exit 1; }
-    exec node "$script_parent_dir/pr-lib/process-group-runner.mjs" "$script_parent_dir/.." "$script_self" "$@"
+    exec node "$script_parent_dir/pr-lib/process-group-runner.mjs" "$canonical_repo_root" "$script_self" "$@"
   fi
 fi
 
@@ -188,7 +207,7 @@ Usage:
   scripts/pr prepare-push <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
-  scripts/pr ci-dispatch <PR>
+  scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--auto-merge]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
@@ -227,8 +246,9 @@ require_cmds() {
 
 require_main_target_pr() {
   local pr="$1"
-  local base
-  base=$(gh pr view "$pr" --json baseRefName --jq .baseRefName)
+  local base base_json
+  base_json=$(read_pr_view_json "$pr" "baseRefName") || exit 1
+  base=$(pr_view_string_field "$base_json" "baseRefName" "$pr" "Retry the scripts/pr command.") || exit 1
   if [ "$base" != "main" ]; then
     echo "scripts/pr prepare and merge commands only support PRs targeting main; PR #$pr targets $base." >&2
     echo "Use the reviewed release-branch landing flow for non-main PRs." >&2
@@ -403,7 +423,8 @@ main() {
     ci-dispatch)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      ci_dispatch "$pr"
+      shift
+      ci_dispatch "$pr" "$@"
       ;;
     merge-verify)
       local pr="${1-}"

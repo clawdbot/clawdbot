@@ -8,12 +8,13 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "express": "5.2.1",
     "playwright-core": "1.62.1",
-    "typebox": "1.3.6",
-    "ws": "8.21.1"
+    "typebox": "1.3.16",
+    "ws": "8.21.3",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "undici": "8.9.0"
+    "undici": "8.10.0"
   },
   "openclaw": {
     "extensions": [

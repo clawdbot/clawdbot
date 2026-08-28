@@ -114,6 +114,8 @@ export async function runCodexSettledTurnFinalization(
     cwd: attempt.workspaceDir,
     messages: [assistant],
     idempotencyScope: `codex-settled-finalizer:${attempt.runId}`,
+    runId: attempt.runId,
+    terminalAssistantOwner: { mirrorIdentity, runId: attempt.runId },
     config: attempt.config,
     skipBeforeMessageWriteHooks: true,
   });
@@ -130,13 +132,10 @@ export async function runCodexSettledTurnFinalization(
     throw new Error("Codex settled-turn final answer transcript attestation mismatch");
   }
   const persistedAssistant = persistedMessage;
-  const persistedAssistantRecord = persistedAssistant as unknown as {
-    idempotencyKey?: unknown;
-  };
+  const persistedIdempotencyKey =
+    "idempotencyKey" in persistedAssistant ? persistedAssistant.idempotencyKey : undefined;
   const assistantTranscriptIdempotencyKey =
-    typeof persistedAssistantRecord.idempotencyKey === "string"
-      ? persistedAssistantRecord.idempotencyKey.trim()
-      : "";
+    typeof persistedIdempotencyKey === "string" ? persistedIdempotencyKey.trim() : "";
   return {
     assistant: persistedAssistant,
     assistantTranscriptOwned: true,

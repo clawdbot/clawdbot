@@ -10,13 +10,15 @@ import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordAvatarResolver } from "./message-avatar.js";
+import type { DiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
-import type { DiscordChannelInfo, DiscordMediaInfo } from "./message-utils.js";
+import type { DiscordMediaInfo } from "./message-media.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
+import type { DiscordThreadChannel } from "./threading.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
-import type { DiscordThreadChannel } from "./threading.js";
 
 type LoadedConfig = OpenClawConfig;
 type BuildChannelInboundContext =
@@ -76,6 +78,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   // fall back to Discord's expiring attachment URLs.
   preparedMedia: DiscordMediaInfo[];
   wasMentioned: boolean;
+  conversationAvatar?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;
@@ -127,6 +130,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   groupPolicy: DiscordMessagePreflightContext["groupPolicy"];
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
+  avatarResolver?: DiscordAvatarResolver;
   data: DiscordMessageEvent;
   client: Client;
 };

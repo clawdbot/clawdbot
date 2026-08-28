@@ -10,6 +10,8 @@ import { buildClawProject } from "./project-build.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const GOLDEN_ARTIFACT_INTEGRITY =
+  "sha256:10b8890c5e5b062c94ff79b1d424859c6a5572548535eec6e31ee0c6d7c08a3b";
 
 // `CLAW.md` and `claw.md` only coexist on a case-sensitive filesystem. On a case-insensitive
 // volume the second write replaces the manifest instead of adding a colliding source, so the
@@ -65,9 +67,7 @@ describe("Claw projects", () => {
       output,
     );
 
-    expect(result.integrity).toBe(
-      "sha256:f7377ae66679a8d1088ac2d259b8567d19f584dbc4357949d3d4e0cc09d05874",
-    );
+    expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
 
   it("matches the golden artifact digest under a restrictive umask", () => {
@@ -100,9 +100,7 @@ describe("Claw projects", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      "sha256:f7377ae66679a8d1088ac2d259b8567d19f584dbc4357949d3d4e0cc09d05874",
-    );
+    expect(result.stdout).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
 
   it("creates a minimal project that validates through the canonical reader", async () => {
@@ -449,11 +447,11 @@ describe("Claw projects", () => {
       const project = tempDirs.make("openclaw-claw-manifest-case-collision-");
       await writeRichProject(project);
       const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+      await writeFile(join(project, "claw.md"), "# Conflicting source\n");
       await writeFile(
         join(project, "CLAW.md"),
         manifest.replace("workspace/reference.md", "claw.md"),
       );
-      await writeFile(join(project, "claw.md"), "# Conflicting source\n");
 
       await expect(validateClawProject(project)).resolves.toMatchObject({
         ok: false,

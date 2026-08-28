@@ -2,14 +2,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginMemoryEmbeddingProviderRegistration } from "./registry.test-fixtures.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
   createInstalledPluginIndexSnapshot,
   createPluginLoadResult,
   createPluginRecord,
-  DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
   HOOK_ONLY_MESSAGE,
   REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
 } from "./status.test-fixtures.js";
@@ -21,9 +20,6 @@ const loadPluginMetadataRegistrySnapshotMock = vi.fn();
 const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
-const isPluginMetadataSnapshotCompatibleMock = vi.fn<
-  typeof import("./plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible
->(() => true);
 const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
   const params = rawParams as { index?: unknown };
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
@@ -60,7 +56,8 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
+  resolveConfigWidePluginMetadataSnapshot: (params: unknown) =>
+    loadPluginMetadataSnapshotMock(params),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -93,13 +90,15 @@ vi.mock("./manifest-registry-installed.js", () => ({
   resolveInstalledManifestRegistryIndexFingerprint: () => "test-installed-index",
 }));
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
-  isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
-  loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
-  rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
-  resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
-    params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
-}));
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
+  return {
+    loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
+    projectPluginMetadataSnapshot: actual.projectPluginMetadataSnapshot,
+    resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
+      params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
+  };
+});
 
 vi.mock("./providers.js", () => ({
   resolveBundledProviderCompatPluginIds: (...args: unknown[]) =>
@@ -397,6 +396,7 @@ describe("plugin status reports", () => {
   });
 
   beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     resolveCompatibleRuntimePluginRegistryMock.mockReset();
@@ -404,8 +404,6 @@ describe("plugin status reports", () => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
-    isPluginMetadataSnapshotCompatibleMock.mockReset();
-    isPluginMetadataSnapshotCompatibleMock.mockReturnValue(true);
     loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
@@ -724,12 +722,12 @@ describe("plugin status reports", () => {
     ]);
   });
 
-  it("builds inspect reports for every loaded plugin", () => {
+  it("prefers exact plugin ids over display names in individual and all inspect reports", () => {
     setPluginLoadResult({
       plugins: [
         createPluginRecord({
           id: "lca",
-          name: "LCA",
+          name: "microsoft",
           description: "Legacy hook plugin",
           hookCount: 1,
         }),
@@ -745,6 +743,9 @@ describe("plugin status reports", () => {
       hooks: [createCustomHook({ pluginId: "lca", events: ["message"] })],
     });
 
+    expect(expectInspectReport("microsoft").plugin.id).toBe("microsoft");
+    expect(expectInspectReport("Microsoft").plugin.id).toBe("microsoft");
+
     const inspect = buildAllPluginInspectReports();
 
     expect(inspect.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
@@ -753,6 +754,82 @@ describe("plugin status reports", () => {
       "text-inference",
       "web-search",
     ]);
+  });
+
+  it.each([
+    {
+      id: "extractor-only",
+      providers: { contracts: { webContentExtractors: ["readability"] } },
+      capabilities: [{ kind: "web-content-extractors", ids: ["readability"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+    {
+      id: "fetch-only",
+      providers: { webFetchProviderIds: ["fetch-only"] },
+      capabilities: [{ kind: "web-fetch", ids: ["fetch-only"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+    {
+      id: "firecrawl",
+      providers: {
+        webFetchProviderIds: ["firecrawl"],
+        webSearchProviderIds: ["firecrawl", "firecrawl-free"],
+      },
+      capabilities: [
+        { kind: "web-fetch", ids: ["firecrawl"] },
+        { kind: "web-search", ids: ["firecrawl", "firecrawl-free"] },
+      ],
+      shape: "hybrid-capability",
+      mode: "hybrid",
+    },
+    {
+      id: "migration-only",
+      providers: { migrationProviderIds: ["importer"] },
+      capabilities: [{ kind: "migration-provider", ids: ["importer"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+  ])(
+    "projects $id capabilities from cold metadata without a hook-only warning",
+    ({ id, providers, capabilities, shape, mode }) => {
+      setSinglePluginLoadResult(createPluginRecord({ id, ...providers }), {
+        hooks: [createCustomHook({ pluginId: id, events: ["message"] })],
+      });
+      const report = buildPluginSnapshotReport({ config: {} });
+      const inspect = expectInspectReport(id, { config: {}, report });
+      expect(inspect).toMatchObject({
+        shape,
+        capabilityMode: mode,
+        capabilityCount: capabilities.length,
+        capabilities,
+        compatibility: [],
+      });
+      expect(buildAllPluginInspectReports({ config: {}, report })).toEqual([inspect]);
+      expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("exposes gateway discovery only after its service is registered", () => {
+    setSinglePluginLoadResult(createPluginRecord({ id: "bonjour" }));
+    const report = buildPluginSnapshotReport({ config: {} });
+    expect(expectInspectReport("bonjour", { config: {}, report })).toMatchObject({
+      shape: "non-capability",
+      capabilityCount: 0,
+      capabilities: [],
+    });
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    setSinglePluginLoadResult(
+      createPluginRecord({ id: "bonjour", gatewayDiscoveryServiceIds: ["bonjour"] }),
+    );
+    expect(expectInspectReport("bonjour", { config: {} })).toMatchObject({
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityCount: 1,
+      capabilities: [{ kind: "gateway-discovery", ids: ["bonjour"] }],
+    });
+    expect(mockInput(loadOpenClawPluginsMock).activate).toBe(false);
   });
 
   it("treats a CLI-command-only plugin as a plain capability", () => {
@@ -851,74 +928,6 @@ describe("plugin status reports", () => {
 
     expect(buildPluginCompatibilitySnapshotNotices({ config: {} })).toStrictEqual([]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("warns external plugins off deprecated memory embedding provider registration", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "legacy-memory-provider",
-        name: "Legacy Memory Provider",
-        memoryEmbeddingProviderIds: ["legacy-memory-provider"],
-        contracts: { memoryEmbeddingProviders: ["legacy-memory-provider"] },
-      }),
-    );
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "legacy-memory-provider",
-          code: "deprecated-memory-embedding-provider-api",
-        }),
-      ],
-      warnings: [`legacy-memory-provider ${DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE}`],
-    });
-  });
-
-  it("warns when external plugins register memory embedding providers at runtime only", () => {
-    const runtimeProviderRegistration: PluginMemoryEmbeddingProviderRegistration = {
-      pluginId: "runtime-only-legacy-memory-provider",
-      pluginName: "Runtime Only Legacy Memory Provider",
-      provider: {
-        id: "runtime-only-legacy-memory-provider",
-        create: async () => ({ provider: null }),
-      },
-      source: "/tmp/runtime-only-legacy-memory-provider/index.ts",
-    };
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "runtime-only-legacy-memory-provider",
-          name: "Runtime Only Legacy Memory Provider",
-        }),
-      ],
-      memoryEmbeddingProviders: [runtimeProviderRegistration],
-    });
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "runtime-only-legacy-memory-provider",
-          code: "deprecated-memory-embedding-provider-api",
-        }),
-      ],
-      warnings: [
-        `runtime-only-legacy-memory-provider ${DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE}`,
-      ],
-    });
-  });
-
-  it("does not surface bundled memory embedding migration debt as user warnings", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "bundled-memory-provider",
-        name: "Bundled Memory Provider",
-        origin: "bundled",
-        memoryEmbeddingProviderIds: ["bundled-memory-provider"],
-        contracts: { memoryEmbeddingProviders: ["bundled-memory-provider"] },
-      }),
-    );
-
-    expectNoCompatibilityWarnings();
   });
 
   it("warns external plugins when load diagnostics reference removed session file APIs", () => {

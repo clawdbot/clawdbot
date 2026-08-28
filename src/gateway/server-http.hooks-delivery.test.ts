@@ -5,7 +5,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HookMappingResolved } from "./hooks-mapping.js";
 import { createHooksConfig } from "./hooks-test-helpers.js";
-import type { HookAgentDispatchPayload } from "./hooks.js";
+import type { HookAgentDispatchPayload, HooksConfigResolved } from "./hooks.js";
 import { createHookRequest, createResponse } from "./server-http.test-harness.js";
 import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 
@@ -33,14 +33,20 @@ vi.mock("./hooks.js", async () => {
   };
 });
 
-function createDeliveryHandler(params?: { mappings?: HookMappingResolved[] }) {
+function createDeliveryHandler(params?: {
+  mappings?: HookMappingResolved[];
+  agentPolicy?: Partial<HooksConfigResolved["agentPolicy"]>;
+}) {
+  const dispatchWakeHook = vi.fn(() => ({ eventOutcome: "queued" as const }));
   const dispatchAgentHook = vi.fn((_value: HookAgentDispatchPayload) => ({
     ok: true as const,
     runId: "run-1",
   }));
+  const canonicalConfig = createHooksConfig();
   const hooksConfig = {
-    ...createHooksConfig(),
+    ...canonicalConfig,
     mappings: params?.mappings ?? [],
+    agentPolicy: { ...canonicalConfig.agentPolicy, ...params?.agentPolicy },
   };
   const handler = createHooksRequestHandler({
     getHooksConfig: () => hooksConfig,
@@ -52,10 +58,10 @@ function createDeliveryHandler(params?: { mappings?: HookMappingResolved[] }) {
       info: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
-    dispatchWakeHook: vi.fn(),
+    dispatchWakeHook,
     dispatchAgentHook,
   });
-  return { handler, dispatchAgentHook };
+  return { handler, dispatchAgentHook, dispatchWakeHook };
 }
 
 async function dispatchPayload(params: {
@@ -229,5 +235,71 @@ describe("hook request delivery normalization", () => {
         delivery: { mode: "none" },
       }),
     );
+  });
+
+  test.each([
+    ["/hooks/agent", { message: "Direct", agentId: "  " }],
+    ["/hooks/wake", { text: "Wake", agentId: "  " }],
+  ])("rejects a blank direct agentId on %s without dispatch", async (path, payload) => {
+    const { handler, dispatchAgentHook, dispatchWakeHook } = createDeliveryHandler();
+
+    const response = await dispatchPayload({ handler, path, payload });
+
+    expect(response.res.statusCode).toBe(400);
+    expect(response.getBody()).toContain("agentId must be a non-empty string");
+    expect(dispatchAgentHook).not.toHaveBeenCalled();
+    expect(dispatchWakeHook).not.toHaveBeenCalled();
+  });
+
+  test("preserves config-mapping fallback for an unrepresentable agentId", async () => {
+    const { handler, dispatchAgentHook } = createDeliveryHandler({
+      mappings: [
+        {
+          id: "mapped-unknown-agent",
+          matchPath: "mapped-unknown-agent",
+          action: "agent",
+          agentId: "!!!",
+          messageTemplate: "Mapped fallback",
+        },
+      ],
+    });
+
+    const mapping = await dispatchPayload({
+      handler,
+      path: "/hooks/mapped-unknown-agent",
+      payload: {},
+    });
+    expect(mapping.res.statusCode).toBe(200);
+    expect(dispatchAgentHook).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", effectiveAgentId: "main" }),
+    );
+  });
+
+  test.each([
+    {
+      owner: { kind: "configured" as const, agentId: "ops" },
+      error: 'agentId \\"research\\" conflicts with global session-store owner \\"ops\\"',
+    },
+    {
+      owner: { kind: "retired" as const, agentId: "retired" },
+      error: 'global session-store owner \\"retired\\" is no longer configured',
+    },
+  ])("reports $owner.kind global session-store ownership", async ({ owner, error }) => {
+    const { handler, dispatchAgentHook } = createDeliveryHandler({
+      agentPolicy: {
+        globalSessionStoreOwner: owner,
+        knownAgentIds: new Set(["ops", "research"]),
+      },
+    });
+
+    const response = await dispatchPayload({
+      handler,
+      path: "/hooks/agent",
+      payload: { message: "Direct", agentId: "research" },
+    });
+    expect(response.res.statusCode).toBe(400);
+    expect(response.getBody()).toContain(error);
+    expect(response.getBody()).not.toContain("agentId is required");
+    expect(dispatchAgentHook).not.toHaveBeenCalled();
   });
 });

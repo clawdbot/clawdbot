@@ -3,7 +3,7 @@
  */
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelDefinition } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   fetchWithSsrFGuard,
@@ -35,13 +35,10 @@ function decorateChutesModelDefinition(model: ModelDefinitionConfig): ModelDefin
 }
 
 /** Bundled fallback Chutes model catalog, normalized from the plugin manifest. */
-export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = CHUTES_MANIFEST_CATALOG.models.map(
-  buildManifestModelDefinition({
-    providerId: "chutes",
-    catalog: CHUTES_MANIFEST_CATALOG,
-    decorate: decorateChutesModelDefinition,
-  }),
-);
+export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
+  providerId: "chutes",
+  catalog: CHUTES_MANIFEST_CATALOG,
+}).models.map(decorateChutesModelDefinition);
 
 interface ChutesModelEntry {
   id: string;

@@ -21,6 +21,7 @@ type LoadPluginManifestRegistry =
   typeof import("./manifest-registry.js").loadPluginManifestRegistryCore;
 type LoadPluginMetadataSnapshot =
   typeof import("./plugin-metadata-snapshot.js").loadPluginMetadataSnapshot;
+type LoadPluginRegistrySnapshot = typeof import("./plugin-registry.js").loadPluginRegistrySnapshot;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -31,12 +32,14 @@ const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
+const loadPluginRegistrySnapshotMock = vi.fn<LoadPluginRegistrySnapshot>();
 const getCurrentPluginMetadataSnapshotMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolveOwningPluginIdsForProviderRef: typeof import("./providers.js").resolveOwningPluginIdsForProviderRef;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
+let resolveOwningPluginIdsForModelRefs: typeof import("./providers.js").resolveOwningPluginIdsForModelRefs;
 let resolveProviderRefOwnership: typeof import("./providers.js").resolveProviderRefOwnership;
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
@@ -502,7 +505,8 @@ describe("resolvePluginProviders", () => {
         await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
       return {
         ...actual,
-        loadPluginRegistrySnapshot: () => createProviderRegistrySnapshotFixture(),
+        loadPluginRegistrySnapshot: (...args: Parameters<LoadPluginRegistrySnapshot>) =>
+          loadPluginRegistrySnapshotMock(...args),
         resolvePluginContributionOwners: resolvePluginContributionOwnersFixture,
         resolveProviderOwners: resolveProviderOwnersFixture,
       };
@@ -519,6 +523,7 @@ describe("resolvePluginProviders", () => {
       resolveOwningPluginIdsForProvider,
       resolveOwningPluginIdsForProviderRef,
       resolveOwningPluginIdsForModelRef,
+      resolveOwningPluginIdsForModelRefs,
       resolveProviderRefOwnership,
       resolveEnabledProviderPluginIds,
       resolveCatalogHookProviderPluginIds,
@@ -547,9 +552,13 @@ describe("resolvePluginProviders", () => {
     });
 
     expectOwningPluginIds("setup-only-cli");
+    loadPluginMetadataSnapshotMock.mockClear();
+    loadPluginRegistrySnapshotMock.mockClear();
     expect(resolveOwningPluginIdsForProviderRef({ provider: "setup-only-cli" })).toEqual([
       "setup-only-backend-owner",
     ]);
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledOnce();
   });
 
   it("maps explicit provider refs to provider or cli-backend owners", () => {
@@ -588,6 +597,18 @@ describe("resolvePluginProviders", () => {
     setOwningProviderManifestPlugins();
 
     expectModelOwningPluginIds("claude-cli/claude-sonnet-4-6", ["anthropic"]);
+  });
+
+  it("reuses one registry snapshot across explicit model ownership lookups", () => {
+    setOwningProviderManifestPlugins();
+
+    expect(
+      resolveOwningPluginIdsForModelRefs({
+        models: ["openai/gpt-5.6-luna", "claude-cli/claude-sonnet-4-6"],
+      }),
+    ).toEqual(["anthropic", "openai"]);
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledOnce();
   });
 
   it("maps manifest model catalog provider aliases to owning plugin ids", () => {
@@ -734,6 +755,10 @@ describe("resolvePluginProviders", () => {
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
     loadPluginMetadataSnapshotMock.mockReset();
+    loadPluginRegistrySnapshotMock.mockReset();
+    loadPluginRegistrySnapshotMock.mockImplementation(() =>
+      createProviderRegistrySnapshotFixture(),
+    );
     getCurrentPluginMetadataSnapshotMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     const provider: ProviderPlugin = {

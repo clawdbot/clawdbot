@@ -1,4 +1,3 @@
-// Control UI chat module implements realtime talk shared behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -10,6 +9,8 @@ import {
 import type { RealtimeVoiceAgentControlMode } from "../../../../src/talk/agent-run-control-shared.js";
 import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+// Control UI chat module implements realtime talk shared behavior.
+import { formatUiError } from "../../lib/format-error.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
@@ -49,6 +50,7 @@ export type RealtimeTalkWebRtcSdpSessionResult = {
   clientSecret: string;
   offerUrl?: string;
   offerHeaders?: Record<string, string>;
+  offerResponseMaxBytes?: number;
   model?: string;
   voice?: string;
   expiresAt?: number;
@@ -458,7 +460,7 @@ export async function steerRealtimeTalkActiveConsult(params: {
   } catch (error) {
     params.emitTalkEvent?.({
       type: "tool.error",
-      payload: { message: error instanceof Error ? error.message : String(error) },
+      payload: { message: formatUiError(error) },
       final: true,
     });
   }
@@ -509,7 +511,7 @@ export async function submitRealtimeTalkAgentControl(params: {
           : undefined,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUiError(error);
     talkEvent = {
       type: "tool.error",
       callId: params.callId,
@@ -638,7 +640,7 @@ export async function submitRealtimeTalkConsult(params: {
       return;
     }
     await submitOnce({
-      error: error instanceof Error ? error.message : String(error),
+      error: formatUiError(error),
     });
   } finally {
     params.signal?.removeEventListener("abort", abortRun);

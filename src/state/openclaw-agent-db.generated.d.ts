@@ -147,6 +147,15 @@ export interface MemoryEmbeddingCache {
   updated_at: number;
 }
 
+export interface MemoryEntryOrigins {
+  agent_id: string;
+  entry_key: string;
+  observed_at: number;
+  origin_class: string;
+  session_id: string;
+  session_key: string | null;
+}
+
 export interface MemoryIndexChunkProvenance {
   chunk_id: string;
   observed_at: number;
@@ -194,6 +203,25 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+export interface MemorySessionTombstones {
+  agent_id: string;
+  created_at: number;
+  reason: string;
+  session_id: string;
+}
+
+export interface MessageToolRunOutcomes {
+  agent_id: string;
+  id: Generated<number>;
+  model: string;
+  occurred_at: number;
+  outcome: string;
+  provider: string;
+  run_id: string;
+  run_status: string;
+  session_key: string;
+}
+
 export interface SchemaMeta {
   agent_id: string | null;
   app_version: string | null;
@@ -209,7 +237,17 @@ export interface SessionConversations {
   first_seen_at: number;
   last_seen_at: number;
   role: Generated<string>;
+  route_context_json: string | null;
   session_id: string;
+}
+
+export interface SessionGoalOperations {
+  expires_at: number;
+  operation_id: string;
+  request_fingerprint: string;
+  result_json: string;
+  session_id: string;
+  session_key: string;
 }
 
 export interface SessionKeyContract {
@@ -244,12 +282,35 @@ export interface SessionNodes {
   last_activity_at: number | null;
   last_interaction_at: number | null;
   last_read_at: number | null;
+  owner_actor_id: string | null;
+  owner_actor_type: string | null;
+  owner_assigned_at: number | null;
+  owner_assigned_by_id: string | null;
+  owner_assigned_by_type: string | null;
   parent_session_key: string | null;
   pinned_at: number | null;
   project_id: string | null;
   session_key: string;
   spawned_by: string | null;
   status: string | null;
+  updated_at: number;
+}
+
+export interface SessionParticipants {
+  actor_id: string;
+  contribution_count: number;
+  first_prompted_at: number | null;
+  identity_namespace: string;
+  last_prompted_at: number | null;
+  session_key: string;
+}
+
+export interface SessionProgressCards {
+  created_at: number;
+  markdown: string | null;
+  revision: number;
+  session_key: string;
+  steps_json: string | null;
   updated_at: number;
 }
 
@@ -271,6 +332,22 @@ export interface SessionTranscriptActiveEvents {
   event_seq: number;
   message_position: number | null;
   session_id: string;
+}
+
+export interface SessionTranscriptArchives {
+  archive_blob: Uint8Array;
+  archive_name: string;
+  archive_sha256: string;
+  created_at: number;
+  encoding: string;
+  generation: string;
+  last_publish_attempt_at: number | null;
+  last_publish_error: string | null;
+  publish_attempts: Generated<number>;
+  published_at: number | null;
+  reason: string;
+  session_id: string;
+  session_key: string;
 }
 
 export interface SessionTranscriptFts {
@@ -437,19 +514,26 @@ export interface DB {
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
+  memory_entry_origins: MemoryEntryOrigins;
   memory_index_chunk_provenance: MemoryIndexChunkProvenance;
   memory_index_chunk_recall_metadata: MemoryIndexChunkRecallMetadata;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  memory_session_tombstones: MemorySessionTombstones;
+  message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
+  session_goal_operations: SessionGoalOperations;
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
+  session_participants: SessionParticipants;
+  session_progress_cards: SessionProgressCards;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
+  session_transcript_archives: SessionTranscriptArchives;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;

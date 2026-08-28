@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { startNostrBus } from "./nostr-bus.js";
@@ -480,24 +480,56 @@ describe("startNostrBus inbound guards", () => {
     await bus.close();
   });
 
-  it("stops the ingress drain when startup state persistence fails", async () => {
+  it("awaits ingress drain shutdown when startup state persistence fails", async () => {
     const startupError = new Error("state unavailable");
     const claimNext = vi.spyOn(ingressQueue, "claimNext");
+    let notifyPruneStarted = () => {};
+    const pruneStarted = new Promise<void>((resolve) => {
+      notifyPruneStarted = resolve;
+    });
+    let releasePrune = () => {};
+    const pruneGate = new Promise<void>((resolve) => {
+      releasePrune = resolve;
+    });
+    let pruneActive = false;
+    const prune = vi.fn(async (...args: Parameters<typeof ingressQueue.prune>) => {
+      pruneActive = true;
+      notifyPruneStarted();
+      try {
+        await pruneGate;
+        return await ingressQueue.prune(...args);
+      } finally {
+        pruneActive = false;
+      }
+    });
+    setNostrRuntime({
+      state: {
+        openChannelIngressQueue: () => ({ ...ingressQueue, prune }),
+      },
+    } as unknown as PluginRuntime);
     mockState.writeNostrBusState.mockRejectedValueOnce(startupError);
 
-    await expect(
-      startTestNostrBus({
-        ...buildResolvedNostrAccount(),
-        onMessage: vi.fn(async () => {}),
-        onMetric: () => {},
-      }),
-    ).rejects.toThrow("state unavailable");
-
-    const callsAfterCleanup = claimNext.mock.calls.length;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 600);
+    const startup = startTestNostrBus({
+      ...buildResolvedNostrAccount(),
+      onMessage: vi.fn(async () => {}),
+      onMetric: () => {},
     });
-    expect(claimNext).toHaveBeenCalledTimes(callsAfterCleanup);
+    const settled = vi.fn();
+    void startup.then(settled, settled);
+
+    await pruneStarted;
+    await Promise.resolve();
+    try {
+      expect(pruneActive).toBe(true);
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      releasePrune();
+    }
+
+    await expect(startup).rejects.toThrow("state unavailable");
+    expect(pruneActive).toBe(false);
+    expect(prune).toHaveBeenCalledOnce();
+    expect(claimNext).not.toHaveBeenCalled();
   });
 
   it("links authorization replies to the inbound NIP-04 event", async () => {

@@ -22,15 +22,18 @@ let mobileContext: BrowserContext;
 function readUiCss(): string {
   const files = [
     "ui/src/styles/base.css",
+    "ui/src/styles/board.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
+    "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
     "ui/src/styles/sidebar-markdown.css",
     "ui/src/styles/chat/sidebar.css",
+    "ui/src/styles/plugins.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
 }
@@ -163,6 +166,43 @@ describeBrowserLayout("sensitive input visibility", () => {
         display: getComputedStyle(mask).display,
       }));
       expect(state).toEqual({ hidden: true, display: "none" });
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+});
+
+describeBrowserLayout("settings icon buttons", () => {
+  it("keeps plugin and MCP remove glyphs proportionate to settings buttons", async () => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setContent(`
+        <!doctype html>
+        <html data-theme-mode="light">
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <div class="settings-row__control">
+              <button class="btn btn--sm btn--icon plugins-remove" type="button">
+                <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
+              </button>
+            </div>
+          </body>
+        </html>
+      `);
+
+      const metrics = await page.locator(".plugins-remove").evaluate((button) => {
+        const glyph = button.querySelector("svg");
+        if (!(glyph instanceof SVGElement)) {
+          throw new Error("Missing remove button glyph");
+        }
+        const buttonRect = button.getBoundingClientRect();
+        const glyphRect = glyph.getBoundingClientRect();
+        return {
+          button: [buttonRect.width, buttonRect.height],
+          glyph: [glyphRect.width, glyphRect.height],
+        };
+      });
+      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
     } finally {
       await page.close().catch(() => {});
     }
@@ -324,7 +364,7 @@ describeBrowserLayout("touch-primary form controls", () => {
 });
 
 describeBrowserLayout("mount fallback cursor", () => {
-  it("advertises its controls with the hand in a browser tab, alongside its real link", async () => {
+  it("uses the arrow for recovery controls and the hand for its real link", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setContent(readStyleSheet("ui/index.html"));
@@ -343,11 +383,9 @@ describeBrowserLayout("mount fallback cursor", () => {
         };
       });
 
-      // A browser tab is display-mode: browser, so the fallback follows the same
-      // cursor policy as the app it is standing in for.
       expect(cursors).toEqual({
-        retry: "pointer",
-        wait: "pointer",
+        retry: "default",
+        wait: "default",
         docs: "pointer",
       });
     } finally {
@@ -482,7 +520,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             <div class="shell shell--mobile-nav">
               <span class="nav-item">Mobile navigation</span>
               <div class="file-view__search"><input value="query" /></div>
-              <div class="sidebar-agent-menu__filter"><input value="agent" /></div>
               <input class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span class="sidebar-recent-session__name">Child session</span>
@@ -506,7 +543,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
             childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
             coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
-            agentFilter: fontSize(".sidebar-agent-menu__filter input"),
             fileSearch: fontSize(".file-view__search input"),
             settingsSearch: fontSize(".settings-sidebar__search-input"),
             navItem: fontSize(".shell--mobile-nav .nav-item"),
@@ -518,7 +554,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         childName: 12,
         childTrail: 10,
         coarsePointer: true,
-        agentFilter: 16,
         fileSearch: 16,
         settingsSearch: 16,
         navItem: 12,
@@ -528,7 +563,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
       });
       const scaled = await readSizes();
-      expect(scaled.agentFilter).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
@@ -539,7 +573,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
     }
   });
 
-  it("keeps sidebars compact while preserving normal content scroll and text entry", async () => {
+  it("uses one canonical scrollbar width while preserving normal content scroll and text entry", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setViewportSize({ width: 1200, height: 800 });
@@ -562,6 +596,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <div style="height: 200px"></div>
             </main>
             <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+            <div class="board-tabs__track">Hidden horizontal rail</div>
           </body>
         </html>
       `);
@@ -590,6 +625,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
           regularSidebarSelection: style(".sidebar-shell__body").userSelect,
           settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
           settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
+          // The board tab rail intentionally hides its scrollbar (a drag/wheel
+          // affordance, not a styling variant); the new blanket
+          // `* { scrollbar-width: thin }` rule in base.css must not win over
+          // its higher-specificity `scrollbar-width: none`.
+          hiddenRailScrollbarWidth: style(".board-tabs__track").scrollbarWidth,
         };
       });
 
@@ -597,10 +637,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
         chatSelection: "text",
         chromeSelection: "none",
         contentScrollbar: "12px",
+        hiddenRailScrollbarWidth: "none",
         inputSelection: "text",
-        regularSidebarScrollbar: "6px",
+        regularSidebarScrollbar: "12px",
         regularSidebarSelection: "none",
-        settingsSidebarScrollbar: "6px",
+        settingsSidebarScrollbar: "12px",
         settingsSidebarSelection: "none",
       });
     } finally {

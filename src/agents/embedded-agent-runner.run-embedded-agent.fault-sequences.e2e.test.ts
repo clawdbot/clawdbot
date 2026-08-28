@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
@@ -22,11 +23,16 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
+import {
+  captureRoutingDecisionWork,
+  createModelRoutingTestAdmission,
+} from "./test-helpers/model-routing-decision-e2e-fixtures.js";
 
 type ProviderFault =
   | { status: 200; text: string }
   | { status: 401 }
   | { status: 402 }
+  | { status: 413 }
   | { status: 429; window: "short" | "long" }
   | { status: 500 }
   | { status: "context_overflow" };
@@ -64,7 +70,12 @@ vi.mock("./models-config.js", async () => {
   return { ...actual, ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })) };
 });
 
-let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type TestRunEmbeddedAgent = (
+  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
+) => ReturnType<ProductionRunEmbeddedAgent>;
+let runEmbeddedAgent: TestRunEmbeddedAgent;
+let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 
 beforeAll(async () => {
@@ -82,7 +93,9 @@ beforeAll(async () => {
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
 
-  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
+  runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
+    .runEmbeddedAgent;
+  runEmbeddedAgent = wrapRunWithTestAdmission(runEmbeddedAgentWithPreparedAdmission);
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
 });
 
@@ -196,11 +209,17 @@ function makeAttemptForFault(
       ? "401 Unauthorized: invalid API key"
       : fault.status === 402
         ? "402 Payment Required: insufficient credits"
-        : fault.status === 429
-          ? fault.window === "short"
-            ? "429 Too Many Requests: rate limit exceeded"
-            : "429 Too Many Requests: subscription usage limit reached"
-          : "Prompt is too long for this model's context window";
+        : fault.status === 413
+          ? // Groq's verbatim refusal for a single request larger than the whole per-minute
+            // token limit: a size ceiling wearing rate-limit clothes.
+            "413 Request too large for model `mock-1` in organization `org_x` service tier " +
+            "`on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, please reduce " +
+            "your message size and try again."
+          : fault.status === 429
+            ? fault.window === "short"
+              ? "429 Too Many Requests: rate limit exceeded"
+              : "429 Too Many Requests: subscription usage limit reached"
+            : "Prompt is too long for this model's context window";
   return makeEmbeddedRunnerAttempt({
     lastAssistant: buildEmbeddedRunnerAssistant({
       provider: ref.provider,
@@ -301,7 +320,100 @@ function expectError(outcome: ScenarioOutcome): Error & { attempts?: unknown[] }
   return outcome.error;
 }
 
+function deferredVoid() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settled) => {
+    resolve = settled;
+  });
+  return { promise, resolve };
+}
+
+async function expectPreparationInvalidationToDropRoutingWork(
+  mode: "close" | "replace",
+): Promise<void> {
+  await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+    const runId = `route-preparation-${mode}`;
+    const config = makeProviderConfig([]);
+    const auditConfig = { ...config, logging: { audit: { executionIdentity: true } } };
+    writeProfiles(agentDir, { openai: 1 });
+    runEmbeddedAttemptMock.mockResolvedValue(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["unexpected dispatch"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "openai",
+          model: "mock-1",
+          stopReason: "stop",
+          content: [{ type: "text", text: "unexpected dispatch" }],
+        }),
+      }),
+    );
+    const preparedAdmission = createModelRoutingTestAdmission({
+      cfg: auditConfig,
+      runId,
+      boundary: "route-preparation-e2e",
+    });
+    let replacementAdmission: ReturnType<typeof createModelRoutingTestAdmission> | undefined;
+    const reachedPreparation = deferredVoid();
+    const releasePreparation = deferredVoid();
+    const realMkdir = fs.mkdir.bind(fs);
+    const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
+      if (String(target) === workspaceDir) {
+        reachedPreparation.resolve();
+        await releasePreparation.promise;
+      }
+      return await realMkdir(target, options);
+    });
+    try {
+      const { decisionWork } = await captureRoutingDecisionWork(async () => {
+        const run = runEmbeddedAgentWithPreparedAdmission({
+          preparedRunAdmission: preparedAdmission,
+          sessionId: `session:${runId}`,
+          sessionKey: `agent:test:${runId}`,
+          workspaceDir,
+          agentDir,
+          config,
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          timeoutMs: 250,
+          runId,
+          enqueue: async (task) => await task(),
+        });
+        await reachedPreparation.promise;
+        if (mode === "close") {
+          preparedAdmission.close();
+        } else {
+          replacementAdmission = createModelRoutingTestAdmission({
+            cfg: auditConfig,
+            runId,
+            boundary: "route-preparation-replacement-e2e",
+          });
+          await replacementAdmission.admit("embedded");
+        }
+        releasePreparation.resolve();
+        await expect(run).rejects.toThrow("admitted run authority is no longer active");
+      });
+
+      expect(decisionWork).toHaveLength(0);
+      expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
+    } finally {
+      releasePreparation.resolve();
+      replacementAdmission?.close();
+      preparedAdmission.close();
+      mkdirSpy.mockRestore();
+    }
+  });
+}
+
 describe("runEmbeddedAgent provider fault sequences", () => {
+  it("drops routing work when the admitted run closes during attempt preparation", async () => {
+    await expectPreparationInvalidationToDropRoutingWork("close");
+  });
+
+  it("drops routing work when the admitted run is replaced during attempt preparation", async () => {
+    await expectPreparationInvalidationToDropRoutingWork("replace");
+  });
+
   it("429 -> 429 -> 200 consumes two same-model retries without rotating", async () => {
     const faults = [
       { status: 429, window: "short" },
@@ -445,6 +557,40 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         text: expect.stringContaining("Context overflow: prompt too large for the model"),
       });
       expect(outcome.attempts).toEqual([]);
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    });
+  });
+
+  it("stops on a provider request-size ceiling without spending a fallback candidate", async () => {
+    await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+      writeProfiles(agentDir, { openai: 1, groq: true });
+      const observations: AttemptObservation[] = [];
+      installFaultScript([{ status: 413 }], observations);
+
+      const outcome = expectResult(
+        await runScenario({
+          agentDir,
+          workspaceDir,
+          config: makeProviderConfig(["groq/mock-2"]),
+          runId: "request-size-ceiling",
+        }),
+      );
+
+      // The ceiling is not reachable by compaction, and inside an embedded run the only thing
+      // downstream of declining it is the same request again, so the turn ends here. A configured
+      // candidate stays unspent: `groq/mock-2` is eligible and never attempted. Rotation for this
+      // class is decided at the fallback boundary, which a transport-owning harness reaches -- see
+      // model-fallback.test.ts.
+      expect(observations).toHaveLength(1);
+      expect(outcome.result.meta.livenessState).toBe("blocked");
+      expect(outcome.result.meta.error).toMatchObject({ kind: "context_overflow" });
+      expect(outcome.result.payloads?.[0]).toMatchObject({
+        isError: true,
+        text: expect.stringContaining("Try /reset (or /new)"),
+      });
+      expect(outcome.attempts).toEqual([]);
+      // Waiting cannot admit this request, so the profile must not be put in rate-limit cooldown.
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     });

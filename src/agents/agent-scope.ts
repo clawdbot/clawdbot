@@ -1,17 +1,13 @@
 /** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
-import fs from "node:fs";
-import path from "node:path";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
-export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import {
-  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -25,9 +21,9 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
-import { resolveUserPath } from "../utils.js";
 import {
   AgentSelectionRequiredError,
+  hasAgentRosterProperty,
   listAgentIds,
   resolveMutableAgentEntry,
   resolveAgentConfig,
@@ -35,10 +31,13 @@ import {
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "./agent-scope-config.js";
+import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
+export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export {
   listAgentEntries,
   listAgentEntriesWithSource,
   listAgentIds,
+  resolveConfiguredAgentId,
   resolveMutableAgentEntry,
   toAgentEntriesRecord,
   resolveAgentConfig,
@@ -46,21 +45,20 @@ export {
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
+  resolveAgentWorkspaceProvisioning,
   tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
   resolveSoleAgentId,
+  tryResolveAmbientOwnerAgentId,
   tryResolveLegacyCompatibilityAgentId,
   tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
   AgentSelectionRequiredError,
   type AgentSelectionContext,
+  type AgentWorkspaceProvisioning,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
-
-/** Strip null bytes from paths to prevent ENOTDIR errors. */
-function stripNullBytes(s: string): string {
-  return s.split("\0").join("");
-}
 
 const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_FALLBACK_PRIMARY_PROBE_MAX_KEYS = 4096;
@@ -308,7 +306,7 @@ export { resolveAgentIdFromSessionKey };
 export function resolveSessionAgentIds(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId?: string | undefined;
   fallbackAgentId?: string;
 }): {
   defaultAgentId: string;
@@ -425,18 +423,24 @@ export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
   primary: string,
-  options: { forceAgent?: boolean } = {},
+  options: { target?: AgentModelPrimaryWriteTarget; forceAgent?: boolean } = {},
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
-  // forceAgent pins the write to the agent entry even without an explicit
-  // model, so a per-agent override never rewrites the shared default route.
-  if (options.forceAgent || resolveAgentExplicitModelPrimary(cfg, id)) {
+  const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  // An explicit agent target pins the write even without an existing model,
+  // so a per-agent override never rewrites the shared default route.
+  if (target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))) {
     const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);
       return "agent";
     }
-    if (options.forceAgent) {
+    if (target === "agent") {
+      if (!hasAgentRosterProperty(cfg) && listAgentIds(cfg).includes(id)) {
+        cfg.agents ??= {};
+        cfg.agents.entries = { [id]: { model: updateAgentModelPrimary(undefined, primary) } };
+        return "agent";
+      }
       throw new Error(`Could not resolve configured agent "${id}".`);
     }
   }
@@ -604,32 +608,16 @@ export function resolveEffectiveModelFallbacks(params: {
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
-function normalizePathForComparison(input: string): string {
-  const resolved = path.resolve(stripNullBytes(resolveUserPath(input)));
-  let normalized = resolved;
-  // Prefer realpath when available to normalize aliases/symlinks (for example /tmp -> /private/tmp)
-  // and canonical path case without forcing case-folding on case-sensitive macOS volumes.
-  try {
-    normalized = fs.realpathSync.native(resolved);
-  } catch {
-    // Keep lexical path for non-existent directories.
-  }
-  if (process.platform === "win32") {
-    return lowercasePreservingWhitespace(normalized);
-  }
-  return normalized;
-}
-
 export function resolveAgentIdByWorkspacePath(
   cfg: OpenClawConfig,
   workspacePath: string,
 ): string | undefined {
-  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
+  const normalizedWorkspacePath = resolveCanonicalWorkspacePath(workspacePath.replaceAll("\0", ""));
   let matchedAgentId: string | undefined;
   let matchedWorkspaceLength = -1;
 
   for (const id of listAgentIds(cfg)) {
-    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
+    const workspaceDir = resolveCanonicalWorkspacePath(resolveAgentWorkspaceDir(cfg, id));
     if (!isPathInside(workspaceDir, normalizedWorkspacePath)) {
       continue;
     }

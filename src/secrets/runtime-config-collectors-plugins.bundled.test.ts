@@ -16,6 +16,7 @@ function envRef(id: string) {
 const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
   list: [{ id: "main", default: true }],
 };
+const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
@@ -43,7 +44,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     } as OpenClawConfig;
-    const context = createResolverContext({ sourceConfig: config, env: {} });
+    const context = createResolverContext({ sourceConfig: config, env: isolatedEnv });
 
     collectPluginConfigAssignments({
       config,
@@ -98,7 +99,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       resolvePluginConfigContractsById({
         config,
         workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-        env: {},
+        env: isolatedEnv,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["codex"],
@@ -110,7 +111,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     ]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({
@@ -169,7 +170,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     } as OpenClawConfig;
-    const env = { GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
+    const env = { ...isolatedEnv, GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
     const context = createResolverContext({ sourceConfig: config, env });
 
     collectPluginConfigAssignments({
@@ -252,7 +253,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       resolvePluginConfigContractsById({
         config,
         workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-        env: {},
+        env: isolatedEnv,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["voice-call"],
@@ -266,7 +267,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     ]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({
@@ -321,13 +322,13 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(
       resolvePluginConfigContractsById({
         config,
-        env: {},
+        env: isolatedEnv,
         pluginIds: ["google-meet"],
       }).get("google-meet")?.configContracts.secretInputs?.paths,
     ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({

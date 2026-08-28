@@ -235,6 +235,7 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
           ? (ctx.secretInputMode ?? "plaintext")
           : ctx.secretInputMode,
       config: ctx.config,
+      workspaceDir: ctx.workspaceDir,
       expectedProviders: [PROVIDER_ID],
       provider: PROVIDER_ID,
       envLabel: "AZURE_OPENAI_API_KEY",

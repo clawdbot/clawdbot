@@ -220,6 +220,11 @@ struct ChatSessionSidebar: View {
 
     @ViewBuilder
     private func badges(for node: ChatSessionSidebarModel.Node) -> some View {
+        if node.badges.queuedCount > 0 {
+            Image(systemName: "hourglass")
+                .foregroundStyle(OpenClawChatTheme.warning)
+                .accessibilityLabel(String(localized: "Thread queued"))
+        }
         if node.badges.runningCount > 0 {
             ProgressView()
                 .controlSize(.small)
@@ -265,9 +270,17 @@ struct ChatSessionSidebar: View {
                 systemImage: session.pinned == true ? "pin.slash" : "pin")
         }
         Button {
-            Task { await self.viewModel.forkSession(key: session.key) }
+            Task {
+                await self.viewModel.forkSession(
+                    key: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
+            }
         } label: {
-            self.actionLabel(String(localized: "Fork"), systemImage: "arrow.triangle.branch")
+            self.actionLabel(
+                session.hasActiveRun == true
+                    ? String(localized: "Fork from last completed message")
+                    : String(localized: "Fork"),
+                systemImage: "arrow.triangle.branch")
         }
         Button {
             self.viewModel.setSessionUnread(key: session.key, unread: session.unread != true)

@@ -8,8 +8,13 @@ import {
   resolveSessionAgentId,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
-import { buildPluginConfigSchema, z, type OpenClawPluginConfigSchema } from "../api.js";
-import type { OpenClawConfig } from "../api.js";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import {
+  buildPluginConfigSchema,
+  z,
+  type OpenClawPluginConfigSchema,
+  type OpenClawConfig,
+} from "../api.js";
 
 const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 const WIKI_VAULT_SCOPES = ["global", "agent"] as const;
@@ -230,34 +235,27 @@ function expandHomePath(inputPath: string, homedir: string): string {
   return inputPath;
 }
 
-function resolveDefaultMemoryWikiVaultPath(homedir = os.homedir()): string {
-  return path.join(homedir, ".openclaw", "wiki", "main");
-}
-
-function resolveDefaultMemoryWikiVaultRoot(homedir = os.homedir()): string {
-  return path.join(homedir, ".openclaw", "wiki");
-}
-
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
-  options?: { homedir?: string },
+  options?: { homedir?: string; env?: NodeJS.ProcessEnv },
 ): ResolvedMemoryWikiConfig {
   const homedir = options?.homedir ?? os.homedir();
   const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
   const safeConfig = parsed?.success ? parsed.data : (config ?? {});
   const vaultScope = safeConfig.vault?.scope ?? DEFAULT_WIKI_VAULT_SCOPE;
+  const vaultPath =
+    safeConfig.vault?.path ??
+    path.join(
+      resolveStateDir({ ...(options?.env ?? process.env), HOME: homedir }),
+      "wiki",
+      ...(vaultScope === "agent" ? [] : ["main"]),
+    );
 
   return {
     vaultMode: safeConfig.vaultMode ?? DEFAULT_WIKI_VAULT_MODE,
     vault: {
       scope: vaultScope,
-      path: expandHomePath(
-        safeConfig.vault?.path ??
-          (vaultScope === "agent"
-            ? resolveDefaultMemoryWikiVaultRoot(homedir)
-            : resolveDefaultMemoryWikiVaultPath(homedir)),
-        homedir,
-      ),
+      path: expandHomePath(vaultPath, homedir),
       renderMode: safeConfig.vault?.renderMode ?? DEFAULT_WIKI_RENDER_MODE,
     },
     obsidian: {

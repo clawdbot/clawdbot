@@ -7,8 +7,8 @@ import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native"
 import type {
   ChatCommandDefinition,
   CommandArgsParsing,
+  ModelsProviderData,
 } from "openclaw/plugin-sdk/command-auth-native";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -24,8 +24,8 @@ import { applyDiscordModelPickerSelection } from "./native-command-model-picker-
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
-  replyWithDiscordModelPickerProviders,
-} from "./native-command-ui.js";
+} from "./native-command-model-picker-interaction.js";
+import { replyWithDiscordModelPickerProviders } from "./native-command-model-picker-ui.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
@@ -715,8 +715,10 @@ describe("Discord model picker interactions", () => {
     ).toContain("selection expired");
   });
 
-  it("requires submit click before routing selected model through /model pipeline", async () => {
-    const context = createModelPickerContext();
+  it("requires submit and retains Gateway ownership through the /model pipeline", async () => {
+    const dispatchReplyFromConfig =
+      vi.fn<NonNullable<ModelPickerContext["dispatchReplyFromConfig"]>>();
+    const context = { ...createModelPickerContext(), dispatchReplyFromConfig };
     const pickerData = createDefaultModelPickerData();
     const modelCommand = createModelCommandDefinition();
 
@@ -745,6 +747,10 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "openai/gpt-4o",
     });
+    const dispatchCall = firstMockArg(dispatchSpy, "dispatchCommandInteraction") as
+      | Parameters<DispatchDiscordCommandInteraction>[0]
+      | undefined;
+    expect(dispatchCall?.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
   });
 
   it("applies the selected model even when component channel.name throws on a partial channel", async () => {

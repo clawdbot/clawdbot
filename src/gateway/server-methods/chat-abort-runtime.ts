@@ -29,7 +29,7 @@ import {
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
-type AbortOrigin = "rpc" | "stop-command";
+type AbortOrigin = "rpc" | "stop-command" | "placement-abandon";
 
 export function prepareControlledSubagentAbort(params: {
   cfg: OpenClawConfig;
@@ -72,13 +72,16 @@ type AbortedPartialSnapshot = {
 };
 
 export async function persistAbortedPartials(params: {
-  context: Pick<GatewayRequestContext, "logGateway">;
+  context: { logGateway: Pick<GatewayRequestContext["logGateway"], "warn"> };
   sessionKey: string;
   snapshots: AbortedPartialSnapshot[];
 }): Promise<void> {
   for (const snapshot of params.snapshots) {
     const sessionLoadOptions = snapshot.agentId ? { agentId: snapshot.agentId } : undefined;
     const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey, sessionLoadOptions);
+    if (snapshot.abortOrigin === "placement-abandon" && entry?.sessionId !== snapshot.sessionId) {
+      throw new Error("Placement abandonment transcript session changed before persistence");
+    }
     const sessionId = entry?.sessionId ?? snapshot.sessionId;
     const appended = await appendAssistantTranscriptMessage({
       sessionKey: params.sessionKey,
@@ -96,9 +99,11 @@ export async function persistAbortedPartials(params: {
       },
     });
     if (!appended.ok) {
-      params.context.logGateway.warn(
-        `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`,
-      );
+      const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
+      params.context.logGateway.warn(error);
+      if (snapshot.abortOrigin === "placement-abandon") {
+        throw new Error(error);
+      }
     }
   }
 }
@@ -325,7 +330,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     };
   }
   const snapshots = authorizedRuns.flatMap(({ runId, entry }) => {
-    const text = params.context.chatRunState.resolveBuffer(runId).text;
+    const text = params.context.chatRunState.resolveBuffer(runId, { final: true }).text;
     return text?.trim()
       ? [
           {

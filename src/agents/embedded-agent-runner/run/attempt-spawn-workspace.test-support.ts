@@ -28,7 +28,8 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentMessage, StreamFn } from "../../runtime/index.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -132,12 +133,14 @@ function createSubscriptionMock(): SubscriptionMock {
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
-    runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
-      await toolParams.execute(),
+    runToolLifecycle: async <T>(toolParams: {
+      execute: (onImplementationStart: () => void) => Promise<T>;
+    }) => await toolParams.execute(() => undefined),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
     waitForPendingEvents: async () => {},
+    flushPartialAssistantText: () => {},
     getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -206,6 +209,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   }));
   const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
@@ -293,19 +297,21 @@ export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return hoisted;
 }
 
+const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "",
+  generatedAtMs: 1,
+  installRecords: {},
+  plugins: [],
+  diagnostics: [],
+};
 const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
+  index: emptyPluginIndex,
+  registryIndex: emptyPluginIndex,
   registryDiagnostics: [],
   manifestRegistry: { plugins: [], diagnostics: [] },
   plugins: [],
@@ -382,14 +388,17 @@ vi.mock("../../../trajectory/runtime.js", async () => {
   };
 });
 
-vi.mock("../../sessions/index.js", () => {
-  function AuthStorage() {}
-  class DefaultResourceLoader {
+vi.mock("../../sessions/resource-loader.js", () => ({
+  DefaultResourceLoader: class {
     constructor(...args: unknown[]) {
       hoisted.defaultResourceLoaderInitMock(...args);
     }
     async reload() {}
-  }
+  },
+}));
+
+vi.mock("../../sessions/index.js", () => {
+  function AuthStorage() {}
   function ModelRegistry() {}
   const estimateTokens = (value: unknown) =>
     Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
@@ -397,7 +406,6 @@ vi.mock("../../sessions/index.js", () => {
   return {
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
-    DefaultResourceLoader,
     estimateTokens,
     generateSummary: async () => "",
     ModelRegistry,
@@ -747,9 +755,8 @@ vi.mock("../../tool-call-id.js", async (importOriginal) => {
 });
 
 vi.mock("../../tool-fs-policy.js", () => ({
-  createToolFsPolicy: (params: { workspaceOnly?: boolean }) => ({
-    workspaceOnly: params.workspaceOnly === true,
-  }),
+  resolveSessionPermissionExecMode: (policy: { mode: string }) =>
+    ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
 }));
 
@@ -936,7 +943,7 @@ type MutableSession = {
   agent: {
     convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
-    streamFn?: (...args: unknown[]) => Promise<unknown>;
+    streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
     transport?: string;
     subscribe?: (
       listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
@@ -966,6 +973,7 @@ type MutableSession = {
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
+  [agentSessionSetContextReplacementHook]: (callback: (() => void) | undefined) => void;
 };
 
 type SessionPromptOverride = (
@@ -1078,6 +1086,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   });
   hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
@@ -1149,7 +1158,14 @@ export function createDefaultEmbeddedSession(params?: {
             preflightResult?: (submitted: boolean) => void;
           },
         };
-        await session.agent.streamFn?.();
+        await session.agent.streamFn?.(
+          testModel,
+          {
+            systemPrompt: session.agent.state.systemPrompt ?? "",
+            messages: session.messages as Parameters<StreamFn>[1]["messages"],
+          },
+          {},
+        );
       },
       streamFn: async () => {
         if (params?.prompt && pendingPrompt) {
@@ -1210,6 +1226,7 @@ export function createDefaultEmbeddedSession(params?: {
     abort: async () => {},
     dispose: () => {},
     steer: async () => {},
+    [agentSessionSetContextReplacementHook]: () => {},
   };
 
   return session;

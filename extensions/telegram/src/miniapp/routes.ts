@@ -7,6 +7,12 @@ import {
   issueDeviceBootstrapToken,
 } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  createFixedWindowRateLimiter,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
+import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
 import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
@@ -24,7 +30,11 @@ const REPLAY_CACHE_LIMIT = 1000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
 const replayCache = new Map<string, number>();
-const rateLimit = new Map<string, { count: number; resetAtMs: number }>();
+const rateLimit = createFixedWindowRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: RATE_LIMIT_MAX,
+  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+});
 
 export function registerTelegramMiniAppRoutes(
   api: OpenClawPluginApi,
@@ -89,20 +99,28 @@ async function handleAuth(
     return;
   }
 
-  const body = await readJsonBody(req);
-  if (body === "too-large") {
-    sendText(res, 413, "Payload too large");
+  const body = await readJsonWebhookBodyOrReject({
+    req,
+    res,
+    maxBytes: MAX_BODY_BYTES,
+    profile: "pre-auth",
+    emptyObjectOnEmpty: false,
+    invalidJsonMessage: TELEGRAM_MINIAPP_EXPIRED_MESSAGE,
+    invalidJsonStatusCode: 401,
+  });
+  if (!body.ok) {
     return;
   }
-  if (!body) {
+  const authBody = parseAuthBody(body.value);
+  if (!authBody) {
     sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
   }
-  const accountId = normalizeAccountId(body.accountId ?? DEFAULT_ACCOUNT_ID);
+  const accountId = normalizeAccountId(authBody.accountId ?? DEFAULT_ACCOUNT_ID);
   const cfg = currentConfig(api);
   const account = resolveTelegramAccount({ cfg, accountId });
   const validated = validateTelegramMiniAppInitData({
-    initData: body.initData,
+    initData: authBody.initData,
     botToken: account.token,
   });
   if (!validated) {
@@ -123,7 +141,7 @@ async function handleAuth(
   }
   if (
     !launchTickets.consume({
-      ticket: body.launchTicket,
+      ticket: authBody.launchTicket,
       accountId,
       userId: validated.userId,
     })
@@ -153,47 +171,24 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
 }
 
-async function readJsonBody(
-  req: IncomingMessage,
-): Promise<{ initData: string; launchTicket: string; accountId?: string } | "too-large" | null> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.length;
-    if (total > MAX_BODY_BYTES) {
-      return "too-large";
-    }
-    chunks.push(buffer);
-  }
-  try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-      initData?: unknown;
-      launchTicket?: unknown;
-      accountId?: unknown;
-    };
-    if (typeof parsed.initData !== "string" || typeof parsed.launchTicket !== "string") {
-      return null;
-    }
-    return {
-      initData: parsed.initData,
-      launchTicket: parsed.launchTicket,
-      ...(typeof parsed.accountId === "string" ? { accountId: parsed.accountId } : {}),
-    };
-  } catch {
+function parseAuthBody(
+  value: unknown,
+): { initData: string; launchTicket: string; accountId?: string } | null {
+  if (!isRecord(value)) {
     return null;
   }
+  if (typeof value.initData !== "string" || typeof value.launchTicket !== "string") {
+    return null;
+  }
+  return {
+    initData: value.initData,
+    launchTicket: value.launchTicket,
+    ...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
+  };
 }
 
 function consumeRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const current = rateLimit.get(ip);
-  if (!current || current.resetAtMs <= now) {
-    rateLimit.set(ip, { count: 1, resetAtMs: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-  current.count += 1;
-  return current.count <= RATE_LIMIT_MAX;
+  return !rateLimit.isRateLimited(ip);
 }
 
 function rememberReplay(hash: string, expiresAtMs: number): boolean {

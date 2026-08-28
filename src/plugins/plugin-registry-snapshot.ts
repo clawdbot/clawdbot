@@ -18,13 +18,11 @@ import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.j
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
-  inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
-  refreshPersistedInstalledPluginIndex,
-  type InstalledPluginIndexStoreInspection,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
 import {
+  diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
   getInstalledPluginRecord,
   hasInstalledPluginIndexWorkspaceScopeMismatch,
@@ -35,7 +33,6 @@ import {
   type InstalledPluginIndex,
   type InstalledPluginIndexRecord,
   type LoadInstalledPluginIndexParams,
-  type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
 import {
@@ -124,7 +121,6 @@ function resolvePluginRegistryContent(
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
-type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
 export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-missing"
@@ -155,6 +151,29 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
 type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
+
+// Shared with plugin-registry-refresh.ts.
+export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
+  params: T,
+): T {
+  if (!params.config) {
+    return params;
+  }
+  const workspace = resolvePluginControlPlaneWorkspace({
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+  });
+  const diagnostics = appendPluginControlPlaneWorkspaceDiagnostic(
+    params.diagnostics ?? [],
+    workspace,
+  );
+  return {
+    ...params,
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
+  };
+}
 
 function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
   return (
@@ -619,27 +638,39 @@ export function isPluginEnabled(params: GetPluginRecordParams): boolean {
   return isInstalledPluginEnabled(resolveSnapshot(params), params.pluginId, params.config);
 }
 
-export function inspectPluginRegistry(
+export async function inspectPluginRegistry(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
-): Promise<PluginRegistryInspection> {
-  return inspectPersistedInstalledPluginIndex(params);
-}
-
-export function refreshPluginRegistry(
-  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
-): Promise<PluginRegistrySnapshot> {
-  if (!params.config) {
-    return refreshPersistedInstalledPluginIndex(params);
-  }
-  const workspace = resolvePluginControlPlaneWorkspace({
-    config: params.config,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
+) {
+  const inspectionParams = resolveControlPlaneRegistryParams(params);
+  const persisted = readPersistedInstalledPluginIndexSync(inspectionParams);
+  // Inspection and runtime selection share one verdict so runtime cannot reject "fresh".
+  const result = loadPluginRegistrySnapshotWithMetadata({
+    ...inspectionParams,
+    allowCurrent: false,
   });
-  const refreshParams = {
-    ...params,
-    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(params.diagnostics ?? [], workspace),
-    ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
+  if (!persisted) {
+    return {
+      state: "missing" as const,
+      refreshReasons: ["missing"],
+      persisted: null,
+      current: result.snapshot,
+    };
+  }
+  const fresh = result.source === "persisted";
+  const refreshReasons = fresh
+    ? []
+    : [...diffInstalledPluginIndexInvalidationReasons(persisted, result.snapshot)];
+  if (!fresh && refreshReasons.length === 0) {
+    refreshReasons.push(
+      result.diagnostics.some((diagnostic) => diagnostic.code === "persisted-registry-stale-policy")
+        ? "policy-changed"
+        : "source-changed",
+    );
+  }
+  return {
+    state: fresh ? ("fresh" as const) : ("stale" as const),
+    refreshReasons,
+    persisted,
+    current: result.snapshot,
   };
-  return refreshPersistedInstalledPluginIndex(refreshParams);
 }

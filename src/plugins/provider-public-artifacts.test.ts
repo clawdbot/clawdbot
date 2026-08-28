@@ -3,13 +3,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
+  listTrustedExternalProviderPolicyOwners,
+  loadTrustedExternalProviderPolicyArtifacts,
   resolveBundledProviderPolicySurface,
   resolveProviderPolicySurface,
 } from "./provider-public-artifacts.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeExternalPolicyFixture(): string {
   const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-external-"));
@@ -20,6 +26,11 @@ function writeExternalPolicyFixture(): string {
       '  return modelId === "full"',
       '    ? { levels: [{ id: "off" }, { id: "high" }, { id: "max" }], defaultLevel: "off" }',
       '    : { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: "off" };',
+      "}",
+      "export function inspectEmbeddingProviderSetup({ provider }) {",
+      '  return provider === "fixture-embedding"',
+      '    ? { provider, reason: "setup missing", requirement: "fixture-setup" }',
+      "    : null;",
       "}",
       "export function projectConfiguredModelRow() { return null; }",
       "",
@@ -45,6 +56,10 @@ describe("provider public artifacts", () => {
       process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
     }
   }
+
+  beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
+  });
 
   afterEach(() => {
     restoreBundledPluginEnv();
@@ -201,6 +216,7 @@ describe("provider public artifacts", () => {
         rootDir: pluginRoot,
         providers: ["fixture-provider"],
         cliBackends: [],
+        contracts: { embeddingProviders: ["fixture-embedding"] },
       } as const;
       const surface = resolveProviderPolicySurface("fixture-provider", {
         manifestRegistry: { plugins: [fixturePlugin as never] },
@@ -217,10 +233,73 @@ describe("provider public artifacts", () => {
           ?.levels.map((level) => level.label),
       ).toEqual([undefined, "on"]);
       expect(surface).not.toHaveProperty("projectConfiguredModelRow");
+      expect(
+        resolveProviderPolicySurface("fixture-embedding", {
+          manifestRegistry: { plugins: [fixturePlugin as never] },
+        })?.inspectEmbeddingProviderSetup?.({
+          config: {},
+          env: {},
+          agentId: "main",
+          provider: "fixture-embedding",
+        }),
+      ).toEqual({
+        provider: "fixture-embedding",
+        reason: "setup missing",
+        requirement: "fixture-setup",
+      });
     } finally {
       restoreBundledPluginEnv();
       fs.rmSync(pluginRoot, { recursive: true, force: true });
       fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a trusted installed provider owner without a policy artifact", () => {
+    const pluginRoot = tempDirs.make("openclaw-provider-owner-");
+    const plugin = {
+      id: "llama-cpp",
+      origin: "external",
+      trustedOfficialInstall: true,
+      rootDir: pluginRoot,
+      providers: ["llama-cpp"],
+      cliBackends: [],
+      contracts: { embeddingProviders: ["local"] },
+    } as never;
+    const manifestRegistry = { plugins: [plugin] };
+
+    const owners = listTrustedExternalProviderPolicyOwners("local", manifestRegistry);
+    expect(loadTrustedExternalProviderPolicyArtifacts(owners)).toEqual({
+      owner: plugin,
+      surface: null,
+    });
+    expect(resolveProviderPolicySurface("local", { manifestRegistry })).toBeNull();
+  });
+
+  it("continues to a usable policy when the first trusted owner lacks its artifact", () => {
+    const missingPolicyRoot = tempDirs.make("openclaw-provider-owner-missing-");
+    const policyRoot = writeExternalPolicyFixture();
+    const owner = (id: string, rootDir: string) =>
+      ({
+        id,
+        origin: "external",
+        trustedOfficialInstall: true,
+        rootDir,
+        providers: [],
+        cliBackends: [],
+        contracts: { embeddingProviders: ["fixture-embedding"] },
+      }) as never;
+    try {
+      const manifestRegistry = {
+        plugins: [owner("a-missing-policy", missingPolicyRoot), owner("b-policy", policyRoot)],
+      };
+
+      const owners = listTrustedExternalProviderPolicyOwners("fixture-embedding", manifestRegistry);
+      const artifacts = loadTrustedExternalProviderPolicyArtifacts(owners);
+
+      expect(artifacts?.owner.id).toBe("b-policy");
+      expect(artifacts?.surface?.inspectEmbeddingProviderSetup).toBeTypeOf("function");
+    } finally {
+      fs.rmSync(policyRoot, { recursive: true, force: true });
     }
   });
 
@@ -523,7 +602,7 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
-  it("does not cache manifest-owned provider policy aliases across bundled metadata changes", async () => {
+  it("refreshes manifest-owned provider policy aliases in a new lifecycle generation", async () => {
     const bundledPluginsDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-provider-policy-refresh-"),
     );
@@ -576,6 +655,7 @@ describe("provider public artifacts", () => {
 
       writePlugin("first", [], 2);
       writePlugin("second", ["fixture-provider"], 2);
+      clearPluginMetadataLifecycleCaches();
 
       expect(
         resolvePolicySurface("fixture-provider")

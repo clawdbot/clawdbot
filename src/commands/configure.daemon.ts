@@ -17,12 +17,14 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { guardCancel } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
+export type DaemonSetupOutcome = "succeeded" | "failed" | "skipped";
+
 /** Prompt to install, reinstall, restart, or skip the local Gateway service. */
 export async function maybeInstallDaemon(params: {
   runtime: RuntimeEnv;
   port: number;
   daemonRuntime?: GatewayDaemonRuntime;
-}) {
+}): Promise<DaemonSetupOutcome> {
   const service = resolveGatewayService();
   let loaded;
   try {
@@ -67,21 +69,12 @@ export async function maybeInstallDaemon(params: {
       shouldInstall = false;
     }
     if (action === "skip") {
-      return;
-    }
-    if (action === "reinstall") {
-      await withProgress(
-        { label: "Gateway service", indeterminate: true, delayMs: 0 },
-        async (progress) => {
-          progress.setLabel("Uninstalling Gateway service…");
-          await service.uninstall({ env: process.env, stdout: process.stdout });
-          progress.setLabel("Gateway service uninstalled.");
-        },
-      );
+      return "skipped";
     }
   }
 
   if (shouldInstall) {
+    // Keep the old service until preparation succeeds; install owns replacement.
     let installError: string | null = null;
     if (!params.daemonRuntime) {
       if (GATEWAY_DAEMON_RUNTIME_OPTIONS.length === 1) {
@@ -120,11 +113,13 @@ export async function maybeInstallDaemon(params: {
           progress.setLabel("Gateway service install blocked.");
           return;
         }
+        const existingCommand = await service.readCommand(process.env).catch(() => null);
         const { programArguments, workingDirectory, environment, environmentValueSources } =
           await buildGatewayInstallPlan({
             env: process.env,
             port: params.port,
             runtime: daemonRuntime,
+            existingCommand,
             warn: (message, title) => note(message, title),
             config: cfg,
           });
@@ -149,7 +144,7 @@ export async function maybeInstallDaemon(params: {
     if (installError) {
       note("Gateway service install failed: ".concat(installError), "Gateway");
       note(gatewayInstallErrorHint(), "Gateway");
-      return;
+      return "failed";
     }
     shouldCheckLinger = true;
   }
@@ -166,4 +161,5 @@ export async function maybeInstallDaemon(params: {
       requireConfirm: true,
     });
   }
+  return "succeeded";
 }

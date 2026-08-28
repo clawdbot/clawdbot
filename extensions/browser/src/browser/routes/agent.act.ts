@@ -5,7 +5,6 @@ import { setTimeout as sleep } from "node:timers/promises";
  * Dispatches normalized actions to either Playwright-backed OpenClaw browser
  * control or Chrome MCP existing-session operations with navigation guards.
  */
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   ChromeMcpDocumentUnavailableError,
@@ -51,7 +50,10 @@ import {
   withRouteTabContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
+import {
+  captureBrowserOperationTarget,
+  resolveOperationTargetOutcome,
+} from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -199,33 +201,39 @@ function buildExistingSessionWaitPredicate(params: {
   loadState?: "load" | "domcontentloaded" | "networkidle";
   fn?: string;
 }): string | null {
-  const checks: string[] = [];
-  if (params.text) {
-    checks.push(`Boolean(document.body?.innerText?.includes(${JSON.stringify(params.text)}))`);
-  }
-  if (params.textGone) {
-    checks.push(`!document.body?.innerText?.includes(${JSON.stringify(params.textGone)})`);
-  }
-  if (params.selector) {
-    checks.push(`Boolean(document.querySelector(${JSON.stringify(params.selector)}))`);
-  }
-  if (params.loadState === "domcontentloaded") {
-    checks.push(`document.readyState === "interactive" || document.readyState === "complete"`);
-  } else if (params.loadState === "load") {
-    checks.push(`document.readyState === "complete"`);
-  }
-  if (params.fn) {
+  const checks = [
+    params.text && `Boolean(document.body?.innerText?.includes(${JSON.stringify(params.text)}))`,
+    params.textGone && `!document.body?.innerText?.includes(${JSON.stringify(params.textGone)})`,
+    params.selector &&
+      `(function visible(node) {
+      if (!node) return false;
+      if (node.nodeType === 1) {
+        // Like managed waits, display:contents is visible through rendered children.
+        if (getComputedStyle(node).display === "contents") {
+          return Array.from(node.childNodes).some(visible);
+        }
+        if (!node.checkVisibility({ visibilityProperty: true })) return false;
+      } else if (node.nodeType !== 3) {
+        return false;
+      }
+      const range = document.createRange();
+      range.selectNode(node);
+      const rect = node.nodeType === 1 ? node.getBoundingClientRect() : range.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    })(document.querySelector(${JSON.stringify(params.selector)}))`,
+    params.loadState === "domcontentloaded" &&
+      `document.readyState === "interactive" || document.readyState === "complete"`,
+    params.loadState === "load" && `document.readyState === "complete"`,
     // `fn` is admitted only by the same evaluateEnabled gate as evaluate.
     // Preserve its async semantics; document binding guards scheduler rebinding.
-    const source = normalizeBrowserEvaluateFunctionSource(params.fn);
-    checks.push(`Boolean(await (${source})())`);
-  }
-  if (checks.length === 0) {
-    return null;
-  }
-  return checks.length === 1
-    ? expectDefined(checks.at(0), "single existing-session condition")
-    : checks.map((check) => `(${check})`).join(" && ");
+    params.fn && `Boolean(await (${normalizeBrowserEvaluateFunctionSource(params.fn)})())`,
+  ];
+  return (
+    checks
+      .filter(Boolean)
+      .map((check) => `(${check})`)
+      .join(" && ") || null
+  );
 }
 
 async function waitForExistingSessionCondition(
@@ -467,17 +475,22 @@ export function registerBrowserAgentActRoutes(
         const hasNavigationResultPolicy = Boolean(
           navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
         );
+        const resolveRelayTarget = captureBrowserOperationTarget({
+          ctx,
+          profileName: profileCtx.profile.name,
+          targetId: tab.targetId,
+        });
         const jsonOk = async (
           extra?: Record<string, unknown>,
-          options?: { resolveCurrentTarget?: boolean },
+          options?: { resolveCurrentTarget?: boolean; operationTargetId?: string },
         ) => {
           const shouldResolveCurrentTarget =
             options?.resolveCurrentTarget && (!isExistingSession || hasNavigationResultPolicy);
           const responseTargetId = shouldResolveCurrentTarget
-            ? await resolveTargetIdAfterNavigate({
-                oldTargetId: tab.targetId,
-                navigatedUrl: tab.url,
-                listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
+            ? resolveOperationTargetOutcome({
+                actedOnTargetId: tab.targetId,
+                operationTargetId: options?.operationTargetId,
+                resolveRelayTarget,
               })
             : tab.targetId;
           const url =
@@ -716,6 +729,10 @@ export function registerBrowserAgentActRoutes(
           ...navigationPolicy,
           signal,
         });
+        const resultTargetOptions = {
+          resolveCurrentTarget: true,
+          operationTargetId: result.targetId,
+        };
         if (result.blockedByDialog) {
           return await jsonOk({
             blockedByDialog: true,
@@ -734,24 +751,24 @@ export function registerBrowserAgentActRoutes(
                 ...(result.aborted ? { aborted: result.aborted } : {}),
                 ...(downloads ? { downloads } : {}),
               },
-              { resolveCurrentTarget: true },
+              {
+                ...resultTargetOptions,
+                resolveCurrentTarget: result.aborted?.reason !== "closed",
+              },
             );
           case "evaluate":
             return await jsonOk(
               { result: result.result, ...(downloads ? { downloads } : {}) },
-              { resolveCurrentTarget: true },
+              resultTargetOptions,
             );
           case "click":
           case "clickCoords":
-            return await jsonOk(downloads ? { downloads } : undefined, {
-              resolveCurrentTarget: true,
-            });
+            return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
           case "resize":
+          case "close":
             return await jsonOk(downloads ? { downloads } : undefined);
           default:
-            return await jsonOk(downloads ? { downloads } : undefined, {
-              resolveCurrentTarget: true,
-            });
+            return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
         }
       },
     });
@@ -793,6 +810,7 @@ export function registerBrowserAgentActRoutes(
         const result = await pw.responseBodyViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          signal,
           url,
           timeoutMs: timeoutMs ?? undefined,
           maxChars: maxChars ?? undefined,

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_SERVER_CAPS,
+  type HelloOk,
+} from "../../../../packages/gateway-protocol/src/index.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
 
@@ -71,12 +74,19 @@ vi.mock("./connect-auth-security.js", () => ({
   emitGatewayAuthSecurityEvent: emitGatewayAuthSecurityEventMock,
 }));
 
+vi.mock("../../../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../version.js")>()),
+  resolveRuntimeServiceBuildId: () => "build-a",
+}));
+
 import { sendGatewayHello } from "./connect-hello.js";
 
 function makeContext(role: "operator" | "node", scopes: string[]) {
   return {
     handler: {
+      getClient: () => null,
       connId: `conn-${role}`,
+      bootId: "gateway-boot-a",
       gatewayMethods: [],
       events: [],
       buildRequestContext: () => ({ nodeRegistry: { get: () => undefined } }),
@@ -114,7 +124,6 @@ function makeState(role: "operator" | "node", scopes: string[]) {
     handoffBootstrapProfile: null,
     deviceToken: null,
     bootstrapDeviceTokens: [],
-    controlUiDeviceAuthMigrationPending: false,
   };
 }
 
@@ -153,6 +162,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, makeState(role, scopes) as never, {});
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: false,
     });
@@ -164,6 +174,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: true,
     });
@@ -182,6 +193,22 @@ describe("sendGatewayHello update detail scope", () => {
         },
       }),
     );
+    expect(helloPayload(context)?.server.buildId).toBe("build-a");
+    expect(helloPayload(context)?.server.bootId).toBe("gateway-boot-a");
+    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+    );
+  });
+
+  it("reports Gateway build identity separately from configured UI source", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    context.configSnapshot = { gateway: { controlUi: { root: "/custom/ui" } } };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloPayload(context)?.server.buildId).toBe("build-a");
+    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("configured");
   });
 
   it("keeps hello projection and telemetry at effective scopes", async () => {
@@ -199,6 +226,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, state as never, {});
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: false,
     });

@@ -108,7 +108,10 @@ export async function exportWidget(
     const copyImage =
       runtime.copyImage ??
       ((dataUrl: Promise<string>) => {
-        const blob = dataUrl.then(async (value) => (await fetch(value)).blob());
+        if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+          throw new Error("image clipboard is unavailable");
+        }
+        const blob = dataUrl.then(async (value) => (await globalThis.fetch(value)).blob());
         void blob.catch(() => {});
         // ClipboardItem keeps the click's transient activation while its PNG promise resolves.
         return navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);

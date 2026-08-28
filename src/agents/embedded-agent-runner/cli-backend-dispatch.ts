@@ -12,7 +12,7 @@
  * to run through the CLI backend on plan limits instead.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { onAgentEvent } from "../../infra/agent-events.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
@@ -140,7 +140,7 @@ async function runEmbeddedAgentViaCliBackend(
   // CLI tool results arrive as agent events with transport-prefixed MCP
   // names; strip and normalize so observers and transcript records see the
   // same tool names and soft-error signal the native embedded path reports.
-  const unsubscribe = onAgentEvent((evt) => {
+  const unsubscribe = onAgentEventForRun(params.runId, (evt) => {
     if (evt.runId !== params.runId) {
       return;
     }
@@ -224,9 +224,13 @@ async function runEmbeddedAgentViaCliBackend(
       config: params.config,
       prompt: params.prompt,
       imagePrompt: params.prompt,
+      images: params.images,
+      imageOrder: params.imageOrder,
       media: params.media,
       provider: dispatch.provider,
       model: params.model,
+      modelHasVision: params.modelHasVision,
+      contextWindow: params.contextWindow,
       thinkLevel: params.thinkLevel,
       timeoutMs: params.timeoutMs,
       runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,
@@ -239,6 +243,8 @@ async function runEmbeddedAgentViaCliBackend(
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,
+      onBlockReply: params.onBlockReply,
+      onPartialReply: params.onPartialReply,
       onExecutionPhase: params.onExecutionPhase,
       cliToolAvailability,
       // One-shot helper run: fresh CLI process, no warm live session left

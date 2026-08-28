@@ -12,11 +12,11 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -155,13 +155,15 @@ function mergeManagedMediaIntoAssistantContent(params: {
       continue;
     }
     const split = splitMediaFromOutput(block.text);
-    const directiveTagsChanged = stripInlineDirectiveTagsForDisplay(split.text).changed;
     const visibleText = sanitizeAssistantDisplayText(split.text, {
-      preserveBoundaries: !directiveTagsChanged,
+      preserveBoundaries: true,
     });
     if (visibleText) {
       const { textSignature: _textSignature, ...rest } = block;
-      merged.push({ ...rest, text: visibleText });
+      merged.push({
+        ...rest,
+        text: visibleText,
+      });
     }
     if (split.mediaUrls?.length && !replaced) {
       merged.push(...managedBlocks);
@@ -265,7 +267,7 @@ export async function appendAssistantTranscriptMessage(params: {
   idempotencyKey?: string;
   abortMeta?: {
     aborted: true;
-    origin: "rpc" | "stop-command";
+    origin: "rpc" | "stop-command" | "placement-abandon";
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
@@ -396,12 +398,18 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
       if (!replacement) {
         return event;
       }
-      return Object.assign({}, event as Record<string, unknown>, {
-        message: {
+      const message = applyAssistantDeliveryDirectives(
+        {
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
-          content: replacement.request.state.persistedContent,
+          content: replacement.request.state.persistedContent.map((block) =>
+            Object.assign({}, block),
+          ),
         },
+        { managedMediaUrls: replacement.request.metadata?.mediaUrls },
+      );
+      return Object.assign({}, event as Record<string, unknown>, {
+        message,
       });
     });
     await transcript.replaceEvents(rewrittenEvents);
@@ -415,6 +423,7 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
 export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
   content: AssistantDisplayContentBlock[];
   idempotencyKey: string;
+  managedMediaUrls?: readonly string[];
   scope: SessionTranscriptWriteScope;
 }): Promise<{ messageId: string } | null> {
   const idempotencyKey = params.idempotencyKey.trim();
@@ -430,10 +439,13 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     const rewrittenEvents = events.map((event) =>
       transcriptEventId(event) === target.messageId
         ? Object.assign({}, event as Record<string, unknown>, {
-            message: {
-              ...target.message,
-              content: params.content,
-            },
+            message: applyAssistantDeliveryDirectives(
+              {
+                ...target.message,
+                content: params.content.map((block) => Object.assign({}, block)),
+              },
+              { managedMediaUrls: params.managedMediaUrls },
+            ),
           })
         : event,
     );
@@ -481,11 +493,15 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   if (!mergedContent) {
     return null;
   }
-  const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
-    message: {
+  const rewrittenMessage = applyAssistantDeliveryDirectives(
+    {
       ...target.message,
       content: mergedContent,
     },
+    { managedMediaUrls: params.mediaUrls },
+  );
+  const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
+    message: rewrittenMessage,
   });
   const rewritten = await rewriteTranscriptEventRowsExact(params.scope, {
     allowInitialGenerationMaterialization: initialGenerationMaterialized,

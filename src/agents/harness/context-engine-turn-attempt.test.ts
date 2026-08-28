@@ -330,14 +330,16 @@ describe("accepted context-engine turn finalization", () => {
       ),
     ).toMatchObject({ state: "blocked", failure: "stale" });
 
+    const nextAdmission = {
+      ...admission,
+      logicalTurnId: "logical-turn-next",
+    };
     await drainPendingContextEngineTurnsBeforeRun({
-      admission,
+      admission: nextAdmission,
       lease,
       warn,
     });
-    expect(lease.degradeBeforeStart).toHaveBeenCalledWith(
-      "pending durable turn advancement could not be completed before the next turn",
-    );
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
 
     const sibling = await appendTranscriptMessage(target, {
       message: { role: "assistant", content: "sibling" },

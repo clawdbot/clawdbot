@@ -41,16 +41,25 @@ import { renderChatResizableDivider } from "./components/chat-resizable-divider.
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
-  detachPanelToColumn,
   fitSidebarLayout,
   openSlot,
-  resizeColumn,
+  resizeSidebarPanel,
+  sidebarDock,
   type SidebarLayout,
-  type SidebarSide,
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
   protected commitSidebarLayout(layout: SidebarLayout): void {
+    // User panel intents and the Board mode must move together. Restored state
+    // bypasses this seam so loading a session never mutates its active tab.
+    const board = this.resolveBoardView();
+    if (board.hasBoard && board.face === "dashboard" && board.provider.canMutate) {
+      if (layout.open === true && board.dock === "hidden") {
+        this.handleBoardDockChange(board.reopenDock);
+      } else if (layout.open !== true && (board.dock === "left" || board.dock === "right")) {
+        this.handleBoardDockChange("hidden");
+      }
+    }
     const state = this.state;
     if (!state) {
       return;
@@ -62,55 +71,28 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     state.updateSidebarLayout(fitted);
   }
 
-  protected commitSidebarPanelMove(
-    layout: SidebarLayout,
-    panelId: string,
-    targetSide: SidebarSide,
-    board: ResolvedBoardView,
-  ): void {
-    const panel = layout.columns
-      .flatMap((column) => column.panels)
-      .find((candidate) => candidate.id === panelId);
-    if (panel?.slot !== "chat" || board.dock === targetSide) {
-      this.commitSidebarLayout(layout);
-      this.commitSidebarMovedPanelActive(panelId);
-      return;
-    }
-    if (!board.provider.canMutate) {
-      return;
-    }
-    this.commitSidebarLayout(layout);
-    this.commitSidebarMovedPanelActive(panelId);
-    this.handleBoardDockChange(targetSide);
-  }
-
-  // A move activates the panel in its destination column, but the collapsed layout
-  // reads a separate persisted selection. Without this the narrow view foregrounds
-  // a stale panel after a drag, and the stale choice survives reload.
-  private commitSidebarMovedPanelActive(panelId: string): void {
-    this.state?.updateSidebarActivePanel(panelId);
-  }
-
-  protected commitSidebarColumnResize(
+  protected commitSidebarPanelResize(
     renderedLayout: SidebarLayout,
     columnId: string,
-    width: number,
+    size: number,
   ): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    const resizedProjection = resizeColumn(renderedLayout, columnId, width);
+    const resizedProjection = resizeSidebarPanel(renderedLayout, columnId, size);
     const fittedProjection =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
         : resizedProjection;
-    const fittedWidth = fittedProjection.columns.find((column) => column.id === columnId)?.width;
+    const fittedColumn = fittedProjection.columns.find((column) => column.id === columnId);
+    const fittedSize =
+      sidebarDock(fittedProjection) === "bottom" ? fittedColumn?.height : fittedColumn?.width;
     if (
-      fittedWidth !== undefined &&
+      fittedSize !== undefined &&
       state.sidebarLayout.columns.some((column) => column.id === columnId)
     ) {
-      state.updateSidebarLayout(resizeColumn(state.sidebarLayout, columnId, fittedWidth));
+      state.updateSidebarLayout(resizeSidebarPanel(state.sidebarLayout, columnId, fittedSize));
       return;
     }
     this.commitSidebarLayout(fittedProjection);
@@ -125,28 +107,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return true;
     }
     const beforeOpen = state.sidebarLayout;
-    let layout = openSlot(beforeOpen, "chat", dock);
-    const chatColumn = layout.columns.find((column) =>
-      column.panels.some((panel) => panel.slot === "chat"),
-    );
-    if (chatColumn && chatColumn.side !== dock) {
-      const panel = chatColumn.panels.find((candidate) => candidate.slot === "chat");
-      if (panel) {
-        layout = detachPanelToColumn(layout, panel.id, dock, 0);
-      }
-    }
+    let layout = openSlot(beforeOpen, "chat");
     const chatPanel = layout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "chat");
     if (chatPanel) {
       layout = activatePanel(layout, chatPanel.id);
     }
-    const newColumn = layout.columns.find(
-      (column) => !beforeOpen.columns.some((current) => current.id === column.id),
-    );
     const fitted =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(layout, this.paneWidth, newColumn?.id) ?? layout)
+        ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
         : layout;
     state.updateSidebarLayout(fitted);
     if (chatPanel) {
@@ -225,7 +195,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return null;
     }
     return {
-      active: board.face === "dashboard",
+      active: board.face === "dashboard" && this.visuallyPresented,
       basePath: state.basePath,
       client,
       sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
@@ -268,7 +238,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected refreshSwarmRoster(): void {
     const state = this.state;
-    if (!state) {
+    if (!state || !this.presented) {
       return;
     }
     const parentKey = this.resolveBoardSessionKey();
@@ -277,6 +247,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
         if (
           !this.state ||
+          !this.presented ||
           this.state.connectionEpoch !== sourceEpoch ||
           parentKey !== this.resolveBoardSessionKey()
         ) {
@@ -381,7 +352,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       board.hasBoard &&
       Boolean(sessionKey) &&
       (board.face === "dashboard" || this.retainedBoardSessionKey === sessionKey);
-    const boardActive = board.face === "dashboard";
+    const boardActive = board.face === "dashboard" && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({
         active,
@@ -394,6 +365,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         canMutate: board.provider.canMutate,
         canGrant: board.provider.canGrant,
         callbacks: {
+          appViewGeneration: board.provider.appViewGeneration,
           applyOps: (ops) => board.provider.applyOps(ops),
           grant: (name, decision) => board.provider.grant(name, decision),
           selectTab: (tabId) => {
@@ -433,6 +405,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected handleBoardCommand(event: BoardCommandEvent): void {
+    if (!this.presented) {
+      return;
+    }
     const board = this.resolveBoardView();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     if (!sessionKey || this.resolveBoardSessionKey(event.sessionKey) !== sessionKey) {
@@ -477,9 +452,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const reopenDock = dock === "hidden" ? board.reopenDock : dock;
     this.lastVisibleBoardDock.set(`${sessionKey}:${board.activeTabId}`, reopenDock);
     this.persistBoardReopenDock(board, reopenDock);
+    const owner = this.headerOutcomeOwner;
     void board.provider
       .applyOps([{ kind: "tab_update", tabId: board.activeTabId, chatDock: dock }])
-      .catch((error: unknown) => this.publishHeaderError(error));
+      .catch((error: unknown) => this.publishHeaderError(error, owner));
   }
 
   protected renderBoardDivider(dock: BoardVisibleChatDock) {

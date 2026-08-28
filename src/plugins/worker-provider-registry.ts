@@ -21,12 +21,36 @@ export function validateWorkerProviderContract(
     return { ok: false, message: "worker provider registration renew must be a function" };
   }
   if (
+    provider.listMachineOptions !== undefined &&
+    typeof provider.listMachineOptions !== "function"
+  ) {
+    return {
+      ok: false,
+      message: "worker provider registration listMachineOptions must be a function",
+    };
+  }
+  if (
     provider.provisionBeforeInstallation !== undefined &&
     typeof provider.provisionBeforeInstallation !== "boolean"
   ) {
     return {
       ok: false,
       message: "worker provider registration provisionBeforeInstallation must be a boolean",
+    };
+  }
+  const executionModes = provider.supportedExecutionModes;
+  const validExecutionModes =
+    Array.isArray(executionModes) &&
+    ((executionModes.length === 1 &&
+      (executionModes[0] === "worker-turn" || executionModes[0] === "remote-exec")) ||
+      (executionModes.length === 2 &&
+        executionModes[0] === "worker-turn" &&
+        executionModes[1] === "remote-exec"));
+  if (executionModes !== undefined && !validExecutionModes) {
+    return {
+      ok: false,
+      message:
+        "worker provider registration supportedExecutionModes must contain one current mode or both current modes in canonical order",
     };
   }
   if (

@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { initialState, Task } from "@lit/task";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -11,14 +11,23 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
+import { FirstRunAutoSetup, type ModelSetupRouteData } from "./first-run-auto-setup.ts";
 import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
+import {
+  captureModelSetupResult,
+  formatModelSetupError,
+  type ModelSetupActivationTaskResult,
+  type ModelSetupTaskResult,
+} from "./model-setup-task-result.ts";
 import {
   findPreparedModelCandidate,
   type ModelSetupPrepareOption,
@@ -40,43 +49,13 @@ import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 import type { ModelSetupWizardCompletion, ModelSetupWizardStartMethod } from "./wizard-runner.ts";
 
+export type { ModelSetupRouteData } from "./first-run-auto-setup.ts";
+export { resumeFirstRunActivation } from "./first-run-activation-receipt.ts";
+
 const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
-
-export type ModelSetupRouteData = {
-  state: ModelSetupPageState;
-  connection: ModelSetupDetectionConnection;
-  firstRun: boolean;
-};
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" && error.trim() ? error : t("modelSetup.errors.requestFailed");
-}
-
-type BoundModelResult<T> =
-  | { client: GatewayBrowserClient; value: T }
-  | { client: GatewayBrowserClient; error: unknown };
-
-type ActivationTaskResult = {
-  result: SystemAgentSetupActivateResult;
-  refreshError: string | null;
-};
-
-async function captureModelResult<T>(
-  client: GatewayBrowserClient,
-  load: () => Promise<T>,
-): Promise<BoundModelResult<T>> {
-  try {
-    return { client, value: await load() };
-  } catch (error) {
-    return { client, error };
-  }
-}
 
 export class ModelSetupPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -102,6 +81,25 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
   private wizardMutationGeneration = 0;
   private wizardMutationActive = false;
+  private readonly firstRun = new FirstRunAutoSetup({
+    context: () => this.context,
+    routeData: () => this.routeData,
+    pageState: () => this.pageState,
+    actionsDisabled: () => this.actionsDisabled(),
+    canUseSetup: (client) => this.canUseSetup(client),
+    canVerify: (client) => this.canVerify(client),
+    activationSuccessful: () => this.activationState.phase === "success",
+    verify: () => this.verifyConnection().then(() => this.verifyTask.value),
+    activate: (candidate, targetId) =>
+      this.activate(
+        { kind: candidate.kind, modelRef: candidate.modelRef },
+        targetId,
+        candidate.modelRef,
+      ).then(() => this.activationTask.value),
+    setVerifyState: (next) => (this.verifyState = next),
+    setActivationState: (next) => (this.activationState = next),
+    setRefreshWarning: (warning) => (this.setupRefreshWarning = warning),
+  });
   private readonly iconLoader = new ModelSetupIconLoader(
     () => this.context,
     (iconUrl) => this.currentIconUrls().has(iconUrl),
@@ -136,7 +134,11 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private readonly detectTask = new Task<
     readonly [GatewayBrowserClient | null, string | null, object | null],
-    BoundModelResult<SystemAgentSetupDetectResult> & { agentId: string | null; token: object }
+    ModelSetupTaskResult<SystemAgentSetupDetectResult> & {
+      agentId: string | null;
+      hello: ModelSetupDetectionConnection["hello"];
+      token: object;
+    }
   >(this, {
     autoRun: false,
     args: () => {
@@ -147,27 +149,38 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         null,
       ] as const;
     },
-    task: async ([client, agentId, token], { signal }) =>
-      client && token
-        ? {
-            ...(await captureModelResult(client, () =>
-              detectModelSetup(client, agentId ?? undefined, signal),
-            )),
-            agentId,
-            token,
-          }
-        : initialState,
+    task: async ([client, agentId, token], { signal }) => {
+      if (!client || !token) {
+        return initialState;
+      }
+      const hello = this.context.gateway.snapshot.hello;
+      return {
+        ...(await captureModelSetupResult(client, () =>
+          detectModelSetup(client, agentId ?? undefined, signal),
+        )),
+        agentId,
+        hello,
+        token,
+      };
+    },
     onComplete: (outcome) => {
       if (
         this.context.gateway.snapshot.client !== outcome.client ||
+        this.context.gateway.snapshot.hello !== outcome.hello ||
         this.context.agentSelection.state.selectedId !== outcome.agentId
       ) {
         return;
       }
       if ("error" in outcome) {
-        this.pageState = { phase: "detect-error", message: errorMessage(outcome.error) };
+        this.firstRun.setReadyConnection(null);
+        this.pageState = { phase: "detect-error", message: formatModelSetupError(outcome.error) };
         return;
       }
+      this.firstRun.setReadyConnection({
+        client: outcome.client,
+        hello: outcome.hello,
+        agentId: outcome.agentId,
+      });
       this.pageState = { phase: "ready", result: outcome.value };
       this.syncManualProvider(this.pageState);
     },
@@ -175,7 +188,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private readonly activationTask = new Task<
     readonly [GatewayBrowserClient | null, SystemAgentSetupActivateParams | null],
-    BoundModelResult<ActivationTaskResult>
+    ModelSetupTaskResult<ModelSetupActivationTaskResult>
   >(this, {
     autoRun: false,
     args: () => [null, null],
@@ -183,7 +196,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       if (!client || !params) {
         return initialState;
       }
-      return captureModelResult(client, async () => {
+      return captureModelSetupResult(client, async () => {
         const mutation = await this.context.runtimeConfig.runExternalMutation((mutationClient) => {
           if (mutationClient !== client) {
             throw new Error("Connection changed before model activation started.");
@@ -216,7 +229,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           phase: "failure",
           targetId: current.targetId,
           status: "unknown",
-          error: errorMessage(outcome.error),
+          error: formatModelSetupError(outcome.error),
         };
         return;
       }
@@ -237,14 +250,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private readonly verifyTask = new Task<
     readonly [GatewayBrowserClient | null, string | null],
-    BoundModelResult<Awaited<ReturnType<typeof verifyModelSetup>>> & { agentId: string | null }
+    ModelSetupTaskResult<Awaited<ReturnType<typeof verifyModelSetup>>> & { agentId: string | null }
   >(this, {
     autoRun: false,
     args: () => [null, null],
     task: async ([client, agentId], { signal }) =>
       client
         ? {
-            ...(await captureModelResult(client, () =>
+            ...(await captureModelSetupResult(client, () =>
               verifyModelSetup(client, agentId ?? undefined, signal),
             )),
             agentId,
@@ -259,12 +272,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       }
       this.verifyState =
         "error" in outcome
-          ? { phase: "failed", status: "unknown", error: errorMessage(outcome.error) }
+          ? { phase: "failed", status: "unknown", error: formatModelSetupError(outcome.error) }
           : mapVerifyResult(outcome.value);
     },
   });
 
   override disconnectedCallback() {
+    this.firstRun.dispose();
     this.wizardMutationGeneration += 1;
     this.wizardMutationActive = false;
     void this.detectTask.run([null, null, null]);
@@ -278,6 +292,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues) {
     const snapshot = this.context.gateway.snapshot;
+    if (changed.has("routeData")) {
+      this.firstRun.routeChanged();
+    }
     if (changed.has("routeData") && this.routeData) {
       const { connection } = this.routeData;
       const current =
@@ -287,8 +304,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.context.agentSelection.state.selectedId === connection.agentId;
       if (current) {
         this.pageState = this.routeData.state;
+        this.firstRun.setReadyConnection(this.pageState.phase === "ready" ? connection : null);
         this.observedConnection = { ...connection, connected: true };
         this.syncManualProvider(this.pageState);
+      } else if (this.routeData.firstRun) {
+        // A stale route completion cannot lend previously rendered candidates
+        // to the current Gateway; detection must mint this generation's result.
+        this.pageState = { phase: "loading" };
       }
     }
   }
@@ -296,6 +318,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   override updated() {
     this.synchronizeGateway(this.context.gateway.snapshot);
     this.iconLoader.reconcile(this.currentIconUrls());
+    this.firstRun.start();
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
@@ -307,15 +330,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     };
     if (!this.observedConnection) {
       this.observedConnection = connection;
-      if (
-        connection.connected &&
-        this.routeData &&
-        (this.routeData.connection.client !== connection.client ||
-          this.routeData.connection.hello !== connection.hello ||
-          this.routeData.connection.agentId !== connection.agentId)
-      ) {
-        void this.detect();
-      }
+      this.ensureRouteSettledDetection();
       return;
     }
     if (
@@ -324,9 +339,11 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       connection.agentId === this.observedConnection.agentId &&
       connection.connected === this.observedConnection.connected
     ) {
+      this.ensureRouteSettledDetection();
       return;
     }
     this.observedConnection = connection;
+    this.firstRun.connectionChanged(connection);
     this.wizardMutationGeneration += 1;
     this.wizardMutationActive = false;
     void this.detectTask.run([null, null, null]);
@@ -338,10 +355,25 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.pendingPrepareOption = null;
     void this.wizard.cancel();
     this.pageState = { phase: "loading" };
-    if (!connection.connected || !connection.client) {
+    if (this.canUseSetup(connection.client)) {
+      void this.detect();
+    }
+  }
+
+  // Route data can settle after mount and be discarded as another
+  // connection's result. Nothing else re-arms detection then, so a loading
+  // page with a connected, capable Gateway self-heals here instead of
+  // dead-ending silently.
+  private ensureRouteSettledDetection(): void {
+    if (
+      !this.hasUpdated ||
+      !this.routeData ||
+      this.pageState.phase !== "loading" ||
+      this.detectTask.status !== TaskStatus.INITIAL
+    ) {
       return;
     }
-    if (this.canUseSetup(connection.client)) {
+    if (this.canUseSetup(this.context.gateway.snapshot.client)) {
       void this.detect();
     }
   }
@@ -360,10 +392,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (pageState.phase !== "ready") {
       return;
     }
-    const available = pageState.result.manualProviders.some(
-      (provider) => provider.id === this.manualProviderId,
-    );
-    if (!available) {
+    if (
+      !pageState.result.manualProviders.some((provider) => provider.id === this.manualProviderId)
+    ) {
       this.manualProviderId = pageState.result.manualProviders[0]?.id ?? "";
     }
   }
@@ -470,7 +501,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const input = this.renderRoot.querySelector<HTMLInputElement>(
       '.model-setup__manual input[type="password"]',
     );
-    input?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    input?.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
     input?.focus();
   }
 
@@ -585,7 +616,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (generation === this.wizardMutationGeneration) {
-        this.wizard.fail(errorMessage(error));
+        this.wizard.fail(formatModelSetupError(error));
       }
     } finally {
       if (generation === this.wizardMutationGeneration) {
@@ -626,7 +657,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       !gatewayTooOld &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.verify") === true;
     const body = renderModelSetup({
-      page: this.pageState,
+      page: this.firstRun.visiblePageState(this.verifyState.phase === "ok"),
       activation: this.activationState,
       verify: this.verifyState,
       wizard: this.wizardState,
@@ -638,6 +669,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         canAdmin &&
         !gatewayTooOld &&
         isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
+      modelConfigured: readSessionDefaults(snapshot)?.modelConfigured === true,
       gatewayTooOld,
       refreshWarning: this.setupRefreshWarning,
       actionsDisabled: this.actionsDisabled(),
@@ -647,7 +679,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       moreSignInOpen: this.moreSignInOpen,
       firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
-      onDetect: () => void this.detect(),
+      onDetect: () => {
+        this.firstRun.retryDetection();
+        void this.detect();
+      },
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
       onStartAuth: (option: AuthOption) => {
@@ -693,8 +728,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("model-setup")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("model-setup")}
-            ${renderDocsLink(MODEL_SETUP_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("model-setup")} ${renderLearnMoreLink(MODEL_SETUP_DOCS_URL)}
           </div>
         </div>
       </section>

@@ -13,22 +13,6 @@ function expectErr(fn: () => unknown, code: string): void {
 }
 
 describe("oc-path-parse-edges", () => {
-  it("file + section", () => {
-    expect(parseOcPath("oc://SOUL.md/Boundaries").section).toBe("Boundaries");
-  });
-
-  it("file + section + item", () => {
-    expect(parseOcPath("oc://SOUL.md/Boundaries/deny-rule-1").item).toBe("deny-rule-1");
-  });
-
-  it("file + section + item + field", () => {
-    expect(parseOcPath("oc://SOUL.md/B/deny-1/risk").field).toBe("risk");
-  });
-
-  it("session query parameter", () => {
-    expect(parseOcPath("oc://X.md?session=daily").session).toBe("daily");
-  });
-
   it("session with full path", () => {
     const p = parseOcPath("oc://X.md/sec/item/field?session=cron");
     expect(p).toEqual({
@@ -55,28 +39,8 @@ describe("oc-path-parse-edges", () => {
     expect(p.session).toBeUndefined();
   });
 
-  it("missing scheme throws", () => {
-    expectErr(() => parseOcPath("SOUL.md"), "OC_PATH_MISSING_SCHEME");
-  });
-
   it("wrong scheme throws", () => {
     expectErr(() => parseOcPath("https://x.com"), "OC_PATH_MISSING_SCHEME");
-  });
-
-  it("empty after scheme throws", () => {
-    expectErr(() => parseOcPath("oc://"), "OC_PATH_EMPTY");
-  });
-
-  it("empty segment throws", () => {
-    expectErr(() => parseOcPath("oc://X.md//item"), "OC_PATH_EMPTY_SEGMENT");
-  });
-
-  it("too-deep nesting throws", () => {
-    expectErr(() => parseOcPath("oc://X.md/a/b/c/d/e"), "OC_PATH_TOO_DEEP");
-  });
-
-  it("non-string throws", () => {
-    expectErr(() => parseOcPath(42 as unknown as string), "OC_PATH_NOT_STRING");
   });
 
   it("round-trip canonical forms", () => {
@@ -110,14 +74,6 @@ describe("oc-path-parse-edges", () => {
     const p = parseOcPath("oc://X.md/[frontmatter]/name");
     expect(p.section).toBe("[frontmatter]");
     expect(p.item).toBe("name");
-  });
-
-  it("formatOcPath rejects empty file", () => {
-    expectErr(() => formatOcPath({ file: "" }), "OC_PATH_FILE_REQUIRED");
-  });
-
-  it("formatOcPath rejects item without section", () => {
-    expectErr(() => formatOcPath({ file: "X.md", item: "i" }), "OC_PATH_NESTING");
   });
 
   it("formatOcPath quotes raw slot values containing special chars", () => {

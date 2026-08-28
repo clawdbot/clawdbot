@@ -46,28 +46,48 @@ describe("legacy channel setup compatibility", () => {
     const cfg = {
       channels: { slack: { allowFrom: ["U1"] } },
     } as OpenClawConfig;
-
-    const next = await promptLegacyChannelAllowFromForAccount({
-      cfg,
+    const promptParams = {
       channel: "slack",
       prompter,
       defaultAccountId: "default",
       resolveAccount: () => ({ allowFrom: ["U1"] }),
-      resolveExisting: (account) => account.allowFrom,
+      resolveExisting: (account: { allowFrom: string[] }) => account.allowFrom,
       resolveToken: () => null,
       noteTitle: "Slack allowlist",
       noteLines: ["Enter Slack user ids"],
       message: "Allowed users",
       placeholder: "U123",
-      parseId: (value) => (/^U\d+$/.test(value) ? value : null),
+      parseId: (value: string) => (/^U\d+$/.test(value) ? value : null),
       invalidWithoutTokenNote: "Use an id",
       resolveEntries: async () => [],
-    });
+    };
+
+    const next = await promptLegacyChannelAllowFromForAccount({ cfg, ...promptParams });
 
     expect(note).toHaveBeenCalledWith("Enter Slack user ids", "Slack allowlist");
     expect(next).toMatchObject({
       channels: {
         slack: { allowFrom: ["U1", "U2"], dm: { enabled: true } },
+      },
+    });
+
+    const accountNext = await promptLegacyChannelAllowFromForAccount({
+      cfg: {
+        channels: {
+          slack: { allowFrom: ["U1"], accounts: { work: { allowFrom: ["U3"] } } },
+        },
+      } as OpenClawConfig,
+      ...promptParams,
+      defaultAccountId: "work",
+      resolveAccount: () => ({ allowFrom: ["U3"] }),
+    });
+
+    expect(accountNext).toMatchObject({
+      channels: {
+        slack: {
+          allowFrom: ["U1"],
+          accounts: { work: { allowFrom: ["U3", "U2"] } },
+        },
       },
     });
   });

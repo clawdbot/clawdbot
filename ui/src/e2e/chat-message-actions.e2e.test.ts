@@ -17,137 +17,40 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-message-actions");
-const transportPreviewLimit = 8_000;
 
-const realisticFullAssistantContent = `# Refactor complete: one transcript-loading path
+// Neutral filler line repeated to push the fixture past the transport
+// preview limit without embedding stale implementation narrative; the
+// heading, list, code block, and path sample below exercise Markdown
+// rendering, while the repeated line only pads length.
+const FULL_ASSISTANT_CONTENT_FILLER_LINE =
+  "Repeat neutral filler text to exceed the transport preview limit while staying deterministic and readable.\n";
 
-I finished the Control UI transcript refactor. Ordinary messages render exactly as before, but a long assistant response no longer leaves the operator behind a disclosure control when the complete Markdown is available.
+const realisticFullAssistantContent = `# Deployment report
 
-## What was wrong
+## Summary
 
-The transcript list already knew the session key and stable message id, while each message group separately derived enough state to render Markdown, copy text, and build reply context. When history contained a transport-limited preview, those consumers could disagree: the bubble showed the preview, Copy used cached text, and Reply rebuilt text from the original transcript entry.
+- service: payment-gateway
+- environment: production
+- status: completed
 
-The underlying problem was ownership. Full-message loading already belonged to the thread, but visibility was controlled farther down the render tree. That meant the UI could possess the complete response and still choose to show only the preview until someone clicked Show more.
+## Rollout steps
 
-## Files reviewed
-
-### ui/src/pages/chat/chat-thread.ts
-
-The page owns the session-scoped map of assistant message expansions. Each entry records a revision and a loading, loaded, or failed result. The revision participates in row memoization, so completing a request invalidates the affected row without rebuilding the entire transcript.
-
-The cache key combines the active session and message id. Switching sessions therefore cannot leak loaded text into another conversation, even when deterministic fixtures reuse a local id.
-
-~~~ts
-type AssistantMessageExpansionState =
-  | { status: "loading"; revision: number }
-  | { status: "error"; revision: number }
-  | { status: "loaded"; expanded: boolean; markdown: string; revision: number };
-~~~
-
-This state and the existing chat.message.get request remain unchanged. The UI adjustment only removes the separate assistant disclosure decision after the loaded Markdown is present.
-
-### ui/src/pages/chat/components/chat-message-group.ts
-
-The group is the shared boundary for bubble content and message actions. It already checks the gateway suffix and transcriptMeta.truncated, looks up the stable message id, and receives the existing full-message callback from the thread.
-
-The group now starts that existing callback when it first sees an eligible entry instead of waiting for a button click. It does not introduce another cache, request type, retry timer, or transport flag. A loading or failed entry is left alone, which prevents render-driven request loops.
+1. Build the release artifact and run smoke tests.
+2. Deploy to the canary pool and watch the error budget.
+3. Promote to the full fleet.
 
 ~~~ts
-for (const details of messageActionDetails) {
-  if (
-    details?.shouldFetchFullMessage &&
-    details.messageId &&
-    !getAssistantMessageExpansion(details.messageId)
-  ) {
-    onToggleAssistantMessageExpanded(details.messageId);
-  }
+export function verifyRollout(serviceName: string): Promise<boolean> {
+  return healthCheck(serviceName);
 }
 ~~~
 
-Once the existing loader resolves, the same selected Markdown flows to the bubble, inline Copy action, Reply action, and context menu. No consumer has to infer whether a loaded response should still look collapsed.
+Reference: src/services/payment-gateway/deploy.ts:88
 
-### ui/src/pages/chat/components/chat-message-markdown.ts
+${FULL_ASSISTANT_CONTENT_FILLER_LINE.repeat(75)}
+## Final verification
 
-Assistant Markdown now renders directly. If the existing expansion record contains loaded text, that text is selected regardless of the old expanded boolean. Otherwise the transcript text is shown exactly as received.
-
-Loaded text uses document rendering mode so the chat renderer does not apply its regular large-message preview limit to a response that was explicitly recovered in full. User-authored messages keep their separate local disclosure behavior; this change only removes the assistant control.
-
-~~~ts
-const markdown = disclosure?.expanded
-  ? disclosure.markdown ?? previewMarkdown
-  : previewMarkdown;
-
-return renderMarkdownText(markdown, isStreaming, renderOptions);
-~~~
-
-There is no assistant footer, loading label, Show more button, Show less button, or inline failure banner. During the existing request, the transport text remains readable. When complete text arrives, the same bubble grows naturally to fit it.
-
-## Request lifecycle
-
-1. History supplies the transport representation of the assistant message.
-2. The existing truncation check determines whether a stored full copy can be requested.
-3. The group invokes the already-shipped full-message callback once.
-4. The thread sends chat.message.get with the stable session and message identifiers.
-5. A successful result replaces the visible Markdown in the existing bubble.
-6. Copy and Reply immediately use the same complete Markdown.
-
-The request shape remains the one already supported by the gateway:
-
-~~~json
-{
-  "sessionKey": "main",
-  "messageId": "assistant-refactor-report",
-  "maxChars": 500000
-}
-~~~
-
-Those names are deterministic fixture values. This scenario contains no production session identifiers, account data, credentials, channel addresses, provider keys, or access tokens.
-
-## Failure behavior
-
-If no complete stored message is available, the UI keeps the transcript text. It does not replace useful content with an error card or leave a dead control on screen. The existing failed state prevents the render pass from immediately issuing the same request again.
-
-This matters during reconnects and partial history imports: the operator still sees the information that actually reached the browser. The UI does not invent missing prose, infer a synthetic ending, or claim that a transport-limited message is complete.
-
-## Observable behavior covered
-
-The focused component tests protect the user-facing boundary rather than the internal call order:
-
-- eligible assistant text starts the existing full-message load without a click;
-- loaded Markdown is visible even if an older cached expanded flag is false;
-- the assistant bubble contains no Show more or Show less control;
-- Copy and Reply use the complete loaded response;
-- loading and failure continue to display the transcript text;
-- mirrored tool replies and messages without a loader remain unchanged;
-- user-message disclosure behavior stays separate and intact.
-
-The thread test verifies that one render starts one request, that the complete response replaces the preview, and that later renders do not fetch it again. A second case rejects the request and confirms that the transport text stays readable with no disclosure or error UI.
-
-## Browser proof
-
-The browser scenario boots the real Control UI against a mocked Gateway WebSocket. History contains the first 8,000 characters of this report plus the existing truncation state, while chat.message.get returns this complete Markdown document.
-
-The test waits for the final heading, checks the exact request parameters, confirms that no disclosure buttons exist, and exercises both inline and context-menu actions. Screenshots use a normal 1440×900 viewport in dark and light themes rather than zooming out to make the response look artificially short.
-
-The before view ends in the middle of the refactor explanation because that is where the transport preview stops. The after view reaches the remaining failure notes, test coverage, scope checks, and final result in the same message bubble.
-
-## Scope checks
-
-No gateway handler, protocol type, persistence model, or transport limit changed. The full-message request, expansion cache, identifiers, and response extraction all predate this change. The production diff removes presentation branches instead of adding a second way to retrieve content.
-
-The change also leaves user-authored long messages alone. Their local disclosure is a presentation choice for text the user submitted, while this assistant path is about showing the complete response once the existing loader has made it available.
-
-## Manual review notes
-
-I reviewed the transition at a normal desktop viewport and followed the text rather than relying only on request assertions. The preview remains selectable while loading, the existing headings and code blocks stay mounted, and the message grows in place when the remaining Markdown arrives.
-
-In both themes, code blocks retain their contrast, long paths wrap without covering the message actions, and the final section remains reachable with ordinary scrolling. No spinner or temporary card shifts the reading position between the preview and the full response.
-
-I also rejected the mocked full-message request and confirmed that the last received sentence stayed visible. A later host render did not create a tight retry loop, duplicate the message group, or expose an inactive assistant disclosure control.
-
-## Verification result
-
-The focused component suite and real-browser mocked-gateway scenario pass with the same structured response. The complete answer is always visible when available, message actions agree with the bubble, both themes remain readable, and the assistant UI exposes no manual expansion control.`;
+All health checks passed and the rollout is complete.`;
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -263,7 +166,221 @@ describeControlUiE2e("Control UI chat message actions", () => {
     await server?.close();
   });
 
-  it("offers Reply inline and mirrors every assistant action in the context menu", async () => {
+  it("keeps assistant actions hidden when the user message is last", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: "Earlier assistant reply.",
+          timestamp: Date.now() - 4_000,
+          __openclaw: { id: "earlier-assistant", seq: 1 },
+        },
+        {
+          role: "user",
+          content: "A question between replies.",
+          timestamp: Date.now() - 3_000,
+          __openclaw: { id: "middle-user", seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant lead-in.",
+          timestamp: Date.now() - 2_000,
+          __openclaw: { id: "latest-assistant", seq: 3 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant reply.",
+          timestamp: Date.now() - 1_500,
+          __openclaw: { id: "latest-assistant-final", seq: 4 },
+        },
+        {
+          role: "user",
+          content: "A newer user follow-up.",
+          timestamp: Date.now() - 1_000,
+          __openclaw: { id: "latest-user", seq: 5 },
+        },
+      ],
+    });
+
+    const presentation = (group: Locator) =>
+      group.evaluate((element) => {
+        const footer = element.querySelector<HTMLElement>(".chat-group-footer");
+        const action = element.querySelector<HTMLElement>(".chat-group-footer-actions button");
+        return {
+          actionOpacity: action ? getComputedStyle(action).opacity : null,
+          actionPointerEvents: action ? getComputedStyle(action).pointerEvents : null,
+          footerOpacity: footer ? getComputedStyle(footer).opacity : null,
+          footerPointerEvents: footer ? getComputedStyle(footer).pointerEvents : null,
+        };
+      });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.mouse.move(0, 0);
+      const assistantGroups = page.locator(".chat-group.assistant");
+      await expect.poll(() => assistantGroups.count()).toBe(2);
+      const earlierAssistant = assistantGroups.first();
+      const latestAssistant = assistantGroups.last();
+      await latestAssistant.getByText("Latest assistant reply.", { exact: true }).waitFor();
+      const inlineAction = latestAssistant.locator(".chat-message-actions-row button").first();
+      await expect.poll(() => inlineAction.count()).toBe(1);
+
+      await screenshot(page, "user-last-assistant-actions-hidden-desktop.png");
+      await expect
+        .poll(() => presentation(earlierAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "0", pointerEvents: "none" });
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await screenshot(page, "latest-assistant-actions-resting-mobile.png");
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await latestAssistant.locator(".chat-bubble").last().dispatchEvent("pointerup", {
+        button: 0,
+        pointerType: "touch",
+      });
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "1",
+          actionPointerEvents: "auto",
+          footerOpacity: "1",
+          footerPointerEvents: "auto",
+        });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "1", pointerEvents: "auto" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shares tooltip styling and dismissal across message metadata, actions, and file hints", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      hasTouch: true,
+      locale: "en-US",
+      recordVideo: captureUiProof
+        ? { dir: path.join(artifactDir, "tooltips-video"), size: { height: 900, width: 1440 } }
+        : undefined,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Tooltip proof. See /workspace/tooltip-proof.txt." }],
+          timestamp: Date.now() - 5 * 60_000,
+          model: "openai/gpt-5.6-luna",
+          usage: { input: 12_000, output: 300, cost: { total: 0.12 } },
+          __openclaw: { id: "tooltip-proof", seq: 1 },
+        },
+      ],
+    });
+    const openTooltip = page.locator("wa-tooltip[open]");
+    const popupStyle = () =>
+      openTooltip.locator('[part="body"]').evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          background: style.backgroundColor,
+          border: style.border,
+          radius: style.borderRadius,
+          padding: style.padding,
+          fontSize: style.fontSize,
+        };
+      });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const group = page.locator(".chat-group.assistant").filter({ hasText: "Tooltip proof." });
+      await group
+        .locator(".chat-text")
+        .first()
+        .tap({ position: { x: 4, y: 4 } });
+      const timestamp = group.locator(".msg-meta__summary");
+      await timestamp.hover();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+      const metadataStyle = await popupStyle();
+      expect(await group.locator(".msg-meta__details").textContent()).toContain("gpt-5.6-luna");
+      expect(await group.locator(".msg-meta__cost").textContent()).toContain("$0.12");
+      await screenshot(page, "tooltip-metadata.png");
+
+      await timestamp.click();
+      await page.mouse.move(0, 0);
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      const reply = group.getByRole("button", { name: "Reply to message" });
+      await expectHoverTooltip(reply, "Reply");
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      expect(await popupStyle()).toEqual(metadataStyle);
+      await screenshot(page, "tooltip-reply.png");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => openTooltip.count()).toBe(0);
+
+      const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
+      await file.hover();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      expect(await popupStyle()).toEqual(metadataStyle);
+      expect(await file.getAttribute("title")).toBe("");
+      await screenshot(page, "tooltip-file-hint.png");
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await timestamp.tap();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+      const bounds = await openTooltip.locator('[part="body"]').boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+      await screenshot(page, "tooltip-mobile.png");
+      await timestamp.tap();
+      await expect.poll(() => openTooltip.count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps oversized history notices consistent through recovery and message actions", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -281,9 +398,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
     const privateThinking = "private reply reasoning";
     const visibleThinkingAnswer = "Visible reply context only.";
     const fullAssistantContent = realisticFullAssistantContent;
-    const truncatedPreview = `${fullAssistantContent.slice(0, transportPreviewLimit)}\n...(truncated)...`;
-    expect(fullAssistantContent.length).toBeGreaterThan(transportPreviewLimit);
+    const rawOversizedMarker = "[chat.history omitted: message too large]";
+    const oversizedNotice = "This message is too large to display here.";
     const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.message.get"],
       historyMessages: [
         {
           role: "assistant",
@@ -316,31 +434,57 @@ describeControlUiE2e("Control UI chat message actions", () => {
         },
         {
           role: "assistant",
-          content: [{ type: "text", text: truncatedPreview }],
+          content: [{ type: "text", text: rawOversizedMarker }],
           timestamp: Date.now() + 4,
-          __openclaw: { id: "assistant-refactor-report", seq: 5 },
+          __openclaw: {
+            id: "assistant-full-message",
+            seq: 5,
+            truncated: true,
+            reason: "oversized",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: rawOversizedMarker }],
+          timestamp: Date.now() + 5,
+          __openclaw: { id: "oversized-user", seq: 6, truncated: true, reason: "oversized" },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "oversized-tool-call-1",
+          toolName: "read_file",
+          content: rawOversizedMarker,
+          timestamp: Date.now() + 6,
+          __openclaw: { id: "oversized-tool-1", seq: 7, truncated: true, reason: "oversized" },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "oversized-tool-call-2",
+          toolName: "run_command",
+          content: rawOversizedMarker,
+          timestamp: Date.now() + 7,
+          __openclaw: { id: "oversized-tool-2", seq: 8, truncated: true, reason: "oversized" },
         },
       ],
-      methodResponses: {
-        "chat.message.get": {
-          ok: true,
-          message: { role: "assistant", content: fullAssistantContent },
-        },
-      },
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
       await setThemeMode(page, "dark");
-      const commandPaletteShortcut = process.platform === "darwin" ? "⌘K" : "Ctrl K";
-      await expectHoverTooltip(page.getByRole("button", { name: "New session" }), "New session");
+      const applePlatform = process.platform === "darwin";
+      const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
+      const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
+      await expectHoverTooltip(
+        page.locator(".sidebar-brand").getByRole("link", { name: "New session" }),
+        "New session",
+      );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
         `Open command palette (${commandPaletteShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Collapse sidebar" }),
-        "Collapse sidebar (⌘B)",
+        `Collapse sidebar (${sidebarShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open split view" }),
@@ -451,7 +595,26 @@ describeControlUiE2e("Control UI chat message actions", () => {
         "Reply",
         "Copy as markdown",
       ]);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await screenshot(page, "04-selected-text-context-menu.png");
+      await bubble.dispatchEvent("pointerup", {
+        button: 0,
+        ctrlKey: true,
+        pointerType: "mouse",
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -474,24 +637,44 @@ describeControlUiE2e("Control UI chat message actions", () => {
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(messageText);
 
-      const fullTextBubble = page.locator(
-        '.chat-bubble[data-entry-id="assistant-refactor-report"]',
-      );
+      const fullTextBubble = page.locator('.chat-bubble[data-entry-id="assistant-full-message"]');
       const fullTextGroup = fullTextBubble.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')]",
       );
       const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "main",
-        messageId: "assistant-refactor-report",
+        messageId: "assistant-full-message",
         maxChars: 500_000,
       });
-      const fullTail = fullTextBubble.getByRole("heading", { name: "Verification result" });
+      await expect
+        .poll(() => fullTextBubble.locator(".chat-text").textContent())
+        .toContain(oversizedNotice);
+      expect(await fullTextBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
+      expect(await page.locator("body").textContent()).not.toContain(rawOversizedMarker);
+      await screenshot(page, "07-oversized-pending-dark.png");
+      const fullTextReplyPreview = page.locator(".chat-reply-preview");
+      await fullTextBubble.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(oversizedNotice);
+      await fullTextBubble.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Reply to message" }).click();
+      await expect
+        .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(oversizedNotice);
+      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+      await gateway.resolveDeferred("chat.message.get", {
+        ok: true,
+        message: { role: "assistant", content: fullAssistantContent },
+      });
+      const fullTail = fullTextBubble.getByRole("heading", { name: "Final verification" });
       await fullTail.waitFor({ state: "visible" });
       expect(await fullTextBubble.getByRole("button", { name: "Show more" }).count()).toBe(0);
       expect(await fullTextBubble.getByRole("button", { name: "Show less" }).count()).toBe(0);
       await fullTail.scrollIntoViewIfNeeded();
-      await screenshot(page, "07-realistic-refactor-dark.png");
+      await screenshot(page, "08-oversized-resolved-dark.png");
 
       await fullTextGroup.hover();
       await fullTextGroup.getByRole("button", { name: "Copy as markdown" }).click();
@@ -499,10 +682,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(fullAssistantContent);
       await fullTextGroup.getByRole("button", { name: "Reply to message" }).click();
-      const fullTextReplyPreview = page.locator(".chat-reply-preview");
       await expect
         .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
-        .toContain("# Refactor complete: one transcript-loading path");
+        .toContain("# Deployment report");
       await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
       await fullTextBubble.click({ button: "right" });
@@ -514,12 +696,32 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await menu.getByRole("menuitem", { name: "Reply to message" }).click();
       await expect
         .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
-        .toContain("# Refactor complete: one transcript-loading path");
+        .toContain("# Deployment report");
+      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      const userOversizedBubble = page.locator('.chat-bubble[data-entry-id="oversized-user"]');
+      expect(await userOversizedBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
+      await expect
+        .poll(() => userOversizedBubble.locator(".chat-text").textContent())
+        .toContain(oversizedNotice);
+
+      const activitySummary = page.locator(".chat-activity-group__summary").last();
+      await activitySummary.click();
+      const groupedToolBubble = page.locator('.chat-bubble[data-entry-id="oversized-tool-1"]');
+      await groupedToolBubble.waitFor({ state: "visible" });
+      expect(await groupedToolBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
+      await groupedToolBubble.click({ button: "right" });
+      expect(await menu.getByRole("menuitem").allTextContents()).toEqual(["Reply"]);
+      await screenshot(page, "09-oversized-tool-actions.png");
+      await menu.getByRole("menuitem", { name: "Reply to message" }).click();
+      await expect
+        .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(oversizedNotice);
       await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
       await setThemeMode(page, "light");
       await fullTail.scrollIntoViewIfNeeded();
-      await screenshot(page, "08-realistic-refactor-light.png");
+      await screenshot(page, "10-oversized-resolved-light.png");
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
     } finally {
       await context.close();

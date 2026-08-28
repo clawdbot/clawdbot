@@ -10,55 +10,18 @@ import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confir
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
+  isUpdateActionable,
   type ApplicationStatusBanner,
 } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
-import { getSafeLocalStorage } from "../local-storage.ts";
+import "../styles/sidebar-update-card.css";
 import { icons } from "./icons.ts";
-
-const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
-
-type DismissedUpdate = {
-  latestVersion: string;
-  channel: string | null;
-  dismissedAtMs: number;
-};
-
-function updateKey(update: UpdateAvailable): string {
-  return `${update.latestVersion}\u0000${update.channel}`;
-}
-
-function isDismissed(update: UpdateAvailable): boolean {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(UPDATE_BANNER_DISMISS_KEY);
-    if (!raw) {
-      return false;
-    }
-    const dismissed = JSON.parse(raw) as Partial<DismissedUpdate>;
-    return dismissed.latestVersion === update.latestVersion && dismissed.channel === update.channel;
-  } catch {
-    return false;
-  }
-}
-
-function dismiss(update: UpdateAvailable): void {
-  try {
-    getSafeLocalStorage()?.setItem(
-      UPDATE_BANNER_DISMISS_KEY,
-      JSON.stringify({
-        latestVersion: update.latestVersion,
-        channel: update.channel,
-        dismissedAtMs: Date.now(),
-      } satisfies DismissedUpdate),
-    );
-  } catch {
-    // Dismissal persistence is best effort.
-  }
-}
+import "./tooltip.ts";
 
 class SidebarUpdateCard extends OpenClawLightDomContentsElement {
+  @property({ attribute: false }) compact = false;
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
   @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
@@ -73,7 +36,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) refreshRequired = false;
   @property({ attribute: false }) onRefresh: () => void = () => undefined;
   @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
-  @state() private dismissedUpdateKey: string | null = null;
+  @property({ attribute: false }) onReviewUpdate: () => void = () => undefined;
+  @property({ attribute: false }) onDismiss: (() => void) | undefined = undefined;
+  @property({ attribute: false }) recoverNativeDecline = true;
   @state() private holdingCampaignId: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
   private nativeUpdateDeclined = false;
@@ -111,7 +76,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,
     );
-    window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    if (this.recoverNativeDecline) {
+      window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    }
   }
 
   override disconnectedCallback() {
@@ -119,7 +86,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,
     );
-    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    if (this.recoverNativeDecline) {
+      window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    }
     super.disconnectedCallback();
   }
 
@@ -149,7 +118,168 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       : nothing;
   }
 
-  override render() {
+  private readonly startUpdate = () => {
+    const campaign = this.updateSchedule?.campaign;
+    const busy = this.updateBusy || campaign?.state === "applying";
+    if (busy || !this.canUpdate) {
+      return;
+    }
+    void confirmAndStartUpdate({
+      startGatewayUpdate: () => this.onUpdate(),
+      ...(this.watchUpdateProgress ? { watchUpdateProgress: this.watchUpdateProgress } : {}),
+      updateAvailable: this.updateAvailable,
+      updateSchedule: this.updateSchedule,
+      // Read the bridge at click time: a Mac app that installed it
+      // after the last availability event still owns this update.
+      viaNativeApp: !this.nativeUpdateDeclined && hasNativeUpdateBridge(),
+    });
+  };
+
+  private readonly holdUpdate = async (campaignId: string) => {
+    this.holdingCampaignId = campaignId;
+    await this.onHoldUpdate();
+    this.holdingCampaignId = null;
+  };
+
+  private hasAvailableUpdate() {
+    const update = this.updateAvailable;
+    const gitTarget = this.updateSchedule?.target;
+    return (
+      (update !== null && update.latestVersion !== update.currentVersion) ||
+      (update?.commitsBehind !== undefined && update.commitsBehind > 0) ||
+      (gitTarget?.kind === "git" && gitTarget.commitsBehind > 0)
+    );
+  }
+
+  private compactSummary() {
+    if (this.refreshRequired) {
+      return {
+        detail: t("chat.sidebar.serverUpdatedRefresh"),
+        icon: icons.refresh,
+        severity: "warning" as const,
+        title: t("chat.sidebar.serverUpdatedTitle"),
+      };
+    }
+    const campaign = this.updateSchedule?.campaign;
+    const busy = this.updateBusy || campaign?.state === "applying";
+    const statusBanner = this.statusBanner;
+    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
+      return null;
+    }
+    const targetLabel = formatUpdateTargetLabel(this.updateSchedule, this.updateAvailable);
+    const campaignLabel = formatUpdateCampaignLabel(this.updateSchedule);
+    const blocked = statusBanner && statusBanner.tone !== "info";
+    const blockedReason = statusBanner?.text.trim() || t("updates.sidebar.blockedSummary");
+    return {
+      detail: blocked
+        ? campaign?.state === "waiting-for-idle" && targetLabel
+          ? t("updates.sidebar.blockedWaiting", { target: targetLabel })
+          : targetLabel
+            ? `${targetLabel} · ${blockedReason}`
+            : blockedReason
+        : campaignLabel && targetLabel
+          ? t("updates.sidebar.campaignTarget", { status: campaignLabel, target: targetLabel })
+          : (campaignLabel ??
+            targetLabel ??
+            statusBanner?.text ??
+            t("updates.sidebar.availableSummary")),
+      icon: statusBanner ? icons.alertTriangle : busy ? icons.refresh : icons.download,
+      critical: Boolean(blocked),
+      severity: statusBanner?.tone === "danger" ? ("error" as const) : ("warning" as const),
+      title: blocked
+        ? t("updates.sidebar.blockedTitle")
+        : busy
+          ? t("updates.sidebar.updating")
+          : t("updates.sidebar.availableTitle"),
+    };
+  }
+
+  private renderCompact() {
+    const summary = this.compactSummary();
+    if (!summary) {
+      return nothing;
+    }
+    return html`<details
+      class="sidebar-issues-panel__details sidebar-issues-panel__details--${summary.severity}"
+    >
+      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
+        <span
+          class="sidebar-issues-panel__icon ${summary.critical
+            ? "sidebar-issues-panel__icon--critical"
+            : ""}"
+          aria-hidden="true"
+          >${summary.icon}</span
+        >
+        <span class="sidebar-issues-panel__content">
+          <span class="sidebar-issues-panel__entity" title=${summary.title}>${summary.title}</span>
+          <span class="sidebar-issues-panel__state" title=${summary.detail}>${summary.detail}</span>
+        </span>
+        ${this.onDismiss
+          ? html`<button
+              type="button"
+              class="sidebar-issues-panel__dismiss"
+              aria-label=${t("attention.dismissItem", { item: summary.title })}
+              title=${t("attention.dismissItem", { item: summary.title })}
+              @click=${(event: Event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.onDismiss?.();
+              }}
+            >
+              ${icons.x}
+            </button>`
+          : nothing}
+        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </summary>
+      <div class="sidebar-issues-panel__body sidebar-update-issue__body">
+        ${this.renderCompactDetails()}
+      </div>
+    </details>`;
+  }
+
+  private renderCompactDetails() {
+    const statusBanner = this.statusBanner;
+    if (!statusBanner) {
+      return this.renderCard();
+    }
+    const campaign = this.updateSchedule?.campaign;
+    const holdActive = campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now();
+    const showHold = Boolean(
+      campaign &&
+      campaign.state !== "applying" &&
+      this.canUpdate &&
+      this.canHoldUpdate &&
+      !this.updateBusy &&
+      !holdActive &&
+      this.heldUpdateCampaignId !== campaign.id,
+    );
+    return html`<div class="sidebar-update-card sidebar-update-card--compact-details">
+      <p class="sidebar-update-card__compact-reason" title=${statusBanner.text}>
+        ${statusBanner.text}
+      </p>
+      <div class="sidebar-update-card__compact-actions">
+        <button
+          class="sidebar-update-card__review sidebar-update-card__review--primary"
+          type="button"
+          @click=${this.onReviewUpdate}
+        >
+          ${t("updates.reviewUpdate")}
+        </button>
+        ${showHold && campaign
+          ? html`<button
+              class="sidebar-update-card__hold"
+              type="button"
+              ?disabled=${this.holdingCampaignId === campaign.id}
+              @click=${() => this.holdUpdate(campaign.id)}
+            >
+              ${t("updates.holdOneHour")}
+            </button>`
+          : nothing}
+      </div>
+    </div>`;
+  }
+
+  private renderCard() {
     // A stale client cannot trust its own update metadata, so refresh takes precedence
     // over any available update it may still report.
     if (this.refreshRequired) {
@@ -173,22 +303,11 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const update = this.updateAvailable;
     const campaign = this.updateSchedule?.campaign;
     const busy = this.updateBusy || campaign?.state === "applying";
-    const hasGitUpdate =
-      this.updateSchedule?.target?.kind === "git" && this.updateSchedule.target.commitsBehind > 0;
-    const hasVersionUpdate = Boolean(update && update.latestVersion !== update.currentVersion);
     // A running update outranks availability: the gateway drops its update
     // metadata while it restarts, and the card must not vanish or fall back to
     // the stale "update available" call to action mid-install.
     const statusBanner = this.statusBanner;
-    if (
-      !campaign &&
-      !busy &&
-      !statusBanner &&
-      (!update ||
-        (!hasVersionUpdate && !hasGitUpdate) ||
-        this.dismissedUpdateKey === updateKey(update) ||
-        isDismissed(update))
-    ) {
+    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
       return nothing;
     }
     const title = this.nativeUpdateAvailable
@@ -220,7 +339,24 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     );
     // An outcome with nothing left to act on is the whole card: re-offering an
     // update the operator just ran would bury the reason it failed.
-    const actionable = Boolean(campaign || busy || (update && (hasVersionUpdate || hasGitUpdate)));
+    const actionable = isUpdateActionable(update, this.updateSchedule, this.updateBusy);
+    const updateAction = html`<button
+      class="sidebar-update-card__action ${busy ? "sidebar-update-card__action--busy" : ""}"
+      type="button"
+      aria-disabled=${this.canUpdate ? nothing : "true"}
+      ?disabled=${busy}
+      @click=${this.startUpdate}
+    >
+      <span class="sidebar-update-card__icon" aria-hidden="true"
+        >${busy ? icons.refresh : icons.download}</span
+      >
+      <span
+        class="sidebar-update-card__text"
+        role=${countdownActive ? "timer" : nothing}
+        aria-live=${countdownActive ? "off" : nothing}
+        >${text}</span
+      >
+    </button>`;
     return html`
       <div
         class="sidebar-update-card"
@@ -230,51 +366,18 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         ${this.renderStatus()}
         ${actionable
           ? html`<div class="sidebar-update-card__actions">
-              <button
-                class="sidebar-update-card__action ${campaign
-                  ? "sidebar-update-card__action--undismissable"
-                  : ""} ${busy ? "sidebar-update-card__action--busy" : ""}"
-                type="button"
-                title=${this.canUpdate ? nothing : t("updates.adminRequired")}
-                ?disabled=${busy || !this.canUpdate}
-                @click=${() => {
-                  if (busy || !this.canUpdate) {
-                    return;
-                  }
-                  void confirmAndStartUpdate({
-                    startGatewayUpdate: () => this.onUpdate(),
-                    ...(this.watchUpdateProgress
-                      ? { watchUpdateProgress: this.watchUpdateProgress }
-                      : {}),
-                    updateAvailable: this.updateAvailable,
-                    updateSchedule: this.updateSchedule,
-                    // Read the bridge at click time: a Mac app that installed it
-                    // after the last availability event still owns this update.
-                    viaNativeApp: !this.nativeUpdateDeclined && hasNativeUpdateBridge(),
-                  });
-                }}
-              >
-                <span class="sidebar-update-card__icon" aria-hidden="true"
-                  >${busy ? icons.refresh : icons.download}</span
-                >
-                <span
-                  class="sidebar-update-card__text"
-                  role=${countdownActive ? "timer" : nothing}
-                  aria-live=${countdownActive ? "off" : nothing}
-                  >${text}</span
-                >
-              </button>
+              ${this.canUpdate
+                ? updateAction
+                : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
+                    ${updateAction}
+                  </openclaw-tooltip>`}
               ${showHold && campaign
                 ? html`
                     <button
                       class="sidebar-update-card__hold"
                       type="button"
                       ?disabled=${this.holdingCampaignId === campaign.id}
-                      @click=${async () => {
-                        this.holdingCampaignId = campaign.id;
-                        await this.onHoldUpdate();
-                        this.holdingCampaignId = null;
-                      }}
+                      @click=${() => this.holdUpdate(campaign.id)}
                     >
                       ${t("updates.holdOneHour")}
                     </button>
@@ -282,23 +385,21 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
                 : nothing}
             </div>`
           : nothing}
-        ${campaign || busy || !update || statusBanner
-          ? nothing
-          : html`
-              <button
-                class="sidebar-update-card__dismiss"
-                type="button"
-                aria-label=${t("chat.dismissUpdateBanner")}
-                @click=${() => {
-                  this.dismissedUpdateKey = updateKey(update);
-                  dismiss(update);
-                }}
-              >
-                ${icons.x}
-              </button>
-            `}
+        ${statusBanner
+          ? html`<button
+              class="sidebar-update-card__review"
+              type="button"
+              @click=${this.onReviewUpdate}
+            >
+              ${t("updates.reviewUpdate")}
+            </button>`
+          : nothing}
       </div>
     `;
+  }
+
+  override render() {
+    return this.compact ? this.renderCompact() : this.renderCard();
   }
 }
 

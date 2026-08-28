@@ -36,9 +36,13 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../config/io.plugin-metadata.js", () => ({
   resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
+  resolveConfigWidePluginMetadataSnapshot: (...args: unknown[]) =>
+    mocks.resolvePluginMetadataSnapshot(...args),
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
+  isPluginMetadataSnapshotCompatible: () => true,
+  projectPluginMetadataSnapshot: (snapshot: unknown) => snapshot,
   rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
   resolvePluginMetadataSnapshot: (...args: unknown[]) =>
     mocks.resolvePluginMetadataSnapshot(...args),
@@ -115,6 +119,53 @@ function createAutoEnabledCliFixture() {
     },
   } as OpenClawConfig;
   return { rawConfig, autoEnabledConfig };
+}
+
+function createCliMetadataSnapshot() {
+  const plugin = {
+    id: "matrix",
+    origin: "bundled",
+    format: "openclaw",
+    cliCommands: [
+      {
+        name: "matrix",
+        description: "Matrix channel utilities",
+        hasSubcommands: true,
+      },
+    ],
+  };
+  return {
+    policyHash: "test",
+    index: {
+      installRecords: {},
+      plugins: [{ pluginId: "matrix", enabled: true, enabledByDefault: true, origin: "bundled" }],
+    },
+    manifestRegistry: { plugins: [plugin], diagnostics: [] },
+    plugins: [plugin],
+    diagnostics: [],
+    byPluginId: new Map([[plugin.id, plugin]]),
+    owners: {},
+  };
+}
+
+function createLegacyExternalCliMetadataSnapshot() {
+  const plugin = {
+    id: "legacy-cli",
+    origin: "config",
+    format: "openclaw",
+  };
+  return {
+    policyHash: "test",
+    index: {
+      installRecords: {},
+      plugins: [{ pluginId: plugin.id, enabled: true, origin: plugin.origin }],
+    },
+    manifestRegistry: { plugins: [plugin], diagnostics: [] },
+    plugins: [plugin],
+    diagnostics: [],
+    byPluginId: new Map([[plugin.id, plugin]]),
+    owners: {},
+  };
 }
 
 function getMockCallObject(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
@@ -288,7 +339,7 @@ describe("registerPluginCliCommands", () => {
     expect(registerOptions.config).toBe(autoEnabledConfig);
   });
 
-  it("loads root-help descriptors through the dedicated non-activating CLI collector", async () => {
+  it("loads root-help descriptors from manifests without entering the plugin module loader", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
     mocks.applyPluginAutoEnable.mockReturnValue({
       config: autoEnabledConfig,
@@ -297,36 +348,7 @@ describe("registerPluginCliCommands", () => {
         demo: ["demo configured"],
       },
     });
-    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
-      cliRegistrars: [
-        {
-          pluginId: "matrix",
-          register: vi.fn(),
-          commands: ["matrix"],
-          descriptors: [
-            {
-              name: "matrix",
-              description: "Matrix channel utilities",
-              hasSubcommands: true,
-            },
-          ],
-          source: "bundled",
-        },
-        {
-          pluginId: "duplicate-matrix",
-          register: vi.fn(),
-          commands: ["matrix"],
-          descriptors: [
-            {
-              name: "matrix",
-              description: "Duplicate Matrix channel utilities",
-              hasSubcommands: true,
-            },
-          ],
-          source: "bundled",
-        },
-      ],
-    });
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createCliMetadataSnapshot());
 
     await expect(getPluginCliCommandDescriptors(rawConfig)).resolves.toEqual([
       {
@@ -335,12 +357,15 @@ describe("registerPluginCliCommands", () => {
         hasSubcommands: true,
       },
     ]);
-    const registryOptions = getMockCallObject(mocks.loadOpenClawPluginCliRegistry);
-    expect(registryOptions.config).toBe(autoEnabledConfig);
-    expect(registryOptions.activationSourceConfig).toBe(rawConfig);
-    expect(registryOptions.autoEnabledReasons).toEqual({
-      demo: ["demo configured"],
-    });
+    const { renderRootHelpText } = await import("../cli/program/root-help.js");
+    const help = await renderRootHelpText({ config: rawConfig });
+    expect(help).toContain("matrix *");
+    expect(help).toContain("Matrix channel utilities");
+    expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+      expect.objectContaining({ config: rawConfig }),
+    );
+    expect(autoEnabledConfig.plugins?.entries?.demo?.enabled).toBe(true);
   });
 
   it("keeps root-help descriptor load failures quiet", async () => {
@@ -352,12 +377,96 @@ describe("registerPluginCliCommands", () => {
       logger.error?.("[plugins] stale failed to load from /tmp/stale: boom");
       throw new Error("boom");
     });
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createLegacyExternalCliMetadataSnapshot());
 
     await expect(
-      getPluginCliCommandDescriptors({ plugins: { entries: { stale: {} } } } as OpenClawConfig),
+      getPluginCliCommandDescriptors({
+        plugins: { entries: { "legacy-cli": { enabled: true } } },
+      } as OpenClawConfig),
     ).resolves.toEqual([]);
 
     expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it("preserves manifest-backed root help when an unrelated legacy CLI plugin fails", async () => {
+    const stderrWrite = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as unknown as typeof process.stderr.write);
+    const healthySnapshot = createCliMetadataSnapshot();
+    const legacySnapshot = createLegacyExternalCliMetadataSnapshot();
+    const plugins = [
+      ...healthySnapshot.plugins.map((plugin) => ({
+        ...plugin,
+        cliCommands: [...plugin.cliCommands, ...plugin.cliCommands],
+      })),
+      ...legacySnapshot.plugins,
+    ];
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      ...healthySnapshot,
+      index: {
+        ...healthySnapshot.index,
+        plugins: [...healthySnapshot.index.plugins, ...legacySnapshot.index.plugins],
+      },
+      manifestRegistry: { plugins, diagnostics: [] },
+      plugins,
+      byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    });
+    mocks.loadOpenClawPluginCliRegistry.mockRejectedValue(new Error("broken legacy CLI plugin"));
+    const config = {
+      plugins: { entries: { "legacy-cli": { enabled: true } } },
+    } as OpenClawConfig;
+
+    await expect(getPluginCliCommandDescriptors(config)).resolves.toEqual([
+      {
+        name: "matrix",
+        description: "Matrix channel utilities",
+        hasSubcommands: true,
+      },
+    ]);
+    const { renderRootHelpText } = await import("../cli/program/root-help.js");
+    await expect(renderRootHelpText({ config })).resolves.toContain("matrix *");
+    expect(stderrWrite).not.toHaveBeenCalled();
+    expect(getMockCallObject(mocks.loadOpenClawPluginCliRegistry).onlyPluginIds).toEqual([
+      "legacy-cli",
+    ]);
+  });
+
+  it("preserves root help for external plugins without manifest CLI descriptors", async () => {
+    const config = {
+      plugins: {
+        entries: { "legacy-cli": { enabled: true } },
+      },
+    } as OpenClawConfig;
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createLegacyExternalCliMetadataSnapshot());
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
+      cliRegistrars: [
+        {
+          pluginId: "legacy-cli",
+          register: vi.fn(),
+          parentPath: [],
+          commands: ["legacy"],
+          descriptors: [
+            {
+              name: "legacy",
+              description: "Legacy external command",
+              hasSubcommands: true,
+            },
+          ],
+          source: "/tmp/legacy-cli/index.js",
+        },
+      ],
+    });
+
+    await expect(getPluginCliCommandDescriptors(config)).resolves.toEqual([
+      {
+        name: "legacy",
+        description: "Legacy external command",
+        hasSubcommands: true,
+      },
+    ]);
+    expect(getMockCallObject(mocks.loadOpenClawPluginCliRegistry).onlyPluginIds).toEqual([
+      "legacy-cli",
+    ]);
   });
 
   it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {

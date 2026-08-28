@@ -188,7 +188,6 @@ describe("registry race safety", () => {
     ]);
 
     const registry = await readRegistry();
-    expect(registry.entries).toHaveLength(2);
     expect(
       registry.entries
         .map((entry) => entry.containerName)
@@ -241,7 +240,6 @@ describe("registry race safety", () => {
     ]);
 
     const registry = await readBrowserRegistry();
-    expect(registry.entries).toHaveLength(2);
     expect(
       registry.entries
         .map((entry) => entry.containerName)

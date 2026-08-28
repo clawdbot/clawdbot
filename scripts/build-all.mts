@@ -6,11 +6,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import prettyMilliseconds from "pretty-ms";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
+  listPluginSdkDistArtifacts,
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mts";
@@ -23,6 +24,11 @@ import {
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import {
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  resolveTsdownBuildPlan,
+  type MemoryLimitParams,
+} from "./tsdown-build.mts";
 
 const nodeBin = process.execPath;
 type BuildCachePath = {
@@ -38,6 +44,7 @@ type BuildCache = {
   inputs: BuildCacheEntry[];
   outputs: BuildCacheEntry[];
   requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
+  requiredCacheHitOutputs?: string[];
   restore?: "always";
   runOnHit?: { env?: NodeJS.ProcessEnv; finalize?: "refresh" };
 };
@@ -61,6 +68,7 @@ type BuildAllStepParams = {
 };
 type BuildAllCacheParams = { rootDir?: string; fs?: BuildAllFs; env?: NodeJS.ProcessEnv };
 const BUILD_CACHE_VERSION = 4;
+const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const TSDOWN_SOURCE_EXTENSIONS = [
   ".cjs",
@@ -93,6 +101,7 @@ const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/lib/tsdown-config-groups.mts",
   "scripts/lib/tsdown-output-roots.mts",
 ];
@@ -122,6 +131,8 @@ const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
 ];
 const PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
+  "scripts/lib/declaration-source-index.mts",
+  "scripts/lib/direct-run.mjs",
   "scripts/lib/plugin-sdk-entries.mts",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
@@ -133,21 +144,18 @@ const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
   { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
 ];
 const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
-  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
+  "scripts/write-plugin-sdk-entry-dts.ts",
   "package.json",
   "pnpm-lock.yaml",
   "tsconfig.json",
   "tsconfig.plugin-sdk.dts.json",
-  {
-    path: "src",
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
+  "node-version.d.mts",
+  // SDK source types also depend on build metadata and private QA helpers.
+  ...["src", "packages", "scripts/lib", "test/helpers"].map((sourceRoot) => ({
+    path: sourceRoot,
+    extensions: TSDOWN_SOURCE_EXTENSIONS,
     excludeDirectories: ["dist", "node_modules"],
-  },
-  {
-    path: "packages",
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
-    excludeDirectories: ["dist", "node_modules"],
-  },
+  })),
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
@@ -171,6 +179,10 @@ const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["ui:build", ["scripts/ui.js", "build"]],
 ]);
 export const BUILD_ALL_STEPS: BuildAllStep[] = [
+  nodeStep("clean:dist", [
+    "-e",
+    'require("node:fs").rmSync("dist", { recursive: true, force: true })',
+  ]),
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   tsxStep("tsdown", "scripts/tsdown-build.mts"),
   {
@@ -229,12 +241,16 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
         env.OPENCLAW_BUILD_PRIVATE_QA === "1"
           ? listPluginSdkDeclarationOutputs(pluginSdkEntrypoints)
           : listPluginSdkDeclarationOutputs(),
+      // Shared declaration snapshots cannot make a replaced live dist complete.
+      // Rebuild the unified unit when its package artifacts are no longer intact.
+      requiredCacheHitOutputs: listPluginSdkDistArtifacts(),
       restore: "always",
       runOnHit: {
         env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
       },
     },
   },
+  tsxStep("external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"),
   tsxStep("check-cli-bootstrap-imports", "scripts/check-cli-bootstrap-imports.mts"),
   {
     label: "plugins:assets:copy",
@@ -257,7 +273,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
     },
   },
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
-  tsxStep("copy-hook-metadata", "scripts/copy-hook-metadata.ts"),
   {
     label: "ui:build",
     kind: "pnpm",
@@ -283,27 +298,31 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   },
 ];
 
+const FULL_BUILD_STEP_LABELS = [
+  "plugins:assets:build",
+  "tsdown-ai",
+  "tsdown-packages",
+  "tsdown-unified",
+  "external-plugins:local-dist",
+  "check-cli-bootstrap-imports",
+  "plugins:assets:copy",
+  "runtime-postbuild",
+  "build-stamp",
+  "runtime-postbuild-stamp",
+  "write-plugin-sdk-entry-dts",
+  "check-plugin-sdk-exports",
+  "ui:build",
+  "write-build-info",
+  "write-cli-startup-metadata",
+] as const;
+
 export const BUILD_ALL_PROFILES: Record<string, string[]> = {
-  full: [
-    "plugins:assets:build",
-    "tsdown-ai",
-    "tsdown-packages",
-    "tsdown-unified",
-    "check-cli-bootstrap-imports",
-    "plugins:assets:copy",
-    "runtime-postbuild",
-    "build-stamp",
-    "runtime-postbuild-stamp",
-    "write-plugin-sdk-entry-dts",
-    "check-plugin-sdk-exports",
-    "copy-hook-metadata",
-    "ui:build",
-    "write-build-info",
-    "write-cli-startup-metadata",
-  ],
+  full: [...FULL_BUILD_STEP_LABELS],
+  package: ["clean:dist", ...FULL_BUILD_STEP_LABELS],
   ciArtifacts: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -311,13 +330,13 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "copy-hook-metadata",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
   ],
   gatewayWatch: [
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
     "build-stamp",
@@ -326,6 +345,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   qaRuntime: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -335,6 +355,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   sourcePerformance: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -345,6 +366,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ],
   cliStartup: [
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
     "build-stamp",
@@ -353,8 +375,33 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ],
 };
 
+const FULL_RUNTIME_ONLY_STEPS = [
+  "plugins:assets:build",
+  "tsdown",
+  "external-plugins:local-dist",
+  "check-cli-bootstrap-imports",
+  "plugins:assets:copy",
+  "runtime-postbuild",
+  "build-stamp",
+  "runtime-postbuild-stamp",
+  "ui:build",
+  "write-build-info",
+  "write-cli-startup-metadata",
+];
+
 export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
   full: {
+    tsdown: {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+    "tsdown-unified": {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+  },
+  package: {
+    tsdown: {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
     "tsdown-unified": {
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
@@ -402,7 +449,7 @@ export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.Pr
   },
 };
 
-export function buildAllUsage() {
+function buildAllUsage() {
   return [
     "Usage: node --import tsx scripts/build-all.mts [profile]",
     "",
@@ -440,11 +487,23 @@ export function parseBuildAllArgs(argv: string[]) {
   return args;
 }
 
-export function resolveBuildAllSteps(profile = "full"): BuildAllStep[] {
-  const labels = BUILD_ALL_PROFILES[profile];
-  if (!labels) {
+export function resolveBuildAllSteps(
+  profile = "full",
+  buildEnv: NodeJS.ProcessEnv = process.env,
+): BuildAllStep[] {
+  const profileLabels = BUILD_ALL_PROFILES[profile];
+  if (!profileLabels) {
     throw new Error(`Unknown build profile: ${profile}`);
   }
+  // A cold runtime-only build has no declarations for the canonical SDK gates.
+  // Keep the full runtime artifact surface, but use the uncached runtime graph.
+  const runtimeOnly = buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1";
+  const labels =
+    profile === "full" && runtimeOnly
+      ? FULL_RUNTIME_ONLY_STEPS
+      : profile === "package" && runtimeOnly
+        ? ["clean:dist", ...FULL_RUNTIME_ONLY_STEPS]
+        : profileLabels;
   const selected = labels.map((label) => BUILD_ALL_STEPS.find((step) => step.label === label));
   if (selected.some((step) => !step)) {
     const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
@@ -491,12 +550,37 @@ export function resolveBuildAllEnvironment(
   now: () => Date = () => new Date(),
   readGitCommit: () => string | null = readCurrentGitCommit,
 ) {
-  return resolveBuildIdentityEnvironment({
+  const buildEnv = resolveBuildIdentityEnvironment({
     commitLabel: "build commit",
     env,
     now,
     readGitCommit,
   });
+  // Older installed updaters already send this marker to candidate builds.
+  // Updates need runtime artifacts; explicit declaration/package builds still win.
+  if (buildEnv.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
+    buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ??= "1";
+  }
+  return buildEnv;
+}
+
+export function resolveBuildAllTsdownPlan(
+  profile: string,
+  env: NodeJS.ProcessEnv,
+  params: Omit<MemoryLimitParams, "env"> = {},
+): {
+  env: NodeJS.ProcessEnv;
+  heapShortfall: ReturnType<typeof resolveTsdownBuildPlan>["heapShortfall"];
+} {
+  if (profile !== "full" && profile !== "package" && profile !== "ciArtifacts") {
+    return { env, heapShortfall: null };
+  }
+  const plan = resolveTsdownBuildPlan({ ...params, env });
+  return {
+    // Direct Node steps need NODE_OPTIONS; tsdown descendants also need the frozen budget.
+    env: { ...plan.env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
+    heapShortfall: plan.heapShortfall,
+  };
 }
 
 function resolveStepEnv(step: BuildAllStep, env: NodeJS.ProcessEnv, platform: NodeJS.Platform) {
@@ -756,11 +840,13 @@ export function resolveBuildAllStepCacheState(
     stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);
   const cachedOutputsPresent =
     stampedOutputs.length > 0 && hasAllFiles(outputRoot, stampedOutputs, fsImpl);
+  const cacheHitContractMatches =
+    stampMatches && hasAllFiles(rootDir, step.cache.requiredCacheHitOutputs ?? [], fsImpl);
   const alwaysRestore = step.cache.restore === "always";
   const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
   const restorable =
-    stampMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
-  const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
+    cacheHitContractMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+  const fresh = cacheHitContractMatches && (actualOutputsAcceptable || cachedOutputsPresent);
   return {
     cacheable: true,
     fresh,
@@ -917,15 +1003,95 @@ export function formatBuildAllTimingSummary(timings: BuildAllTiming[]) {
   return `[build-all] phase timings: total ${formatBuildAllDuration(totalMs)}; slowest ${phases}`;
 }
 
-function isMainModule() {
-  const argv1 = process.argv[1];
-  if (!argv1) {
-    return false;
+export function runBuildAllSteps(
+  profile: string,
+  params: {
+    cacheEnabled?: boolean;
+    env?: NodeJS.ProcessEnv;
+    finalizeCache?: typeof finalizeBuildAllStepCache;
+    logger?: Pick<Console, "error" | "warn">;
+    memoryLimit?: Omit<MemoryLimitParams, "env">;
+    now?: () => number;
+    resolveCacheState?: typeof resolveBuildAllStepCacheState;
+    restoreCache?: typeof restoreBuildAllStepCacheOutputs;
+    runStep?: (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number | null };
+    steps?: BuildAllStep[];
+  } = {},
+) {
+  const { env: buildEnv, heapShortfall } = resolveBuildAllTsdownPlan(
+    profile,
+    resolveBuildAllEnvironment(params.env),
+    params.memoryLimit,
+  );
+  const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
+  const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
+  const logger = params.logger ?? console;
+  const now = params.now ?? performance.now.bind(performance);
+  const resolveCacheState = params.resolveCacheState ?? resolveBuildAllStepCacheState;
+  const restoreCache = params.restoreCache ?? restoreBuildAllStepCacheOutputs;
+  const finalizeCache = params.finalizeCache ?? finalizeBuildAllStepCache;
+  const runStep =
+    params.runStep ??
+    ((invocation: ReturnType<typeof resolveBuildAllStep>) =>
+      spawnSync(invocation.command, invocation.args, invocation.options));
+  const timings: BuildAllTiming[] = [];
+  let exitCode = 0;
+  if (heapShortfall) {
+    if (heapShortfall.fatal) {
+      logger.error(heapShortfall.message);
+      return { exitCode: 1, timings };
+    }
+    logger.warn(heapShortfall.message);
   }
-  return import.meta.url === pathToFileURL(argv1).href;
+  for (const step of steps) {
+    const cacheStartedAt = now();
+    const cacheState = resolveCacheState(step, { env: buildEnv });
+    const cacheDurationMs = now() - cacheStartedAt;
+    const startedAt = now();
+    let stepToRun = step;
+    let reusedCache = false;
+    if (cacheEnabled && cacheState.fresh) {
+      restoreCache(cacheState);
+      const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
+      if (!cacheHitStep) {
+        const durationMs = cacheDurationMs + now() - startedAt;
+        timings.push({ label: step.label, status: "cached", durationMs });
+        logger.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
+        continue;
+      }
+      reusedCache = true;
+      stepToRun = cacheHitStep;
+    }
+    logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
+    const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
+    const result = runStep(invocation);
+    const durationMs = cacheDurationMs + now() - startedAt;
+    if (typeof result.status === "number") {
+      if (result.status !== 0) {
+        timings.push({ label: step.label, status: "failed", durationMs });
+        logger.error(
+          `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
+        );
+        exitCode = result.status;
+        break;
+      }
+      // Runtime-only tsdown cleans its output roots. Cache hits restore
+      // declarations again after that pass so the full build stays complete.
+      finalizeCache(step, cacheState, { env: buildEnv, reusedCache });
+      timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
+      logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
+      continue;
+    }
+    timings.push({ label: step.label, status: "failed", durationMs });
+    logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
+    exitCode = 1;
+    break;
+  }
+  logger.error(formatBuildAllTimingSummary(timings));
+  return { exitCode, timings };
 }
 
-if (isMainModule()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   let args;
   try {
     args = parseBuildAllArgs(process.argv.slice(2));
@@ -936,54 +1102,9 @@ if (isMainModule()) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
-    const buildEnv = resolveBuildAllEnvironment();
-    const timings: BuildAllTiming[] = [];
-    let exitCode = 0;
-    for (const step of resolveBuildAllSteps(args.profile)) {
-      const startedAt = performance.now();
-      const cacheState = resolveBuildAllStepCacheState(step, { env: buildEnv });
-      let stepToRun = step;
-      let reusedCache = false;
-      if (process.env.OPENCLAW_BUILD_CACHE !== "0" && cacheState.fresh) {
-        restoreBuildAllStepCacheOutputs(cacheState);
-        const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
-        if (!cacheHitStep) {
-          const durationMs = performance.now() - startedAt;
-          timings.push({ label: step.label, status: "cached", durationMs });
-          console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
-          continue;
-        }
-        reusedCache = true;
-        stepToRun = cacheHitStep;
-      }
-      console.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
-      const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
-      const result = spawnSync(invocation.command, invocation.args, invocation.options);
-      const durationMs = performance.now() - startedAt;
-      if (typeof result.status === "number") {
-        if (result.status !== 0) {
-          timings.push({ label: step.label, status: "failed", durationMs });
-          console.error(
-            `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
-          );
-          exitCode = result.status;
-          break;
-        }
-        // Runtime-only tsdown cleans its output roots. Cache hits restore
-        // declarations again after that pass so the full build stays complete.
-        finalizeBuildAllStepCache(step, cacheState, { env: buildEnv, reusedCache });
-        timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
-        console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
-        continue;
-      }
-      timings.push({ label: step.label, status: "failed", durationMs });
-      console.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
-      exitCode = 1;
-      break;
-    }
-    console.error(formatBuildAllTimingSummary(timings));
-    if (exitCode !== 0) {
-      process.exit(exitCode);
+    const result = runBuildAllSteps(args.profile);
+    if (result.exitCode !== 0) {
+      process.exit(result.exitCode);
     }
   }
 }

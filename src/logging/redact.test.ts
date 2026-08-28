@@ -4,10 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
+import {
+  DEFAULT_REDACT_PATTERNS,
+  TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
+} from "./redact-patterns.js";
+import { redactSourceInputTextWithConfig } from "./redact-source.js";
 import {
   computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
+  redactModelVisibleToolPayloadText,
   redactSecrets,
   redactSensitiveFieldValue,
   redactSensitiveLines,
@@ -114,6 +119,102 @@ describe("registered exact secret values", () => {
 
     expect(redactSensitiveText(first, { mode: "off" })).not.toContain(first);
     expect(redactSensitiveText(second, { mode: "off" })).toBe(second);
+  });
+});
+
+describe("model-visible tool payload redaction", () => {
+  it.each([
+    'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;',
+    "const API_TOKEN = 'fixture-only-not-a-real-secret'; return API_TOKEN;",
+    "const API_TOKEN = `fixture-only-not-a-real-secret`; return API_TOKEN;",
+    "const API_TOKEN = 987654321; return API_TOKEN;",
+    'const note = "API_TOKEN=fixture-only-not-a-real-secret";',
+    "// API_TOKEN=fixture-only-not-a-real-secret\nreturn 42;",
+    'return { "api_key": "fixture-only-not-a-real-secret" };',
+    'const API_TOKEN = "fixture-only-not-a-real-secret" + suffix; return API_TOKEN;',
+    "const API_TOKEN = computeToken(); /* API_TOKEN=fixture-only-not-a-real-secret */",
+    'const API_TOKEN = "fixture-only-not-a-real-secret"; @',
+  ])("retains diagnostic literal masking in input source: %s", (source) => {
+    const redacted = redactSourceInputTextWithConfig(source);
+    expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
+    expect(redacted).not.toMatch(/fixture-only-not-a-real-secret|987654321/);
+    expect(redacted).toContain("***");
+    expect(redacted).not.toBe(source);
+    expect(redactSourceInputTextWithConfig(redacted)).toBe(redacted);
+  });
+
+  it.each([
+    "const API_TOKEN = computeToken(); return API_TOKEN;",
+    "const API_TOKEN: number = computeToken(); return API_TOKEN;",
+    "const API_TOKEN = computeToken<string>(); return API_TOKEN;",
+    "const API_TOKEN = (40 + 2); return API_TOKEN;",
+    "const API_TOKEN = await computeToken(); return API_TOKEN;",
+    "const HAS_API_TOKEN = false; return HAS_API_TOKEN;",
+    "const HAS_API_TOKEN = true; return HAS_API_TOKEN;",
+    "let API_TOKEN = null; return API_TOKEN;",
+  ])("preserves input computations without changing diagnostics: %s", (source) => {
+    expect(redactSourceInputTextWithConfig(source)).toBe(source);
+    expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
+  });
+
+  it("keeps explicit custom assignment patterns authoritative over source syntax", () => {
+    const source = "const API_TOKEN = computeToken(); return API_TOKEN;";
+    const assignmentPatterns = [...TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS].filter(
+      (pattern) => redactSensitiveText(source, { patterns: [pattern] }) !== source,
+    );
+    expect(assignmentPatterns.length).toBeGreaterThan(0);
+    for (const pattern of ["computeToken", ...assignmentPatterns]) {
+      expect(redactSourceInputTextWithConfig(source, { redactPatterns: [pattern] })).not.toContain(
+        "computeToken",
+      );
+    }
+  });
+
+  it("does not substitute the weaker output policy for input source", () => {
+    const source = 'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;';
+    expect(redactModelVisibleToolPayloadText(source)).toBe(source);
+    expect(redactSourceInputTextWithConfig(source)).toBe(
+      'const API_TOKEN = "***"; return API_TOKEN;',
+    );
+  });
+
+  it("uses bounded diagnostic masking for oversized source", () => {
+    const source = `const API_TOKEN = computeToken();\n${" ".repeat(131_072)}`;
+    expect(redactSourceInputTextWithConfig(source)).toBe(redactToolPayloadTextWithConfig(source));
+    expect(redactSourceInputTextWithConfig(source)).not.toContain("computeToken");
+  });
+
+  it("preserves source assignments while masking explicit credential forms", () => {
+    const registeredSecret = "registered-model-visible-secret";
+    registerSecretValueForRedaction(registeredSecret);
+    const credentials = [
+      registeredSecret,
+      "bearer-model-visible-credential-1234567890",
+      "url-model-visible-password-1234567890",
+      "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+    ];
+    const input = [
+      "token = timeObserverToken",
+      "API_TOKEN = computeToken()",
+      "API_TOKEN=computeToken()",
+      "API_KEY: str = computeKey()",
+      '"api_key": "computeToken()"',
+      `registered: ${credentials[0]}`,
+      `Authorization: Bearer ${credentials[1]}`,
+      `https://user:${credentials[2]}@example.test/path`,
+      `GitHub token: ${credentials[3]}`,
+    ].join("\n");
+
+    const output = redactModelVisibleToolPayloadText(input);
+
+    expect(output).toContain("token = timeObserverToken");
+    expect(output).toContain("API_TOKEN = computeToken()");
+    expect(output).toContain("API_TOKEN=computeToken()");
+    expect(output).toContain("API_KEY: str = computeKey()");
+    expect(output).toContain('"api_key": "computeToken()"');
+    for (const credential of credentials) {
+      expect(output).not.toContain(credential);
+    }
   });
 });
 
@@ -1808,6 +1909,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("ticket *** should hide");
   });
 
+  it("keeps custom redaction patterns active for structured sensitive fields", () => {
+    expect(
+      redactSensitiveFieldValue("TOKEN", "${TOKEN}", {
+        mode: "tools",
+        patterns: [/TOKEN/g],
+      }),
+    ).toBe("${***}");
+  });
+
   it("keeps configured redaction patterns active for text outside default markers", () => {
     const configPath = writeConfig(`{
       logging: {
@@ -1975,9 +2085,11 @@ describe("redactSensitiveLines", () => {
     expect(result[1]).toBe("normal log line");
   });
 
-  it("returns lines unmodified when mode is off", () => {
+  it("returns lines unmodified when redaction is off", () => {
     const resolved = resolveRedactOptions({ mode: "off", patterns: defaults });
-    const lines = ["TOKEN=abcdef1234567890ghij"];
+    const secret = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(secret);
+    const lines = [`TOKEN=abcdef1234567890ghij ${secret}`];
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 
@@ -2008,12 +2120,15 @@ describe("redactSensitiveLines", () => {
     ).toEqual(["Authorization: Digest", " ***; status=401"]);
   });
 
-  it("returns lines unmodified when resolved patterns is empty — does not fall back to defaults", () => {
+  it("applies exact registered secrets without falling back from empty resolved patterns", () => {
     // Simulates the case where all user-configured patterns fail to compile.
     // The pre-resolved empty array must be honored, not silently replaced with defaults.
     const resolved = { mode: "tools" as const, patterns: [], redactFormBodies: false };
-    const lines = ["TOKEN=abcdef1234567890ghij"];
-    expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
+    const secret = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(secret);
+    expect(redactSensitiveLines([`TOKEN=abcdef1234567890ghij ${secret}`], resolved)).toEqual([
+      "TOKEN=abcdef1234567890ghij opaque…7890",
+    ]);
   });
 
   it("returns empty array unchanged — does not produce a synthetic blank line", () => {

@@ -3,17 +3,17 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import { CHAT_RUN_STATUS_TOAST_DURATION_MS } from "../pages/chat/run-lifecycle.ts";
-import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat run lifecycle",
 });
-
-// Home mirrors the sidebar leading-slot contract: an active run rings the Home
-// glyph instead of adding a trailing spinner (see app-sidebar-render.ts).
-const HOME_RUN_RING_SELECTOR = ".session-glyph--running .session-glyph__ring";
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
@@ -24,6 +24,120 @@ suite.define(() => {
       .close()
       .catch(() => {});
     page = undefined;
+  });
+
+  it("excludes a reply-less failed turn's idle time from the next successful turn", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessionKey = "agent:main:dashboard:failed-turn-elapsed";
+    const gateway = await installMockGateway(currentPage, { sessionKey });
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const composer = currentPage.locator(".agent-chat__input textarea");
+    await composer.fill("First attempt");
+    // Freeze wall time without pausing the animation frames that publish sends.
+    const firstStartedAt = Date.now();
+    await currentPage.clock.setFixedTime(firstStartedAt);
+    const messages: Record<string, unknown>[] = [];
+    const persistUser = async (text: string, timestamp: number, after: number) => {
+      const send = await gateway.waitForRequest("chat.send", { after });
+      expect(send.params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
+      const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
+      const message = {
+        role: "user",
+        content: text,
+        timestamp,
+        __openclaw: {
+          id: `user-${after}`,
+          idempotencyKey: `${runId}:user`,
+          senderId: "operator",
+        },
+      };
+      messages.push(message);
+      await gateway.setHistoryMessages(messages);
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        clientRunId: runId,
+        message,
+        messageId: message["__openclaw"].id,
+        messageSeq: messages.length,
+        activeRunIds: [runId],
+        hasActiveRun: true,
+      });
+      await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
+      return runId;
+    };
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const failedRunId = await persistUser("First attempt", firstStartedAt, 0);
+    await gateway.emitGatewayEvent("chat", {
+      sessionKey,
+      runId: failedRunId,
+      state: "error",
+      errorMessage: "Failed before model output",
+    });
+    await currentPage
+      .getByRole("alert")
+      .filter({ hasText: "Failed before model output" })
+      .waitFor();
+    expect(await currentPage.locator(".chat-group.assistant").count()).toBe(0);
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+
+    await currentPage.clock.setFixedTime(firstStartedAt + 981_000);
+    await composer.fill("Try again independently");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const runId = await persistUser("Try again independently", firstStartedAt + 981_000, 1);
+    expect(runId).not.toBe(failedRunId);
+    await currentPage.clock.setFixedTime(firstStartedAt + 982_000);
+    const tool = {
+      role: "toolResult",
+      toolName: "bash",
+      toolCallId: "successful-tool",
+      content: "ok",
+      timestamp: firstStartedAt + 982_000,
+      __openclaw: { id: "successful-tool-result", runId },
+    };
+    messages.push(tool);
+    await gateway.setHistoryMessages(messages);
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey,
+      runId,
+      message: tool,
+      messageId: tool["__openclaw"].id,
+      messageSeq: messages.length,
+      activeRunIds: [runId],
+      hasActiveRun: true,
+    });
+    await currentPage.clock.setFixedTime(firstStartedAt + 994_000);
+    const reply = {
+      role: "assistant",
+      content: "Success after the earlier failure.",
+      timestamp: firstStartedAt + 994_000,
+      __openclaw: { id: "successful-reply", runId },
+    };
+    messages.push(reply);
+    // The same canonical history must survive a full page reload, not just
+    // the live terminal projection or its retained local timestamps.
+    await gateway.setMethodResponse("chat.history", {
+      messages,
+      sessionId: "control-ui-e2e-session",
+      sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
+    });
+    await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
+    const replyBody = currentPage
+      .locator(".chat-group.assistant")
+      .getByText(reply.content, { exact: true });
+    await replyBody.waitFor();
+    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
+    await elapsedLabel.waitFor();
+    expect.soft(await elapsedLabel.textContent()).toBe("Worked for 13s");
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+
+    await currentPage.reload();
+    await gateway.waitForRequest("chat.startup");
+    await replyBody.waitFor();
+    await elapsedLabel.waitFor();
+    expect(await elapsedLabel.textContent()).toBe("Worked for 13s");
+    expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
   });
 
   it("keeps a continuing run inside its latest assistant reply", async () => {
@@ -61,6 +175,40 @@ suite.define(() => {
       path: path.join(artifactDir, "continuing-reply.png"),
       fullPage: true,
     });
+  });
+
+  it("keeps a different active run in its own status row", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await installMockGateway(currentPage, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: "Older run result.",
+          timestamp: Date.now() - 1_000,
+          __openclaw: { id: "older-result", idempotencyKey: "older-run" },
+        },
+      ],
+      inFlightRun: { runId: "newer-run", text: "" },
+      sessionInfo: {
+        activeRunIds: ["newer-run"],
+        hasActiveRun: true,
+        key: "main",
+      },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Older run result.", { exact: true }).waitFor();
+    await currentPage.locator(".chat-reading-indicator").waitFor();
+
+    expect(await currentPage.locator(".chat-group.assistant").count()).toBe(2);
+    expect(
+      await currentPage
+        .locator(".chat-group.assistant", { hasText: "Older run result." })
+        .locator(".chat-working-indicator--continuation")
+        .count(),
+    ).toBe(0);
   });
 
   it("restores only the unpersisted assistant response after reconnecting", async () => {
@@ -182,7 +330,10 @@ suite.define(() => {
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     const mainSession = currentPage.locator(".nav-item--home");
-    const mainSessionRunRing = mainSession.locator(HOME_RUN_RING_SELECTOR);
+    // Home mirrors session rows: active-run state lives in the trailing metadata endcap.
+    const mainSessionRunIndicator = mainSession
+      .locator(".nav-item__state")
+      .getByRole("img", { name: "Active run" });
     await mainSession.waitFor({ state: "visible" });
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -201,11 +352,11 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeActive);
-    await mainSessionRunRing.waitFor();
+    await mainSessionRunIndicator.waitFor();
 
     await gateway.emitChatFinal({ runId, text: "Run complete." });
     await currentPage.locator(".chat-bubble").getByText("Run complete.", { exact: true }).waitFor();
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     const staleActiveLabel = "Main stale active snapshot";
     await gateway.resolveDeferred("sessions.list", {
       count: 1,
@@ -230,7 +381,7 @@ suite.define(() => {
     });
     await currentPage.locator(".chat-pane__session-title", { hasText: staleActiveLabel }).waitFor();
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
 
     const sessionListsBeforeStaleActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -248,12 +399,12 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
     await currentPage.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    expect(await mainSessionRunRing.count()).toBe(0);
+    expect(await mainSessionRunIndicator.count()).toBe(0);
 
     // Event timestamps must follow the page's virtual clock so freshness checks
     // see the same elapsed suppression window that the UI just observed.
@@ -271,7 +422,7 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeOtherSession);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
     // Re-publish after the former 10-second suppression window. The completed
@@ -294,7 +445,7 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeLateStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
   });
 
@@ -326,7 +477,10 @@ suite.define(() => {
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     const mainSession = currentPage.locator(".nav-item--home");
-    const mainSessionRunRing = mainSession.locator(HOME_RUN_RING_SELECTOR);
+    // Home mirrors session rows: active-run state lives in the trailing metadata endcap.
+    const mainSessionRunIndicator = mainSession
+      .locator(".nav-item__state")
+      .getByRole("img", { name: "Active run" });
     await mainSession.waitFor({ state: "visible" });
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -343,7 +497,7 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeActive);
-    await mainSessionRunRing.waitFor();
+    await mainSessionRunIndicator.waitFor();
 
     const finalText = "The gateway will restart; I will resume verification afterward.";
     await gateway.emitGatewayEvent("chat", {
@@ -361,14 +515,14 @@ suite.define(() => {
 
     await currentPage.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     await expect
       .poll(() => currentPage.locator(".agent-chat__run-status-announcement").textContent())
       .toBe("");
     await gateway.resolveDeferred("sessions.list");
   });
 
-  it("renders a safe self-abort diagnostic while preserving interrupted status", async () => {
+  it("renders a safe self-abort diagnostic without leaving stale composer status", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-abort-diagnostic");
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
     if (captureProof) {
@@ -398,7 +552,7 @@ suite.define(() => {
     const alert = currentPage.getByRole("alert").filter({ hasText: diagnostic });
     await alert.waitFor();
     expect((await alert.textContent())?.trim()).toContain(`Error: ${diagnostic}`);
-    await currentPage.getByLabel("Run status: Interrupted").waitFor();
+    expect(await currentPage.getByLabel("Run status: Interrupted").count()).toBe(0);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     if (captureProof) {
       await currentPage.screenshot({

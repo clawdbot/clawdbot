@@ -10,6 +10,33 @@ import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { setFeishuRuntime } from "./runtime.js";
 
+const failedFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 1,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: false,
+} as const;
+
 const {
   builtInboundContextCalls,
   mockCreateFeishuReplyDispatcher,
@@ -85,6 +112,7 @@ function createIngressLifecycle() {
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
+    deferredHeartbeat: vi.fn(),
     finalizing: vi.fn(),
     abandoned: vi.fn(async () => {}),
   };
@@ -92,6 +120,7 @@ function createIngressLifecycle() {
     abortSignal: new AbortController().signal,
     onAdopted: calls.adopted,
     onDeferred: calls.deferred,
+    onDeferredHeartbeat: calls.deferredHeartbeat,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: calls.abandoned,
   };
@@ -449,7 +478,7 @@ describe("broadcast dispatch", () => {
       .mockResolvedValueOnce({
         queuedFinal: true,
         counts: { final: 1 },
-        failedCounts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: failedFinalReceipt,
       });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
@@ -923,7 +952,10 @@ describe("broadcast dispatch", () => {
             : broadcastClaim,
     }));
     let deferredLifecycle:
-      | Pick<FeishuIngressLifecycle, "onAdopted" | "onDeferred" | "onAbandoned">
+      | Pick<
+          FeishuIngressLifecycle,
+          "onAdopted" | "onDeferred" | "onDeferredHeartbeat" | "onAbandoned"
+        >
       | undefined;
     mockDispatchReply.mockImplementation(async ({ ctx, replyOptions }) => {
       if (String(ctx.SessionKey).startsWith("agent:susan:")) {
@@ -949,6 +981,8 @@ describe("broadcast dispatch", () => {
 
     expect(transport.calls.deferred).toHaveBeenCalledTimes(1);
     expect(transport.calls.adopted).not.toHaveBeenCalled();
+    deferredLifecycle?.onDeferredHeartbeat?.();
+    expect(transport.calls.deferredHeartbeat).toHaveBeenCalledOnce();
     expect(broadcastClaim.commit).not.toHaveBeenCalled();
     expect(mainClaim.commit).toHaveBeenCalledTimes(1);
     expect(susanClaim.commit).not.toHaveBeenCalled();

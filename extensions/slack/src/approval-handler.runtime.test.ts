@@ -1,6 +1,7 @@
 // Slack tests cover approval handler plugin behavior.
 import type {
   ApprovalActionView,
+  ChannelApprovalKind,
   ApprovalMetadataView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -66,7 +67,7 @@ const ACTION_PRESENTATION = {
 } as const satisfies Record<ApprovalDecision, Pick<ApprovalActionView, "label" | "style">>;
 
 function buildApprovalAction(
-  approvalKind: "exec" | "plugin",
+  approvalKind: ChannelApprovalKind,
   approvalId: string,
   decision: ApprovalDecision,
 ): ApprovalActionView {
@@ -164,6 +165,25 @@ function buildExecResolvedResult() {
       decision: "allow-once",
       commandText: "echo hi",
       resolvedBy: "U123APPROVER",
+    } as never,
+    entry: APPROVAL_ENTRY,
+  });
+}
+
+function buildExecExpiredResult() {
+  return slackApprovalNativeRuntime.presentation.buildExpiredResult({
+    ...APPROVAL_CONTEXT,
+    request: {
+      id: "req-1",
+      request: { command: "echo hi" },
+      ...APPROVAL_TIMING,
+    },
+    view: {
+      approvalKind: "exec",
+      approvalId: "req-1",
+      phase: "expired",
+      commandText: "echo hi",
+      metadata: [],
     } as never,
     entry: APPROVAL_ENTRY,
   });
@@ -350,6 +370,9 @@ describe("slackApprovalNativeRuntime", () => {
     });
 
     expect(payload.text).toContain("*Exec approval required*");
+    expect((payload.blocks as Array<{ block_id?: string }>)[0]?.block_id).toBe(
+      "openclaw_approval_header",
+    );
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
     );
@@ -371,13 +394,26 @@ describe("slackApprovalNativeRuntime", () => {
       metadata: [
         { label: "Severity", value: "Warning" },
         { label: "Plugin", value: "computer-use" },
+        {
+          label: "Scope",
+          value: "Send to 3 recipients via email (external): alice@example.com, +2 more",
+        },
       ],
       decisions: ["allow-once", "allow-always", "deny"],
     });
 
     expect(payload.text).toContain("*Plugin approval required*");
+    expect((payload.blocks as Array<{ block_id?: string }>)[0]?.block_id).toBe(
+      "openclaw_approval_header",
+    );
     expect(payload.text).toContain("Share screen with Computer Use");
     expect(payload.text).toContain("*Approval ID:* plugin:req-1");
+    expect(payload.text).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
+    expect(readMrkdwnTexts(payload.blocks)).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
     expect(payload.text).not.toContain("*Command*");
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
@@ -407,6 +443,33 @@ describe("slackApprovalNativeRuntime", () => {
     expect(
       (payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
     ).toBe(false);
+  });
+
+  it("renders expired exec approvals without interactive controls", async () => {
+    const result = await buildExecExpiredResult();
+
+    expect(result).toEqual({
+      kind: "update",
+      payload: {
+        text: "*Exec approval expired*\nThis approval request expired before it was resolved.\n\n*Command*\n```\necho hi\n```",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Exec approval expired*\nThis approval request expired before it was resolved.",
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Command*\n```\necho hi\n```",
+            },
+          },
+        ],
+      },
+    });
   });
 
   it("renders plugin resolved and expired updates without command text", async () => {

@@ -4,23 +4,9 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
-  estimateStringChars,
-  estimateTokensFromChars,
-} from "@openclaw/normalization-core/cjk-chars";
-import {
-  asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber as resolvePositiveUsageNumber,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  deriveSessionTotalTokens,
-  hasNonzeroUsage,
-  normalizeUsage,
-  type ContextUsage,
-  type UsageLike,
-} from "../agents/usage.js";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
@@ -28,11 +14,11 @@ import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcr
 import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
-import { truncateUtf16Safe } from "../utils.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
-import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
-import { stripEnvelope } from "./chat-sanitize.js";
+import { projectSessionDisplayMessage } from "./session-display-projection.js";
+import {
+  aggregateSessionTranscriptUsage,
+  type SessionTranscriptUsageSnapshot,
+} from "./session-transcript-derived-readers.js";
 import {
   resolveSessionTranscriptCandidates,
   resolveSessionTranscriptResetArchiveCandidatesAsync,
@@ -48,6 +34,8 @@ import {
   projectTranscriptEntryMessage,
 } from "./session-transcript-message.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
+
+export type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 
 export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
@@ -853,11 +841,12 @@ export { resolveSessionTranscriptCandidates } from "./session-transcript-files.f
 export function capArrayByJsonBytes<T>(
   items: T[],
   maxBytes: number,
+  byteLength: (item: T) => number = jsonUtf8Bytes,
 ): { items: T[]; bytes: number } {
   if (items.length === 0) {
     return { items, bytes: 2 };
   }
-  const parts = items.map((item) => jsonUtf8Bytes(item));
+  const parts = items.map(byteLength);
   let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1);
   let start = 0;
   while (bytes > maxBytes && start < items.length - 1) {
@@ -884,315 +873,6 @@ export async function resolveSessionHistoryTranscriptPathAsync(
   });
 }
 
-export type SessionTranscriptUsageSnapshot = {
-  modelProvider?: string;
-  model?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  contextUsage?: ContextUsage;
-  trailingBytes?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  costUsd?: number;
-};
-
-function extractTranscriptUsageCost(raw: unknown): number | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const cost = (raw as { cost?: unknown }).cost;
-  if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
-    return undefined;
-  }
-  const total = (cost as { total?: unknown }).total;
-  return asNonNegativeFiniteNumber(total);
-}
-
-function extractTranscriptContentEstimatedChars(content: unknown): number {
-  if (typeof content === "string") {
-    const normalized = stripInlineDirectiveTagsForDisplay(content).text.trim();
-    return normalized ? estimateStringChars(normalized) : 0;
-  }
-  if (!Array.isArray(content)) {
-    return 0;
-  }
-  let chars = 0;
-  for (const part of content) {
-    if (!part || typeof part !== "object" || Array.isArray(part)) {
-      continue;
-    }
-    const record = part as Record<string, unknown>;
-    if (typeof record.text !== "string") {
-      continue;
-    }
-    const type = typeof record.type === "string" ? record.type : "text";
-    if (type !== "text" && type !== "output_text" && type !== "input_text") {
-      continue;
-    }
-    const normalized = stripInlineDirectiveTagsForDisplay(record.text).text.trim();
-    if (normalized) {
-      chars += estimateStringChars(normalized);
-    }
-  }
-  return chars;
-}
-
-function extractTranscriptTokenEstimateFromLine(line: string): {
-  estimatedChars: number;
-  hasModelIdentity: boolean;
-} | null {
-  if (isOversizedTranscriptLine(line)) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    const message =
-      parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
-        ? (parsed.message as Record<string, unknown>)
-        : undefined;
-    if (!message) {
-      return null;
-    }
-    const role = typeof message.role === "string" ? message.role : undefined;
-    if (role !== "user" && role !== "assistant") {
-      return null;
-    }
-    const modelProvider =
-      typeof message.provider === "string"
-        ? message.provider.trim()
-        : typeof parsed.provider === "string"
-          ? parsed.provider.trim()
-          : undefined;
-    const model =
-      typeof message.model === "string"
-        ? message.model.trim()
-        : typeof parsed.model === "string"
-          ? parsed.model.trim()
-          : undefined;
-    const isDeliveryMirror =
-      role === "assistant" && modelProvider === "openclaw" && model === "delivery-mirror";
-    if (isDeliveryMirror) {
-      return null;
-    }
-    const contentChars = extractTranscriptContentEstimatedChars(message.content);
-    if (contentChars <= 0) {
-      return null;
-    }
-    return {
-      estimatedChars: contentChars,
-      hasModelIdentity: role === "assistant" && Boolean(modelProvider || model),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function extractUsageSnapshotFromTranscriptLine(
-  line: string,
-): SessionTranscriptUsageSnapshot | null {
-  if (isOversizedTranscriptLine(line)) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    const message =
-      parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
-        ? (parsed.message as Record<string, unknown>)
-        : undefined;
-    if (!message) {
-      return null;
-    }
-    const role = typeof message.role === "string" ? message.role : undefined;
-    if (role && role !== "assistant") {
-      return null;
-    }
-    const usageRaw =
-      message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
-        ? message.usage
-        : parsed.usage && typeof parsed.usage === "object" && !Array.isArray(parsed.usage)
-          ? parsed.usage
-          : undefined;
-    const usageRecord = usageRaw as UsageLike | undefined;
-    const usage = normalizeUsage(usageRecord);
-    const api = typeof message.api === "string" ? message.api.trim() : undefined;
-    const legacyCliUsage =
-      api === "cli" && usageRecord !== undefined && usageRecord.contextUsage === undefined;
-    const totalTokens = legacyCliUsage
-      ? undefined
-      : resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
-    const costUsd = extractTranscriptUsageCost(usageRaw);
-    const modelProvider =
-      typeof message.provider === "string"
-        ? message.provider.trim()
-        : typeof parsed.provider === "string"
-          ? parsed.provider.trim()
-          : undefined;
-    const model =
-      typeof message.model === "string"
-        ? message.model.trim()
-        : typeof parsed.model === "string"
-          ? parsed.model.trim()
-          : undefined;
-    const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
-    const hasMeaningfulUsage =
-      hasNonzeroUsage(usage) ||
-      typeof totalTokens === "number" ||
-      (typeof costUsd === "number" && Number.isFinite(costUsd));
-    const hasModelIdentity = Boolean(modelProvider || model);
-    if (!hasMeaningfulUsage && !hasModelIdentity) {
-      return null;
-    }
-    if (isDeliveryMirror && !hasMeaningfulUsage) {
-      return null;
-    }
-
-    const snapshot: SessionTranscriptUsageSnapshot = {};
-    if (!isDeliveryMirror) {
-      if (modelProvider) {
-        snapshot.modelProvider = modelProvider;
-      }
-      if (model) {
-        snapshot.model = model;
-      }
-    }
-    if (typeof usage?.input === "number" && Number.isFinite(usage.input)) {
-      snapshot.inputTokens = usage.input;
-    }
-    if (typeof usage?.output === "number" && Number.isFinite(usage.output)) {
-      snapshot.outputTokens = usage.output;
-    }
-    if (typeof usage?.cacheRead === "number" && Number.isFinite(usage.cacheRead)) {
-      snapshot.cacheRead = usage.cacheRead;
-    }
-    if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
-      snapshot.cacheWrite = usage.cacheWrite;
-    }
-    if (legacyCliUsage) {
-      snapshot.contextUsage = { state: "unavailable" };
-    } else if (usage?.contextUsage) {
-      snapshot.contextUsage = usage.contextUsage;
-    }
-    if (typeof totalTokens === "number") {
-      snapshot.totalTokens = totalTokens;
-      snapshot.totalTokensFresh = true;
-    }
-    if (typeof costUsd === "number" && Number.isFinite(costUsd)) {
-      snapshot.costUsd = costUsd;
-    }
-    return snapshot;
-  } catch {
-    return null;
-  }
-}
-
-function extractAggregateUsageFromTranscriptLines(
-  lines: Iterable<string>,
-): SessionTranscriptUsageSnapshot | null {
-  const snapshot: SessionTranscriptUsageSnapshot = {};
-  let sawSnapshot = false;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let sawInputTokens = false;
-  let sawOutputTokens = false;
-  let sawCacheRead = false;
-  let sawCacheWrite = false;
-  let costUsdTotal = 0;
-  let sawCost = false;
-  let estimatedTranscriptChars = 0;
-  let sawEstimatedTranscriptContent = false;
-  let sawEstimateModelIdentity = false;
-
-  for (const line of lines) {
-    const estimate = extractTranscriptTokenEstimateFromLine(line);
-    if (estimate) {
-      estimatedTranscriptChars += estimate.estimatedChars;
-      sawEstimatedTranscriptContent = true;
-      sawEstimateModelIdentity ||= estimate.hasModelIdentity;
-    }
-    const current = extractUsageSnapshotFromTranscriptLine(line);
-    if (!current) {
-      continue;
-    }
-    sawSnapshot = true;
-    if (current.modelProvider) {
-      snapshot.modelProvider = current.modelProvider;
-    }
-    if (current.model) {
-      snapshot.model = current.model;
-    }
-    if (typeof current.inputTokens === "number") {
-      inputTokens += current.inputTokens;
-      sawInputTokens = true;
-    }
-    if (typeof current.outputTokens === "number") {
-      outputTokens += current.outputTokens;
-      sawOutputTokens = true;
-    }
-    if (typeof current.cacheRead === "number") {
-      cacheRead += current.cacheRead;
-      sawCacheRead = true;
-    }
-    if (typeof current.cacheWrite === "number") {
-      cacheWrite += current.cacheWrite;
-      sawCacheWrite = true;
-    }
-    if (current.contextUsage) {
-      snapshot.contextUsage = current.contextUsage;
-    } else if (typeof current.totalTokens === "number") {
-      delete snapshot.contextUsage;
-    }
-    if (current.contextUsage?.state === "unavailable") {
-      // Unavailable invalidates every older total; only a later numeric snapshot
-      // may restore freshness as the forward scan continues.
-      delete snapshot.totalTokens;
-      delete snapshot.totalTokensFresh;
-    } else if (typeof current.totalTokens === "number") {
-      snapshot.totalTokens = current.totalTokens;
-      snapshot.totalTokensFresh = true;
-    }
-    if (typeof current.costUsd === "number" && Number.isFinite(current.costUsd)) {
-      costUsdTotal += current.costUsd;
-      sawCost = true;
-    }
-  }
-
-  if (!sawSnapshot) {
-    return null;
-  }
-  if (sawInputTokens) {
-    snapshot.inputTokens = inputTokens;
-  }
-  if (sawOutputTokens) {
-    snapshot.outputTokens = outputTokens;
-  }
-  if (sawCacheRead) {
-    snapshot.cacheRead = cacheRead;
-  }
-  if (sawCacheWrite) {
-    snapshot.cacheWrite = cacheWrite;
-  }
-  if (sawCost) {
-    snapshot.costUsd = costUsdTotal;
-  }
-  if (
-    typeof snapshot.totalTokens !== "number" &&
-    snapshot.contextUsage?.state !== "unavailable" &&
-    sawEstimatedTranscriptContent &&
-    sawEstimateModelIdentity
-  ) {
-    const estimatedTotalTokens = estimateTokensFromChars(estimatedTranscriptChars);
-    if (estimatedTotalTokens > 0) {
-      snapshot.totalTokens = estimatedTotalTokens;
-      snapshot.totalTokensFresh = true;
-    }
-  }
-  return snapshot;
-}
-
 export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1209,107 +889,43 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
     if (stat.size === 0) {
       return null;
     }
-    const lines: string[] = [];
+    const messages: unknown[] = [];
     for await (const line of streamSessionTranscriptLines(filePath)) {
-      lines.push(line);
+      if (isOversizedTranscriptLine(line)) {
+        continue;
+      }
+      try {
+        const record = JSON.parse(line) as Record<string, unknown>;
+        if (
+          !record.message ||
+          typeof record.message !== "object" ||
+          Array.isArray(record.message)
+        ) {
+          continue;
+        }
+        const message = record.message as Record<string, unknown>;
+        const usage =
+          message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
+            ? message.usage
+            : record.usage;
+        messages.push({
+          ...message,
+          ...(typeof message.provider !== "string" && typeof record.provider === "string"
+            ? { provider: record.provider }
+            : {}),
+          ...(typeof message.model !== "string" && typeof record.model === "string"
+            ? { model: record.model }
+            : {}),
+          ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
+        });
+      } catch {
+        continue;
+      }
     }
-    return extractAggregateUsageFromTranscriptLines(lines);
+    return aggregateSessionTranscriptUsage(messages, "artifact");
   } catch {
     return null;
   }
-}
-
-type TranscriptContentEntry = {
-  type?: string;
-  text?: string;
-  name?: string;
-};
-
-type TranscriptPreviewMessage = {
-  role?: string;
-  content?: string | TranscriptContentEntry[];
-  text?: string;
-  toolName?: string;
-  tool_name?: string;
-};
-
-function normalizeRole(role: string | undefined, isTool: boolean): SessionPreviewItem["role"] {
-  if (isTool) {
-    return "tool";
-  }
-  switch (normalizeLowercaseStringOrEmpty(role)) {
-    case "user":
-      return "user";
-    case "assistant":
-      return "assistant";
-    case "system":
-      return "system";
-    case "tool":
-      return "tool";
-    default:
-      return "other";
-  }
-}
-
-function truncatePreviewText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  // The preview entry point clamps maxChars to at least 20, so the suffix budget stays positive.
-  return `${truncateUtf16Safe(text, maxChars - 3)}...`;
-}
-
-function extractPreviewText(message: TranscriptPreviewMessage): string | null {
-  const role = normalizeLowercaseStringOrEmpty(message.role);
-  if (role === "assistant") {
-    const assistantText = extractAssistantPhaseText(message);
-    if (assistantText) {
-      const normalized = stripInlineDirectiveTagsForDisplay(assistantText).text.trim();
-      return normalized ? normalized : null;
-    }
-    return null;
-  }
-  if (typeof message.content === "string") {
-    const normalized = stripInlineDirectiveTagsForDisplay(message.content).text.trim();
-    return normalized ? normalized : null;
-  }
-  if (Array.isArray(message.content)) {
-    const parts = message.content
-      .map((entry) =>
-        typeof entry?.text === "string" ? stripInlineDirectiveTagsForDisplay(entry.text).text : "",
-      )
-      .filter((text) => text.trim().length > 0);
-    if (parts.length > 0) {
-      return parts.join("\n").trim();
-    }
-  }
-  if (typeof message.text === "string") {
-    const normalized = stripInlineDirectiveTagsForDisplay(message.text).text.trim();
-    return normalized ? normalized : null;
-  }
-  return null;
-}
-
-function isToolCall(message: TranscriptPreviewMessage): boolean {
-  return hasToolCall(message as Record<string, unknown>);
-}
-
-function extractToolNames(message: TranscriptPreviewMessage): string[] {
-  return extractToolCallNames(message as Record<string, unknown>);
-}
-
-function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
-  if (!Array.isArray(message.content)) {
-    return null;
-  }
-  for (const entry of message.content) {
-    const raw = normalizeLowercaseStringOrEmpty(entry?.type);
-    if (!raw || raw === "text" || raw === "toolcall" || raw === "tool_call") {
-      continue;
-    }
-    return `[${raw}]`;
-  }
-  return null;
 }
 
 export function buildSessionPreviewItems(
@@ -1319,39 +935,11 @@ export function buildSessionPreviewItems(
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
+    const projected = projectSessionDisplayMessage(message, { maxChars });
+    if (!projected) {
       continue;
     }
-    const previewMessage = message as TranscriptPreviewMessage;
-    const toolCall = isToolCall(previewMessage);
-    const role = normalizeRole(previewMessage.role, toolCall);
-    let text = extractPreviewText(previewMessage);
-    if (!text) {
-      const toolNames = extractToolNames(previewMessage);
-      if (toolNames.length > 0) {
-        const shown = toolNames.slice(0, 2);
-        const overflow = toolNames.length - shown.length;
-        text = `call ${shown.join(", ")}`;
-        if (overflow > 0) {
-          text += ` +${overflow}`;
-        }
-      }
-    }
-    if (!text) {
-      text = extractMediaSummary(previewMessage);
-    }
-    if (!text) {
-      continue;
-    }
-    let trimmed = text.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (role === "user") {
-      trimmed = stripEnvelope(trimmed);
-    }
-    trimmed = truncatePreviewText(trimmed, maxChars);
-    items.push({ role, text: trimmed });
+    items.push(projected);
   }
 
   if (items.length <= maxItems) {

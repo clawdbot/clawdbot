@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { buildSessionUsageDateParams, requestSessionUsage } from "./usage.ts";
+import {
+  buildSessionUsageDateParams,
+  requestSessionUsage,
+  requestSessionUsageContextWeight,
+} from "./usage.ts";
 
 describe("buildSessionUsageDateParams", () => {
   afterEach(() => {
@@ -27,44 +31,78 @@ describe("buildSessionUsageDateParams", () => {
   });
 });
 
-describe("requestSessionUsage legacy timeZone retry", () => {
-  const query = {
-    startDate: "2026-07-01",
-    endDate: "2026-07-28",
-    scope: "instance",
-    timeZone: "local",
-  } as const;
-
-  it("retries older gateways with the legacy UTC offset", async () => {
+describe("requestSessionUsage", () => {
+  it.each([
+    { key: "agent:main:detail", agentId: undefined },
+    { key: "global", agentId: "research" },
+  ])("scopes selected context for $key without an all-agent request", async ({ key, agentId }) => {
+    const request = vi.fn().mockResolvedValue({ sessions: [] });
+    const signal = new AbortController().signal;
+    await requestSessionUsageContextWeight(
+      { request } as never,
+      {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        scope: "family",
+        timeZone: "utc",
+        agentId,
+      },
+      key,
+      signal,
+    );
+    expect(request).toHaveBeenCalledWith(
+      "sessions.usage",
+      {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        mode: "utc",
+        groupBy: "family",
+        key,
+        limit: 1,
+        includeContextWeight: true,
+        ...(agentId ? { agentId } : {}),
+      },
+      { signal },
+    );
+  });
+  it("requests canonical family grouping", async () => {
     const result = { sessions: [] };
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "invalid sessions.usage params: at root: unexpected property 'timeZone'",
-        }),
-      )
-      .mockResolvedValueOnce(result);
+    const request = vi.fn().mockResolvedValue(result);
 
-    await expect(requestSessionUsage({ request } as never, query)).resolves.toBe(result);
-    expect(request).toHaveBeenCalledTimes(2);
-    const [, firstParams] = request.mock.calls[0] as [string, Record<string, unknown>];
-    const [, retryParams] = request.mock.calls[1] as [string, Record<string, unknown>];
-    expect(typeof firstParams.timeZone).toBe("string");
-    expect(typeof firstParams.utcOffset).toBe("string");
-    const { timeZone: _dropped, ...withoutTimeZone } = firstParams;
-    expect(retryParams).toEqual(withoutTimeZone);
+    await expect(
+      requestSessionUsage({ request } as never, {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        scope: "family",
+        timeZone: "utc",
+      }),
+    ).resolves.toBe(result);
+    expect(request).toHaveBeenCalledWith("sessions.usage", {
+      startDate: "2026-07-01",
+      endDate: "2026-07-28",
+      agentScope: "all",
+      mode: "utc",
+      groupBy: "family",
+      limit: 1000,
+      includeContextWeight: false,
+    });
   });
 
-  it("does not retry unrelated invalid usage parameters", async () => {
+  it("surfaces a rejected request without retrying an older Gateway shape", async () => {
     const error = new GatewayRequestError({
       code: "INVALID_REQUEST",
-      message: "invalid sessions.usage params: invalid IANA timeZone",
+      message: "invalid sessions.usage params: at root: unexpected property 'timeZone'",
     });
     const request = vi.fn().mockRejectedValue(error);
 
-    await expect(requestSessionUsage({ request } as never, query)).rejects.toBe(error);
+    await expect(
+      requestSessionUsage({ request } as never, {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        scope: "instance",
+        timeZone: "local",
+      }),
+    ).rejects.toBe(error);
     expect(request).toHaveBeenCalledOnce();
   });
 });

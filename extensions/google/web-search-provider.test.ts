@@ -194,6 +194,71 @@ describe("google web search provider", () => {
     expect(postCalls).toHaveLength(2);
   });
 
+  it("reuses cached Gemini answers across ignored result counts while rejecting invalid counts", async () => {
+    const mockFetch = installGeminiFetch();
+    const tool = createGeminiToolWithHeaders({});
+    const query = "unique Gemini ignored result count cache regression";
+
+    await tool?.execute({ query, count: 1 });
+    await tool?.execute({ query, count: 10 });
+    await tool?.execute({ query });
+
+    await expect(tool?.execute({ query, count: 0 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    expect(postCalls).toHaveLength(1);
+  });
+
+  it.each([0, 1])("honors the current Gemini cache TTL of %s minutes", async (cacheTtlMinutes) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    let content = "Original grounded answer";
+    const mockFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: content }] } }] })),
+    );
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const provider = createGeminiWebSearchProvider();
+    const createTool = (ttl: number) =>
+      provider.createTool({
+        config: {
+          plugins: {
+            entries: { google: { config: { webSearch: { apiKey: "AIza-plugin-test" } } } },
+          },
+        },
+        searchConfig: { provider: "gemini", cacheTtlMinutes: ttl },
+      });
+    const query = `Gemini current request cache TTL ${cacheTtlMinutes}`;
+    const cachedTool = createTool(15);
+    await cachedTool?.execute({ query });
+    await expect(cachedTool?.execute({ query })).resolves.toMatchObject({
+      cached: true,
+      content: expect.stringContaining("Original grounded answer"),
+    });
+    expect(mockFetch).toHaveBeenCalledOnce();
+
+    now.mockReturnValue(1_060_000);
+    content = "Fresh grounded answer";
+    const currentTool = createTool(cacheTtlMinutes);
+    const fresh = await currentTool?.execute({ query });
+    expect(fresh).not.toHaveProperty("cached");
+    expect(fresh).toMatchObject({ content: expect.stringContaining("Fresh grounded answer") });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    if (cacheTtlMinutes === 0) {
+      await expect(currentTool?.execute({ query })).resolves.not.toHaveProperty("cached");
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      await expect(cachedTool?.execute({ query })).resolves.toMatchObject({
+        cached: true,
+        content: expect.stringContaining("Original grounded answer"),
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    } else {
+      await expect(currentTool?.execute({ query })).resolves.toEqual({ ...fresh, cached: true });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    }
+  });
+
   it("does not partition cached results by overwritten provider-owned headers", async () => {
     const mockFetch = installGeminiFetch();
 
@@ -422,10 +487,11 @@ describe("google web search provider", () => {
     );
   });
 
-  it("passes provider execution abort signals into the Gemini fetch", async () => {
+  it("does not contact Gemini for an already-cancelled search", async () => {
     const mockFetch = installGeminiFetch();
     const controller = new AbortController();
-    controller.abort();
+    const reason = new Error("Gemini search cancelled before billing");
+    controller.abort(reason);
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({
       config: {
@@ -444,10 +510,46 @@ describe("google web search provider", () => {
       searchConfig: { provider: "gemini" },
     });
 
-    await tool?.execute({ query: "OpenClaw docs" }, { signal: controller.signal });
+    await expect(
+      tool?.execute({ query: "OpenClaw cancelled docs" }, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 
-    const [, init] = requireFirstGeminiFetchCall(mockFetch);
-    expect(init?.signal?.aborted).toBe(true);
+  it("does not cache a Gemini result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gemini search cancelled after response");
+    const mockFetch = installGeminiFetch();
+    mockFetch.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: { parts: [{ text: "Cancelled grounded answer" }] },
+              groundingMetadata: {},
+            },
+          ],
+        }),
+      );
+    });
+    const tool = createGeminiWebSearchProvider().createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: { config: { webSearch: { apiKey: "AIza-plugin-test" } } },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+    const query = "OpenClaw late-cancel Gemini cache";
+
+    await expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
+    await tool?.execute({ query });
+
+    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    expect(postCalls).toHaveLength(2);
   });
 
   it("reuses the Google model provider key when no web search key or env key is set", async () => {
@@ -682,6 +784,51 @@ describe("google web search provider", () => {
     expect(thirdBody.tools?.[0]?.google_search?.timeRangeFilter).toBeUndefined();
     expect(thirdBody.contents?.[0]?.parts?.[0]?.text).toBe("same query cache partition");
   });
+
+  it.each([
+    {
+      label: "relative freshness",
+      filter: { freshness: "week" },
+      equivalentFilter: { freshness: "pw" },
+      distinctFilter: { freshness: "month" },
+      initialTimeRange: {
+        startTime: "2026-04-08T12:00:00Z",
+        endTime: "2026-04-15T12:00:00Z",
+      },
+    },
+    {
+      label: "open-ended date ranges",
+      filter: { date_after: "2026-04-01" },
+      equivalentFilter: { date_after: "2026-04-01" },
+      distinctFilter: { date_after: "2026-04-02" },
+      initialTimeRange: {
+        startTime: "2026-04-01T00:00:00Z",
+        endTime: "2026-04-15T12:00:00Z",
+      },
+    },
+  ])(
+    "reuses Gemini $label cache entries as the clock advances without merging distinct filters",
+    async ({ label, filter, equivalentFilter, distinctFilter, initialTimeRange }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
+      const mockFetch = installGeminiFetch();
+      const tool = createGeminiToolWithHeaders({});
+      const query = `unique Gemini ${label} moving-clock cache regression`;
+
+      await tool?.execute({ query, ...filter });
+      vi.setSystemTime(new Date("2026-04-15T12:00:02.123Z"));
+      const cached = await tool?.execute({ query, ...equivalentFilter });
+
+      expect(cached).toMatchObject({ cached: true });
+      expect(parseGeminiFetchBody(mockFetch).tools?.[0]?.google_search?.timeRangeFilter).toEqual(
+        initialTimeRange,
+      );
+
+      await tool?.execute({ query, ...distinctFilter });
+      const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+      expect(postCalls).toHaveLength(2);
+    },
+  );
 
   it("strips sub-second precision from date-range timestamps so Gemini accepts them", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

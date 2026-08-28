@@ -145,8 +145,9 @@ Two deterministic ranking passes are enabled by default for hybrid search.
 
 Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
-original weight. `MEMORY.md` and other non-dated files under `memory/` are
-evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
+original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
+remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
+at any depth, including session-memory notes and nested dreaming reports.
 
 ### MMR (diversity)
 
@@ -165,7 +166,7 @@ run the hybrid MMR pass.
 
 ## Multimodal memory
 
-With `gemini-embedding-2-preview`, you can index images and audio alongside
+With `gemini-embedding-2`, you can index images and audio alongside
 Markdown. This only applies to files under `memory.search.extraPaths`; default
 memory roots (`MEMORY.md`, `memory/*.md`) stay Markdown-only. Search queries
 remain text, but they match against visual and audio content. See
@@ -183,12 +184,12 @@ conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
 Session hits obey `tools.sessions.visibility`: the default `"tree"` exposes the
-current session, sessions it spawned, and same-agent group sessions watched
-through ambient group awareness. With `session.dmScope: "main"`, a multi-user
-DM setup shares that main session, so users routed there can recall content
-from its watched groups. Use a per-peer `dmScope` for DM isolation, or set
-visibility to `"self"` to opt out of ambient watched-session reads. Other
-unrelated same-agent sessions still require `"agent"` visibility.
+current session and sessions it spawned. When the caller is the canonical main
+session, `tree` covers every same-agent session. With `session.dmScope: "main"`,
+a multi-user DM setup shares that main session and its recall scope. Use a
+per-peer `dmScope` for DM isolation, or set visibility to `"self"` for strict
+current-session recall. Non-main callers still need `"agent"` visibility for
+unrelated same-agent sessions.
 
 ## Troubleshooting
 

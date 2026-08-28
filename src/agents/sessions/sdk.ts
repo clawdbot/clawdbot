@@ -6,15 +6,13 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import {
-  resolveThinkingDefaultForModel,
-  type ThinkingCatalogEntry,
-} from "../../auto-reply/thinking.js";
+import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { getAgentDir } from "../config.js";
+import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import {
   Agent,
   type AgentMessage,
@@ -52,28 +50,6 @@ import {
   createWriteTool,
   type ToolName,
 } from "./tools/index.js";
-
-type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
-
-function projectThinkingCatalogCompat(compat: Model["compat"]) {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  const record = compat as Record<string, unknown>;
-  const projected: ThinkingCatalogCompat = {};
-  if (typeof record.thinkingFormat === "string") {
-    projected.thinkingFormat = record.thinkingFormat;
-  }
-  if (record.supportedReasoningEfforts === null) {
-    projected.supportedReasoningEfforts = null;
-  } else if (
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
-  ) {
-    projected.supportedReasoningEfforts = record.supportedReasoningEfforts;
-  }
-  return Object.keys(projected).length > 0 ? projected : undefined;
-}
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
@@ -373,7 +349,7 @@ async function createAgentSessionImpl(
   // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
   // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
   const modelThinkingProvider = model?.api === "ollama" ? "ollama" : model?.provider;
-  const modelThinkingCompat = model ? projectThinkingCatalogCompat(model.compat) : undefined;
+  const modelThinkingCompat = model ? projectModelThinkingCompat(model.compat) : undefined;
   const resolvedProviderDefault =
     model && modelThinkingProvider
       ? resolveThinkingDefaultForModel({

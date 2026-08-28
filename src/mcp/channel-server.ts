@@ -15,6 +15,7 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
   const transport = new StdioServerTransport();
 
   let shuttingDown = false;
+  let closePromise: Promise<void> | undefined;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
@@ -29,9 +30,9 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
-    // The MCP SDK exposes transport close as a mutable handler rather than an EventEmitter API.
-    transport["onclose"] = undefined;
-    close().then(resolveClosed, resolveClosed);
+    // Assign before cleanup starts so SDK transport-close reentry observes the same owner promise.
+    closePromise = Promise.resolve().then(close);
+    void closePromise.then(resolveClosed, resolveClosed);
   };
 
   transport["onclose"] = shutdown;
@@ -44,8 +45,10 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
     await server.connect(transport);
     await start();
     await closed;
+    await closePromise;
   } finally {
     shutdown();
     await closed;
+    await closePromise;
   }
 }

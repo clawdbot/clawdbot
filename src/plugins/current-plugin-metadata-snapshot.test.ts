@@ -7,13 +7,15 @@ import { describe, expect, it } from "vitest";
 import {
   getCurrentPluginMetadataSnapshot,
   installTemporaryCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+  setGatewayPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -55,22 +57,24 @@ function createSnapshot(
         },
       ]
     : [];
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
     ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
     ...(params.registrySource ? { registrySource: params.registrySource } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
@@ -166,23 +170,39 @@ describe("current plugin metadata snapshot", () => {
     ).toBe(globalSnapshot);
   });
 
-  it("carries prepared metadata and registry as one runtime generation", async () => {
+  it("carries prepared metadata and registry across nested agent workspaces", async () => {
     const config = { plugins: { allow: ["scoped"] } };
-    const workspaceDir = "/workspace/scoped";
-    const metadataSnapshot = createSnapshot({ config, workspaceDir });
+    const pluginWorkspaceDir = "/workspace/plugins";
+    const agentWorkspaceDir = "/workspace/agent-run";
+    const metadataSnapshot = createSnapshot({ config, workspaceDir: pluginWorkspaceDir });
     const pluginRegistry = createEmptyPluginRegistry();
     setCurrentPluginMetadataSnapshot(undefined);
 
     await withPluginRuntimeGenerationScope(
-      { config, metadataSnapshot, pluginRegistry, workspaceDir },
+      { config, metadataSnapshot, pluginRegistry },
       async () => {
         await Promise.resolve();
-        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBe(metadataSnapshot);
+        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir })).toBe(
+          metadataSnapshot,
+        );
+        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: pluginWorkspaceDir })).toBe(
+          metadataSnapshot,
+        );
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            config: { plugins: { allow: ["derived-run-policy"] } },
+            workspaceDir: agentWorkspaceDir,
+          }),
+        ).toBe(metadataSnapshot);
+        expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(true);
         expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
       },
     );
 
-    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
+    expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(false);
+    expect(
+      getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir }),
+    ).toBeUndefined();
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   });
 
@@ -217,7 +237,6 @@ describe("current plugin metadata snapshot", () => {
           config: outerConfig,
           metadataSnapshot: outerSnapshot,
           pluginRegistry: outerRegistry,
-          workspaceDir: "/workspace/outer",
         },
         async () => {
           await expect(
@@ -225,7 +244,6 @@ describe("current plugin metadata snapshot", () => {
               {
                 config: innerConfig,
                 metadataSnapshot: innerSnapshot,
-                workspaceDir: "/workspace/inner",
               },
               async () => {
                 await Promise.resolve();
@@ -391,6 +409,34 @@ describe("current plugin metadata snapshot", () => {
         compatibleConfigs: [runtimeConfig],
       },
     );
+  });
+
+  it("invalidates a generic scope when the config identity has a different policy", () => {
+    const config = { plugins: { allow: ["source"] } };
+    const workspaceDir = "/workspace";
+    const snapshot = createSnapshot({ config, workspaceDir });
+    config.plugins.allow = ["runtime"];
+
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
+      },
+      { config },
+    );
+  });
+
+  it("trusts the config identity paired with an immutable runtime generation", () => {
+    const sourceConfig = { plugins: { allow: ["source"] } };
+    const runtimeConfig = { plugins: { allow: ["runtime"] } };
+    const workspaceDir = "/workspace";
+    const snapshot = createSnapshot({ config: sourceConfig, workspaceDir });
+
+    withPluginRuntimeGenerationScope({ config: runtimeConfig, metadataSnapshot: snapshot }, () => {
+      expect(getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir })).toBe(
+        snapshot,
+      );
+    });
   });
 
   it("rejects a workspace-scoped snapshot when the caller does not provide workspace scope", () => {
@@ -708,7 +754,7 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
 
     const replacedLease = installTemporaryCurrentPluginMetadataSnapshot(temporary);
-    setCurrentPluginMetadataSnapshot(newer);
+    setGatewayPluginMetadataSnapshot(newer);
     expect(replacedLease.release()).toBe(false);
     expect(getCurrentPluginMetadataSnapshot()).toBe(newer);
   });

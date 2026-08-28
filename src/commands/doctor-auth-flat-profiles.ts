@@ -44,13 +44,13 @@ import {
   type AuthProfileDatabase,
 } from "../agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStoreWithPreparedOwner } from "../agents/auth-profiles/store.js";
 import type {
   AuthProfileCredential,
   AuthProfileState,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
-import { resolveLegacyInheritedAuthDir } from "../agents/legacy-inherited-auth-dir.js";
+import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
@@ -295,8 +295,8 @@ function listAuthProfileSqliteMigrationCandidates(
   return listAuthProfileRepairCandidates(cfg, env).map((candidate) => ({
     agentDir: candidate.agentDir,
     authPath: candidate.authPath,
-    statePath: resolveAuthStatePath(candidate.agentDir),
-    legacyPath: resolveLegacyAuthStorePath(candidate.agentDir),
+    statePath: resolveAuthStatePath(path.dirname(candidate.authPath)),
+    legacyPath: resolveLegacyAuthStorePath(path.dirname(candidate.authPath)),
   }));
 }
 
@@ -450,7 +450,7 @@ function isDefaultAgentCandidate(
 ): boolean {
   return (
     candidate.agentDir === undefined ||
-    path.resolve(candidate.agentDir) === path.resolve(resolveLegacyInheritedAuthDir(cfg, env))
+    path.resolve(candidate.agentDir) === path.resolve(resolveLegacyInheritedAuthAgentDir(cfg, env))
   );
 }
 
@@ -820,7 +820,7 @@ function migrateLockedLegacyOAuthFile(params: {
   });
   const loaded = runAuthProfileWriteTransaction(
     undefined,
-    (database) => {
+    (database, owner) => {
       const authoritative = loadAuthProfileMigrationTargetStore(
         undefined,
         loadPersistedAuthProfileStore,
@@ -829,7 +829,7 @@ function migrateLockedLegacyOAuthFile(params: {
       if (!isDeepStrictEqual(authoritative, existing)) {
         throw new Error("canonical auth profile store changed during legacy OAuth migration");
       }
-      saveAuthProfileStore(
+      saveAuthProfileStoreWithPreparedOwner(
         next,
         undefined,
         {
@@ -840,6 +840,7 @@ function migrateLockedLegacyOAuthFile(params: {
           syncExternalCli: false,
         },
         database,
+        owner,
       );
       const verified = loadPersistedAuthProfileStore(undefined, { database });
       const verificationFailure = formatMissingAuthProfileSqliteVerification({
@@ -905,9 +906,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   let resumeWarning: string | undefined;
   try {
     resumedChanges = resumePendingAuthProfileMigrationArchives(env);
-  } catch {
-    resumeWarning =
-      "Could not finalize an interrupted auth profile archive; legacy sources were left for recovery.";
+  } catch (err) {
+    resumeWarning = `Could not finalize an interrupted auth profile archive; legacy sources were left for recovery: ${String(err)}`;
   }
   const candidates = listAuthProfileSqliteMigrationCandidates(params.cfg, env);
   const configStore = coerceLegacyConfigAuthProfileStore(params.cfg);
@@ -989,6 +989,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const sharedStateTarget =
         candidate.agentDir === undefined &&
         resolveSharedAuthStoreOwnership(env).location === "state-db";
+      // A shared candidate on a legacy root names the main agent dir explicitly: it resolves to the
+      // same database, but an undefined agent dir would enter the shared-write bootstrap and could
+      // record state-db ownership midway through this import. Doctor stays the only owner of that flip.
+      const transactionAgentDir =
+        sharedStateTarget || candidate.agentDir !== undefined
+          ? candidate.agentDir
+          : resolveSharedMainAuthAgentDir(env);
       let sourceReceipts = candidateSourcePaths.filter(fs.existsSync).map((pathname) =>
         prepareAuthProfileSourceReceipt({
           pathname,
@@ -1160,8 +1167,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         try {
           assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
           verifiedStore = runAuthProfileWriteTransaction(
-            candidate.agentDir,
-            (database) => {
+            transactionAgentDir,
+            (database, owner) => {
               const authoritative = loadAuthProfileMigrationTargetStore(
                 candidate.agentDir,
                 loadMigratedStore,
@@ -1172,7 +1179,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
               if (!isDeepStrictEqual(authoritative, existing)) {
                 throw new Error("canonical auth profile store changed during legacy migration");
               }
-              saveAuthProfileStore(
+              saveAuthProfileStoreWithPreparedOwner(
                 next,
                 candidate.agentDir,
                 {
@@ -1182,6 +1189,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
                   syncExternalCli: false,
                 },
                 database,
+                owner,
               );
               const loaded = loadMigratedStore(candidate.agentDir, { database });
               const persistedStores = {
@@ -1262,7 +1270,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         }),
       );
       const expectedStateSha256 = digestAuthProfileMigrationValue(
-        readPersistedAuthProfileStateRaw(candidate.agentDir),
+        candidate.agentDir
+          ? readPersistedAuthProfileStateRaw(candidate.agentDir)
+          : readPersistedSharedAuthProfileStateRaw(env),
       );
       const canonicalSourceCarriesState = canonicalStore
         ? hasAuthProfileState(coerceAuthProfileState(canonicalStore))

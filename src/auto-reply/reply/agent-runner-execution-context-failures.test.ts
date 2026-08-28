@@ -9,6 +9,7 @@ import {
   makeTestModel,
   getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   requireRecord,
   expectRecordFields,
@@ -188,7 +189,7 @@ describe("executeAgentTurn: context failures", () => {
   it("uses the built-in compaction failure hint when the fallback candidate throws", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("custom", "uncataloged-32k");
+      await params.run("custom", "uncataloged-32k", initialFallbackAttemptOptions(params));
       throw new Error("expected fallback candidate to throw");
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(

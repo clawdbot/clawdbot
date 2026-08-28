@@ -21,6 +21,10 @@ Enable the command surface explicitly:
 export OPENCLAW_EXPERIMENTAL_CLAWS=1
 ```
 
+For human-readable `claws add`, OpenClaw prints the experimental warning before
+changing state. JSON mode keeps stdout machine-readable and identifies the
+contract with `"stability": "experimental"`.
+
 The current CLI reads a local package directory, `CLAW.md`, or grouped JSON manifest.
 Publishing, searching, and installing whole Claws through ClawHub are a
 separate registry track and are not part of this command surface yet.
@@ -499,6 +503,10 @@ credentials, sessions, and unowned local state are excluded.
 
 | Command                             | Purpose                                             |
 | ----------------------------------- | --------------------------------------------------- |
+| `claws create [path]`               | Create a minimal local Claw project.                |
+| `claws validate [path]`             | Validate project inputs and package contents.       |
+| `claws dev [path]`                  | Build and preview locally without mutation.         |
+| `claws build [path] --out <tgz>`    | Build a deterministic package artifact.             |
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
 | `claws add <source>`                | Preview or create one agent and its workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
@@ -507,6 +515,12 @@ credentials, sessions, and unowned local state are excluded.
 | `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
 
 Use `--json` for experimental machine-readable output.
+
+Successful commands exit `0`. Validation errors, blocked plans, missing
+targets, and both `failed` and `partial` mutation results exit `1`. Inspect the
+JSON `status` and `error.code` fields to distinguish a failure that made no
+change from a partial result that requires `claws status`, `openclaw doctor`,
+and a new preview before retrying.
 
 ## See also
 

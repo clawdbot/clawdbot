@@ -9,10 +9,7 @@ import {
   restoreRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
-import {
-  clearMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
@@ -29,23 +26,27 @@ const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
 });
 let registeredEmbeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
 
+function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): void {
+  registerEmbeddingProvider(adapter);
+}
+
 function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
   // Register provider contracts locally so config tests do not depend on the
   // plugin loader or live embedding backends.
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "openai",
     defaultModel: "text-embedding-3-small",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "local",
     defaultModel: "local-default",
     transport: "local",
     create: async () => ({ provider: null }),
   });
   if (options?.includeGemini !== false) {
-    registerMemoryEmbeddingProvider({
+    registerTestMemoryAdapter({
       id: "gemini",
       defaultModel: "gemini-embedding-001",
       transport: "remote",
@@ -57,25 +58,25 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
       create: async () => ({ provider: null }),
     });
   }
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "voyage",
     defaultModel: "voyage-4-large",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "mistral",
     defaultModel: "mistral-embed",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "lmstudio",
     defaultModel: "text-embedding-nomic-embed-text-v1.5",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "ollama",
     defaultModel: "nomic-embed-text",
     transport: "remote",
@@ -87,14 +88,25 @@ describe("memory search config", () => {
   beforeEach(() => {
     registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
     clearEmbeddingProviders();
-    clearMemoryEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders();
   });
 
   afterEach(() => {
     setActiveDegradedSecretOwners([]);
-    clearMemoryEmbeddingProviders();
     restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
+  });
+
+  it("bounds the embedding cache with a built-in default", () => {
+    // #111382 purged `memory.search.cache.maxEntries` from the config contract and replaced it
+    // with an unset built-in default, so pruneEmbeddingCacheIfNeeded early-returned on
+    // `!max` and memory_embedding_cache grew without limit (openclaw/openclaw#114612).
+    const resolved = resolveMemorySearchConfig(
+      asConfig({ memory: { search: {} }, agents: { defaults: {} } }),
+      "main",
+    );
+
+    expect(resolved?.cache.enabled).toBe(true);
+    expect(resolved?.cache.maxEntries).toBeGreaterThan(0);
   });
 
   function configWithDefaultProvider(provider: string): OpenClawConfig {
@@ -490,7 +502,7 @@ describe("memory search config", () => {
   });
 
   it("resolves fixed sync defaults without consulting embedding providers", () => {
-    clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
     const cfg = asConfig({
       memory: {
         search: {
@@ -503,7 +515,7 @@ describe("memory search config", () => {
       },
     });
 
-    expect(resolveMemorySearchSyncConfig(cfg, "main")).toEqual({
+    expect(resolveMemorySearchSyncConfig(cfg, "main")).toStrictEqual({
       onSessionStart: true,
       onSearch: true,
       watch: true,
@@ -518,22 +530,23 @@ describe("memory search config", () => {
     });
   });
 
-  it("keeps the fixed embedding batch timeout unset", () => {
-    const cfg = asConfig({
-      memory: {
-        search: {
-          provider: "openai",
-        },
-      },
+  it("keeps resolved defaults isolated across calls and sync-only consumers", () => {
+    const cfg = configWithDefaultProvider("openai");
+    const resolved = resolveMemorySearchConfig(cfg, "main")!;
+    const expected = structuredClone(resolved);
+    expect(resolved.cache).toStrictEqual({ enabled: true, maxEntries: 50_000 });
 
-      agents: {
-        defaults: {},
-      },
-    });
+    resolved.chunking.tokens = 1;
+    resolved.chunking.overlap = 0;
+    resolved.sync.watch = false;
+    resolved.sync.sessions.deltaBytes = 0;
+    resolved.query.hybrid.vectorWeight = 0;
+    resolved.query.hybrid.mmr.lambda = 0;
+    resolved.query.hybrid.temporalDecay.halfLifeDays = 1;
+    resolved.cache.enabled = false;
 
-    expect(
-      resolveMemorySearchSyncConfig(cfg, "main")?.embeddingBatchTimeoutSeconds,
-    ).toBeUndefined();
+    expect(resolveMemorySearchConfig(cfg, "main")).toStrictEqual(expected);
+    expect(resolveMemorySearchSyncConfig(cfg, "main")).toStrictEqual(expected.sync);
   });
 
   it("merges defaults and overrides", () => {
@@ -753,7 +766,7 @@ describe("memory search config", () => {
   });
 
   it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
-    clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders({ includeGemini: false });
     const cfg = asConfig({
       memory: {

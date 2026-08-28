@@ -7,9 +7,23 @@ import {
   type APIGuildScheduledEvent,
   type APIRole,
   type APIVoiceState,
+  type RESTGetAPIGuildEmojisResult,
   type RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
+import { Type } from "typebox";
+import { Check } from "typebox/value";
 import type { RequestClient, RequestData } from "./rest.js";
+
+const discordGuildEmojiListSchema = Type.Array(
+  Type.Object(
+    {
+      id: Type.Union([Type.String(), Type.Null()]),
+      name: Type.Union([Type.String(), Type.Null()]),
+      animated: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: true },
+  ),
+);
 
 export async function getGuild(rest: RequestClient, guildId: string): Promise<APIGuild> {
   return (await rest.get(Routes.guild(guildId))) as APIGuild;
@@ -144,8 +158,15 @@ export async function createGuildBan(
   await rest.put(Routes.guildBan(guildId, userId), data);
 }
 
-export async function listGuildEmojis(rest: RequestClient, guildId: string): Promise<unknown> {
-  return await rest.get(Routes.guildEmojis(guildId));
+export async function listGuildEmojis(
+  rest: RequestClient,
+  guildId: string,
+): Promise<RESTGetAPIGuildEmojisResult> {
+  const emojis = await rest.get(Routes.guildEmojis(guildId));
+  if (!Check(discordGuildEmojiListSchema, emojis)) {
+    throw new Error("Invalid Discord guild emoji response.");
+  }
+  return emojis;
 }
 
 export async function createGuildEmoji(

@@ -4,12 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   asNullableRecord as readRecord,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pLimit from "p-limit";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -57,11 +58,6 @@ function evidenceError(message: string, statusCode: number): QaEvidenceGalleryEr
   return new QaEvidenceGalleryError(message, statusCode);
 }
 
-function isInside(root: string, candidate: string) {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function sanitizeGalleryText(
   value: string,
   params: {
@@ -94,7 +90,7 @@ function displayGalleryPath(
     const absolute = path.resolve(value);
     for (const root of [params.repoRoot, ...(params.extraRoots ?? [])]) {
       const resolvedRoot = path.resolve(root);
-      if (isInside(resolvedRoot, absolute)) {
+      if (isPathInside(resolvedRoot, absolute)) {
         return sanitizeGalleryText(toRepoPath(path.relative(resolvedRoot, absolute)), params);
       }
     }
@@ -138,7 +134,7 @@ async function resolveContainedFileIfExists(
   if (!realFile) {
     return null;
   }
-  if (!allowedRoots.some((root) => isInside(root, realFile))) {
+  if (!allowedRoots.some((root) => isPathInside(root, realFile))) {
     return null;
   }
   const stats = await fs.stat(realFile).catch(() => null);
@@ -159,7 +155,7 @@ async function resolveQaEvidenceFile(params: {
   if (!realCandidate) {
     throw evidenceError("Evidence path not found.", 404);
   }
-  if (!isInside(repoRoot, realCandidate)) {
+  if (!isPathInside(repoRoot, realCandidate)) {
     throw evidenceError("Evidence path must stay inside the repo root.", 403);
   }
   const stats = await fs.stat(realCandidate);
@@ -170,7 +166,7 @@ async function resolveQaEvidenceFile(params: {
   if (!realEvidencePath) {
     throw evidenceError("qa-evidence.json not found.", 404);
   }
-  if (!isInside(repoRoot, realEvidencePath)) {
+  if (!isPathInside(repoRoot, realEvidencePath)) {
     throw evidenceError("qa-evidence.json must stay inside the repo root.", 403);
   }
   return realEvidencePath;
@@ -313,7 +309,10 @@ async function resolveArtifactFileWithinRoots(params: {
     if (!realCandidate) {
       continue;
     }
-    if (!isInside(params.repoRoot, realCandidate) && !isInside(params.evidenceDir, realCandidate)) {
+    if (
+      !isPathInside(params.repoRoot, realCandidate) &&
+      !isPathInside(params.evidenceDir, realCandidate)
+    ) {
       continue;
     }
     const stats = await fs.stat(realCandidate).catch(() => null);
@@ -440,9 +439,7 @@ async function readJsonIfExists(
   }
   try {
     const value = JSON.parse(await fs.readFile(realFile, "utf8")) as unknown;
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
+    return readRecord(value);
   } catch {
     return null;
   }
@@ -518,7 +515,7 @@ async function buildArtifactView(params: {
     repoRoot: params.repoRoot,
   }).catch(() => null);
   const realFileRepoPath =
-    realFile && isInside(params.repoRoot, realFile)
+    realFile && isPathInside(params.repoRoot, realFile)
       ? toRepoRelativePath(params.repoRoot, realFile)
       : null;
   const displayPath =
@@ -733,7 +730,7 @@ async function candidateProducerRoots(params: {
         continue;
       }
       let current = path.dirname(artifactPath);
-      while (isInside(repoRoot, current)) {
+      while (isPathInside(repoRoot, current)) {
         roots.add(current);
         const parent = path.dirname(current);
         if (parent === current) {
@@ -890,50 +887,59 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
     summaryEntries: summary.entries,
   });
-  const limitArtifactView = pLimit(ARTIFACT_VIEW_CONCURRENCY);
-  const entries = await Promise.all(
-    summary.entries.map(async (entry, entryIndex): Promise<QaEvidenceGalleryEntryView> => {
-      counts[entry.result.status] += 1;
-      const sanitizeEntryText = (value: string) =>
-        sanitizeGalleryText(value, {
+  const artifactTasks = summary.entries.flatMap((entry, entryIndex) =>
+    (entry.execution?.artifacts ?? []).map(
+      (artifact, artifactIndex) => () =>
+        buildArtifactView({
+          allowedArtifactFiles,
+          artifact,
+          artifactIndex,
+          evidenceDir,
+          entryIndex,
           extraRoots: [requestedRepoRoot],
+          hrefEvidencePath,
           repoRoot,
-        });
-      return {
-        artifacts: await limitArtifactView.map(
-          entry.execution?.artifacts ?? [],
-          (artifact, artifactIndex) =>
-            buildArtifactView({
-              allowedArtifactFiles,
-              artifact,
-              artifactIndex,
-              evidenceDir,
-              entryIndex,
-              extraRoots: [requestedRepoRoot],
-              hrefEvidencePath,
-              repoRoot,
-            }),
-        ),
-        coverage: entry.coverage.map((coverage) => ({
-          id: sanitizeEntryText(coverage.id),
-          role: sanitizeEntryText(coverage.role),
-        })),
-        failureReason: entry.result.failure?.reason
-          ? sanitizeEntryText(entry.result.failure.reason)
-          : null,
-        id: sanitizeEntryText(entry.test.id),
-        kind: sanitizeEntryText(entry.test.kind),
-        sourcePath: entry.test.source?.path
-          ? displayGalleryPath(entry.test.source.path, {
-              extraRoots: [requestedRepoRoot],
-              repoRoot,
-            })
-          : null,
-        status: entry.result.status,
-        title: sanitizeEntryText(entry.test.title),
-      };
-    }),
+        }),
+    ),
   );
+  const { results: artifactViews } = await runTasksWithConcurrency({
+    tasks: artifactTasks,
+    limit: ARTIFACT_VIEW_CONCURRENCY,
+    errorMode: "continue",
+    throwOnError: true,
+  });
+  let artifactOffset = 0;
+  const entries = summary.entries.map((entry): QaEvidenceGalleryEntryView => {
+    counts[entry.result.status] += 1;
+    const artifactCount = entry.execution?.artifacts?.length ?? 0;
+    const artifacts = artifactViews.slice(artifactOffset, artifactOffset + artifactCount);
+    artifactOffset += artifactCount;
+    const sanitizeEntryText = (value: string) =>
+      sanitizeGalleryText(value, {
+        extraRoots: [requestedRepoRoot],
+        repoRoot,
+      });
+    return {
+      artifacts,
+      coverage: entry.coverage.map((coverage) => ({
+        id: sanitizeEntryText(coverage.id),
+        role: sanitizeEntryText(coverage.role),
+      })),
+      failureReason: entry.result.failure?.reason
+        ? sanitizeEntryText(entry.result.failure.reason)
+        : null,
+      id: sanitizeEntryText(entry.test.id),
+      kind: sanitizeEntryText(entry.test.kind),
+      sourcePath: entry.test.source?.path
+        ? displayGalleryPath(entry.test.source.path, {
+            extraRoots: [requestedRepoRoot],
+            repoRoot,
+          })
+        : null,
+      status: entry.result.status,
+      title: sanitizeEntryText(entry.test.title),
+    };
+  });
   return {
     counts,
     entries,

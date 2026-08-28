@@ -45,6 +45,7 @@ type CodexAttemptResultInput = {
   aborted: boolean;
   tokenUsage: EmbeddedRunAttemptResult["attemptUsage"];
   contextTokens: number | undefined;
+  contextTokensSource: EmbeddedRunAttemptResult["contextTokensSource"];
   completedCompactionCount: number;
   activeItemCount: number;
   completedItemCount: number;
@@ -55,6 +56,7 @@ type CodexAttemptResultInput = {
   assistantProjection: Pick<
     CodexAssistantProjection,
     | "collectAssistantTexts"
+    | "collectAsyncMessages"
     | "collectCommentaryMessages"
     | "createAssistantMessage"
     | "createAssistantMirrorMessage"
@@ -84,14 +86,20 @@ export function buildCodexAttemptResult(
   // tool lacking a terminal item so audit consumers never retain an open action.
   input.nativeToolLifecycleProjection.finalizeActive();
   const assistantTexts = input.assistantProjection.collectAssistantTexts();
+  const asyncMessages = input.assistantProjection.collectAsyncMessages();
   const commentaryMessages = input.assistantProjection.collectCommentaryMessages();
   const reasoningText = input.reasoningProjection.reasoningText();
   const planText = input.reasoningProjection.planText();
   // A terminal timeout must not publish exact usage, but the timeout watcher
   // can still recover a completed assistant. Keep the snapshot masked until
   // recovery clears the abort instead of destroying it in markTimedOut().
-  const completedUsage = input.responseCompletions.usage ?? input.tokenUsage;
-  const projectedUsage = input.aborted ? input.tokenUsage : completedUsage;
+  const unavailableThreadUsage = input.tokenUsage
+    ? { ...input.tokenUsage, contextUsage: { state: "unavailable" } as const }
+    : undefined;
+  const completedUsage =
+    input.responseCompletions.usage ??
+    (input.responseCompletions.modelIterations > 0 ? unavailableThreadUsage : input.tokenUsage);
+  const projectedUsage = input.aborted ? unavailableThreadUsage : completedUsage;
   const hasAssistantItemText = input.assistantProjection.hasAssistantItemTextForSynthesis();
   const legacyFailClosed =
     !input.completedTurn || input.completedTurn.status !== "completed" || hasAssistantItemText;
@@ -146,7 +154,7 @@ export function buildCodexAttemptResult(
     turnId: input.turnId,
     upstreamUserText: input.upstreamUserText,
     reasoningText,
-    planText,
+    asyncMessages,
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
@@ -212,6 +220,7 @@ export function buildCodexAttemptResult(
     acceptedSessionSpawns: input.toolTelemetry.acceptedSessionSpawns,
     cloudCodeAssistFormatError: false,
     contextTokens: input.contextTokens,
+    contextTokensSource: input.contextTokensSource,
     attemptUsage: projectedUsage,
     ...(input.completedCompactionCount > 0
       ? { compactionCount: input.completedCompactionCount }

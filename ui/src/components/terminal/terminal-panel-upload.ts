@@ -1,6 +1,8 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
@@ -191,7 +193,7 @@ export class TerminalPanelUploadController {
       return;
     }
     batch.state = "failed";
-    batch.error = error instanceof Error ? error.message : String(error);
+    batch.error = formatUiError(error);
     batch.retryable = retryable;
     this.host.requestUpdate();
   }
@@ -311,6 +313,7 @@ export class TerminalPanelUploadController {
 
 export function renderTerminalPanelActions(params: {
   fullscreen: boolean;
+  embedded?: boolean;
   dock: "bottom" | "right" | "main";
   upload: TerminalPanelUploadController;
   sessionPicker: unknown;
@@ -339,55 +342,61 @@ export function renderTerminalPanelActions(params: {
     </button>
     ${params.fullscreen
       ? nothing
-      : html`${params.sessionPicker}<span
-            class="tp-dock-modes"
-            role="group"
-            aria-label=${t("terminal.dockMode")}
-            ><button
-              class="rail-header__action tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
+      : html`${params.sessionPicker}${params.embedded
+          ? html`<button
+              class="rail-header__action tp-icon"
               type="button"
               title=${t("terminal.dockBottom")}
               aria-label=${t("terminal.dockBottom")}
               @click=${() => params.onDock("bottom")}
             >
               ${icons.panelBottomOpen}
-            </button>
-            <button
-              class="rail-header__action tp-icon ${params.dock === "right" ? "is-active" : ""}"
-              type="button"
-              title=${t("terminal.dockRight")}
-              aria-label=${t("terminal.dockRight")}
-              @click=${() => params.onDock("right")}
-            >
-              ${icons.panelRightOpen}</button
-            ><button
-              class="rail-header__action tp-icon ${params.dock === "main" ? "is-active" : ""}"
-              type="button"
-              title=${t("terminal.dockMain")}
-              aria-label=${t("terminal.dockMain")}
-              @click=${() => params.onDock("main")}
-            >
-              ${icons.columns2}
-            </button>
-          </span>
-          <button
-            class="rail-header__action tp-icon tp-open-fullscreen"
-            type="button"
-            title=${t("terminal.openFullscreen")}
-            aria-label=${t("terminal.openFullscreen")}
-            @click=${params.onOpenFullscreen}
-          >
-            ${icons.maximize}
-          </button>
-          <button
-            class="rail-header__action tp-icon"
-            type="button"
-            title=${t("terminal.hide")}
-            aria-label=${t("terminal.hide")}
-            @click=${params.onHide}
-          >
-            ${icons.x}
-          </button>`}
+            </button>`
+          : html`${renderDockDestinations({
+                current: params.dock,
+                groupClass: "tp-dock-modes",
+                groupLabel: t("terminal.dockMode"),
+                destinations: [
+                  {
+                    dock: "bottom",
+                    label: t("terminal.dockBottom"),
+                    icon: icons.panelBottomOpen,
+                    className: "tp-icon",
+                  },
+                  {
+                    dock: "right",
+                    label: t("terminal.dockRight"),
+                    icon: icons.panelRightOpen,
+                    className: "tp-icon",
+                  },
+                  {
+                    dock: "main",
+                    label: t("terminal.dockMain"),
+                    icon: icons.columns2,
+                    className: "tp-icon",
+                  },
+                ],
+                onSelect: params.onDock,
+              })}
+              <button
+                class="rail-header__action tp-icon tp-open-fullscreen"
+                type="button"
+                data-new-tab-action
+                title=${t("terminal.openWindow")}
+                aria-label=${t("terminal.openWindow")}
+                @click=${params.onOpenFullscreen}
+              >
+                ${icons.maximize}
+              </button>
+              <button
+                class="rail-header__action tp-icon"
+                type="button"
+                title=${t("terminal.hide")}
+                aria-label=${t("terminal.hide")}
+                @click=${params.onHide}
+              >
+                ${icons.x}
+              </button>`}`}
   </div>`;
 }
 

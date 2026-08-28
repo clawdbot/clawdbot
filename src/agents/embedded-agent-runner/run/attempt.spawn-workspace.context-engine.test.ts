@@ -199,6 +199,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
+  it("carries the resolved context budget into OpenClaw tool construction", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 1_000_000,
+        disableTools: false,
+      },
+    });
+
+    expect(
+      mockParams(hoisted.createOpenClawCodingToolsMock, 0, "tool construction params")
+        .modelContextWindowTokens,
+    ).toBe(1_000_000);
+  });
+
   it("keeps client tool names out of context engine capability guidance", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
 
@@ -2260,8 +2277,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 
-  it("submits once to the provider when owning context engine assembly fails", async () => {
+  it("preserves pipeline history when owning context engine assembly mutates then fails", async () => {
     let sawPrompt = false;
+    let preassemblyMessages: AgentMessage[] = [];
+    let providerMessages: AgentMessage[] = [];
     const hugeHistory = "large raw history ".repeat(2_000);
 
     const result = await createContextEngineAttemptRunner({
@@ -2272,7 +2291,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           version: "0.0.1",
           ownsCompaction: true,
         },
-        assemble: async () => {
+        assemble: async ({ messages }) => {
+          preassemblyMessages = messages.slice();
+          messages.reverse();
+          messages.pop();
           throw new Error("assembly failed");
         },
       }),
@@ -2284,6 +2306,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
       sessionPrompt: async (session) => {
         sawPrompt = true;
+        providerMessages = session.messages.slice() as AgentMessage[];
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -2292,6 +2315,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
+    expect(providerMessages).toEqual(preassemblyMessages);
+    for (const [index, message] of providerMessages.entries()) {
+      expect(message).toBe(preassemblyMessages[index]);
+    }
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
@@ -2903,7 +2930,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
         const session = createDefaultEmbeddedSession({ initialMessages: [admittedMessage] });
         session.agent.convertToLlm = vi.fn(async (messages) => messages as never);
         const baseStreamFn = session.agent.streamFn;
-        session.agent.streamFn = async (...args: unknown[]) => {
+        session.agent.streamFn = async (...args) => {
           const context = args[1] as { messages?: AgentMessage[] } | undefined;
           submittedMessages =
             ((await session.agent.convertToLlm?.(context?.messages ?? [])) as AgentMessage[]) ?? [];

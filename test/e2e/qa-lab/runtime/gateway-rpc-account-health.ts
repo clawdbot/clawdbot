@@ -3,9 +3,11 @@ import { fileURLToPath } from "node:url";
 import {
   createQaBusState,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts";
@@ -105,7 +107,7 @@ export function statusSummaryMentions(payload: unknown, ...needles: string[]) {
 }
 
 async function waitForAccounts(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   predicate: (accounts: Record<string, AccountState>) => boolean,
   label: string,
 ) {
@@ -131,10 +133,7 @@ function readChannelConfig(payload: unknown) {
   return structuredClone(assertRecord(assertRecord(config.channels)[CHANNEL_ID]));
 }
 
-async function waitForAppliedConfig(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  hash: string,
-) {
+async function waitForAppliedConfig(gateway: QaGatewayChild, hash: string) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const payload = assertRecord(await gateway.call("config.get", {}));
@@ -155,9 +154,10 @@ export async function runGatewayRpcAccountHealthProof(
 ): Promise<GatewayAccountHealthProof> {
   const state = createQaBusState();
   const bus = await startQaBusServer({ state });
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot,
       useRepoCli: true,
       transportBaseUrl: bus.baseUrl,
@@ -236,7 +236,7 @@ export async function runGatewayRpcAccountHealthProof(
         finalChannelAccounts.default?.running === true,
     };
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await bus.stop().catch(() => undefined);
   }
 }

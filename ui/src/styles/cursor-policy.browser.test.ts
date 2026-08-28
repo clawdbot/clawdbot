@@ -1,10 +1,11 @@
-// Control UI tests cover the display-mode cursor policy.
+// Control UI tests cover the semantic cursor policy.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
+import { dockPanelStyles } from "../components/dock-layout-controller.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -19,40 +20,55 @@ const describeCursorPolicy = canRunPlaywrightChromium(chromiumExecutablePath)
 const NATIVE_HOST_MARKERS = ["openclaw-native-macos", "openclaw-native-web-chrome"] as const;
 
 type CursorCase = {
-  /**
-   * Expected cursor in an installed/app window: a `display-mode: standalone`
-   * window, or a native app host that stamps `NATIVE_HOST_MARKERS` instead.
-   */
-  readonly appWindow: string;
-  /** Expected cursor in an ordinary tab (`display-mode: browser`). */
-  readonly browserTab: string;
+  readonly expected: string;
   readonly selector: string;
+  readonly shadow?: boolean;
 };
 
 const CURSOR_CASES: readonly CursorCase[] = [
-  // Actionable controls follow the window they run in.
-  { appWindow: "default", browserTab: "pointer", selector: ".btn" },
-  { appWindow: "default", browserTab: "pointer", selector: "#plain-summary" },
-  { appWindow: "default", browserTab: "pointer", selector: "#plain-select" },
-  { appWindow: "default", browserTab: "pointer", selector: "#plain-checkbox" },
-  { appWindow: "default", browserTab: "pointer", selector: "#role-button" },
-  { appWindow: "default", browserTab: "pointer", selector: ".nav-item" },
-  { appWindow: "default", browserTab: "pointer", selector: ".settings-secret__toggle" },
-  // Real links keep the hand in both windows: a[href] through the UA, the
-  // href-less content link through its own documented rule.
-  { appWindow: "pointer", browserTab: "pointer", selector: "#real-link" },
-  { appWindow: "pointer", browserTab: "pointer", selector: ".markdown-file-link" },
-  // Semantic cursors belong to their component and never follow the policy.
-  { appWindow: "text", browserTab: "text", selector: "#plain-text-input" },
-  { appWindow: "text", browserTab: "text", selector: ".chat-pane__session-title-button" },
-  { appWindow: "grab", browserTab: "grab", selector: ".sidebar-session-group-drag-handle" },
-  { appWindow: "col-resize", browserTab: "col-resize", selector: ".sw-queue-resizer" },
-  { appWindow: "zoom-in", browserTab: "zoom-in", selector: ".chat-message-image-button" },
-  { appWindow: "not-allowed", browserTab: "not-allowed", selector: ".btn--ghost:disabled" },
-  { appWindow: "wait", browserTab: "wait", selector: ".sidebar-update-card__hold:disabled" },
-  // Deliberate `default` on non-actionable elements survives in both windows.
-  { appWindow: "default", browserTab: "default", selector: ".session-tokens" },
-  { appWindow: "default", browserTab: "default", selector: ".agent-tools-runtime-chip--more" },
+  // State-changing controls use the desktop arrow in every host.
+  { expected: "default", selector: ".btn" },
+  { expected: "default", selector: "#plain-summary" },
+  { expected: "default", selector: "#plain-select" },
+  { expected: "default", selector: "#plain-checkbox" },
+  { expected: "default", selector: "#role-button" },
+  { expected: "default", selector: ".settings-secret__toggle" },
+  { expected: "default", selector: ".nav-item" },
+  { expected: "default", selector: ".nav-item__text" },
+  { expected: "default", selector: ".sidebar-recent-session__link" },
+  { expected: "default", selector: ".sidebar-recent-session__name" },
+  { expected: "default", selector: ".sidebar-online__person" },
+  { expected: "default", selector: ".sidebar-brand__new-thread" },
+  { expected: "default", selector: ".sidebar-new-session" },
+  { expected: "default", selector: ".sidebar-session-catalog-new" },
+  { expected: "default", selector: ".settings-sidebar__item" },
+  { expected: "default", selector: ".settings-sidebar__subitem" },
+  { expected: "default", selector: ".sidebar-issues-panel__navigation-link" },
+  { expected: "default", selector: ".sidebar-approval-row__open-session" },
+  { expected: "default", selector: ".sidebar-footer-build" },
+  { expected: "default", selector: ".sidebar-more-menu a" },
+  // Links and explicit new-tab controls keep the hand.
+  { expected: "pointer", selector: "#real-link" },
+  { expected: "pointer", selector: "#sidebar-external-link" },
+  { expected: "pointer", selector: "#sidebar-help-link" },
+  { expected: "pointer", selector: "#sidebar-new-tab-link" },
+  { expected: "pointer", selector: "#sidebar-new-tab-action" },
+  { expected: "pointer", selector: "#new-tab-link" },
+  { expected: "pointer", selector: "#new-tab-button" },
+  { expected: "pointer", selector: "#shadow-new-tab-button", shadow: true },
+  { expected: "pointer", selector: ".markdown-file-link" },
+  // Semantic cursors remain owned by their components.
+  { expected: "text", selector: "#plain-text-input" },
+  { expected: "text", selector: ".chat-pane__session-title-button" },
+  { expected: "grab", selector: ".sidebar-session-group-drag-handle" },
+  { expected: "zoom-in", selector: ".chat-message-image-button" },
+  { expected: "not-allowed", selector: ".btn--ghost:disabled" },
+  { expected: "not-allowed", selector: "#disabled-new-tab-button" },
+  { expected: "default", selector: "#shadow-disabled-new-tab-button", shadow: true },
+  { expected: "wait", selector: ".sidebar-update-card__hold:disabled" },
+  { expected: "default", selector: ".session-tokens" },
+  { expected: "default", selector: ".agent-tools-runtime-chip--more" },
+  { expected: "default", selector: ".chat-assistant-attachment-card[data-openable]" },
 ];
 
 function readUiCss(): string {
@@ -60,7 +76,10 @@ function readUiCss(): string {
     "ui/src/styles/base.css",
     "ui/src/styles/components.css",
     "ui/src/styles/layout.css",
+    "ui/src/styles/sidebar-update-card.css",
+    "ui/src/styles/sidebar-issues.css",
     "ui/src/styles/sessions.css",
+    "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/skill-workshop.css",
     "ui/src/styles/chat/layout.css",
@@ -82,16 +101,43 @@ function fixtureDocument(): string {
       <input id="plain-text-input" type="text" value="text" />
       <div id="role-button" role="button" tabindex="0">Role button</div>
       <a id="real-link" href="https://example.com">Real link</a>
-      <a class="nav-item" href="#/chat">Nav rail</a>
+      <aside class="sidebar">
+        <a class="nav-item" href="/chat"><span class="nav-item__text">Home</span></a>
+        <a class="sidebar-recent-session__link" href="/chat/test"><span class="sidebar-recent-session__name">Session</span></a>
+        <a class="sidebar-online__person" href="/activity">Person</a>
+        <a class="sidebar-brand__new-thread" href="/new">New session</a>
+        <a class="sidebar-new-session" href="/new">New group session</a>
+        <a class="sidebar-session-catalog-new" href="/new">New catalog session</a>
+        <a class="sidebar-issues-panel__navigation-link" href="/settings/channels">Channel issue</a>
+        <a class="sidebar-approval-row__open-session" href="/chat/test">Open approval session</a>
+        <a id="sidebar-external-link" href="https://example.com">External link</a>
+        <a id="sidebar-new-tab-link" class="nav-item" href="/chat" target="_BLANK">New tab</a>
+        <a id="sidebar-new-tab-action" class="nav-item" href="/chat" data-new-tab-action>New window</a>
+      </aside>
+      <aside class="settings-sidebar">
+        <a class="settings-sidebar__item" href="/settings">Settings</a>
+        <a class="settings-sidebar__subitem" href="/settings#theme">Theme</a>
+        <a class="sidebar-footer-build" href="/settings/about">Build</a>
+      </aside>
+      <div class="sidebar-more-menu"><div class="sidebar-customize-menu__item"><a href="/activity">Activity</a></div></div>
+      <div class="sidebar-agent-menu"><div class="sidebar-customize-menu__item"><a id="sidebar-help-link" href="https://example.com/docs" target="_blank">Docs</a></div></div>
+      <a id="new-tab-link" class="btn" href="https://example.com/docs" target="_blank">Docs</a>
+      <button id="new-tab-button" class="btn" type="button" data-new-tab-action>New tab</button>
+      <button id="disabled-new-tab-button" class="btn btn--ghost" type="button" data-new-tab-action disabled>Unavailable new tab</button>
       <button class="settings-secret__toggle" type="button">Reveal</button>
       <button class="sidebar-update-card__hold" type="button" disabled>Hold</button>
       <button class="chat-pane__session-title-button" type="button">Session title</button>
       <button class="chat-message-image-button" type="button">Image</button>
+      <div class="chat-assistant-attachment-card" data-openable>Attachment</div>
       <div class="sidebar-session-group-drag-handle"></div>
-      <div class="sw-queue-resizer"></div>
       <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
       <span class="agent-tools-runtime-chip--more">+3</span>
       <div class="chat-text"><a class="markdown-file-link">src/index.ts</a></div>
+      <div id="shadow-policy-host"><template shadowrootmode="open">
+        <style>${dockPanelStyles.cssText}</style>
+        <button id="shadow-new-tab-button" class="rail-header__action" type="button" data-new-tab-action>New tab</button>
+        <button id="shadow-disabled-new-tab-button" class="rail-header__action" type="button" data-new-tab-action disabled>Unavailable new tab</button>
+      </template></div>
     </main>
   </body></html>`;
 }
@@ -102,35 +148,29 @@ type WindowProbe = {
 };
 
 async function probeWindow(page: Page): Promise<WindowProbe> {
-  return await page.evaluate(
-    (selectors: readonly string[]) => {
-      const modes = [
-        "browser",
-        "standalone",
-        "minimal-ui",
-        "window-controls-overlay",
-        "fullscreen",
-      ];
-      const cursors = selectors.map((selector) => {
-        const element = document.querySelector(selector);
-        if (!element) {
-          throw new Error(`Missing cursor fixture element for ${selector}`);
-        }
-        return [selector, getComputedStyle(element).cursor] as const;
-      });
-      return {
-        cursors: Object.fromEntries(cursors),
-        displayMode:
-          modes.find((mode) => matchMedia(`(display-mode: ${mode})`).matches) ?? "unknown",
-      };
-    },
-    CURSOR_CASES.map((cursorCase) => cursorCase.selector),
-  );
+  return await page.evaluate((cursorCases: readonly CursorCase[]) => {
+    const modes = ["browser", "standalone", "minimal-ui", "window-controls-overlay", "fullscreen"];
+    const cursors = cursorCases.map(({ selector, shadow }) => {
+      const element = shadow
+        ? document
+            .querySelector<HTMLElement>("#shadow-policy-host")
+            ?.shadowRoot?.querySelector(selector)
+        : document.querySelector(selector);
+      if (!element) {
+        throw new Error(`Missing cursor fixture element for ${selector}`);
+      }
+      return [selector, getComputedStyle(element).cursor] as const;
+    });
+    return {
+      cursors: Object.fromEntries(cursors),
+      displayMode: modes.find((mode) => matchMedia(`(display-mode: ${mode})`).matches) ?? "unknown",
+    };
+  }, CURSOR_CASES);
 }
 
-function expectedCursors(key: "appWindow" | "browserTab"): Record<string, string> {
+function expectedCursors(): Record<string, string> {
   return Object.fromEntries(
-    CURSOR_CASES.map((cursorCase) => [cursorCase.selector, cursorCase[key]]),
+    CURSOR_CASES.map((cursorCase) => [cursorCase.selector, cursorCase.expected]),
   );
 }
 
@@ -171,20 +211,20 @@ afterAll(async () => {
 });
 
 describeCursorPolicy("Control UI cursor policy", () => {
-  it("advertises actionable controls with the hand in a browser tab", async () => {
+  it("uses semantic cursors in a browser tab", async () => {
     const page = await tabBrowser.newPage();
     try {
       await page.goto(`file://${fixtureFile}`);
       const probe = await probeWindow(page);
 
       expect(probe.displayMode).toBe("browser");
-      expect(probe.cursors).toEqual(expectedCursors("browserTab"));
+      expect(probe.cursors).toEqual(expectedCursors());
     } finally {
       await page.close().catch(() => {});
     }
   });
 
-  it("keeps the desktop arrow on app chrome in a native app host", async () => {
+  it("uses the same semantic cursors in a native app host", async () => {
     const page = await tabBrowser.newPage();
     try {
       await page.goto(`file://${fixtureFile}`);
@@ -196,19 +236,19 @@ describeCursorPolicy("Control UI cursor policy", () => {
       const probe = await probeWindow(page);
 
       expect(probe.displayMode).toBe("browser");
-      expect(probe.cursors).toEqual(expectedCursors("appWindow"));
+      expect(probe.cursors).toEqual(expectedCursors());
     } finally {
       await page.close().catch(() => {});
     }
   });
 
-  it("keeps the desktop arrow on app chrome in an installed window", async () => {
+  it("uses the same semantic cursors in an installed window", async () => {
     const [page] = appContext.pages();
     expect(page, "Chromium --app window did not expose a page").toBeDefined();
     await page!.waitForLoadState("load");
     const probe = await probeWindow(page!);
 
     expect(probe.displayMode).toBe("standalone");
-    expect(probe.cursors).toEqual(expectedCursors("appWindow"));
+    expect(probe.cursors).toEqual(expectedCursors());
   });
 });

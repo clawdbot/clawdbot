@@ -1,13 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db.js";
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
+import { createAuditEventRecorder } from "./audit-recorder.js";
 import { pageExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -20,9 +25,36 @@ import {
   inspectExecutionIdentityRun,
   processExecutionIdentityAdmissionWork,
 } from "./execution-identity-context.js";
+import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
+
+function observeNonblockingSqliteTransactions(
+  database: DatabaseSync,
+  observed: number[],
+): () => void {
+  const originalExecDescriptor = Object.getOwnPropertyDescriptor(database, "exec");
+  const originalExec = database.exec.bind(database);
+  database.exec = (sql: string) => {
+    if (sql === "BEGIN IMMEDIATE") {
+      const busyTimeout = readSqliteBusyTimeout(database);
+      observed.push(busyTimeout);
+      if (busyTimeout !== 0) {
+        throw new Error(`audit writer attempted a blocking SQLite transaction (${busyTimeout} ms)`);
+      }
+    }
+    return originalExec(sql);
+  };
+  return () => {
+    if (originalExecDescriptor) {
+      Object.defineProperty(database, "exec", originalExecDescriptor);
+      return;
+    }
+    const ownDatabaseMethod: { exec?: DatabaseSync["exec"] } = database;
+    delete ownDatabaseMethod.exec;
+  };
+}
 
 function defineObjectPrototypeProperties(descriptors: PropertyDescriptorMap): void {
-  // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real worker boundary.
+  // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real clone boundary.
   Object.defineProperties(Object.prototype, descriptors);
 }
 
@@ -75,6 +107,36 @@ function input(): AuditEventInput {
   };
 }
 
+function messageEvent(
+  action:
+    | "message.outbound.queued"
+    | "message.outbound.platform-started"
+    | "message.outbound.finished",
+): TrustedMessageAuditEvent {
+  const progress = action !== "message.outbound.finished";
+  return {
+    sourceId: `message-source:${action}`,
+    occurredAt: Date.now(),
+    kind: "message",
+    action,
+    status: progress ? "started" : "succeeded",
+    outcome:
+      action === "message.outbound.queued"
+        ? "queued"
+        : action === "message.outbound.platform-started"
+          ? "platform_started"
+          : "sent",
+    actorType: "agent",
+    actorId: "main",
+    agentId: "main",
+    runId: "message-worker-run",
+    direction: "outbound",
+    channel: "qa-channel",
+    conversationKind: "direct",
+    targetId: "raw-target",
+  } as TrustedMessageAuditEvent;
+}
+
 function decisionReceipt(): DecisionReceiptV1 {
   return {
     schemaVersion: 1,
@@ -110,7 +172,74 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("audit event worker", () => {
+describe("audit event writer", () => {
+  it("keeps progress absent while disabled and routes enabled progress off audit_events", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const disabledWriter = createAuditEventWriter({ stateDir });
+    const disabledRecorder = createAuditEventRecorder({
+      messageMode: "off",
+      writer: disabledWriter,
+    });
+    await disabledWriter.ready;
+    expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
+      false,
+    );
+    disabledRecorder.recordMessage(messageEvent("message.outbound.queued"));
+    await disabledWriter.stop();
+    expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
+      false,
+    );
+
+    const enabledWriter = createAuditEventWriter({ stateDir });
+    const enabledRecorder = createAuditEventRecorder({
+      messageMode: "all",
+      writer: enabledWriter,
+    });
+    enabledRecorder.recordMessage(messageEvent("message.outbound.queued"));
+    enabledRecorder.recordMessage(messageEvent("message.outbound.platform-started"));
+    enabledRecorder.recordMessage(messageEvent("message.outbound.finished"));
+    await enabledWriter.ready;
+    await enabledWriter.stop();
+
+    const { db } = openOpenClawStateDatabase(database);
+    expect(
+      (
+        db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get() as {
+          count: number;
+        }
+      ).count,
+    ).toBe(2);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count,
+    ).toBe(1);
+    expect(
+      (
+        db.prepare("SELECT action FROM audit_events").get() as {
+          action: string;
+        }
+      ).action,
+    ).toBe("message.outbound.finished");
+  });
+
+  it("flushes accepted events through the canonical state connection", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const owner = openOpenClawStateDatabase(database).db;
+    const readDataVersion = () =>
+      (owner.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+    const dataVersionBefore = readDataVersion();
+    const writer = createAuditEventWriter({ stateDir });
+
+    await writer.ready;
+    expect(writer.record(input())).toBe(true);
+    await writer.stop();
+
+    expect(readDataVersion()).toBe(dataVersionBefore);
+    expect(owner.prepare("SELECT run_id FROM audit_events").get()).toEqual({ run_id: "run-1" });
+    expect(owner.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+  });
+
   it("keeps fresh storage identity-free when recovery evidence is missing", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -151,7 +280,58 @@ describe("audit event worker", () => {
     ).toBeUndefined();
   });
 
-  it("persists a generic decision through the bounded worker queue", async () => {
+  it("keeps a cold owner open nonblocking under a held write lock", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    recordAuditEvent(input(), database);
+    const path = openOpenClawStateDatabase(database).path;
+    closeOpenClawStateDatabaseForTest();
+    const contender = new DatabaseSync(path);
+    contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    const errors: string[] = [];
+    const observedBusyTimeouts: number[] = [];
+    let openedBusyTimeout: number | undefined;
+    let restoreExec: (() => void) | undefined;
+    const clearDatabaseListener = registerOpenClawStateDatabaseLifecycleListener((event) => {
+      if (event.kind !== "opened" || event.database.path !== path) {
+        return;
+      }
+      openedBusyTimeout = readSqliteBusyTimeout(event.database.db);
+      restoreExec = observeNonblockingSqliteTransactions(event.database.db, observedBusyTimeouts);
+    });
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+
+    try {
+      await writer.ready;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(contender.isTransaction).toBe(true);
+      expect(openedBusyTimeout).toBe(0);
+      expect(observedBusyTimeouts).not.toHaveLength(0);
+      expect(observedBusyTimeouts.every((busyTimeout) => busyTimeout === 0)).toBe(true);
+      expect(writer.record({ ...input(), sourceId: "cold-owner", runId: "cold-owner" })).toBe(true);
+    } finally {
+      try {
+        contender.exec("ROLLBACK");
+        contender.close();
+      } finally {
+        try {
+          await writer.stop();
+        } finally {
+          restoreExec?.();
+          clearDatabaseListener();
+        }
+      }
+    }
+
+    expect(errors).toEqual([]);
+    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toContain(
+      "cold-owner",
+    );
+  });
+
+  it("persists a generic decision through the bounded queue", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
@@ -200,14 +380,17 @@ describe("audit event worker", () => {
       onError: (error) => errors.push(error),
     });
     await writer.ready;
-    const { db } = openOpenClawStateDatabase(database);
+    const { db, path } = openOpenClawStateDatabase(database);
     expect(
       db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("execution_identity_contexts"),
     ).toBeUndefined();
     db.exec("DELETE FROM audit_identity_keys;");
-    db.exec("BEGIN IMMEDIATE");
+    const contender = new DatabaseSync(path);
+    contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    const observedBusyTimeouts: number[] = [];
+    const restoreExec = observeNonblockingSqliteTransactions(db, observedBusyTimeouts);
     const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
     const admittedAt = Date.now();
 
@@ -246,6 +429,13 @@ describe("audit event worker", () => {
         accepted: true,
       });
       expect(performance.now() - startedAt).toBeLessThan(250);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(contender.isTransaction).toBe(true);
+      expect(observedBusyTimeouts).not.toHaveLength(0);
+      expect(observedBusyTimeouts.every((busyTimeout) => busyTimeout === 0)).toBe(true);
+      expect(readSqliteBusyTimeout(db)).toBe(5_000);
       expect(
         writer.recordExecutionIdentity({
           kind: "retry-reference",
@@ -267,10 +457,15 @@ describe("audit event worker", () => {
       });
     } finally {
       try {
-        db.exec("ROLLBACK");
+        contender.exec("ROLLBACK");
+        contender.close();
       } finally {
         clearSink();
-        await writer.stop();
+        try {
+          await writer.stop();
+        } finally {
+          restoreExec();
+        }
       }
     }
 
@@ -304,7 +499,65 @@ describe("audit event worker", () => {
     }
   });
 
-  it("persists owned unknown and omits inherited evidence through the worker clone boundary", async () => {
+  it("reports sustained lock contention once while backing off retries", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const contentions: string[] = [];
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      stateDir,
+      onContention: (message) => contentions.push(message),
+      onError: (error) => errors.push(error),
+    });
+    await writer.ready;
+    const { path } = openOpenClawStateDatabase(database);
+    const contender = new DatabaseSync(path);
+    contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    let fakeTimersActive = false;
+
+    try {
+      vi.useFakeTimers({
+        toFake: ["setImmediate", "clearImmediate", "setTimeout", "clearTimeout"],
+      });
+      fakeTimersActive = true;
+      expect(
+        writer.record({
+          ...input(),
+          sourceId: "sustained-contention",
+          runId: "sustained-contention",
+        }),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(1_750);
+      expect(contentions).toEqual(["audit event persistence delayed by SQLite lock contention"]);
+    } finally {
+      try {
+        try {
+          contender.exec("ROLLBACK");
+        } finally {
+          contender.close();
+        }
+      } finally {
+        try {
+          const stopPromise = writer.stop();
+          if (fakeTimersActive) {
+            await vi.advanceTimersToNextTimerAsync();
+          }
+          await stopPromise;
+        } finally {
+          if (fakeTimersActive) {
+            vi.useRealTimers();
+          }
+        }
+      }
+    }
+
+    expect(errors).toEqual([]);
+    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toContain(
+      "sustained-contention",
+    );
+  });
+
+  it("persists owned unknown and omits inherited evidence through the queue clone boundary", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
@@ -592,7 +845,7 @@ describe("audit event worker", () => {
     }
   });
 
-  it("keeps unavailable worker, schema, and insert failures off the admission path", async () => {
+  it("keeps schema and insert failures off the admission path", async () => {
     const envelope = captureExecutionIdentityAdmissionEnvelope(
       {
         runId: "nonblocking-failure-run",
@@ -602,18 +855,6 @@ describe("audit event worker", () => {
       },
       { runtimeInstanceId: "runtime-1" },
     );
-
-    const unavailableErrors: string[] = [];
-    const unavailableWriter = createAuditEventWriter({
-      workerUrl: new URL("./missing-audit-event-writer.worker.ts", import.meta.url),
-      onError: (error) => unavailableErrors.push(error),
-    });
-    await unavailableWriter.ready;
-    const unavailableStartedAt = performance.now();
-    expect(unavailableWriter.recordExecutionIdentity(captureWork(envelope))).toBe(false);
-    expect(performance.now() - unavailableStartedAt).toBeLessThan(250);
-    await unavailableWriter.stop();
-    expect(unavailableErrors).toContain("audit event writer is unavailable; dropping metadata");
 
     const schemaStateDir = tempDirs.make("openclaw-audit-writer-");
     const schemaDatabase = { env: { OPENCLAW_STATE_DIR: schemaStateDir } };

@@ -6,7 +6,6 @@ import {
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
-import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../agents/auth-profiles/read-only-availability.js";
@@ -16,8 +15,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import type { AuthProfileStore, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -61,19 +59,16 @@ export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-prof
 export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreForLocalUpdate,
-  updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
+export { listProfilesForProvider, upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 export {
-  listProfilesForProvider,
-  removeProviderAuthProfilesWithLock,
-  upsertAuthProfile,
-  upsertAuthProfileWithLock,
-} from "../agents/auth-profiles/profiles.js";
+  removeProviderAuthProfilesWithLockCompat as removeProviderAuthProfilesWithLock,
+  updateAuthProfileStoreWithLockCompat as updateAuthProfileStoreWithLock,
+  upsertAuthProfileWithLockCompat as upsertAuthProfileWithLock,
+} from "./provider-auth-write-compat.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
-export {
-  readClaudeCliCredentialsCached,
-  readCodexCliCredentialsCached,
-} from "../agents/cli-credentials.js";
+export { readCodexCliCredentialsCached } from "../agents/cli-credentials.js";
+export { readClaudeCliCredentialsCached } from "./provider-auth-claude-compat.js";
 export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -95,7 +90,7 @@ export {
   promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
 } from "../plugins/provider-auth-input.js";
-export { normalizeApiKeyConfig } from "../agents/models-config.providers.secrets.js";
+export { normalizeApiKeyConfig } from "../agents/models-config.providers.secret-helpers.js";
 export {
   buildTokenProfileId,
   validateAnthropicSetupToken,
@@ -599,6 +594,7 @@ export async function resolveProviderAuthProfileApiKey(params: {
   /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
+  const { resolveApiKeyForProfile } = await import("../agents/auth-profiles/oauth.js");
   const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
     return undefined;

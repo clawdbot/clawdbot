@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   nodeHostCommands: [] as string[],
   nodeHostCaps: [] as string[],
   availabilityChanged: undefined as (() => void) | undefined,
+  closeMcpManager: vi.fn(async () => undefined),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => ({
     version: 1 as const,
     nodeId: params.nodeId?.trim() || "node-test",
@@ -105,10 +106,9 @@ vi.mock("./plugin-node-host.js", () => ({
 
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({
-    configuredServerCount: 0,
     descriptors: [],
     callMcpTool: vi.fn(),
-    close: vi.fn(async () => {}),
+    close: mocks.closeMcpManager,
   })),
 }));
 
@@ -159,7 +159,7 @@ async function withReadyNodeHost(
   }
 }
 
-describe("runNodeHost optional publications", () => {
+describe("runNodeHost connection and optional publications", () => {
   beforeEach(() => {
     mocks.capturedGatewayClientOptions.length = 0;
     mocks.capturedGatewayClients.length = 0;
@@ -177,6 +177,98 @@ describe("runNodeHost optional publications", () => {
     mocks.nodeHostCaps = [];
     mocks.availabilityChanged = undefined;
     vi.clearAllMocks();
+  });
+
+  it("exits after three identical permanent Gateway upgrade rejections", async () => {
+    await withReadyNodeHost(async ({ client, options }) => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const rejection = new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "gateway rejected websocket upgrade (HTTP 403)",
+          details: {
+            reason: "websocket-upgrade-rejected",
+            httpStatus: 403,
+            gatewayErrorType: "proxy_attribution_required",
+            gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
+          },
+        });
+        options?.onConnectError?.(rejection);
+        options?.onConnectError?.(rejection);
+        expect(client.stop).not.toHaveBeenCalled();
+        options?.onConnectError?.(rejection);
+
+        await vi.waitFor(() => expect(process.exitCode).toBe(1));
+        expect(client.stop).toHaveBeenCalledOnce();
+        expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
+        expect(stderr).toHaveBeenCalledWith(
+          "node host gateway permanently rejected connection (proxy_attribution_required): Configure gateway.trustedProxies narrowly; exiting\n",
+        );
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+  });
+
+  it("keeps retrying transient upgrade failures and resets permanent rejection streaks", async () => {
+    await withReadyNodeHost(async ({ client, options }) => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const permanentRejection = new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          details: {
+            reason: "websocket-upgrade-rejected",
+            httpStatus: 403,
+            gatewayErrorType: "proxy_attribution_required",
+          },
+        });
+        const rejectTwice = () => {
+          options?.onConnectError?.(permanentRejection);
+          options?.onConnectError?.(permanentRejection);
+        };
+        const transientErrors = [
+          new Error("connect ECONNRESET"),
+          ...[
+            { httpStatus: 429, gatewayErrorType: "rate_limited" },
+            { httpStatus: 503, gatewayErrorType: "proxy_attribution_required" },
+            { httpStatus: 403 },
+            { httpStatus: 403, gatewayErrorType: "another_rejection" },
+          ].map(
+            (details) =>
+              new GatewayClientRequestError({
+                code: "UNAVAILABLE",
+                details: { reason: "websocket-upgrade-rejected", ...details },
+              }),
+          ),
+        ];
+
+        for (const transientError of transientErrors) {
+          rejectTwice();
+          options?.onConnectError?.(transientError);
+          expect(client.stop).not.toHaveBeenCalled();
+        }
+        rejectTwice();
+        options?.onHelloOk?.({
+          type: "hello-ok",
+          protocol: 4,
+          server: { version: "test", connId: "test-connection" },
+          features: { methods: [], events: [] },
+          snapshot: {
+            presence: [],
+            health: {},
+            stateVersion: { presence: 0, health: 0 },
+            uptimeMs: 0,
+          },
+          auth: { role: "node", scopes: [] },
+          policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
+        });
+        rejectTwice();
+        expect(client.stop).not.toHaveBeenCalled();
+        expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("permanently rejected"));
+      } finally {
+        stderr.mockRestore();
+      }
+    });
   });
 
   it("learns unsupported optional publications once per connection without a request flood", async () => {
@@ -226,7 +318,10 @@ describe("runNodeHost optional publications", () => {
         ).toEqual([
           [
             NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-            { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+            {
+              protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+              workerHost: { enabled: false },
+            },
           ],
         ]);
       });

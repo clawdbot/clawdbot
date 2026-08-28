@@ -1,6 +1,5 @@
 import type { DesktopSource, EnvironmentSummary } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { DesktopDocumentOptions } from "../../app/desktop-document-mode.ts";
 import { resolveChatPaneDesktopTarget } from "../../pages/chat/chat-pane-placement.ts";
 
 export function desktopSourceForEnvironment(
@@ -20,7 +19,7 @@ export function desktopSourceForEnvironment(
  * owner pulls the chat page's dependency tree, which must stay out of the startup chunk.
  */
 export function resolveDesktopDocumentTarget(
-  options: DesktopDocumentOptions,
+  options: { source: string | null; session: string | null },
   session: GatewaySessionRow | undefined,
 ): string | null {
   return options.source ?? (options.session ? resolveChatPaneDesktopTarget(session) : null);

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.types.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
@@ -16,7 +16,7 @@ import {
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
 import {
-  applyQaMergePatch,
+  applyQaSuiteGatewayConfigPatches,
   collectQaSuiteTransportPolicy,
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
@@ -65,7 +65,7 @@ export async function runQaFlowSuiteStandard(
     alternateModel,
     fastMode,
     enabledPluginIds,
-    gatewayConfigPatch,
+    gatewayConfigPatches,
     gatewayRuntimeOptions,
     concurrency,
     progressEnabled,
@@ -103,14 +103,14 @@ export async function runQaFlowSuiteStandard(
   });
   const transport = transportFactoryResult.adapter;
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gateway = createQaGatewayChild();
   let env: QaSuiteEnvironment | undefined;
   let preserveGatewayRuntimeDir: string | undefined;
   let runFailed = false;
   let runError: unknown;
-  let result: QaSuiteResult | undefined;
   let completionProgress: string | undefined;
-  let evidenceWritten = false;
+  let terminalScenarios: QaSuiteScenarioResult[] | undefined;
+  let publishTerminalResult: (() => Promise<QaSuiteResult>) | undefined;
   const startedScenarioIds: string[] = [];
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
@@ -123,7 +123,7 @@ export async function runQaFlowSuiteStandard(
       `provider ready: ${sanitizeQaSuiteProgressValue(activeMock?.baseUrl ?? "live")}`,
     );
     writeQaSuiteProgress(progressEnabled, "gateway start");
-    const activeGateway = await startQaGatewayChild({
+    const activeGateway = await gateway.start({
       repoRoot,
       command: params?.sutOpenClawCommand,
       providerBaseUrl: activeMock ? `${activeMock.baseUrl}/v1` : undefined,
@@ -142,10 +142,10 @@ export async function runQaFlowSuiteStandard(
       allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
       mutateConfig:
-        gatewayConfigPatch || params?.mutateConfig
+        gatewayConfigPatches.length > 0 || params?.mutateConfig
           ? (cfg) => {
-              const patchedConfig = gatewayConfigPatch
-                ? (applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig)
+              const patchedConfig = gatewayConfigPatches.length
+                ? (applyQaSuiteGatewayConfigPatches(cfg, gatewayConfigPatches) as OpenClawConfig)
                 : cfg;
               return params?.mutateConfig ? params.mutateConfig(patchedConfig) : patchedConfig;
             }
@@ -156,7 +156,6 @@ export async function runQaFlowSuiteStandard(
         buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
       ),
     });
-    gateway = activeGateway;
     writeQaSuiteProgress(
       progressEnabled,
       `gateway ready: ${sanitizeQaSuiteProgressValue(activeGateway.baseUrl)}`,
@@ -358,11 +357,11 @@ export async function runQaFlowSuiteStandard(
             mockBaseUrl: activeMock?.baseUrl,
           })
         : undefined;
-    const finishedAt = new Date();
+    const scenarioFinishedAt = new Date();
     await captureGatewayHeapCheckpoint("suite-finish");
     const metrics = buildQaSuiteRuntimeMetrics({
       startedAt,
-      finishedAt,
+      finishedAt: scenarioFinishedAt,
       gatewayProcessCpuStartMs,
       gatewayProcessCpuEndMs: activeGateway.getProcessCpuMs?.() ?? null,
       gatewayProcessRssStartBytes,
@@ -378,62 +377,67 @@ export async function runQaFlowSuiteStandard(
     ) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
-    lab.setScenarioRun({
-      kind: "suite",
-      status: "completed",
-      startedAt: startedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      scenarios: [...liveScenarioOutcomes],
-    });
-    const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
-      {
-        repoRoot,
-        outputDir,
-        startedAt,
-        finishedAt,
-        scenarios,
-        metrics,
-        scenarioDefinitions: selectedScenarios,
-        evidenceMode: params?.evidenceMode,
-        transport,
-        providerMode,
-        primaryModel,
-        alternateModel,
-        fastMode,
-        concurrency,
-        channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
-        channelDriver: transportFactoryResult.driver,
-        channelDriverSelection: params?.channelDriverSelection,
-        isolatedWorkers: false,
-        writeEvidenceFile: params?.writeEvidenceFile,
-        // Same "filtered → executed list, unfiltered → null" convention as
-        // the concurrent-path writeQaSuiteArtifacts call above.
-        scenarioIds:
-          params?.scenarioIds && params.scenarioIds.length > 0
-            ? selectedScenarios.map((scenario) => scenario.id)
-            : undefined,
-      },
-    );
-    const latestReport = {
-      outputPath: reportPath,
-      markdown: report,
-      generatedAt: finishedAt.toISOString(),
-    } satisfies QaLabLatestReport;
-    lab.setLatestReport(latestReport);
+    terminalScenarios = scenarios;
     completionProgress = `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`;
-    evidenceWritten = evidence !== undefined && (params?.writeEvidenceFile ?? true);
-    result = {
-      outputDir,
-      evidence,
-      evidencePath,
-      reportPath,
-      summaryPath,
-      report,
-      scenarios,
-      startedScenarioIds,
-      watchUrl: lab.baseUrl,
-      ...(runtimeParityCell ? { runtimeParityCell } : {}),
-    } satisfies QaSuiteResult;
+    publishTerminalResult = async () => {
+      const finishedAt = new Date();
+      const { evidence, evidencePath, report, reportPath, summaryPath } =
+        await writeQaSuiteArtifacts({
+          repoRoot,
+          outputDir,
+          startedAt,
+          finishedAt,
+          scenarios,
+          metrics,
+          scenarioDefinitions: selectedScenarios,
+          evidenceMode: params?.evidenceMode,
+          transport,
+          providerMode,
+          primaryModel,
+          alternateModel,
+          fastMode,
+          concurrency,
+          channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
+          channelDriver: transportFactoryResult.driver,
+          // Nested workers retain the selection for transport setup, but the outer
+          // aggregate alone owns readiness publication under the shared output tree.
+          channelDriverSelection: isQaSuiteNestedRun(params)
+            ? undefined
+            : params?.channelDriverSelection,
+          isolatedWorkers: false,
+          writeEvidenceFile: params?.writeEvidenceFile,
+          // Same "filtered → executed list, unfiltered → null" convention as
+          // the concurrent-path writeQaSuiteArtifacts call above.
+          scenarioIds:
+            params?.scenarioIds && params.scenarioIds.length > 0
+              ? selectedScenarios.map((scenario) => scenario.id)
+              : undefined,
+        });
+      lab.setLatestReport({
+        outputPath: reportPath,
+        markdown: report,
+        generatedAt: finishedAt.toISOString(),
+      } satisfies QaLabLatestReport);
+      lab.setScenarioRun({
+        kind: "suite",
+        status: "completed",
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        scenarios: [...liveScenarioOutcomes],
+      });
+      return {
+        outputDir,
+        evidence,
+        evidencePath,
+        reportPath,
+        summaryPath,
+        report,
+        scenarios,
+        startedScenarioIds,
+        watchUrl: lab.baseUrl,
+        ...(runtimeParityCell ? { runtimeParityCell } : {}),
+      } satisfies QaSuiteResult;
+    };
   } catch (error) {
     runFailed = true;
     runError = error;
@@ -448,13 +452,11 @@ export async function runQaFlowSuiteStandard(
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
       cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
       cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
-      stopGateway: activeGateway
-        ? () =>
-            activeGateway.stop({
-              keepTemp,
-              preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
-            })
-        : undefined,
+      stopGateway: () =>
+        activeGateway.stop({
+          keepTemp,
+          preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+        }),
       disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
       stopProvider: activeMock ? () => activeMock.stop() : undefined,
       finishLab: ownsLab
@@ -468,11 +470,17 @@ export async function runQaFlowSuiteStandard(
             }
           },
     });
-    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
+    throwQaSuiteCleanupErrors({
+      cleanupFailures,
+      runFailed,
+      runError,
+      scenarios: terminalScenarios,
+    });
   }
-  if (!result || !completionProgress) {
+  if (!publishTerminalResult || !completionProgress) {
     throw new Error("QA suite completed without terminal result metadata");
   }
+  const result = await publishTerminalResult();
   if (!params?.captureRuntimeParityCell && !isQaSuiteNestedRun(params)) {
     writeQaSuiteProgress(progressEnabled, completionProgress);
   }

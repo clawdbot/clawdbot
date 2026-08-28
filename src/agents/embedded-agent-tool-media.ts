@@ -1,6 +1,10 @@
 /** Extracts and trust-filters media from embedded-agent tool results. */
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { extractToolResultText } from "./embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -103,7 +107,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "edit",
   "exec",
   "gateway",
-  "image",
+  "view_image",
   "image_generate",
   "memory_get",
   "memory_search",
@@ -232,6 +236,7 @@ export function filterToolResultMediaUrls(
  */
 type ToolResultMediaArtifact = {
   mediaUrls: string[];
+  attachments?: ReplyMediaAttachment[];
   audioAsVoice?: boolean;
   trustedLocalMedia?: boolean;
 };
@@ -247,28 +252,57 @@ function readToolResultDetailsMedia(
   return media;
 }
 
-function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const pushString = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
-    const normalized = value.trim();
-    if (normalized) {
-      urls.push(normalized);
+const REPLY_ATTACHMENT_METADATA_KEYS = new Set([
+  "type",
+  "path",
+  "url",
+  "mediaUrl",
+  "filePath",
+  "mimeType",
+  "name",
+  "sizeBytes",
+  "durationMs",
+  "width",
+  "height",
+]);
+
+function collectStructuredMedia(media: Record<string, unknown>): ToolResultMediaArtifact {
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  const attachmentsByUrl = new Map<string, ReplyMediaAttachment>();
+  const pushString = (value: unknown, attachment?: ReplyMediaAttachment) => {
+    pushUniqueMessagingMediaUrl(mediaUrls, seen, value);
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (normalized && attachment && !attachmentsByUrl.has(normalized)) {
+      attachmentsByUrl.set(normalized, attachment);
     }
   };
   const pushAttachment = (value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return;
     }
-    const attachment = value as Record<string, unknown>;
-    pushString(attachment.media);
-    pushString(attachment.path);
-    pushString(attachment.url);
-    pushString(attachment.mediaUrl);
-    pushString(attachment.filePath);
-    pushString(attachment.fileUrl);
+    const record = value as Record<string, unknown>;
+    // Provider metadata can break Gateway delivery; media trust remains policy-owned.
+    const attachment: ReplyMediaAttachment = Object.fromEntries(
+      Object.entries(record).filter(([key, entry]) => {
+        if (!REPLY_ATTACHMENT_METADATA_KEYS.has(key)) {
+          return false;
+        }
+        if (key === "type") {
+          return entry === "image" || entry === "audio" || entry === "video" || entry === "file";
+        }
+        if (key === "width" || key === "height") {
+          return asPositiveFiniteNumber(entry) !== undefined;
+        }
+        if (key === "sizeBytes" || key === "durationMs") {
+          return asNonNegativeFiniteNumber(entry) !== undefined;
+        }
+        return typeof entry === "string";
+      }),
+    );
+    for (const key of ["media", "path", "url", "mediaUrl", "filePath", "fileUrl"]) {
+      pushString(record[key], attachment);
+    }
   };
   pushString(media.media);
   pushString(media.path);
@@ -286,7 +320,12 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
       pushAttachment(attachment);
     }
   }
-  return uniqueStrings(urls);
+  return {
+    mediaUrls,
+    ...(attachmentsByUrl.size > 0
+      ? { attachments: mediaUrls.map((url) => attachmentsByUrl.get(url) ?? {}) }
+      : {}),
+  };
 }
 
 function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
@@ -318,10 +357,10 @@ export function extractToolResultMediaArtifact(
     if (isNonOutboundToolResultMedia(detailsMedia)) {
       return undefined;
     }
-    const mediaUrls = collectStructuredMediaUrls(detailsMedia);
-    if (mediaUrls.length > 0) {
+    const structuredMedia = collectStructuredMedia(detailsMedia);
+    if (structuredMedia.mediaUrls.length > 0) {
       return {
-        mediaUrls,
+        ...structuredMedia,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       };

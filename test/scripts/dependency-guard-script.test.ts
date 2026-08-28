@@ -28,10 +28,10 @@ import {
   renderClearedDependencyGuardComment,
   renderRemovalOnlyDependencyComment,
   renderTrustedDependencyComment,
-  sanitizeDisplayValue,
   securityApproverSet,
   shouldAutoscrubDependencyLockfiles,
 } from "../../scripts/github/dependency-guard.mjs";
+import { createGuardApproverChecks } from "../../scripts/github/guard-shared.mjs";
 
 const headSha = "a".repeat(40);
 const staleSha = "b".repeat(40);
@@ -241,31 +241,85 @@ describe("dependency guard script", () => {
     await expect(
       findTrustedDependencyGuardActor({
         candidates: untrustedAuthorCandidate,
+        pullRequest: { author_association: "COLLABORATOR" },
         isDependencyApprover: async (login) =>
           login === "security-user" || login === "repo-admin" ? "openclaw-secops" : null,
+        getRepositoryRoleName: async () => "maintain",
       }),
     ).resolves.toBeNull();
     await expect(
       findTrustedDependencyGuardActor({
         candidates: sameActorCandidates,
+        pullRequest: { author_association: "MEMBER" },
         isDependencyApprover: async (login) => (login === "repo-admin" ? "repository admin" : null),
+        getRepositoryRoleName: async () => null,
       }),
     ).resolves.toEqual({
       login: "repo-admin",
       reason: "pull request author; repository admin",
     });
+
+    await expect(
+      findTrustedDependencyGuardActor({
+        candidates: [{ login: "maintainer", source: "pull request author" }],
+        pullRequest: { author_association: "MEMBER" },
+        isDependencyApprover: async () => null,
+        getRepositoryRoleName: async () => "maintain",
+      }),
+    ).resolves.toEqual({
+      login: "maintainer",
+      reason: "pull request author; OpenClaw organization member with repository maintain role",
+    });
+
+    const rejectedAuthorRoles: Array<[string, string]> = [
+      ["COLLABORATOR", "maintain"],
+      ["MEMBER", "write"],
+    ];
+    for (const [authorAssociation, repositoryRole] of rejectedAuthorRoles) {
+      await expect(
+        findTrustedDependencyGuardActor({
+          candidates: [{ login: "contributor", source: "pull request author" }],
+          pullRequest: { author_association: authorAssociation },
+          isDependencyApprover: async () => null,
+          getRepositoryRoleName: async () => repositoryRole,
+        }),
+      ).resolves.toBeNull();
+    }
+  });
+
+  it("uses GitHub role_name without granting Maintain users comment authority", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ permission: "write", role_name: "maintain" })
+      .mockResolvedValueOnce({ permission: "admin", role_name: "admin" });
+    const checks = createGuardApproverChecks({
+      api: { request },
+      owner: "openclaw",
+      repo: "openclaw",
+      securityTeamSlug: "openclaw-secops",
+      explicitSecurityApprovers: new Set(),
+    });
+
+    await expect(checks.getRepositoryRoleName("maintainer")).resolves.toBe("maintain");
+    await expect(checks.isRepositoryAdmin("maintainer")).resolves.toBe(false);
+    await expect(checks.isRepositoryAdmin("admin")).resolves.toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("renders trusted dependency graph comments without blocker language", () => {
     const body = renderTrustedDependencyComment({
-      actor: { login: "repo-admin", reason: "pull request author; repository admin" },
+      actor: {
+        login: "maintainer",
+        reason: "pull request author; OpenClaw organization member with repository maintain role",
+      },
       headSha,
     });
 
     expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
     expect(body).toContain("Dependency graph changes noted");
     expect(body).toContain("informational");
-    expect(body).toContain("@repo-admin");
+    expect(body).toContain("OpenClaw organization member with Maintain or Admin repository access");
+    expect(body).toContain("@maintainer");
     expect(body).toContain(headSha);
     expect(body).not.toContain("are blocked");
     expect(body).not.toContain("/allow-dependencies-change");
@@ -679,11 +733,6 @@ describe("dependency guard script", () => {
     expect(securityApproverSet("vincentkoc, steipete\njoshavant")).toEqual(
       new Set(["vincentkoc", "steipete", "joshavant"]),
     );
-  });
-
-  it("sanitizes display values", () => {
-    expect(sanitizeDisplayValue("abc\u0000def")).toBe("abc?def");
-    expect(sanitizeDisplayValue("x".repeat(300))).toHaveLength(240);
   });
 
   it("bounds GitHub error bodies by content-length", async () => {

@@ -6,18 +6,19 @@ import {
   type GatewayNativeApprovalMethod,
 } from "../infra/approval-gateway-runtime-methods.js";
 import type {
-  GatewayApprovalEventKind,
   GatewayApprovalEventSubscriber,
   GatewayApprovalRequest,
   GatewayApprovalResolved,
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type {
+  GatewayInstanceAgentDispatchOptions,
   GatewayInstanceRuntime,
   GatewayRecoveryRuntime,
 } from "./server-instance-runtime.types.js";
@@ -25,6 +26,10 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { registerGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import {
+  cancelSubagentCompletionToolHandoff,
+  registerSubagentCompletionToolHandoff,
+} from "./subagent-completion-tool-handoff.js";
 
 const loadOutboundMessageRuntime = createLazyRuntimeModule(
   () => import("../infra/outbound/message.js"),
@@ -77,35 +82,84 @@ export function createGatewayInstanceRuntime(
     });
   };
 
-  const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
+  const recoveryClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [WRITE_SCOPE],
+  });
   const recoveryAgentTurns = createInternalAgentTurnFacade({
     client: recoveryClient,
     getContext: options.getContext,
     getMethodRegistry: options.getMethodRegistry,
   });
-  const approvalClient = createSyntheticPluginRuntimeClient({ scopes: [APPROVALS_SCOPE] });
+  const recoveryControlMethods = new Set(["chat.abort"]);
+  const approvalClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [APPROVALS_SCOPE],
+  });
   const approvalMethods = new Set<GatewayNativeApprovalMethod>(GATEWAY_NATIVE_APPROVAL_METHODS);
-  const approvalRouteClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
+  const approvalRouteClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [WRITE_SCOPE],
+  });
   const approvalRouteMethods = new Set(["send"]);
 
   const recovery: GatewayRecoveryRuntime = {
+    abortAgent: async (payload, timeoutMs) =>
+      await dispatch<{ aborted?: boolean; runIds?: string[] }>({
+        allowedMethods: recoveryControlMethods,
+        client: recoveryClient,
+        method: "chat.abort",
+        payload,
+        timeoutMs,
+      }),
     dispatchAgent: async <T>(
       payload: AgentRunRequest,
       timeoutMs?: number,
-      dispatchOptions?: { allowModelOverride?: boolean; scopes?: string[] },
+      dispatchOptions: GatewayInstanceAgentDispatchOptions = {},
     ) => {
       assertDispatchAvailable("agent");
-      const agentTurns = dispatchOptions
+      const delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
+        ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
+        : undefined;
+      const needsDedicatedPrincipal = Boolean(
+        dispatchOptions.allowModelOverride === true ||
+        dispatchOptions.allowSyntheticModelOverride === true ||
+        dispatchOptions.allowSyntheticCronRunContinuation === true ||
+        dispatchOptions.internalDeliveryMediaUrls ||
+        dispatchOptions.internalDeliverySuppressText === true ||
+        delegatedToolPolicyHandoffId ||
+        dispatchOptions.scopes ||
+        dispatchOptions.syntheticScopes,
+      );
+      const agentTurns = needsDedicatedPrincipal
         ? createInternalAgentTurnFacade({
             client: createSyntheticPluginRuntimeClient({
-              allowModelOverride: dispatchOptions.allowModelOverride,
-              scopes: dispatchOptions.scopes,
+              operatorRoleActor: { kind: "system" },
+              allowModelOverride:
+                dispatchOptions.allowModelOverride === true ||
+                dispatchOptions.allowSyntheticModelOverride === true,
+              cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
+              internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
+              internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
+              delegatedToolPolicyHandoffId,
+              scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
             }),
             getContext: options.getContext,
             getMethodRegistry: options.getMethodRegistry,
           })
         : recoveryAgentTurns;
-      return await agentTurns.dispatch<T>(payload, timeoutMs);
+      try {
+        return await agentTurns.dispatch<T>(payload, {
+          expectFinal: dispatchOptions.expectFinal,
+          onAccepted: dispatchOptions.onAccepted,
+          onExecutionStarted: dispatchOptions.onExecutionStarted,
+          onSignalAbort: dispatchOptions.onSignalAbort,
+          signal: dispatchOptions.signal,
+          timeoutMs,
+        });
+      } finally {
+        cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
+      }
     },
     waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number) => {
       assertDispatchAvailable("agent.wait");
@@ -142,7 +196,7 @@ export function createGatewayInstanceRuntime(
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);
 
   const publish = (
-    kind: GatewayApprovalEventKind,
+    kind: ChannelApprovalKind,
     callback: (subscriber: GatewayApprovalEventSubscriber) => void,
     shouldDeliver?: (subscriber: GatewayApprovalEventSubscriber) => boolean,
   ): number => {
@@ -228,6 +282,7 @@ export function createGatewayInstanceRuntime(
       },
     },
     recovery,
+    isAvailable: () => !closed && options.isDispatchAvailable(),
     close: () => {
       closed = true;
       releaseRecoveryRuntime();

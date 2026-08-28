@@ -16,7 +16,10 @@ import {
 } from "./agent-tool-result-middleware.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
-import { getPluginCompatRecord } from "./compat/registry.js";
+import {
+  resolveConversationAccessAllowed,
+  resolvePromptInjectionAllowed,
+} from "./hook-policy-decisions.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
@@ -33,11 +36,10 @@ import {
 } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
-  DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
-  isDeprecatedPluginHookName,
   isPluginHookAgentTrigger,
   isPluginHookName,
+  isPluginHookReplyDispatchKind,
   isPromptInjectionHookName,
 } from "./types.js";
 import type {
@@ -52,33 +54,15 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 
-const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
-
-function normalizeEligibleTriggers(value: unknown) {
+function normalizeHookEligibility<T>(value: unknown, isEligible: (item: unknown) => item is T) {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const triggers = Array.from(value);
-  if (triggers.length === 0 || !triggers.every(isPluginHookAgentTrigger)) {
+  const entries = Array.from(value);
+  if (entries.length === 0 || !entries.every(isEligible)) {
     return undefined;
   }
-  return uniqueValues(triggers);
-}
-
-function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string | undefined {
-  if (!isDeprecatedPluginHookName(hookName)) {
-    return undefined;
-  }
-  const deprecation = DEPRECATED_PLUGIN_HOOKS[hookName];
-  const compat =
-    hookName === "subagent_spawning" ? LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT : undefined;
-  const removeAfter = compat?.removeAfter ?? deprecation.removeAfter ?? "a future breaking release";
-  const code = compat?.code ?? "deprecated-plugin-hook";
-  return (
-    `typed hook "${hookName}" is deprecated (${code}); ` +
-    `${deprecation.reason} Use ${deprecation.replacement}. ` +
-    `This compatibility hook will be removed after ${removeAfter}.`
-  );
+  return uniqueValues(entries);
 }
 
 function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
@@ -415,16 +399,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const diagnostic = formatDeprecatedTypedHookDiagnostic(hookName);
-    if (diagnostic) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: diagnostic,
-      });
-    }
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
+    if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
@@ -433,9 +408,11 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (isConversationHookName(hookName)) {
-      const explicitConversationAccess = policy?.allowConversationAccess;
-      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+    if (
+      isConversationHookName(hookName) &&
+      !resolveConversationAccessAllowed(record.origin, policy)
+    ) {
+      if (record.origin !== "bundled") {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
@@ -446,20 +423,22 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         });
         return;
       }
-      if (record.origin === "bundled" && explicitConversationAccess === false) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
-        });
-        return;
-      }
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+      });
+      return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     const eligibleTriggers =
       hookName === "before_agent_reply"
-        ? normalizeEligibleTriggers(opts?.eligibleTriggers)
+        ? normalizeHookEligibility(opts?.eligibleTriggers, isPluginHookAgentTrigger)
+        : undefined;
+    const eligibleDispatchKinds =
+      hookName === "reply_dispatch"
+        ? normalizeHookEligibility(opts?.eligibleDispatchKinds, isPluginHookReplyDispatchKind)
         : undefined;
     const matcher =
       hookName === "before_tool_call" || hookName === "after_tool_call"
@@ -483,6 +462,10 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),
+      ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
+      ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
+        ? { requiresToolAuthority: true }
+        : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

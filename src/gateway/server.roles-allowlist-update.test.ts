@@ -7,8 +7,9 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
-import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
@@ -572,6 +573,22 @@ describe("gateway node command allowlist", () => {
       const payload = await invokeCapture.waitForInvoke();
       const requestId = payload?.id ?? "";
       const nodeIdFromReq = payload?.nodeId ?? "node-allowed";
+      for (const [progress, message] of [
+        [{ nodeId: "different-node", seq: 0, chunk: "" }, "nodeId mismatch"],
+        [{ nodeId: nodeIdFromReq, seq: 0, chunk: "🐙".repeat(5_000) }, "progress chunk too large"],
+      ] as const) {
+        await expect(
+          allowedClient.request("node.invoke.progress", { invokeId: requestId, ...progress }),
+        ).rejects.toThrow(message);
+      }
+      await expect(
+        allowedClient.request("node.invoke.progress", {
+          invokeId: requestId,
+          nodeId: nodeIdFromReq,
+          seq: 0,
+          chunk: "",
+        }),
+      ).resolves.toEqual({ ok: true, ignored: true });
       await allowedClient.request("node.invoke.result", {
         id: requestId,
         nodeId: nodeIdFromReq,
@@ -581,23 +598,37 @@ describe("gateway node command allowlist", () => {
       const invokeRes = await invokeResP;
       expect(invokeRes.ok).toBe(true);
 
-      const invokeNullResP = rpcReq(ws, "node.invoke", {
-        nodeId: allowedNodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "allowlist-null-payloadjson",
-      });
-      const payloadNull = await invokeCapture.waitForInvoke();
-      const requestIdNull = payloadNull?.id ?? "";
-      const nodeIdNull = payloadNull?.nodeId ?? "node-allowed";
-      await allowedClient.request("node.invoke.result", {
-        id: requestIdNull,
-        nodeId: nodeIdNull,
-        ok: true,
-        payloadJSON: null,
-      });
-      const invokeNullRes = await invokeNullResP;
-      expect(invokeNullRes.ok).toBe(true);
+      for (const [id, result, expectedPayload] of [
+        ["null", { payloadJSON: null, error: null }, undefined],
+        ["object", { payloadJSON: { source: "payloadJSON" } }, { source: "payloadJSON" }],
+        [
+          "explicit",
+          { payloadJSON: { source: "payloadJSON" }, payload: { source: "payload" } },
+          { source: "payload" },
+        ],
+      ] as const) {
+        const invokeResult = rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(
+          ws,
+          "node.invoke",
+          {
+            nodeId: allowedNodeId,
+            command: "canvas.snapshot",
+            params: { format: "png" },
+            idempotencyKey: `allowlist-${id}-payloadjson`,
+          },
+        );
+        const captured = await invokeCapture.waitForInvoke();
+        await allowedClient.request("node.invoke.result", {
+          id: captured.id,
+          nodeId: captured.nodeId,
+          ok: true,
+          ...result,
+        });
+        const response = await invokeResult;
+        expect(response.ok).toBe(true);
+        expect(response.payload?.payloadJSON).toBeNull();
+        expect(response.payload?.payload).toEqual(expectedPayload);
+      }
     } finally {
       await systemClient?.stopAndWait();
       await emptyClient?.stopAndWait();

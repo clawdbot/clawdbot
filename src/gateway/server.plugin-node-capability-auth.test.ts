@@ -19,6 +19,7 @@ import { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } from "./desktop/observ
 import { PLUGIN_NODE_CAPABILITY_PATH_PREFIX } from "./plugin-node-capability.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { authorizePluginNodeCapabilityRequest } from "./server/plugin-node-capability-auth.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -29,7 +30,7 @@ const HTTP_REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
-const CANVAS_WS_PATH = "/__openclaw__/ws";
+const CANVAS_WS_PATH = "/__openclaw__/test/ws";
 const CANVAS_CAPABILITY_PATH_PREFIX = PLUGIN_NODE_CAPABILITY_PATH_PREFIX;
 
 type CanvasHostHandler = {
@@ -565,6 +566,135 @@ describe("gateway plugin node capability auth", () => {
         },
       });
     }, "openclaw-canvas-auth-test-");
+  }, 60_000);
+
+  test("does not charge a stale bearer when a valid node capability succeeds", async () => {
+    await withLoopbackTrustedProxy(async () => {
+      const rateLimiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      });
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        rateLimiter,
+        handleHttpRequest: allowCanvasHostHttp,
+        run: async ({ listener, clients }) => {
+          const capability = "active-node";
+          clients.add(
+            makeWsClient({
+              connId: "c-active-node",
+              clientIp: "203.0.113.99",
+              role: "node",
+              mode: "node",
+              capability,
+              capabilityExpiresAtMs: Date.now() + 60_000,
+            }),
+          );
+          const proxyHeaders = {
+            authorization: "Bearer stale-token",
+            "x-forwarded-for": "203.0.113.99",
+          };
+
+          const scopedCanvas = await fetchCanvas(
+            `http://127.0.0.1:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
+            { headers: proxyHeaders },
+          );
+          expect(scopedCanvas.status).toBe(200);
+          await expectWsConnected(
+            `ws://127.0.0.1:${listener.port}${scopedCanvasPath(capability, CANVAS_WS_PATH)}`,
+            proxyHeaders,
+          );
+
+          const sharedSecretControl = await fetchCanvas(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers: {
+                authorization: "Bearer test-token",
+                "x-forwarded-for": "203.0.113.99",
+              },
+            },
+          );
+          expect(sharedSecretControl.status).toBe(200);
+        },
+      });
+    });
+  }, 60_000);
+
+  test("revalidates a node capability after awaited bearer auth", async () => {
+    const capability = "active-node";
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      exemptLoopback: false,
+      pruneIntervalMs: 0,
+    });
+    const client = makeWsClient({
+      connId: "c-active-node",
+      clientIp: "203.0.113.99",
+      role: "node",
+      mode: "node",
+      capability,
+      capabilityExpiresAtMs: Date.now() + 60_000,
+    });
+    const result = authorizePluginNodeCapabilityRequest({
+      req: {
+        headers: { authorization: "Bearer stale-token" },
+        socket: { remoteAddress: "127.0.0.1" },
+      } as IncomingMessage,
+      auth: tokenResolvedAuth,
+      trustedProxies: [],
+      allowRealIpFallback: false,
+      clients: new Set([client]),
+      nodeCapability: { surface: "canvas" },
+      capability,
+      rateLimiter,
+    });
+
+    try {
+      client.invalidated = true;
+      await expect(result).resolves.toMatchObject({ ok: false, reason: "token_mismatch" });
+      expect(rateLimiter.check("127.0.0.1", "shared-secret").allowed).toBe(false);
+    } finally {
+      rateLimiter.dispose();
+    }
+  });
+
+  test("does not let node capability fallback bypass missing proxy attribution", async () => {
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener, clients }) => {
+        const capability = "active-node";
+        clients.add(
+          makeWsClient({
+            connId: "c-active-node",
+            clientIp: "203.0.113.99",
+            role: "node",
+            mode: "node",
+            capability,
+            capabilityExpiresAtMs: Date.now() + 60_000,
+          }),
+        );
+
+        const response = await fetchCanvas(
+          `http://127.0.0.1:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
+          {
+            headers: {
+              authorization: "Bearer stale-token",
+              "x-forwarded-for": "203.0.113.99",
+            },
+          },
+        );
+
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { type: "proxy_attribution_required" },
+        });
+      },
+    });
   }, 60_000);
 
   test("rejects malformed raw HTTP request targets without disrupting gateway", async () => {

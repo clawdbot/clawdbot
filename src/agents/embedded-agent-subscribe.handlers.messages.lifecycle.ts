@@ -15,10 +15,14 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
-import { hasAssistantVisibleReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import {
+  hasAssistantVisibleReply,
+  resolveManagedStreamMediaUrls,
+} from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   buildAssistantStreamData,
   emitAssistantMessageStart,
+  emitReasoningEnd,
   extractStandaloneMessageToolText,
   hasMessageToolOnlySourceDelivery,
   isOpenAiCompletionsAssistantMessage,
@@ -152,6 +156,10 @@ export function handleMessageEnd(
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
+  // Provider completion can omit thinking_end; close the visible lane before final output.
+  if (!suppressMessageToolOnlySourceReplyOutput) {
+    emitReasoningEnd(ctx);
+  }
   ctx.noteLastAssistant(assistantMessage);
   ctx.noteCompletedAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
@@ -243,10 +251,13 @@ export function handleMessageEnd(
   const parsedText = trimmedText ? parseReplyDirectives(trimmedText) : null;
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+  const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
     ctx.state.thinkingTagStream = createThinkingTagStreamState();
+    ctx.state.deltaBufferIsCommentary = false;
+    ctx.state.hasFlushedPartialText = false;
     ctx.state.blockBuffer = "";
     ctx.blockChunker?.reset();
     ctx.state.blockState.thinking = false;
@@ -299,6 +310,7 @@ export function handleMessageEnd(
       delta: finalStreamDelta,
       replace: shouldReplaceFinalStream,
       mediaUrls,
+      managedMediaUrls,
       phase: assistantPhase,
     });
     ctx.emitAssistantStreamData(data);

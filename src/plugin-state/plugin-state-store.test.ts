@@ -8,9 +8,10 @@ import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
-  OPENCLAW_STATE_SCHEMA_VERSION,
+  isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
 } from "../state/openclaw-state-db.js";
@@ -26,7 +27,6 @@ import {
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
-  isPluginStateDatabaseOpen,
   pluginStateEntriesInKeyRange,
   registerPluginStateSyncSequencedJournalEntry,
   resetPluginStateStoreForTests,
@@ -810,7 +810,10 @@ describe("plugin state keyed store", () => {
       await expect(store.register("non-enumerable", nonEnumerable)).rejects.toThrow(
         PluginStateStoreError,
       );
-      await expectPluginStateStoreError(store.register("big", "x".repeat(65_537)), {
+      // UTF-8 bytes, including JSON quotes, determine the 1 MiB boundary.
+      const boundary = "é".repeat(524_287);
+      await expect(store.register("large", boundary)).resolves.toBeUndefined();
+      await expectPluginStateStoreError(store.register("big", `${boundary}x`), {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
 
@@ -889,7 +892,7 @@ describe("plugin state keyed store", () => {
       await store.register("k", { ok: true });
       resetPluginStateStoreForTests();
 
-      expect(isPluginStateDatabaseOpen()).toBe(false);
+      expect(isOpenClawStateDatabaseOpen()).toBe(false);
       await expect(store.lookup("k")).resolves.toEqual({ ok: true });
       await expect(store.entries()).resolves.toMatchObject([{ key: "k", value: { ok: true } }]);
       expect(
@@ -902,7 +905,7 @@ describe("plugin state keyed store", () => {
         }),
       ).toMatchObject([{ key: "k", value: { ok: true } }]);
       expect(countPluginStateLiveEntries("discord")).toBe(1);
-      expect(isPluginStateDatabaseOpen()).toBe(false);
+      expect(isOpenClawStateDatabaseOpen()).toBe(false);
     });
   });
 

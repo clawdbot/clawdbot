@@ -4,7 +4,6 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
-import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMobileUiCommand
@@ -14,9 +13,7 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
-import android.webkit.WebView
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -291,58 +288,6 @@ class InvokeDispatcherTest {
       assertEquals(listOf("start", "stop", "cancel"), talk.calls)
     }
 
-  @Test
-  fun handleInvoke_presentAndHideDriveTheShellOwnedCanvasState() =
-    runTest {
-      val appContext = RuntimeEnvironment.getApplication()
-      val canvas = CanvasController()
-      val webView = WebView(appContext)
-      canvas.attach(webView)
-      val dispatcher = newDispatcher(canvas = canvas)
-
-      val present =
-        dispatcher.handleInvoke(
-          OpenClawCanvasCommand.Present.rawValue,
-          """{"url":"https://example.com/canvas"}""",
-        )
-
-      assertNull(present.error)
-      assertEquals("https://example.com/canvas", canvas.currentUrl())
-      assertEquals(CanvasController.PresentationState.Visible, canvas.presentationState.value)
-
-      val hide = dispatcher.handleInvoke(OpenClawCanvasCommand.Hide.rawValue, null)
-
-      assertNull(hide.error)
-      assertEquals(CanvasController.PresentationState.Hidden, canvas.presentationState.value)
-      canvas.releaseHost()
-      webView.destroy()
-    }
-
-  @Test
-  fun handleInvoke_rejectsBackgroundCanvasPresentationBeforeMountingAHost() =
-    runTest {
-      val canvas = CanvasController()
-      val result =
-        newDispatcher(isForeground = false, canvas = canvas)
-          .handleInvoke(OpenClawCanvasCommand.Present.rawValue, """{"url":"https://example.com"}""")
-
-      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
-      assertEquals(CanvasController.PresentationState.Unmounted, canvas.presentationState.value)
-    }
-
-  @Test
-  fun handleInvoke_doesNotCommitNavigationWhenTheShellHostCannotAttach() =
-    runTest {
-      val canvas = CanvasController()
-      val result =
-        newDispatcher(canvas = canvas)
-          .handleInvoke(OpenClawCanvasCommand.Present.rawValue, """{"url":"https://example.com"}""")
-
-      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
-      assertNull(canvas.currentUrl())
-      assertEquals(CanvasController.PresentationState.Unmounted, canvas.presentationState.value)
-    }
-
   private fun newDispatcher(
     isForeground: Boolean = true,
     cameraEnabled: Boolean = false,
@@ -359,12 +304,10 @@ class InvokeDispatcherTest {
     motionPedometerAvailable: Boolean = false,
     mobileUiAvailable: Boolean = false,
     talkHandler: TalkHandler = InvokeDispatcherFakeTalkHandler(),
-    canvas: CanvasController = CanvasController(),
   ): InvokeDispatcher {
     val appContext = RuntimeEnvironment.getApplication()
     shadowOf(appContext.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, smsTelephonyAvailable)
     return InvokeDispatcher(
-      canvas = canvas,
       cameraHandler = newCameraHandler(appContext),
       locationHandler =
         LocationHandler.forTesting(
@@ -384,11 +327,6 @@ class InvokeDispatcherTest {
       calendarHandler = CalendarHandler.forTesting(appContext, InvokeDispatcherFakeCalendarDataSource()),
       motionHandler = MotionHandler.forTesting(appContext, InvokeDispatcherFakeMotionDataSource()),
       smsHandler = SmsHandler(SmsManager(appContext)),
-      a2uiHandler =
-        A2UIHandler(
-          canvas = canvas,
-          json = Json { ignoreUnknownKeys = true },
-        ),
       debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
       mobileUiHandler = MobileUiHandler(),
@@ -403,8 +341,6 @@ class InvokeDispatcherTest {
       photosAvailable = { photosAvailable },
       installedAppsSharingEnabled = { installedAppsSharingEnabled },
       debugBuild = { debugBuild },
-      onCanvasA2uiPush = {},
-      onCanvasA2uiReset = {},
       motionActivityAvailable = { motionActivityAvailable },
       motionPedometerAvailable = { motionPedometerAvailable },
       mobileUiAvailable = { mobileUiAvailable },
@@ -450,8 +386,6 @@ private class InvokeDispatcherFakeNotificationsStateProvider : NotificationsStat
 }
 
 private class InvokeDispatcherFakeSystemNotificationPoster : SystemNotificationPoster {
-  override fun isAuthorized(): Boolean = true
-
   override fun post(request: SystemNotifyRequest) = Unit
 }
 

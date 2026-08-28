@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../../lib/sessions/session-key.ts";
 import {
@@ -286,10 +287,7 @@ function loadBackgroundTasks(
             observeTaskTerminal(current, task, "event");
           }
         }
-        current.error =
-          error instanceof Error && error.message.trim()
-            ? error.message.trim()
-            : t("tasksPage.loadFailed");
+        current.error = formatUiError(error, t("tasksPage.loadFailed"));
       }
     } finally {
       const current = getBackgroundTasksState(host);
@@ -347,7 +345,11 @@ function bufferBackgroundTaskEvent(
 
 /** Apply a gateway `task` event to the pane's snapshot. Events for other
  * sessions are ignored; a registry restore forces a refetch. */
-export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: unknown) {
+export function handleBackgroundTasksEvent(
+  host: BackgroundTasksHost,
+  payload: unknown,
+  presented = true,
+) {
   const state = host.backgroundTasksState;
   if (
     !state ||
@@ -375,10 +377,23 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
         }
       : normalizedEvent;
   const bufferedEvent = bufferBackgroundTaskEvent(host, state, event);
+  if (event.action === "restored" && !presented) {
+    // Restore replaces the registry snapshot. Retire any older page without
+    // issuing hidden work; presentation will start the authoritative reload.
+    state.requestId += 1;
+    state.pendingTaskEvents = null;
+    state.pendingReload = false;
+    state.loading = false;
+    state.tasks = null;
+    state.loadedClient = null;
+    state.error = null;
+    host.requestUpdate?.();
+    return;
+  }
   if (state.tasks === null) {
     // The exact in-flight snapshot already replays its buffered events; a
     // redundant stale reload would immediately undo that initial-load replay.
-    if (!bufferedEvent) {
+    if (presented && !bufferedEvent) {
       loadBackgroundTasks(host, state, true);
     }
     return;
@@ -465,10 +480,7 @@ async function loadBackgroundTaskDetail(
     }
   } catch (error) {
     if (getBackgroundTasksState(host) === state) {
-      const message =
-        error instanceof Error && error.message.trim()
-          ? error.message.trim()
-          : t("chat.backgroundTasks.detailFailed");
+      const message = formatUiError(error, t("chat.backgroundTasks.detailFailed"));
       state.taskDetailErrors = new Map(state.taskDetailErrors).set(rowId, message);
     }
   } finally {
@@ -516,14 +528,12 @@ async function cancelBackgroundTask(
     // Refusals (already terminal, stale id, no cancellation handle) are
     // successful responses with cancelled=false; surface them like errors.
     if (!result?.cancelled) {
-      state.error = result?.reason?.trim() || t("tasksPage.cancelFailed");
+      const reason = result?.reason?.trim();
+      state.error = reason ? formatUiError(reason) : t("tasksPage.cancelFailed");
     }
   } catch (error) {
     if (getBackgroundTasksState(host) === state) {
-      state.error =
-        error instanceof Error && error.message.trim()
-          ? error.message.trim()
-          : t("tasksPage.cancelFailed");
+      state.error = formatUiError(error, t("tasksPage.cancelFailed"));
     }
   } finally {
     if (getBackgroundTasksState(host) === state) {
@@ -547,6 +557,7 @@ export function createBackgroundTasksProps(
     narrowLayout?: boolean;
     openTaskId?: string;
     onOpenTaskDetail?: (task: TaskSummary) => void;
+    presented?: boolean;
   } = {},
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
@@ -558,6 +569,7 @@ export function createBackgroundTasksProps(
   // Load eagerly even while collapsed: the toggle badge is how running work
   // gets detected at all, so it cannot wait for the rail to be opened first.
   if (
+    opts.presented !== false &&
     host.connected &&
     !state.loading &&
     !state.error &&
@@ -586,6 +598,7 @@ export function createBackgroundTasksProps(
     loading: state.loading,
     error: state.error,
     tasks: state.tasks,
+    activeCount: state.tasks?.filter(isActiveTask).length ?? 0,
     subagentActivity,
     openTaskId: opts.openTaskId,
     taskDetails: state.taskDetails,

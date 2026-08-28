@@ -1,15 +1,11 @@
 import type fs from "node:fs";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { isRecord } from "../utils.js";
-import { pinSurvivorWorkspaceForRosterCollapse } from "./agent-workspace-roster-transition.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -23,7 +19,6 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
-import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import {
   EnvRefArrayMutationError,
   restoreEnvRefsFromMap,
@@ -39,22 +34,20 @@ import {
   formatConfigOverwriteLogMessage,
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
-import { prepareAuthInheritanceOwnerForWrite } from "./io.auth-inheritance-owner.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
-import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.js";
 import {
   collectEnvRefPaths,
   containsConfigIncludeDirective,
   hashConfigRaw,
   hasConfigMeta,
   parseConfigJson5,
+  rejectConfigNonFiniteNumbers,
   resolveConfigSnapshotHash,
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
-import { prepareSessionStoreOwnershipForWrite } from "./io.session-store-owner.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteOptions,
@@ -63,7 +56,7 @@ import type {
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
-import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { createConfigValidationFailedError } from "./io.write-errors.js";
 import {
   preserveIncludeOwnedConfigForWrite,
   resolvePersistCandidateForWrite,
@@ -79,37 +72,27 @@ import {
   stampConfigVersion,
   tightenStateDirPermissionsIfNeeded,
 } from "./io.write-safety.js";
+import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
+import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
-import {
-  materializeLegacyAgentOwnershipForActiveChannelsResult,
-  validateConfigObjectRawWithPlugins,
-} from "./validation.js";
+import { validateConfigObjectRawWithPlugins } from "./validation.js";
 
 function hasOwnIncludeDirective(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && Object.hasOwn(value, INCLUDE_KEY);
 }
 
 function hasIncludedGatewayModeOwner(value: unknown): boolean {
-  if (hasOwnIncludeDirective(value)) {
-    return true;
-  }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const gateway = (value as Record<string, unknown>).gateway;
-  if (hasOwnIncludeDirective(gateway)) {
-    return true;
-  }
-  if (gateway === null || typeof gateway !== "object" || Array.isArray(gateway)) {
-    return false;
-  }
-  return hasOwnIncludeDirective((gateway as Record<string, unknown>).mode);
+  return (
+    hasOwnIncludeDirective(value) ||
+    (isRecord(value) &&
+      (hasOwnIncludeDirective(value.gateway) ||
+        (isRecord(value.gateway) && hasOwnIncludeDirective(value.gateway.mode))))
+  );
 }
 
 export async function writeConfigFileFromContext(
@@ -122,7 +105,6 @@ export async function writeConfigFileFromContext(
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
-  let nextConfig = cfg;
   const snapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,
@@ -134,153 +116,23 @@ export async function writeConfigFileFromContext(
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
 
-  const sourceRosterMigration = migratePersistedImplicitMainRoster(
-    snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
-  );
-  const retainedLegacyDefaultAgentId = sourceRosterMigration.retainedLegacyDefaultAgentId;
-  const previousEntries = listAgentEntries(snapshot.config);
-  const nextEntries = listAgentEntries(nextConfig);
-  const nextAgentIds = new Set(nextEntries.map((entry) => normalizeAgentId(entry.id)));
-  const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
-  const entersMultiAgent = previousEntries.length <= 1 && nextEntries.length > 1;
-  const previousSoleRemains = Boolean(
-    previousSoleAgentId && nextAgentIds.has(normalizeAgentId(previousSoleAgentId)),
-  );
-  const writesOwnershipTopology =
-    !isDeepStrictEqual(previousEntries, nextEntries) ||
-    [...(options.explicitSetPaths ?? []), ...unsetPaths].some(
-      (writePath) =>
-        writePath[0] === "agents" &&
-        (writePath.length === 1 ||
-          writePath[1] === "entries" ||
-          writePath[1] === "list" ||
-          writePath[1] === "ownership"),
-    );
-  const persistOwnership =
-    entersMultiAgent || (retainedLegacyDefaultAgentId !== undefined && writesOwnershipTopology);
-  const keepOwnership = nextEntries.length > 1 && snapshot.config.agents?.ownership === "explicit";
-  const stampOwnership =
-    (persistOwnership || keepOwnership) && nextConfig.agents?.ownership === undefined;
-  if (stampOwnership) {
-    nextConfig = {
-      ...nextConfig,
-      agents: { ...nextConfig.agents, ownership: "explicit" },
-    };
-  }
-
-  const workspaceCollapse = pinSurvivorWorkspaceForRosterCollapse(
-    snapshot.config,
+  const {
     nextConfig,
-    deps.env,
-  );
-  nextConfig = workspaceCollapse.config;
-
-  const authInheritanceOwnership = prepareAuthInheritanceOwnerForWrite({
-    currentConfig: snapshot.config,
-    targetConfig: nextConfig,
-    writesOwnershipTopology,
-    explicitSetPaths: options.explicitSetPaths,
+    explicitSetPaths,
+    explicitSetValueSource,
+    preserveLegacyAgentRoster,
+    cronOwner,
+  } = prepareConfigWriteTopology({
+    ...snapshotRead,
+    nextConfig: cfg,
+    options,
+    unsetPaths,
     env: deps.env,
   });
-  nextConfig = authInheritanceOwnership.config;
-
-  const sessionStoreOwnership = prepareSessionStoreOwnershipForWrite({
-    currentConfig: snapshot.config,
-    currentStore: (snapshot.sourceConfigBeforeMigrations ?? snapshot.config).session?.store,
-    targetConfig: nextConfig,
-    env: deps.env,
-    explicitSetPaths: options.explicitSetPaths,
-    explicitSetValueSource: options.explicitSetValueSource,
-  });
-  nextConfig = sessionStoreOwnership.config;
-  const { sameFixedSessionStore } = sessionStoreOwnership;
-  const retainedFleetOwner =
-    retainedLegacyDefaultAgentId &&
-    writesOwnershipTopology &&
-    nextAgentIds.has(normalizeAgentId(retainedLegacyDefaultAgentId))
-      ? retainedLegacyDefaultAgentId
-      : undefined;
-  const ownerAgentId =
-    (entersMultiAgent && previousSoleRemains ? previousSoleAgentId : undefined) ??
-    retainedFleetOwner;
-  const ownershipMaterialization = ownerAgentId
-    ? materializeLegacyAgentOwnershipForActiveChannelsResult(
-        nextConfig,
-        ownerAgentId,
-        deps.env,
-        snapshotRead.pluginMetadataSnapshot?.manifestRegistry.plugins,
-        { materializeSessionStore: sameFixedSessionStore, materializeWorkspace: true },
-      )
-    : { config: nextConfig, insertedPaths: [] as string[][] };
-  nextConfig = ownershipMaterialization.config;
-  const insertedPaths = [
-    ...(persistOwnership || keepOwnership
-      ? (sourceRosterMigration.insertedPaths ?? []).filter(
-          (entry) =>
-            sameFixedSessionStore || entry.join(".") !== "agents.defaults.sessionStore.agentId",
-        )
-      : []),
-    ...((persistOwnership || keepOwnership) &&
-    retainedLegacyDefaultAgentId &&
-    Array.isArray(snapshot.config.bindings) &&
-    !isDeepStrictEqual(snapshot.sourceConfigBeforeMigrations?.bindings, snapshot.config.bindings)
-      ? [["bindings"]]
-      : []),
-    ...ownershipMaterialization.insertedPaths.concat(workspaceCollapse.insertedPaths),
-    ...authInheritanceOwnership.insertedPaths, // Persisting explicit ownership must replace the authored legacy roster too.
-    ...(persistOwnership ? [["agents", "entries"]] : []), // Otherwise projection restores the retired default marker.
-    ...(stampOwnership ? [["agents", "ownership"]] : []),
-  ];
-
-  const nextSessionStoreConfig = nextConfig.agents?.defaults?.sessionStore;
-  if (
-    !ownerAgentId &&
-    writesOwnershipTopology &&
-    previousEntries.length === 1 &&
-    previousSoleAgentId &&
-    !previousSoleRemains &&
-    sameFixedSessionStore &&
-    (nextSessionStoreConfig === undefined ||
-      (isRecord(nextSessionStoreConfig) && !Object.hasOwn(nextSessionStoreConfig, "agentId")))
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      agents: {
-        ...nextConfig.agents,
-        defaults: {
-          ...nextConfig.agents?.defaults,
-          sessionStore: {
-            ...(isRecord(nextSessionStoreConfig) ? nextSessionStoreConfig : {}),
-            agentId: normalizeAgentId(previousSoleAgentId),
-          },
-        },
-      },
-    };
-    insertedPaths.push(["agents", "defaults", "sessionStore", "agentId"]);
-  }
-
-  const topologyPaths = [
-    ...new Map(insertedPaths.map((entry) => [entry.join("\0"), entry])).values(),
-  ];
-  assertAutomaticBindingsWriteAllowed({
-    bindingsIncludeOwned: snapshot.bindingsIncludeOwned === true,
-    ownershipPaths: topologyPaths,
-  });
-  const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyPaths];
-  const explicitSetValueSource = structuredClone(
-    options.explicitSetValueSource ?? nextConfig,
-  ) as Record<string, unknown>;
-  for (const ownershipPath of topologyPaths) {
-    setConfigValueAtPath(
-      explicitSetValueSource,
-      ownershipPath,
-      getConfigValueAtPath(nextConfig as Record<string, unknown>, ownershipPath),
-    );
-  }
-  const cronOwnerRefusal = persistOwnership
+  const cronOwnerRefusal = cronOwner
     ? await prepareCronOwnerWriteRefusal(snapshot.config, {
         storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
-        ...(retainedFleetOwner ? { provenOwnerAgentId: retainedFleetOwner } : {}),
+        ...cronOwner,
         env: deps.env,
       })
     : undefined;
@@ -313,7 +165,7 @@ export async function writeConfigFileFromContext(
       explicitSetValueSource,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
-      preserveLegacyAgentRoster: Boolean(retainedLegacyDefaultAgentId) && !writesOwnershipTopology,
+      preserveLegacyAgentRoster,
     });
   } else if (snapshot.exists && hasAuthoredIncludes) {
     persistCandidate = preserveIncludeOwnedConfigForWrite({
@@ -353,23 +205,39 @@ export async function writeConfigFileFromContext(
 
   persistCandidate = applyUnsetPathsForWrite(persistCandidate as OpenClawConfig, unsetPaths);
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
-  const validationSourceCandidate = containsConfigIncludeDirective(persistCandidate)
-    ? restoreEnvVarRefs(persistCandidate, snapshot.parsed, envForRestore)
-    : persistCandidate;
-  const validationCandidate = containsConfigIncludeDirective(validationSourceCandidate)
-    ? context.resolveRuntimePreflightSourceConfig(validationSourceCandidate as OpenClawConfig)
-    : validationSourceCandidate;
-  const validated = validateConfigObjectRawWithPlugins(validationCandidate, {
-    env: deps.env,
-    pluginValidation: options.skipPluginValidation ? "skip" : "full",
-    preservedLegacyRootKeys: options.preservedLegacyRootKeys,
-  });
-  if (!validated.ok) {
-    const issue = validated.issues[0];
-    throw new Error(
-      formatConfigValidationFailure(issue?.path || "<root>", issue?.message ?? "invalid"),
-    );
-  }
+  const resolveValidationCandidate = (candidate: unknown) =>
+    containsConfigIncludeDirective(candidate)
+      ? context.resolveRuntimePreflightSourceConfig(
+          restoreEnvVarRefs(candidate, snapshot.parsed, envForRestore) as OpenClawConfig,
+        )
+      : candidate;
+  const validationCandidate = resolveValidationCandidate(persistCandidate);
+  const validateCandidate = (candidate: unknown) => {
+    const result = validateConfigObjectRawWithPlugins(candidate, {
+      env: deps.env,
+      pluginValidation: options.skipPluginValidation ? "skip" : "full",
+      semanticValidation: "strict",
+      preservedLegacyRootKeys: options.preservedLegacyRootKeys,
+    });
+    if (!result.ok) {
+      throw createConfigValidationFailedError(result.issues);
+    }
+    return result;
+  };
+  // Validate authored structure before stamping can replace malformed parents.
+  validateCandidate(validationCandidate);
+  const materialized = stampConfigVersion(
+    // SAFETY: the original resolved input was just validated; retain raw values, not parser defaults.
+    validationCandidate as OpenClawConfig,
+    options.lastTouchedVersionOverride,
+    snapshot.exists ? (snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig) : null,
+  );
+  // Resolve policy from included facts, but persist only its delta beside authored directives.
+  persistCandidate = applyMergePatch(
+    persistCandidate,
+    createMergePatch(validationCandidate, materialized),
+  );
+  const validated = validateCandidate(resolveValidationCandidate(persistCandidate));
   const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
   // Capture before commit so rollback cannot restore a watcher-updated slot.
   const priorSnapshotAuditRecord = readLatestConfigSnapshotAuditRecord({
@@ -418,11 +286,8 @@ export async function writeConfigFileFromContext(
     deps.homedir(),
   ) as OpenClawConfig;
   const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
-  const stampedOutputConfig = stampConfigVersion(
-    outputConfig,
-    options.lastTouchedVersionOverride,
-    snapshot.exists ? snapshot.parsed : null,
-  );
+  const stampedOutputConfig = stampConfigVersion(outputConfig, options.lastTouchedVersionOverride);
+  rejectConfigNonFiniteNumbers(stampedOutputConfig);
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
   const previousHash = resolveConfigSnapshotHash(snapshot);
@@ -442,18 +307,10 @@ export async function writeConfigFileFromContext(
   const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
   const authoredGateway = (snapshot.parsed as { gateway?: unknown }).gateway;
-  const authoredGatewayMode =
-    authoredGateway !== null &&
-    typeof authoredGateway === "object" &&
-    !Array.isArray(authoredGateway)
-      ? (authoredGateway as Record<string, unknown>).mode
-      : undefined;
   const gatewayModeAuthoredLocally =
-    authoredGateway !== null &&
-    typeof authoredGateway === "object" &&
-    !Array.isArray(authoredGateway) &&
+    isRecord(authoredGateway) &&
     Object.hasOwn(authoredGateway, "mode") &&
-    !hasOwnIncludeDirective(authoredGatewayMode);
+    !hasOwnIncludeDirective(authoredGateway.mode);
   const preservesIncludedGatewayMode =
     options.allowIncludeAncestorExplicitSetPaths === true &&
     gatewayModeBefore != null &&

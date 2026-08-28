@@ -20,12 +20,28 @@ import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 
+function rethrowPromptFinalizationFailure(failed: boolean, error: unknown): void {
+  if (failed) {
+    throw error;
+  }
+}
+
 export abstract class AgentSessionPrompting extends AgentSessionBase {
+  private logicalPromptActive = false;
+
   // =========================================================================
   // Prompting
   // =========================================================================
 
   private async runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+    if (this.logicalPromptActive) {
+      throw new Error(
+        "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
+      );
+    }
+    // Retry and compaction gaps briefly make the core idle, but the logical prompt
+    // still owns continuation and its one terminal fact until this scope closes.
+    this.logicalPromptActive = true;
     let endedForTurnHandoff = false;
     try {
       await this.agent.prompt(messages);
@@ -39,14 +55,34 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
     } finally {
       this.systemPromptOverride = undefined;
-      this.flushPendingBashMessages();
-      // Consume handoff state before callbacks can start a nested run and set it again.
-      endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
-      this.lastRunEndedForTurnHandoff = false;
-      // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
-      if (!endedForTurnHandoff) {
-        await this.currentExtensionRunner.emit({ type: "agent_settled" });
+      let flushFailed = false;
+      let flushError: unknown;
+      try {
+        this.flushPendingBashMessages();
+      } catch (error) {
+        flushFailed = true;
+        flushError = error;
       }
+      this.logicalPromptActive = false;
+      let terminalFailed = false;
+      let terminalError: unknown;
+      try {
+        // Consume handoff state before callbacks can start a nested run and set it again.
+        endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
+        this.lastRunEndedForTurnHandoff = false;
+        // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
+        if (endedForTurnHandoff) {
+          this.emit({ type: "agent_handoff" });
+        } else {
+          this.emit({ type: "agent_settled" });
+          await this.currentExtensionRunner.emit({ type: "agent_settled" });
+        }
+      } catch (error) {
+        terminalFailed = true;
+        terminalError = error;
+      }
+      rethrowPromptFinalizationFailure(flushFailed, flushError);
+      rethrowPromptFinalizationFailure(terminalFailed, terminalError);
     }
   }
 
@@ -100,10 +136,10 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } satisfies PersistedUserTurnMessage;
     const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
     return imageFactIndexes
-      ? ({
+      ? Object.assign({}, message, {
           ...message,
           __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes },
-        } as unknown as PersistedUserTurnMessage)
+        })
       : message;
   }
 
@@ -160,7 +196,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
 
       // If streaming, queue via steer() or followUp() based on option
-      if (this.isStreaming) {
+      if (this.isStreaming || this.logicalPromptActive) {
         if (!options?.streamingBehavior) {
           throw new Error(
             "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
@@ -418,11 +454,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Internal: Queue a follow-up message (already expanded, no extension command check).
    */
   private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
-    const message = {
-      role: "user",
-      content: this.createUserContent(text, images),
-      timestamp: Date.now(),
-    } satisfies AgentMessage;
+    const message = this.createUserMessage(text, images);
     this.trackQueuedUserMessage(message, "followUp", text);
     this.agent.followUp(message);
   }

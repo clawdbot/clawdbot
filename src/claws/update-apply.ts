@@ -4,6 +4,7 @@ import { listAgentEntries } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { clawTargetPackages } from "./application-provenance.js";
 import {
@@ -86,6 +87,21 @@ function comparablePlan(plan: ClawUpdatePlan): unknown {
   };
 }
 
+function unchangedPackagePaths(plan: ClawUpdatePlan, manifest: ClawManifest): Set<string> {
+  const unchangedIds = new Set(
+    plan.actions
+      .filter((action) => action.kind === "package" && action.action === "unchanged")
+      .map((action) => action.id),
+  );
+  const paths = new Set<string>();
+  manifest.packages.forEach((pkg, index) => {
+    if (unchangedIds.has(`${pkg.kind}:${pkg.ref}`)) {
+      paths.add(`$.packages[${index}]`);
+    }
+  });
+  return paths;
+}
+
 export async function applyClawUpdatePlan(
   plan: ClawUpdatePlan,
   params: {
@@ -99,6 +115,7 @@ export async function applyClawUpdatePlan(
     sourceMcpServers: Record<string, Record<string, unknown>>;
     consentPlanIntegrity: string | undefined;
     packagePreflight?: ClawAddPlanContext["packagePreflight"];
+    runtime?: RuntimeEnv;
     commitConfig?: ConfigCommit;
     rebuildPlan?: typeof buildClawUpdatePlan;
     buildAddPlan?: typeof buildClawAddPlan;
@@ -219,9 +236,13 @@ export async function applyClawUpdatePlan(
       },
     },
   });
+  const unchangedPaths = unchangedPackagePaths(fresh, params.targetManifest);
   if (
     targetAddPlan.blockers.some(
-      (blocker) => blocker.code !== "agent_id_collision" && blocker.code !== "workspace_collision",
+      (blocker) =>
+        blocker.code !== "agent_id_collision" &&
+        blocker.code !== "workspace_collision" &&
+        !(blocker.code === "skill_version_conflict" && unchangedPaths.has(blocker.path)),
     )
   ) {
     throw new ClawUpdateMutationError(
@@ -229,10 +250,24 @@ export async function applyClawUpdatePlan(
       "The target Claw cannot be safely materialized for update.",
     );
   }
+  for (const action of fresh.actions.filter(
+    (candidate) => candidate.kind === "package" && candidate.action === "unchanged",
+  )) {
+    const addAction = targetAddPlan.actions.find(
+      (candidate) => candidate.kind === "package" && candidate.id === action.id,
+    );
+    if (!addAction || addAction.details?.expectedState === "absent") {
+      throw new ClawUpdateMutationError(
+        "update_changed",
+        `Package ${JSON.stringify(action.id)} is no longer present; build a new dry-run plan.`,
+      );
+    }
+  }
   const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
   for (const action of fresh.actions.filter(
     (candidate) =>
       candidate.kind === "package" &&
+      candidate.action !== "unchanged" &&
       candidate.action !== "release" &&
       candidate.action !== "remove",
   )) {
@@ -270,7 +305,10 @@ export async function applyClawUpdatePlan(
       targetPackages.get(action.id)?.kind === "plugin",
   );
   const remainingPackageActions = fresh.actions.filter(
-    (action) => action.kind === "package" && !requirementActions.includes(action),
+    (action) =>
+      action.kind === "package" &&
+      action.action !== "unchanged" &&
+      !requirementActions.includes(action),
   );
   const applyPackageActions = async (
     actions: ClawUpdateAction[],

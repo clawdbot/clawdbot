@@ -45,21 +45,29 @@ verifies the selected exact package, and installs that exact version. Missing
 or inconsistent registry data fails closed; it never falls back to `latest`.
 If the selected version is older than the installed version, the normal
 downgrade confirmation still applies. The CLI persists the channel after a
-successful core update; a direct `npm install -g openclaw@extended-stable`
-does not update `update.channel`, but a final extended-stable package version
-still checks only the verified `extended-stable` selector for update availability.
+successful core update; a direct
+`npm install -g openclaw@extended-stable --allow-scripts=openclaw` does not
+update `update.channel`, but a final extended-stable package version still
+checks only the verified `extended-stable` selector for update availability.
+That direct command is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
+Version-bound runtime plugins converge to the base release cohort when the
+core is a correction release (for example, `YYYY.M.P-2` uses plugin
+`YYYY.M.P`).
 Catalog installs created by current OpenClaw versions retain that default
 intent. Older records that contain only an exact version remain pinned because
 OpenClaw cannot safely distinguish an old automatic pin from a user pin; run
 `openclaw plugins update @openclaw/name` once on the extended-stable channel
 to opt that plugin back into exact-core tracking.
 
-`--channel dev` gives a persistent moving GitHub `main` checkout. For a one-off
-package update, `--tag main` maps to the `github:openclaw/openclaw#main` package
-spec and installs it directly through the target package manager (npm/pnpm/bun).
+`--channel dev` gives a persistent moving GitHub `main` checkout. Package
+installs reject the `--tag main` shorthand because the workspace checkout is
+not a self-contained package artifact. Use `openclaw update --channel dev` to
+switch to the supported checkout and build flow. Other explicit package specs
+keep their package-manager behavior.
 
 For managed plugins, a missing beta release is a warning, not a failure: the
 core update can still succeed while a plugin falls back to its recorded
@@ -68,6 +76,8 @@ default/latest release.
 See [Release channels](/install/development-channels) for channel semantics.
 
 ## Switch between npm and git installs
+
+Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
@@ -93,6 +103,11 @@ checkout. The `stable`, `extended-stable`, and `beta` channels use package
 installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
 the service metadata and restarts it unless you pass `--no-restart`.
+
+Dev updates build the complete runtime, including plugins and the Control UI,
+without generating TypeScript declarations. Preflight still validates the
+candidate, and the final checkout is rebuilt after checkout or rebase. Ordinary
+`pnpm build` and package builds continue to generate declarations.
 
 For package installs with a managed Gateway service, `openclaw update` targets
 the package root used by that service. If the shell `openclaw` command comes
@@ -154,8 +169,11 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 
 ## Alternative: manual npm, pnpm, or bun
 
+The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
+
 ```bash
-npm i -g openclaw@latest
+npm i -g openclaw@latest --allow-scripts=openclaw
 ```
 
 Prefer `openclaw update` for supervised installs: it can coordinate the package
@@ -171,9 +189,12 @@ manual replacement. Use the same profile flags/environment you normally use for
 that Gateway. Replace `/usr/bin/npm` with the system npm that owns the
 root-owned global prefix on your host:
 
+The npm command below follows the same version contract: use the flag on npm 12
+or npm 11.16+, and omit it on npm 11.15 and earlier.
+
 ```bash
 openclaw gateway stop
-sudo /usr/bin/npm i -g openclaw@latest
+sudo /usr/bin/npm i -g openclaw@latest --allow-scripts=openclaw
 openclaw gateway install --force
 openclaw gateway restart
 ```
@@ -194,11 +215,13 @@ Node version during `preinstall`; only then does OpenClaw verify the packaged
 `dist` inventory and swap the clean package tree into the real global prefix. A
 packed completion guard is omitted from the expected inventory and removed only
 after `preinstall` succeeds, so skipped lifecycle scripts also fail before the
-swap. On npm 12 and newer, the updater approves only the candidate OpenClaw
-lifecycle; transitive dependency scripts remain blocked. This avoids npm
-overlaying a new package onto stale files from the old one. If the install
-command fails, OpenClaw retries once with `--omit=optional`, which helps hosts
-where native optional dependencies cannot compile.
+swap. The updater probes the owning npm before mutation. On npm 11.15 and
+earlier it omits the unsupported lifecycle-policy flag. On npm 12 and npm
+11.16+, it approves only the candidate OpenClaw lifecycle; transitive
+dependency scripts remain unapproved.
+This avoids npm overlaying a new package onto stale files from the old one. If
+the install command fails, OpenClaw retries once with `--omit=optional`, which
+helps hosts where native optional dependencies cannot compile.
 
 OpenClaw-managed npm update and plugin-update commands also clear npm's
 `min-release-age` supply-chain quarantine (or the older `before` config key)
@@ -206,7 +229,7 @@ for the child npm process. That policy exists for general protection, but an
 explicit OpenClaw update means "install the selected release now."
 
 ```bash
-pnpm add -g openclaw@latest
+pnpm add -g --allow-build=openclaw openclaw@latest
 ```
 
 If pnpm 11 installed OpenClaw 2026.7.1, run that manual command once. That
@@ -224,8 +247,11 @@ comma-separated group manually so its sibling packages and build policy stay
 intact.
 
 ```bash
-bun add -g openclaw@latest
+bun add -g --trust openclaw@latest
 ```
+
+`--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
+path applies the same OpenClaw-only Bun trust when it owns the install.
 
 ### Advanced npm install topics
 
@@ -266,6 +292,10 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 
 You can also choose the update channel and enable automatic updates from
 **Settings → Updates** (`/settings/updates`) in the Control UI.
+Recorded failures on that page include typed **Check status** and **Retry
+update** actions when the connected Gateway supports them. See [Update
+troubleshooting](/install/update-troubleshooting) for reason codes, guided
+recovery, CLI fallbacks, and diagnostics to collect.
 For a `dev` git install, opening this page refreshes the tracked upstream and
 shows whether the checkout is current, ahead, diverged, unavailable, or a
 specific number of commits behind. It also shows exact and relative build,
@@ -300,9 +330,13 @@ Every failed apply ends the campaign so the UI does not remain on
 in the restart sentinel and surface after the Gateway returns; direct
 unsupervised failures remain in the running Gateway's logs.
 
-`OPENCLAW_NO_AUTO_UPDATE=1` and external-supervisor mode disable automatic
-applies entirely. Startup update hints can still run unless
-`update.checkOnStart` is also disabled.
+`update.checkOnStart: false` disables all automatic update checks, feature
+statistics, and update notices, even when `update.auto.enabled` is `true`.
+`OPENCLAW_NO_AUTO_UPDATE=1` also disables automatic checks and applies.
+External-supervisor mode disables automatic applies; startup update hints can
+still run unless `update.checkOnStart` is also disabled. See
+[Usage telemetry and update checks](/gateway/telemetry) for the information
+sent by the daily check and optional anonymous feature statistics.
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this
@@ -357,6 +391,10 @@ openclaw doctor
 ```
 
 Migrates config, audits DM policies, and checks gateway health. Details: [Doctor](/gateway/doctor)
+
+If you use the unpacked Chrome extension, also run `openclaw browser doctor --browser-profile chrome`.
+For a version-mismatch warning, reload the extension from `chrome://extensions`;
+fully restart Chrome if the warning remains.
 
 ### Restart the gateway
 
@@ -431,16 +469,23 @@ automatically replacing the package again.
 If the CLI update path is unavailable, use the same package manager and install
 scope that own the current Gateway:
 
+The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
+
 ```bash
 openclaw gateway stop
-npm i -g openclaw@<known-good-version>
+npm i -g openclaw@<known-good-version> --allow-scripts=openclaw
 openclaw gateway install --force
 openclaw gateway restart
 ```
 
-Replace `npm` with `pnpm` or `bun` when that manager owns the install. During
-incident recovery, prevent an enabled auto-updater from immediately applying a
-newer release by setting `OPENCLAW_NO_AUTO_UPDATE=1` in the Gateway environment.
+For a pnpm-owned install, use
+`pnpm add -g --allow-build=openclaw openclaw@<known-good-version>` instead. For
+a Bun-owned install, use
+`bun add -g --trust openclaw@<known-good-version>`; `--trust` allows OpenClaw's
+lifecycle scripts. During incident recovery, prevent an enabled auto-updater
+from immediately applying a newer release by setting
+`OPENCLAW_NO_AUTO_UPDATE=1` in the Gateway environment.
 
 ### Roll back a source checkout
 

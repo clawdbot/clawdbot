@@ -2,7 +2,7 @@
 
 // Enforces core tsgo project boundaries and sparse-checkout safety.
 import { spawnSync } from "node:child_process";
-import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mts";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {

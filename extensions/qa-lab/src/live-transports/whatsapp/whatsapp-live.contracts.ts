@@ -3,7 +3,8 @@ import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
-import type { startQaGatewayChild } from "../../gateway-child.js";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { QaGatewayChild } from "../../gateway-child.js";
 export { toQaError as toWhatsAppQaError } from "../../errors.js";
 
 export type WhatsAppQaRuntimeEnv = {
@@ -14,7 +15,6 @@ export type WhatsAppQaRuntimeEnv = {
   groupJid?: string;
 };
 
-export type WhatsAppQaApprovalKind = "exec" | "plugin";
 export type WhatsAppQaApprovalDecision = "allow-once" | "deny";
 type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
 type WhatsAppQaScenarioPosture = "direct-gateway" | "native-approval" | "user-path";
@@ -30,7 +30,7 @@ type WhatsAppQaMessageSendMode =
       mediaType: string;
     };
 
-export type WhatsAppQaGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+export type WhatsAppQaGateway = QaGatewayChild;
 export type WhatsAppQaGatewayRuntime = Pick<
   WhatsAppQaGateway,
   "call" | "restart" | "workspaceDir"
@@ -149,7 +149,7 @@ export type WhatsAppQaMessageScenarioRun = {
 };
 
 export type WhatsAppQaApprovalScenarioRun = {
-  approvalKind: WhatsAppQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision: WhatsAppQaApprovalDecision;
   decisionMode?: WhatsAppQaApprovalDecisionMode;
   kind: "approval";

@@ -22,6 +22,7 @@ import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-deliv
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
+  loadSessionEntry,
   persistSessionTranscriptTurn,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
@@ -67,7 +68,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
-import { hasClaudeSession } from "../cli-runner/claude-live-registry.js";
+import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
   getCliSessionBinding,
@@ -76,14 +77,20 @@ import {
 } from "../cli-session.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
+import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
+import { appendGitCoauthorContext } from "../git-coauthor-attribution.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
+import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -487,6 +494,8 @@ export function runAgentAttempt(params: {
   preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;
   modelOverride: string;
+  modelHasVision?: boolean;
+  modelThinkingCapability?: RunEmbeddedAgentInternalParams["modelThinkingCapability"];
   configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
@@ -502,6 +511,7 @@ export function runAgentAttempt(params: {
   body: string;
   transcriptBody?: string;
   isFallbackRetry: boolean;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: FastMode;
   fastModeStartedAtMs?: number;
@@ -522,13 +532,15 @@ export function runAgentAttempt(params: {
     stream: string;
     data?: Record<string, unknown>;
     sessionKey?: string;
-  }) => void;
+  }) => void | Promise<void>;
   deferTerminalLifecycle?: boolean;
+  deferredLifecycle?: DeferredEmbeddedRunLifecycleManager;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   pluginsEnabled?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
+  pluginGeneration: PreparedModelRuntimePluginGeneration | undefined;
   allowTransientCooldownProbe?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
@@ -539,7 +551,18 @@ export function runAgentAttempt(params: {
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
+  onSuccessfulAuthProfile?: (selection: {
+    authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
+  }) => void;
 }) {
+  const onRuntimeActivity = (info: { phase: string }) => {
+    // CLI preparation and child launch do not prove a native turn. Parsed
+    // assistant/tool activity does, even when the backend omits lifecycle events.
+    if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
+      void params.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+    }
+  };
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
   const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
@@ -553,6 +576,7 @@ export function runAgentAttempt(params: {
           ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
           : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  const isSubagentLane = params.opts.lane === AGENT_LANE_SUBAGENT;
   // A completion handoff relays frozen child output, so only a verified private
   // capability plus persisted requester lineage may restore its tool surface.
   const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
@@ -787,6 +811,7 @@ export function runAgentAttempt(params: {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
+    params.deferredLifecycle?.handoffToCli();
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
@@ -822,6 +847,10 @@ export function runAgentAttempt(params: {
       params.opts.inputProvenance?.kind === "inter_session"
         ? cliEffectivePrompt
         : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
+    const cliModelPrompt = appendGitCoauthorContext(cliPrompt, params.opts.gitCoauthorAttribution);
+    const cliPersistencePrompt = params.opts.gitCoauthorAttribution
+      ? (cliTranscriptPrompt ?? cliPrompt)
+      : cliTranscriptPrompt;
     const mutableCliSessionStore =
       params.sessionKey && params.sessionStore && params.storePath
         ? {
@@ -834,7 +863,7 @@ export function runAgentAttempt(params: {
       const hasManagedClaudeLiveSession = Boolean(
         isClaudeCliProvider(cliExecutionProvider) &&
         cliSessionBinding?.sessionId &&
-        hasClaudeSession({
+        hasCliLiveSession({
           backendId: cliExecutionProvider,
           agentAccountId: params.runContext.accountId,
           agentId: params.sessionAgentId,
@@ -910,6 +939,7 @@ export function runAgentAttempt(params: {
             sessionTarget: params.sessionTarget,
             sessionEntry: params.sessionEntry,
             chatType: params.sessionEntry?.chatType,
+            contextWindow: params.sessionEntry?.contextWindow,
             agentId: params.sessionAgentId,
             trigger: "user",
             sessionFile: params.sessionFile,
@@ -919,20 +949,25 @@ export function runAgentAttempt(params: {
             workspaceDir: params.workspaceDir,
             cwd: params.cwd,
             config: params.cfg,
-            prompt: cliPrompt,
-            transcriptPrompt: cliTranscriptPrompt,
+            prompt: cliModelPrompt,
+            transcriptPrompt: cliPersistencePrompt,
             modelProvider: params.providerOverride,
+            modelHasVision: params.modelHasVision,
             provider: cliExecutionProvider,
             model: params.modelOverride,
+            modelRoutingProvenance: params.modelRoutingProvenance,
             thinkLevel: params.resolvedThinkLevel,
             timeoutMs: params.timeoutMs,
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
             lifecycleGeneration: params.lifecycleGeneration,
+            abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
             onExecutionStarted: params.opts.onExecutionStarted,
+            onExecutionPhase: onRuntimeActivity,
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
+            cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
             sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
             requireExplicitMessageTarget:
               params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
@@ -1017,7 +1052,7 @@ export function runAgentAttempt(params: {
             onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
             disableTools,
-            allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
+            allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
             ...(forkStoreParams && !forkCliSessionOnResume
               ? {
                   onBeforeForkedCliSessionRetry: async (retry) => {
@@ -1047,7 +1082,18 @@ export function runAgentAttempt(params: {
               ? {
                   onBeforeFreshCliSessionRetry: async (retry) => {
                     if (
-                      hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore)
+                      hasNewGeneratedMediaTaskForSessionKey(
+                        params.sessionKey,
+                        mediaTaskIdsBefore,
+                      ) ||
+                      getCliSessionBinding(
+                        loadSessionEntry({
+                          sessionKey: mutableCliSessionStore.sessionKey,
+                          storePath: mutableCliSessionStore.storePath,
+                          readConsistency: "latest",
+                        }),
+                        cliExecutionProvider,
+                      )?.sessionId !== retry.sessionId
                     ) {
                       return false;
                     }
@@ -1111,15 +1157,25 @@ export function runAgentAttempt(params: {
     });
   }
 
-  const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
+  const embeddedModelPrompt = appendGitCoauthorContext(
+    effectivePrompt,
+    params.opts.gitCoauthorAttribution,
+  );
+  const embeddedPersistencePrompt = params.opts.gitCoauthorAttribution
+    ? (continuationTranscriptBody ?? effectivePrompt)
+    : continuationTranscriptBody;
+  const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     preparedRunAdmission: params.preparedRunAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     chatType: params.sessionEntry?.chatType,
+    contextWindow: params.sessionEntry?.contextWindow,
     sessionTarget: params.sessionTarget,
     sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
     trigger: "user",
+    // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
+    terminalReplyExpectation: isSubagentLane ? "optional" : undefined,
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
     agentAccountId: params.runContext.accountId,
@@ -1141,13 +1197,18 @@ export function runAgentAttempt(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
+    permissionMode: params.sessionEntry?.permissionMode,
+    sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
+    ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: embeddedAgentHarnessOverride,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
+    agentHarnessRuntimePreparationHint:
+      agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
     skillsSnapshot: params.skillsSnapshot,
-    prompt: effectivePrompt,
-    transcriptPrompt: continuationTranscriptBody,
+    prompt: embeddedModelPrompt,
+    transcriptPrompt: embeddedPersistencePrompt,
     // CLI-origin retries cannot rely on transcript replay: orphan-user repair
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -1156,6 +1217,9 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
+    modelRoutingProvenance: params.modelRoutingProvenance,
+    modelHasVision: params.modelHasVision,
+    modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
@@ -1205,14 +1269,28 @@ export function runAgentAttempt(params: {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     disableTools,
-    allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
+    allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
+    onExecutionPhase: onRuntimeActivity,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
+    onDeferredLifecycleOwner: params.deferredLifecycle?.adopt,
+    onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
+    onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
+      ? (successfulProfileId) =>
+          params.onSuccessfulAuthProfile?.({
+            authProfileId: successfulProfileId,
+            authProfileIdSource: successfulProfileId
+              ? successfulProfileId === authProfileId
+                ? harnessAuthSelection.authProfileIdSource
+                : "auto"
+              : undefined,
+          })
+      : undefined,
     onExecutionStarted: (info) => {
       params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {

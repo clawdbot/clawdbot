@@ -14,11 +14,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  attachGatewayUpgradeHandler,
-  attachWorkerGatewayUpgradeHandler,
-  createGatewayHttpServer,
-} from "./server-http.js";
+import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import { createGatewayWsTestLogger } from "./server/ws-connection.test-helpers.js";
@@ -225,6 +221,7 @@ class PublicWorkerHarness {
     attachGatewayWsConnectionHandler({
       wss: this.wss,
       clients: this.clients,
+      bootId: "worker-ingress-test-boot",
       preauthConnectionBudget: this.preauthBudget,
       port: 0,
       getResolvedAuth: () => RESOLVED_AUTH,
@@ -331,6 +328,16 @@ describe("public worker ingress", () => {
         harness.url(),
         workerConnect(harness.credential, { environmentId: "worker-other" }),
       );
+      const staleBuild = await rejectWorker(
+        harness.url(),
+        workerConnect(harness.credential, {
+          handshake: {
+            ...BUILD,
+            bundleHash: "b".repeat(64),
+            protocolFeatures: [...BUILD.protocolFeatures],
+          },
+        }),
+      );
       harness.credentialRecord.expiresAtMs = Date.now() - 1;
       const expiredCredential = await rejectWorker(
         harness.url(),
@@ -338,6 +345,7 @@ describe("public worker ingress", () => {
       );
 
       expect(badCredential).toEqual(wrongEnvironment);
+      expect(staleBuild).toEqual(badCredential);
       expect(expiredCredential).toEqual(badCredential);
       expect(badCredential).toEqual({
         response: {
@@ -357,6 +365,9 @@ describe("public worker ingress", () => {
       );
       expect(harness.logWsControl.warn).toHaveBeenCalledWith(
         "worker admission rejected reason=environment-mismatch",
+      );
+      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+        "worker admission rejected reason=bundle-mismatch",
       );
       expect(harness.logWsControl.warn).toHaveBeenCalledWith(
         "worker admission rejected reason=credential-expired",
@@ -387,42 +398,6 @@ describe("public worker ingress", () => {
       await waitForOpen(worker);
       worker.send(JSON.stringify(connectFrame(workerConnect(harness.credential))));
       await expect(workerClose).resolves.toEqual({ code: 1008, reason: "invalid-handshake" });
-    });
-  });
-
-  it("shares the gateway preauth budget without affecting loopback worker ingress", async () => {
-    await withHarness({ preauthLimit: 1 }, async (harness) => {
-      const publicWorker = new WebSocket(harness.url());
-      await waitForOpen(publicWorker);
-
-      await expect(requestUpgradeRejection(harness.port, "/")).resolves.toEqual({
-        status: 503,
-        body: "Too many unauthenticated sockets",
-      });
-
-      const loopbackServer = http.createServer();
-      attachWorkerGatewayUpgradeHandler({
-        httpServer: loopbackServer,
-        wss: harness.wss,
-        preauthConnectionBudget: createPreauthConnectionBudget(1),
-      });
-      await new Promise<void>((resolve) => {
-        loopbackServer.listen(0, "127.0.0.1", resolve);
-      });
-      const loopbackPort = (loopbackServer.address() as AddressInfo).port;
-      const loopbackWorker = new WebSocket(`ws://127.0.0.1:${loopbackPort}`);
-      try {
-        await waitForOpen(loopbackWorker);
-      } finally {
-        const loopbackClose = waitForClose(loopbackWorker);
-        const publicClose = waitForClose(publicWorker);
-        loopbackWorker.close();
-        publicWorker.close();
-        await Promise.all([loopbackClose, publicClose]);
-        await new Promise<void>((resolve, reject) => {
-          loopbackServer.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
     });
   });
 

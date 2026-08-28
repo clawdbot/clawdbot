@@ -37,10 +37,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Install ShellCheck
-        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
-
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Shell syntax
         run: bash -n scripts/install.sh scripts/install-cli.sh
 
@@ -70,7 +67,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install.sh in Docker
         run: |
           timeout --kill-after=30s 20m docker run --rm \
@@ -87,13 +84,182 @@ jobs:
             node:24-bookworm-slim \
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
+  debian-installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install.sh on Debian without Node
+        run: |
+          timeout --kill-after=30s 20m docker run --rm -i \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            debian:bookworm-slim \
+            bash -s <<'CONTAINER'
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq ca-certificates curl
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          node --version | grep -E '^v24\.[0-9]+\.[0-9]+$'
+          node -e '
+            const { DatabaseSync } = require("node:sqlite");
+            const db = new DatabaseSync(":memory:");
+            console.log(`SQLite ${db.prepare("SELECT sqlite_version() AS version").get().version}`);
+            db.close();
+          '
+          openclaw --version
+          CONTAINER
+
+  linux-build-tools-failure:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install.sh reports build-tool failures honestly
+        run: |
+          timeout --kill-after=10s 5m docker run --rm -i \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            debian:bookworm \
+            bash -s <<'CONTAINER'
+          set -euo pipefail
+          export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+          cat > /usr/local/sbin/apt-get <<'STUB'
+          #!/bin/bash
+          for arg in "$@"; do
+            if [[ "$arg" == "build-essential" ]]; then
+              : > /tmp/build-tools-stub-triggered
+              echo "E: simulated package manager failure" >&2
+              exit 100
+            fi
+          done
+          for arg in "$@"; do
+            if [[ "$arg" == "update" ]]; then
+              exit 0
+            fi
+          done
+          echo "unexpected apt-get call: $*" >&2
+          exit 99
+          STUB
+
+          cat > /usr/local/bin/curl <<'STUB'
+          #!/bin/sh
+          echo "network blocked by failure-propagation lane" >&2
+          exit 97
+          STUB
+          chmod +x /usr/local/sbin/apt-get /usr/local/bin/curl
+
+          installer_status=0
+          bash /tmp/install.sh --no-onboard --no-prompt </dev/null > /tmp/out.log 2>&1 || installer_status=$?
+          cat /tmp/out.log
+
+          if [[ ! -f /tmp/build-tools-stub-triggered ]]; then
+            echo "stub did not trigger" >&2
+            exit 2
+          fi
+          if ! grep -aFq "Installing build tools failed" /tmp/out.log; then
+            echo "installer did not report the simulated build-tools failure" >&2
+            exit 2
+          fi
+          if grep -aFq "Build tools installed" /tmp/out.log; then
+            echo "REGRESSION: installer claimed success after failure" >&2
+            exit 1
+          fi
+          if (( installer_status == 0 )); then
+            echo "installer unexpectedly completed despite blocked package and network access" >&2
+            exit 3
+          fi
+          echo "ok: failure reported honestly"
+          CONTAINER
+
+  linux-non-root:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install.sh as a non-root user
+        run: |
+          timeout --kill-after=30s 20m docker run --rm -i \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            node:24-bookworm-slim \
+            bash -s <<'CONTAINER'
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq sudo
+          useradd --create-home --shell /bin/bash installer
+          printf '%s\n' 'installer ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/installer
+          chmod 0440 /etc/sudoers.d/installer
+
+          sudo -u installer -H bash <<'USER'
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sudo -n true
+          initial_prefix="$(npm config get prefix)"
+          if [[ -w "$initial_prefix" || -w "$initial_prefix/lib" ]]; then
+            echo "initial npm prefix is writable; relocation path would not run" >&2
+            exit 1
+          fi
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          test "$(npm config get prefix)" = "$HOME/.npm-global"
+          "$HOME/.npm-global/bin/openclaw" --version
+          grep -Fxq 'export PATH="$HOME/.npm-global/bin:$PATH"' "$HOME/.bashrc"
+          echo "ok: non-root prefix relocation and bash PATH persistence verified"
+          USER
+          CONTAINER
+
+  fedora-installer:
+    name: Fedora installer (${{ matrix.user }})
+    strategy:
+      fail-fast: false
+      matrix:
+        user: [root, non-root]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install.sh on Fedora
+        env:
+          INSTALL_USER: ${{ matrix.user }}
+        run: |
+          if [[ "$INSTALL_USER" == "root" ]]; then
+            timeout --kill-after=30s 20m docker run --rm -i \
+              -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+              fedora:44 \
+              bash -s <<'CONTAINER'
+          set -euo pipefail
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          openclaw --version
+          CONTAINER
+          else
+            timeout --kill-after=30s 20m docker run --rm -i \
+              -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+              fedora:44 \
+              bash -s <<'CONTAINER'
+          set -euo pipefail
+          dnf install -y -q sudo shadow-utils
+          useradd --create-home --shell /bin/bash installer
+          printf '%s\n' 'installer ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/installer
+          chmod 0440 /etc/sudoers.d/installer
+
+          sudo -u installer -H bash <<'USER'
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sudo -n true
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          test "$(npm config get prefix)" = "$HOME/.npm-global"
+          "$HOME/.npm-global/bin/openclaw" --version
+          grep -Fxq 'export PATH="$HOME/.npm-global/bin:$PATH"' "$HOME/.bashrc"
+          echo "ok: Fedora non-root install and PATH persistence verified"
+          USER
+          CONTAINER
+          fi
+
   macos-installer:
     runs-on: macos-15
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
@@ -112,18 +278,80 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+
+      - name: install.ps1 strict option binding
+        shell: pwsh
+        run: |
+          $scriptPath = (Resolve-Path ".\scripts\install.ps1").Path
+          $env:OPENCLAW_DRY_RUN = "1"
+          $env:OPENCLAW_NO_ONBOARD = "1"
+
+          function Invoke-InstallerProbe {
+            param(
+              [string]$HostCommand,
+              [string[]]$InstallerArgs
+            )
+
+            $output = @(& $HostCommand -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scriptPath @InstallerArgs 2>&1 | ForEach-Object { $_.ToString() })
+            return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
+          }
+
+          foreach ($hostCommand in @("powershell.exe", "pwsh.exe")) {
+            if (-not (Get-Command $hostCommand -ErrorAction SilentlyContinue)) {
+              throw "Required PowerShell host is unavailable: $hostCommand"
+            }
+
+            $invalidCases = @(
+              @{ Label = "unknown option"; Args = @("-DryRnu") },
+              @{ Label = "positional argument"; Args = @("-DryRun", "beta") }
+            )
+            foreach ($invalidCase in $invalidCases) {
+              $result = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs $invalidCase.Args
+              if ($result.ExitCode -eq 0 -or $result.Output -match '\[OK\] Windows detected') {
+                throw "$hostCommand accepted $($invalidCase.Label).`n$($result.Output)"
+              }
+            }
+
+            $env:OPENCLAW_INSTALL_METHOD = "bogus"
+            try {
+              $invalidEnvironment = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-NoOnboard")
+              if ($invalidEnvironment.ExitCode -eq 0 -or $invalidEnvironment.Output -match '\[OK\] Windows detected') {
+                throw "$hostCommand accepted invalid OPENCLAW_INSTALL_METHOD.`n$($invalidEnvironment.Output)"
+              }
+            } finally {
+              Remove-Item Env:OPENCLAW_INSTALL_METHOD -ErrorAction SilentlyContinue
+            }
+
+            $help = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-?")
+            if ($help.ExitCode -ne 0 -or $help.Output -match '\[OK\] Windows detected') {
+              throw "$hostCommand failed to handle -? before installer startup.`n$($help.Output)"
+            }
+
+            $valid = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-DryRun", "-NoOnboard", "-InstallMethod", "npm")
+            if ($valid.ExitCode -ne 0 -or $valid.Output -notmatch '\[OK\] Install method: npm') {
+              throw "$hostCommand rejected documented named options.`n$($valid.Output)"
+            }
+          }
 
       - name: install.ps1 dry run
         shell: pwsh
         run: .\scripts\install.ps1 -DryRun -NoOnboard -InstallMethod npm
 
   sync-website:
-    needs: [static, linux-docker, macos-installer, windows-installer]
+    needs:
+      - static
+      - linux-docker
+      - debian-installer
+      - linux-build-tools-failure
+      - linux-non-root
+      - fedora-installer
+      - macos-installer
+      - windows-installer
     if: >
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_website)
@@ -137,13 +365,13 @@ jobs:
 
       - name: Checkout OpenClaw
         if: env.OPENCLAW_GH_TOKEN != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: openclaw
 
       - name: Checkout openclaw.ai
         if: env.OPENCLAW_GH_TOKEN != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw.ai
           ref: main
@@ -178,13 +406,9 @@ jobs:
 
       - name: Setup Node.js
         if: steps.changes.outputs.changed == 'true'
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
-
-      - name: Install ShellCheck
-        if: steps.changes.outputs.changed == 'true'
-        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
 
       - name: Verify website with synced installers
         if: steps.changes.outputs.changed == 'true'

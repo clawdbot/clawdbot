@@ -10,8 +10,24 @@ function hasExplicitGatewayConnectionAuth(auth?: ExplicitGatewayAuth): boolean {
   return Boolean(trimToUndefined(auth?.token) || trimToUndefined(auth?.password));
 }
 
-/** Returns true when url/auth flags are sufficient and loading OpenClaw config is unnecessary. */
-export function canSkipGatewayConfigLoad(params: {
+// gateway.remote.edgeAuth lives in config and only ever applies to secure remote
+// targets. Skipping the config load for one would silently drop the edge
+// credential and surface as an identity-proxy rejection the flags cannot explain.
+function targetMayRequireConfiguredEdgeAuth(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "wss:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when the caller fully addressed the Gateway with flags. Config is then
+ * consulted only for gateway.remote.edgeAuth, so a broken config must not block
+ * the connection: this is the historical recovery path for an invalid config.
+ */
+export function isExplicitGatewayConnection(params: {
   config?: OpenClawConfig;
   urlOverride?: string;
   explicitAuth?: ExplicitGatewayAuth;
@@ -21,4 +37,17 @@ export function canSkipGatewayConfigLoad(params: {
     Boolean(trimToUndefined(params.urlOverride)) &&
     hasExplicitGatewayConnectionAuth(params.explicitAuth)
   );
+}
+
+/** Returns true when url/auth flags are sufficient and loading OpenClaw config is unnecessary. */
+export function canSkipGatewayConfigLoad(params: {
+  config?: OpenClawConfig;
+  urlOverride?: string;
+  explicitAuth?: ExplicitGatewayAuth;
+}): boolean {
+  const urlOverride = trimToUndefined(params.urlOverride);
+  if (!urlOverride || params.config || !hasExplicitGatewayConnectionAuth(params.explicitAuth)) {
+    return false;
+  }
+  return !targetMayRequireConfiguredEdgeAuth(urlOverride);
 }

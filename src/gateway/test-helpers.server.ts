@@ -4,14 +4,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import "./test-helpers.mocks.js";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
-import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import { getRuntimeConfig, parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
+import { resolveSystemMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
@@ -25,12 +27,10 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
   setGatewaySigusr1RestartPolicy,
@@ -104,6 +104,7 @@ let tempControlUiRoot: string | undefined;
 let suiteConfigRootSeq = 0;
 let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
+let gatewayReplyRuntimePrepared = false;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
 // Gateway tests exercise RPC/server behavior, not production bind auto-detection by default.
@@ -111,7 +112,8 @@ let activeSuiteHookScopeCount = 0;
 const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
-  const resolved = resolveMainSessionKeyFromConfig();
+  // Use the fixture's config seam; transitive runtime readers can retain real IO bindings.
+  const resolved = resolveSystemMainSessionKey(getRuntimeConfig());
   const keys = new Set<string>();
   if (resolved) {
     keys.add(resolved);
@@ -201,8 +203,8 @@ async function persistTestSessionConfig(): Promise<void> {
     } else {
       delete config.session;
     }
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+    // Suite servers may still read config from pending session-change callbacks.
+    await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
   }
   resetConfigRuntimeState();
   lastSyncedSessionStorePath = testState.sessionStorePath;
@@ -359,6 +361,9 @@ function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: bool
 function resetGatewayMutableTestFixtures(): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
+  agentDiscoveryMock.enabled = false;
+  agentDiscoveryMock.discoverCalls = 0;
+  agentDiscoveryMock.models = [];
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
@@ -368,6 +373,7 @@ function resetGatewayMutableTestFixtures(): void {
   testState.migrationConfig = null;
   testState.migrationChanges = [];
   testState.cronEnabled = false;
+  testState.cronTriggersEnabled = undefined;
   testState.cronStorePath = undefined;
   testState.sessionConfig = undefined;
   testState.sessionStorePath = undefined;
@@ -478,9 +484,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetAgentEventsForTest();
   const mod = await getServerModule();
   await mod.resetPreparedModelCatalogForTest();
-  agentDiscoveryMock.enabled = false;
-  agentDiscoveryMock.discoverCalls = 0;
-  agentDiscoveryMock.models = [];
+  gatewayReplyRuntimePrepared = false;
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
@@ -525,6 +529,28 @@ async function resetGatewayTestRuntimeOnly() {
     drainSystemEvents(sessionKey);
   }
   resetAgentEventsForTest({ preserveListeners: true });
+  gatewayReplyRuntimePrepared = false;
+}
+
+export async function prepareGatewayReplyRuntimeForTest(options?: {
+  force?: boolean;
+}): Promise<void> {
+  if (
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1" ||
+    (!options?.force && gatewayReplyRuntimePrepared)
+  ) {
+    return;
+  }
+  const [preparedRuntime, configRuntime] = await Promise.all([
+    import("../agents/prepared-model-runtime.js"),
+    import("../config/io.js"),
+  ]);
+  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(configRuntime.getRuntimeConfig(), {
+    gatewayLifecycle: true,
+    catalogMode: agentDiscoveryMock.enabled ? "live" : "static",
+    allowGatewaySubagentBinding: true,
+  });
+  gatewayReplyRuntimePrepared = true;
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -1224,11 +1250,12 @@ export async function rpcReq<T extends Record<string, unknown>>(
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  // Gateway suites often mutate testState-backed config/session inputs between
-  // RPCs while reusing one server instance; flush caches so the next request
-  // observes the updated test fixture state.
+  // Refresh mutable config fixtures, but leave in-flight session writers owned
+  // by the running Gateway; their producers publish SQLite cache updates.
   resetConfigRuntimeState();
-  clearSessionStoreCacheForTest();
+  if (method === "agent" || method === "chat.send") {
+    await prepareGatewayReplyRuntimeForTest();
+  }
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   const responsePromise = onceMessage<{

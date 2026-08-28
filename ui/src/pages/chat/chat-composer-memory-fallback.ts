@@ -1,4 +1,4 @@
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import {
   DEFAULT_MAIN_KEY,
   buildAgentMainSessionKey,
@@ -6,6 +6,7 @@ import {
   resolveUiDefaultAgentId,
   resolveUiKnownSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import {
   loadChatComposerCommittedDraftRevision,
@@ -106,6 +107,13 @@ function resolveChatComposerMemoryFallback(
     delete nextFallbacks[candidate.scopeKey];
   }
   nextFallbacks[scopeKey] = adoptedFallback;
+  // Losing sibling fallbacks are dropped for good here; release their
+  // payload-store entries (like the pane-handoff owner does) or the data URLs
+  // leak for the pane's lifetime.
+  releaseDisplacedChatAttachmentPayloads(
+    candidates.flatMap((candidate) => candidate.fallback.attachments),
+    [state.chatAttachments, ...Object.values(nextFallbacks).map((f) => f.attachments)],
+  );
   state.chatComposerFallbackByScope = nextFallbacks;
   return { fallback: adoptedFallback, scopeKey };
 }
@@ -115,6 +123,7 @@ export function storeChatComposerMemoryFallback(
   scope: StoredChatOutboxScope,
   composer: {
     message: string;
+    goalMode?: ChatGoalDraftMode | null;
     attachments: ChatAttachment[];
     draftRetry?: ChatComposerDraftRetry;
   },
@@ -124,6 +133,7 @@ export function storeChatComposerMemoryFallback(
     ...state.chatComposerFallbackByScope,
     [storedChatOutboxScopeKey(scope)]: {
       message: composer.message,
+      ...(composer.goalMode ? { goalMode: composer.goalMode } : {}),
       attachments: [...composer.attachments],
       storageFailed: composer.draftRetry !== undefined,
       sequence,

@@ -7,17 +7,17 @@ const defaultCwd = process.cwd();
 const cwdPath = (...segments: string[]) => path.join(defaultCwd, ...segments);
 
 describe("deriveToolParams", () => {
-  it("returns an empty object for tools that have no registered parser", () => {
-    expect(deriveToolParams("exec", { command: "ls" })).toEqual({});
-    expect(deriveToolParams("read_file", { path: "/tmp/x" })).toEqual({});
+  it("returns an empty object for tools that have no registered parser", async () => {
+    await expect(deriveToolParams("exec", { command: "ls" })).resolves.toEqual({});
+    await expect(deriveToolParams("read_file", { path: "/tmp/x" })).resolves.toEqual({});
   });
 
-  it("ignores prototype-key tool names when looking up parsers", () => {
-    expect(deriveToolParams("__proto__", { input: "anything" })).toEqual({});
-    expect(deriveToolParams("hasOwnProperty", { input: "anything" })).toEqual({});
+  it("ignores prototype-key tool names when looking up parsers", async () => {
+    await expect(deriveToolParams("__proto__", { input: "anything" })).resolves.toEqual({});
+    await expect(deriveToolParams("hasOwnProperty", { input: "anything" })).resolves.toEqual({});
   });
 
-  it("derives apply_patch destination paths from the input envelope", () => {
+  it("derives apply_patch destination paths from the input envelope", async () => {
     const patch = [
       "*** Begin Patch",
       "*** Add File: src/new.ts",
@@ -29,7 +29,7 @@ describe("deriveToolParams", () => {
       "*** Delete File: src/dead.ts",
       "*** End Patch",
     ].join("\n");
-    expect(deriveToolParams("apply_patch", { input: patch })).toEqual({
+    await expect(deriveToolParams("apply_patch", { input: patch })).resolves.toEqual({
       derivedPaths: [
         cwdPath("src/new.ts"),
         cwdPath("src/old.ts"),
@@ -39,52 +39,52 @@ describe("deriveToolParams", () => {
     });
   });
 
-  it("returns immutable derived path snapshots", () => {
+  it("returns immutable derived path snapshots", async () => {
     const patch = ["*** Begin Patch", "*** Add File: src/new.ts", "+x", "*** End Patch"].join("\n");
-    const derived = deriveToolParams("apply_patch", { input: patch });
+    const derived = await deriveToolParams("apply_patch", { input: patch });
     expect(Array.isArray(derived.derivedPaths)).toBe(true);
     expect(Object.isFrozen(derived.derivedPaths)).toBe(true);
   });
 
-  it("resolves derived apply_patch paths against the tool cwd when provided", () => {
+  it("resolves derived apply_patch paths against the tool cwd when provided", async () => {
     const patch = ["*** Begin Patch", "*** Add File: @src/../new.ts", "+x", "*** End Patch"].join(
       "\n",
     );
     const cwd = path.join("/tmp", "openclaw-derived");
-    expect(deriveToolParams("apply_patch", { input: patch }, { cwd })).toEqual({
+    await expect(deriveToolParams("apply_patch", { input: patch }, { cwd })).resolves.toEqual({
       derivedPaths: [path.join(cwd, "new.ts")],
     });
   });
 
-  it("preserves apply_patch backslashes when deriving path facts", () => {
+  it("preserves apply_patch backslashes when deriving path facts", async () => {
     const patch = [
       "*** Begin Patch",
       String.raw`*** Add File: safe\evil.ts`,
       "+x",
       "*** End Patch",
     ].join("\n");
-    expect(deriveToolParams("apply_patch", { input: patch })).toEqual({
+    await expect(deriveToolParams("apply_patch", { input: patch })).resolves.toEqual({
       derivedPaths: [path.resolve(defaultCwd, String.raw`safe\evil.ts`)],
     });
   });
 
-  it("preserves apply_patch marker payload bytes after the executor header trim", () => {
+  it("preserves apply_patch marker payload bytes after the executor header trim", async () => {
     const patch = ["*** Begin Patch", "*** Add File:  src/new.ts", "+x", "*** End Patch"].join(
       "\n",
     );
-    expect(deriveToolParams("apply_patch", { input: patch })).toEqual({
+    await expect(deriveToolParams("apply_patch", { input: patch })).resolves.toEqual({
       derivedPaths: [path.resolve(defaultCwd, " src/new.ts")],
     });
   });
 
-  it("resolves sandboxed apply_patch paths through the execution bridge", () => {
+  it("resolves sandboxed apply_patch paths through the execution bridge", async () => {
     const patch = [
       "*** Begin Patch",
       "*** Add File: /workspace/src/new.ts",
       "+x",
       "*** End Patch",
     ].join("\n");
-    expect(
+    await expect(
       deriveToolParams(
         "apply_patch",
         { input: patch },
@@ -102,19 +102,19 @@ describe("deriveToolParams", () => {
           },
         },
       ),
-    ).toEqual({
+    ).resolves.toEqual({
       derivedPaths: ["/host/sandbox/src/new.ts"],
     });
   });
 
-  it("returns an empty object when apply_patch input has no recognised paths", () => {
-    expect(deriveToolParams("apply_patch", { input: "not a patch" })).toEqual({});
-    expect(deriveToolParams("apply_patch", {})).toEqual({});
-    expect(deriveToolParams("apply_patch", undefined)).toEqual({});
+  it("returns an empty object when apply_patch input has no recognised paths", async () => {
+    await expect(deriveToolParams("apply_patch", { input: "not a patch" })).resolves.toEqual({});
+    await expect(deriveToolParams("apply_patch", {})).resolves.toEqual({});
+    await expect(deriveToolParams("apply_patch", undefined)).resolves.toEqual({});
   });
 
-  it("does not throw for malformed param shapes", () => {
-    expect(deriveToolParams("apply_patch", null)).toEqual({});
-    expect(deriveToolParams("apply_patch", 42)).toEqual({});
+  it("does not throw for malformed param shapes", async () => {
+    await expect(deriveToolParams("apply_patch", null)).resolves.toEqual({});
+    await expect(deriveToolParams("apply_patch", 42)).resolves.toEqual({});
   });
 });

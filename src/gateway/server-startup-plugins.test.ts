@@ -40,20 +40,22 @@ const pluginManifestRegistry = vi.hoisted(
     diagnostics: [],
   }),
 );
-const pluginMetadataSnapshot = vi.hoisted(
-  (): PluginMetadataSnapshot => ({
+const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
     policyHash: "policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    policyHash: "policy",
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
     plugins: [],
@@ -78,8 +80,8 @@ const pluginMetadataSnapshot = vi.hoisted(
       indexPluginCount: 0,
       manifestPluginCount: 0,
     },
-  }),
-);
+  };
+});
 const pluginLookUpTableMetrics = vi.hoisted(() => ({
   registrySnapshotMs: 0,
   manifestRegistryMs: 0,
@@ -326,6 +328,15 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
   });
 
+  it("hydrates the subagent registry before plugin bootstrap", async () => {
+    await prepareBootstrapWithRuntimeConfig({});
+
+    expect(initSubagentRegistry).toHaveBeenCalledOnce();
+    expect(initSubagentRegistry.mock.invocationCallOrder[0]).toBeLessThan(
+      loadPluginLookUpTable.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
       channels: {
@@ -540,8 +551,9 @@ describe("loadGatewayStartupPluginRuntime", () => {
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
   function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
     return {
-      memoryEmbeddingProviders: providerIds.map((id) => ({ provider: { id } })),
-      embeddingProviders: (options.embeddingProviderIds ?? []).map((id) => ({ provider: { id } })),
+      embeddingProviders: [...providerIds, ...(options.embeddingProviderIds ?? [])].map((id) => ({
+        provider: { id },
+      })),
     } as never;
   }
 

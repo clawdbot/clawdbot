@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectReplaySafeToolNames,
+  collectSideEffectToolOwners,
   isAgentToolReplaySafe,
   isAgentToolRestartSafe,
 } from "./tool-replay-safety.js";
@@ -8,7 +9,7 @@ import {
 describe("agent tool replay safety", () => {
   it("allows only audited unconditional core tools", () => {
     expect(isAgentToolReplaySafe({ name: "search" })).toBe(true);
-    expect(isAgentToolReplaySafe({ name: "update_plan" })).toBe(true);
+    expect(isAgentToolReplaySafe({ name: "progress_card" })).toBe(false);
     expect(isAgentToolReplaySafe({ name: "process" })).toBe(false);
     expect(isAgentToolReplaySafe({ name: "vendor_widget" })).toBe(false);
   });
@@ -67,5 +68,23 @@ describe("agent tool replay safety", () => {
         declaredReplaySafe: (tool) => (tool === pluginTool ? true : undefined),
       }),
     ).toEqual(new Set());
+  });
+
+  it("retains canonical owners only for unique side-effecting tool names", () => {
+    const memoryStore = { name: "memory_store" };
+    const unrelatedStore = { name: "vendor_store" };
+    const shadowedStore = { name: "memory_store" };
+    const owners = collectSideEffectToolOwners([memoryStore, unrelatedStore, shadowedStore], {
+      declaredOwner: (tool) =>
+        tool === memoryStore ? '["memory-lancedb","memory_store"]' : undefined,
+    });
+
+    expect(owners).toEqual(new Map());
+    expect(
+      collectSideEffectToolOwners([memoryStore, unrelatedStore], {
+        declaredOwner: (tool) =>
+          tool === memoryStore ? '["memory-lancedb","memory_store"]' : undefined,
+      }),
+    ).toEqual(new Map([["memory_store", '["memory-lancedb","memory_store"]']]));
   });
 });

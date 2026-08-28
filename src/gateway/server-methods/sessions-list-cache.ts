@@ -1,26 +1,42 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
-import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
+import {
+  readSessionIdentityMutationVersion,
+  readSessionLifecycleVersion,
+} from "../../sessions/session-lifecycle-events.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import {
+  readOpenClawAgentDatabaseRegistryToken,
+  readOpenIncognitoAgentDatabaseGeneration,
+} from "../../state/openclaw-agent-db.js";
+import { readUserProfileVersion } from "../../state/user-profile-events.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { readSessionAutomationVersion } from "../session-automation-index.js";
 import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
-import type { SessionsListResult } from "../session-utils.types.js";
+import type { SessionListModelCatalog, SessionsListResult } from "../session-utils.types.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type SessionListFence = {
   agentRunIndexVersion: number;
+  agentDatabaseRegistryToken: symbol;
+  incognitoDatabaseGeneration: number;
   lifecyclePersistenceVersion: number;
+  modelCatalogRevision: string;
   sessionAutomationVersion: number;
   sessionIdentityMutationVersion: number;
+  sessionLifecycleVersion: number;
+  userProfileVersion: number;
   sessionsMutationVersion: number;
   sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
   workerPlacementDiskSpaceVersion: number;
+  workerPlacementRunnerAvailabilityVersion: number;
 };
 type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
 type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
@@ -32,46 +48,93 @@ type SessionListState = {
 
 const SESSIONS_LIST_COMPLETED_CACHE_LIMIT = 64;
 const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListState>();
+const modelCatalogRevisions = new WeakMap<readonly ModelCatalogEntry[], number>();
+let nextModelCatalogRevision = 1;
 
-function readSessionListFence(context: GatewayRequestContext): SessionListFence {
+function readModelCatalogRevision(modelCatalog: readonly ModelCatalogEntry[] | undefined): number {
+  if (!modelCatalog) {
+    return 0;
+  }
+  const existing = modelCatalogRevisions.get(modelCatalog);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const revision = nextModelCatalogRevision++;
+  modelCatalogRevisions.set(modelCatalog, revision);
+  return revision;
+}
+
+/**
+ * Serializes the per-agent catalog revision set so the cache fence advances
+ * when any row owner's catalog changes. The revision identity of each distinct
+ * catalog array is monotonic; the string join is stable per sorted agent set.
+ */
+function readSessionListModelCatalogFence(
+  modelCatalog: SessionListModelCatalog | undefined,
+): string {
+  if (!modelCatalog || modelCatalog.size === 0) {
+    return "none";
+  }
+  return [...modelCatalog.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([agentId, entries]) => `${agentId}:${readModelCatalogRevision(entries)}`)
+    .join(",");
+}
+
+function readSessionListFence(
+  context: GatewayRequestContext,
+  modelCatalog: SessionListModelCatalog | undefined,
+): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
+    agentDatabaseRegistryToken: readOpenClawAgentDatabaseRegistryToken(),
+    incognitoDatabaseGeneration: readOpenIncognitoAgentDatabaseGeneration(),
     lifecyclePersistenceVersion: readSessionLifecyclePersistenceVersion(),
+    modelCatalogRevision: readSessionListModelCatalogFence(modelCatalog),
     sessionAutomationVersion: readSessionAutomationVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
+    sessionLifecycleVersion: readSessionLifecycleVersion(),
+    userProfileVersion: readUserProfileVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
     // Rows embed transcript-derived previews/titles; a committed transcript
     // write without a session mutation must still invalidate reuse.
     sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
     workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
+    workerPlacementRunnerAvailabilityVersion:
+      context.workerPlacementRunnerAvailabilityReader?.version() ?? 0,
   };
 }
 
 function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
   return (
     value.agentRunIndexVersion === fence.agentRunIndexVersion &&
+    value.agentDatabaseRegistryToken === fence.agentDatabaseRegistryToken &&
+    value.incognitoDatabaseGeneration === fence.incognitoDatabaseGeneration &&
     value.lifecyclePersistenceVersion === fence.lifecyclePersistenceVersion &&
+    value.modelCatalogRevision === fence.modelCatalogRevision &&
     value.sessionAutomationVersion === fence.sessionAutomationVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
+    value.sessionLifecycleVersion === fence.sessionLifecycleVersion &&
+    value.userProfileVersion === fence.userProfileVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
-    value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion
+    value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion &&
+    value.workerPlacementRunnerAvailabilityVersion ===
+      fence.workerPlacementRunnerAvailabilityVersion
   );
 }
 
-function sessionListVisibilityIdentity(client: GatewayClient | null): string {
-  if (isGatewayAdmin(client)) {
-    return "admin";
-  }
-  const profileId = gatewayClientSessionCreator(client)?.id;
-  return profileId ? `profile:${profileId}` : "anonymous";
-}
-
-function sessionListWorkKey(params: SessionsListParams, client: GatewayClient | null): string {
+function sessionListWorkKey(
+  params: SessionsListParams,
+  client: GatewayClient | null,
+  config: OpenClawConfig,
+): string {
   return JSON.stringify([
-    sessionListVisibilityIdentity(client),
+    // Admin visibility is global, but owner-first and involving-me rows remain viewer-specific.
+    gatewayClientSessionCreator(client)?.id ?? null,
+    isGatewayAdmin(client) ? "admin" : (operatorSessionCap(client, config) ?? null),
     Object.entries(params).toSorted(([left], [right]) => left.localeCompare(right)),
   ]);
 }
@@ -127,15 +190,16 @@ export async function respondWithCachedSessionList(params: {
   client: GatewayClient | null;
   config: OpenClawConfig;
   context: GatewayRequestContext;
+  modelCatalog?: SessionListModelCatalog;
   request: SessionsListParams;
   respond: RespondFn;
   run: () => Promise<SessionsListResult>;
 }): Promise<void> {
-  const workKey = sessionListWorkKey(params.request, params.client);
+  const workKey = sessionListWorkKey(params.request, params.client, params.config);
   const state = sessionListState(params.context, params.config);
   // Every input that can change a projected row must fence reuse. Session identity,
   // Gateway projection, and live-run mutations have separate monotonic owners.
-  const fence = readSessionListFence(params.context);
+  const fence = readSessionListFence(params.context, params.modelCatalog);
   // Activity windows and child retention expire without mutations; hidden paginated rows
   // prevent deriving a safe deadline, so only concurrent temporal requests share work.
   const cacheCompleted = params.request.activeMinutes === undefined && !params.request.spawnedBy;
@@ -159,7 +223,10 @@ export async function respondWithCachedSessionList(params: {
   const promise = Promise.resolve()
     .then(params.run)
     .then((result) => {
-      if (cacheCompleted && matchesSessionListFence(readSessionListFence(params.context), fence)) {
+      if (
+        cacheCompleted &&
+        matchesSessionListFence(readSessionListFence(params.context, params.modelCatalog), fence)
+      ) {
         const expiresAt = resolveSessionListExpiration(result);
         if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
           rememberCompletedSessionList(state, workKey, { ...fence, result, expiresAt });

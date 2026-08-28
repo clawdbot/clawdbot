@@ -67,6 +67,7 @@ describe("dependency-changes-report", () => {
   it("treats committed dependency locks as dependency files", () => {
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
     expect(isDependencyFile(".github/release/clawhub-cli/package-lock.json")).toBe(true);
+    expect(isDependencyFile(".github/release/vercel-cli/package-lock.json")).toBe(true);
     expect(isDependencyFile("extensions/discord/package-lock.json")).toBe(false);
     expect(isDependencyFile("docs/gateway/security/index.md")).toBe(false);
   });
@@ -74,6 +75,7 @@ describe("dependency-changes-report", () => {
   it("includes committed dependency locks in git diff pathspecs", () => {
     expect(dependencyDiffPathspecs()).toContain("pnpm-lock.yaml");
     expect(dependencyDiffPathspecs()).toContain(".github/release/clawhub-cli/package-lock.json");
+    expect(dependencyDiffPathspecs()).toContain(".github/release/vercel-cli/package-lock.json");
   });
 
   it("rejects missing report artifact path option values", () => {

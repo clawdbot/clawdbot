@@ -4,7 +4,6 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModelCore,
 } from "../../../../src/auto-reply/thinking.shared.js";
-// Control UI module implements thinking behavior.
 import type {
   GatewaySessionRow,
   GatewayThinkingLevelOption,
@@ -13,6 +12,8 @@ import type {
 } from "../../api/types.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
+// Control UI module implements thinking behavior.
+import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
 
@@ -42,16 +43,39 @@ export type ChatThinkingSelectState = {
 function resolveThinkingLevelOptionsForSession(
   session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
+  catalog: readonly ModelCatalogEntry[] = [],
+  fallbackLabels?: readonly string[],
 ): GatewayThinkingLevelOption[] {
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
-  return resolveThinkingLevelOptions({ catalog: [], defaults, model, provider, session });
+  return resolveThinkingLevelOptions({
+    catalog,
+    defaults,
+    fallbackLabels,
+    model,
+    provider,
+    session,
+  });
+}
+
+export function resolveThinkingCommandArgOptionsForSession(
+  session: ChatThinkingTarget | undefined,
+  defaults?: SessionsListResult["defaults"],
+  catalog: readonly ModelCatalogEntry[] = [],
+): string[] {
+  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog, []).map(
+    (level) => normalizeThinkingOptionValue(level.id),
+  );
+  return options.length > 0
+    ? ["default", ...new Set(options.filter((option) => option && option !== "default"))]
+    : [];
 }
 
 export function formatThinkingCommandOptionsForSession(
   session: ChatThinkingTarget | undefined,
   defaults?: SessionsListResult["defaults"],
+  catalog: readonly ModelCatalogEntry[] = [],
 ): string {
-  const options = resolveThinkingLevelOptionsForSession(session, defaults)
+  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog)
     .map((level) => level.label)
     .join(", ");
   return options.split(", ").includes("default") ? options : `default, ${options}`;
@@ -61,13 +85,14 @@ export function resolveThinkingLevelInput(
   rawLevel: string,
   session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
+  catalog: readonly ModelCatalogEntry[] = [],
 ): string | undefined {
   const normalized = normalizeThinkLevel(rawLevel);
   if (normalized) {
     return normalized;
   }
   const rawKey = normalizeLowercaseStringOrEmpty(rawLevel);
-  return resolveThinkingLevelOptionsForSession(session, defaults)
+  return resolveThinkingLevelOptionsForSession(session, defaults, catalog)
     .map((option) => ({
       id: normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id),
       label: normalizeLowercaseStringOrEmpty(option.label),
@@ -79,8 +104,9 @@ export function isThinkingLevelOptionForSession(
   session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
   level: string,
+  catalog: readonly ModelCatalogEntry[] = [],
 ): boolean {
-  return resolveThinkingLevelOptionsForSession(session, defaults).some((option) => {
+  return resolveThinkingLevelOptionsForSession(session, defaults, catalog).some((option) => {
     const id = normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id);
     return id === level || normalizeThinkLevel(option.label) === level;
   });
@@ -166,6 +192,7 @@ function resolveThinkingCatalogEntry(
 function resolveThinkingLevelOptions(params: {
   catalog: readonly ModelCatalogEntry[];
   defaults: ThinkingSessionDefaults;
+  fallbackLabels?: readonly string[];
   hideUnsupportedOffOnly?: boolean;
   model: string | null;
   provider: string | null;
@@ -201,7 +228,7 @@ function resolveThinkingLevelOptions(params: {
       return [];
     }
   }
-  const labels = explicitLabels ?? BASE_THINKING_LEVELS;
+  const labels = explicitLabels ?? params.fallbackLabels ?? BASE_THINKING_LEVELS;
   return labels.map((label) => ({
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
     label,
@@ -216,7 +243,10 @@ export function resolveChatThinkingSelectState(params: {
   sessionsResult: SessionsListResult | null;
 }): ChatThinkingSelectState {
   const session =
-    params.session ?? params.sessionsResult?.sessions?.find((row) => row.key === params.sessionKey);
+    params.session ??
+    params.sessionsResult?.sessions?.find((row) =>
+      areUiSessionKeysEquivalent(row.key, params.sessionKey),
+    );
   const persisted = session?.thinkingLevel;
   const currentOverride =
     typeof persisted === "string" && persisted.trim()

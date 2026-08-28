@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html, nothing, type TemplateResult } from "lit";
 import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../../lib/sessions/session-key.ts";
 import {
@@ -143,9 +144,7 @@ function renderTaskTranscript(params: {
     sessionKey: params.sessionKey,
   });
   if (load.status === "loading") {
-    return html`<div class="sidebar-content chat-task-detail__state">
-      ${t("chat.backgroundTasks.transcriptLoading")}
-    </div>`;
+    return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.transcriptLoading"));
   }
   if (load.status === "error") {
     return html`<div class="sidebar-content chat-task-detail__state chat-task-detail__state--error">
@@ -194,21 +193,32 @@ function renderTaskInspector(task: TaskSummary, props: BackgroundTasksProps): Te
   const output = taskDetail(newest);
   const detailLoading = props.taskDetailLoadingIds.has(task.id);
   const detailError = props.taskDetailErrors.get(task.id);
+  if (detailLoading && !detailError) {
+    return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.detailLoading"));
+  }
   return html`
     ${detailError
       ? html`<div
           class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
         >
           ${detailError}
+          <!-- The render-driven load skips errored tasks to avoid a per-paint
+               retry loop, so without this the panel dead-ends whenever the task
+               row that could re-open it is not on screen. -->
+          <button
+            class="chat-tasks-rail__task-inspector-retry"
+            type="button"
+            ?disabled=${detailLoading}
+            @click=${() => props.onLoadDetail?.(task)}
+          >
+            ${t("chat.backgroundTasks.detailRetry")}
+          </button>
         </div>`
       : nothing}
     <div class="chat-tasks-rail__detail-blocks">
       <section class="chat-tasks-rail__task-inspector-block">
         <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.prompt")}</div>
-        <pre>
-${detailLoading
-            ? t("chat.backgroundTasks.detailLoading")
-            : (detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable"))}</pre>
+        <pre>${detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable")}</pre>
       </section>
       <section class="chat-tasks-rail__task-inspector-block">
         <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.output")}</div>

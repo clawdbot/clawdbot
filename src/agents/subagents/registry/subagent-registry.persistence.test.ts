@@ -31,6 +31,7 @@ import {
 } from "./subagent-registry.store.sqlite.js";
 import {
   testing,
+  activateSubagentRegistry,
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
   getSubagentRunByChildSessionKey,
@@ -187,6 +188,14 @@ describe("subagent registry persistence", () => {
   const restartRegistry = () => {
     resetSubagentRegistryForTests({ persist: false });
     initSubagentRegistry();
+    const recoveryRuntime = {
+      dispatchAgent: (params: Record<string, unknown>, timeoutMs?: number) =>
+        callGateway({ method: "agent", params, timeoutMs }),
+      waitForAgent: (params: Record<string, unknown>, timeoutMs?: number) =>
+        callGateway({ method: "agent.wait", params, timeoutMs }),
+      sendRecoveryNotice: vi.fn(),
+    };
+    activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
   };
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>

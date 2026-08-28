@@ -273,6 +273,18 @@ describe("exec approvals pending and resolve CLI", () => {
     });
   });
 
+  it("bubbles pending approval failures to the JSON owner", async () => {
+    callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
+
+    await expect(runApprovalsCommand(["approvals", "pending", "--json"])).rejects.toThrow(
+      "gateway unavailable",
+    );
+
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
   it("preserves whitespace-bearing ids verbatim and keeps them distinct", async () => {
     const now = Date.now();
     callGatewayFromCli.mockImplementation(async (method: string) => {
@@ -514,5 +526,34 @@ describe("exec approvals pending and resolve CLI", () => {
       "allow-always is not allowed for system-agent approvals; allowed decisions: allow-once, deny",
     );
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("escapes hostile grant fields visibly in the standing-grant ledger", async () => {
+    const now = Date.now();
+    callGatewayFromCli.mockResolvedValueOnce({
+      grants: [
+        {
+          grantId: "grant-1",
+          cronJobId: "job-1",
+          cronJobName: "night\u001B[2Jly",
+          command: "echo hi \u001B]52;c;steal\u0007",
+          cwd: null,
+          createdAtMs: now - 60_000,
+          expiresAtMs: null,
+          revokedAtMs: now - 1_000,
+          revokedBy: "ops\u001B[1;31madmin",
+          lastUsedAtMs: null,
+          useCount: 3,
+        },
+      ],
+    });
+
+    await runApprovalsCommand(["approvals", "grants", "list"]);
+
+    const output = runtimeOutput();
+    expect(output).not.toContain("\u001B");
+    expect(output).toContain("revoked by ops\\u{1B}");
+    expect(output).toContain("night\\u{1B}");
+    expect(output).toContain("\\u{1B}]52;c;steal");
   });
 });

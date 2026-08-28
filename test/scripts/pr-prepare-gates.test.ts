@@ -1,38 +1,18 @@
-// Covers the scripts/pr prepare-gates remote testbox mode and the
-// cross-worktree gate lock that serializes whole gate blocks.
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+// Covers the scripts/pr prepare-gates remote testbox mode.
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
-const gateLockHelperPath = join(repoRoot, "scripts", "pr-gates-lock.mts");
 
 const tempDirs = createTempDirTracker();
-const children: ChildProcess[] = [];
-
-function makeLockRepoDir(): string {
-  const dir = tempDirs.make("openclaw-pr-gates-lock-");
-  mkdirSync(join(dir, ".git"), { recursive: true });
-  return dir;
-}
-
-function heavyCheckLockDir(repoDir: string): string {
-  return join(repoDir, ".git", "openclaw-local-checks", "heavy-check.lock");
-}
 
 function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  // check:changed and gate runs export these to children; drop ambient copies
-  // so lock and mode behavior under test only sees explicit overrides.
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.OPENCLAW_PR_GATES_REMOTE;
   delete env.OPENCLAW_TESTBOX;
-  delete env.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD;
-  delete env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD;
-  delete env.OPENCLAW_OXLINT_SKIP_LOCK;
-  delete env.OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS;
-  delete env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS;
   return { ...env, ...overrides };
 }
 
@@ -68,16 +48,6 @@ function runGatesBash(
       env: sanitizedEnv(options.env),
     },
   );
-}
-
-function spawnGateLockHolder(repoDir: string, statusFile: string, env: NodeJS.ProcessEnv = {}) {
-  const child = spawn(process.execPath, [gateLockHelperPath, "--status-file", statusFile], {
-    cwd: repoDir,
-    stdio: ["ignore", "ignore", "pipe"],
-    env: sanitizedEnv(env),
-  });
-  children.push(child);
-  return child;
 }
 
 function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } {
@@ -242,70 +212,7 @@ function prepareSyncHeadStubs(): string[] {
   ];
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) {
-      return true;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  return predicate();
-}
-
-async function waitForExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  await new Promise((resolve) => {
-    child.once("exit", resolve);
-  });
-}
-
-async function waitForStderr(
-  child: ChildProcess,
-  expected: string,
-  timeoutMs: number,
-): Promise<string> {
-  const stderr = child.stderr;
-  if (!stderr) {
-    throw new Error("child stderr is not piped");
-  }
-  stderr.setEncoding("utf8");
-  let output = "";
-  return await new Promise<string>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timeout);
-      stderr.off("data", onData);
-      child.off("exit", onExit);
-    };
-    const onData = (chunk: string) => {
-      output += chunk;
-      if (output.includes(expected)) {
-        cleanup();
-        resolve(output);
-      }
-    };
-    const onExit = () => {
-      cleanup();
-      reject(new Error(`child exited before writing ${JSON.stringify(expected)}: ${output}`));
-    };
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error(`timed out waiting for ${JSON.stringify(expected)}: ${output}`));
-    }, timeoutMs);
-    stderr.on("data", onData);
-    child.once("exit", onExit);
-  });
-}
-
-afterEach(async () => {
-  for (const child of children.splice(0)) {
-    child.kill("SIGKILL");
-    await waitForExit(child);
-  }
+afterEach(() => {
   tempDirs.cleanup();
 });
 
@@ -314,6 +221,7 @@ describe("resolve_pr_gates_remote_mode", () => {
     { value: undefined, expected: "local" },
     { value: "", expected: "local" },
     { value: "testbox", expected: "testbox" },
+    { value: "crabbox-aws", expected: "crabbox-aws" },
   ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
     const env: NodeJS.ProcessEnv = {};
     if (value !== undefined) {
@@ -338,6 +246,112 @@ describe("resolve_pr_gates_remote_mode", () => {
     });
     expect(result.status).toBe(2);
     expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
+  });
+
+  it("rejects the Crabbox AWS hosted-gates conflict before touching the worktree", () => {
+    const result = runGatesBash("prepare_gates 424242", {
+      env: { OPENCLAW_PR_GATES_REMOTE: "crabbox-aws", OPENCLAW_TESTBOX: "1" },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("OPENCLAW_PR_GATES_REMOTE=crabbox-aws conflicts");
+  });
+});
+
+describe("remote Crabbox AWS gate contract", () => {
+  it("builds the canonical deterministic proof command", () => {
+    const planPath = join(tempDirs.make("openclaw-crabbox-command-"), "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        baseSha: "a".repeat(40),
+        changedPaths: [{ path: "scripts/pr-lib/gates.sh", status: "M" }],
+        headSha: "b".repeat(40),
+        targets: ["test/scripts/pr-prepare-gates.test.ts"],
+        version: 1,
+      }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(repoRoot, "scripts/pr-crabbox-gate-publisher.mjs"),
+        "--print-command",
+        planPath,
+        "c".repeat(64),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("umask 022");
+    expect(result.stdout).toContain("pnpm build");
+    expect(result.stdout).toContain("pnpm check");
+    expect(result.stdout).toContain("test/scripts/pr-prepare-gates.test.ts");
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_BASE=${"a".repeat(40)}`);
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${"b".repeat(40)}`);
+    expect(result.stdout).not.toContain("OPENCLAW_CRABBOX_GATE_WORKFLOW=");
+    expect(result.stdout).not.toContain("test/scripts/pr-wrappers.test.ts");
+    expect(result.stdout).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
+    expect(result.stdout).not.toContain("pnpm test");
+    expect(result.stdout).not.toContain("pnpm check:changed");
+  });
+
+  it("records only trusted publisher metadata after synchronous success", () => {
+    const dir = tempDirs.make("openclaw-pr-gates-aws-publisher-");
+    const workDir = join(dir, "work");
+    mkdirSync(workDir);
+    mkdirSync(join(workDir, ".local"));
+    const base = "a".repeat(40);
+    const head = "b".repeat(40);
+    const runUrl = "https://github.com/openclaw/openclaw/actions/runs/99";
+
+    const result = runGatesBash(
+      [
+        "require_active_org_admin_for_crabbox_gate() { :; }",
+        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${base}'; }`,
+        "ci_dispatch() {",
+        `  printf '%s\\n' '${JSON.stringify({
+          actionsRunUrl: runUrl,
+          backend: "crabbox",
+          baseSha: base,
+          headSha: head,
+          leaseId: "cbx_stub",
+          provider: "aws",
+          runId: "run_stub",
+          target: "linux",
+        })}'`,
+        "}",
+        `finalize_remote_crabbox_aws_gate 424242 '${head}'`,
+        "cat .local/gates.env",
+      ].join("\n"),
+      { cwd: workDir },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("GATES_MODE=remote_crabbox_aws");
+    expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${head}`);
+    expect(result.stdout).toContain("REMOTE_GATES_PROVIDER=aws");
+    expect(result.stdout).toContain("REMOTE_GATES_RUN_ID=run_stub");
+    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=cbx_stub");
+    expect(result.stdout).toContain(`REMOTE_GATES_RUN_URL=${runUrl}`);
+  });
+
+  it("keeps pending evidence when the protected publisher fails", () => {
+    const workDir = join(tempDirs.make("openclaw-pr-gates-aws-failure-"), "work");
+    mkdirSync(workDir, { recursive: true });
+    mkdirSync(join(workDir, ".local"));
+    writeFileSync(join(workDir, ".local/gates.env"), "GATES_MODE=remote_crabbox_aws_pending\n");
+    const result = runGatesBash(
+      [
+        "require_active_org_admin_for_crabbox_gate() { :; }",
+        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${"a".repeat(40)}'; }`,
+        "ci_dispatch() { return 1; }",
+        `finalize_remote_crabbox_aws_gate 424242 '${"b".repeat(40)}'`,
+      ].join("\n"),
+      { cwd: workDir },
+    );
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(join(workDir, ".local/gates.env"), "utf8")).toBe(
+      "GATES_MODE=remote_crabbox_aws_pending\n",
+    );
   });
 });
 
@@ -936,7 +950,6 @@ describe("prepare gate stamp transitions", () => {
         "changelog_required_for_changed_files() { return 1; }",
         "prepare_local_gate_workspace() { :; }",
         "run_quiet_logged() { :; }",
-        "release_pr_gates_lock() { :; }",
         "prepare_gates 4242",
         "cat .local/gates.env",
       ].join("\n"),
@@ -994,91 +1007,12 @@ describe("prepare gate stamp transitions", () => {
   });
 });
 
-describe("pr-gates-lock helper", () => {
-  it("acquires the shared heavy-check lock and releases it on SIGTERM", async () => {
-    const repoDir = makeLockRepoDir();
-    const statusFile = join(repoDir, "status");
-    const holder = spawnGateLockHolder(repoDir, statusFile);
-
-    expect(await waitFor(() => existsSync(statusFile), 5_000)).toBe(true);
-    expect(existsSync(heavyCheckLockDir(repoDir))).toBe(true);
-
-    holder.kill("SIGTERM");
-    await waitForExit(holder);
-    expect(await waitFor(() => !existsSync(heavyCheckLockDir(repoDir)), 5_000)).toBe(true);
-  });
-
-  it("queues behind an existing holder and acquires after it exits", async () => {
-    const repoDir = makeLockRepoDir();
-    const firstStatus = join(repoDir, "status-first");
-    const secondStatus = join(repoDir, "status-second");
-
-    const first = spawnGateLockHolder(repoDir, firstStatus);
-    expect(await waitFor(() => existsSync(firstStatus), 5_000)).toBe(true);
-
-    const second = spawnGateLockHolder(repoDir, secondStatus, {
-      OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "50",
-    });
-    await waitForStderr(second, "queued behind the local heavy-check lock", 5_000);
-    expect(existsSync(secondStatus)).toBe(false);
-
-    first.kill("SIGTERM");
-    await waitForExit(first);
-    expect(await waitFor(() => existsSync(secondStatus), 5_000)).toBe(true);
-
-    second.kill("SIGTERM");
-    await waitForExit(second);
-    expect(await waitFor(() => !existsSync(heavyCheckLockDir(repoDir)), 5_000)).toBe(true);
-  });
-
-  it("fails instead of holding when the wait times out", async () => {
-    const repoDir = makeLockRepoDir();
-    const lockDir = heavyCheckLockDir(repoDir);
-    mkdirSync(lockDir, { recursive: true });
-    // Owner pid must be alive or the helper reclaims the stale lock.
-    writeFileSync(
-      join(lockDir, "owner.json"),
-      `${JSON.stringify({ pid: process.pid, tool: "test-holder", cwd: repoDir })}\n`,
-    );
-
-    const statusFile = join(repoDir, "status");
-    const holder = spawnGateLockHolder(repoDir, statusFile, {
-      OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS: "200",
-      OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "50",
-    });
-    await waitForExit(holder);
-
-    expect(holder.exitCode).not.toBe(0);
-    expect(existsSync(statusFile)).toBe(false);
-  });
-
-  it("releases the lock when the parent process dies", async () => {
-    const repoDir = makeLockRepoDir();
-    const statusFile = join(repoDir, "status");
-    const parent = spawn(
-      "bash",
-      [
-        "-c",
-        `node '${gateLockHelperPath}' --status-file '${statusFile}' 2>/dev/null & ` +
-          `while [ ! -s '${statusFile}' ]; do sleep 0.05; done`,
-      ],
-      { cwd: repoDir, stdio: "ignore", env: sanitizedEnv() },
-    );
-    children.push(parent);
-    await waitForExit(parent);
-
-    expect(existsSync(statusFile)).toBe(true);
-    expect(await waitFor(() => !existsSync(heavyCheckLockDir(repoDir)), 8_000)).toBe(true);
-  });
-});
-
-describe("gates.sh gate lock plumbing", () => {
-  it("acquires the block lock before dependency bootstrap", () => {
+describe("gates.sh local gate workspace", () => {
+  it("pins the worktree before dependency bootstrap", () => {
     const result = runGatesBash(
       [
         "events=$(mktemp)",
         'pin_worktree_bundled_plugins_dir() { echo pin >> "$events"; }',
-        'acquire_pr_gates_lock() { echo lock >> "$events"; }',
         'bootstrap_deps_if_needed() { echo bootstrap >> "$events"; }',
         "prepare_local_gate_workspace",
         'cat "$events"',
@@ -1086,66 +1020,6 @@ describe("gates.sh gate lock plumbing", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim().split("\n")).toEqual(["pin", "lock", "bootstrap"]);
-  });
-
-  it("exports the held-lock contract while holding and clears it on release", () => {
-    const repoDir = makeLockRepoDir();
-    const result = runGatesBash(
-      [
-        "acquire_pr_gates_lock",
-        'echo "held=${OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD:-unset},${OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD:-unset},${OPENCLAW_OXLINT_SKIP_LOCK:-unset}"',
-        "jq -r .tool .git/openclaw-local-checks/heavy-check.lock/owner.json",
-        "release_pr_gates_lock",
-        'echo "released=${OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD:-unset}"',
-        '[ -d .git/openclaw-local-checks/heavy-check.lock ] && echo "lock=held" || echo "lock=free"',
-      ].join("\n"),
-      { cwd: repoDir },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("held=1,1,1");
-    expect(result.stdout).toContain("pr-gates");
-    expect(result.stdout).toContain("released=unset");
-    expect(result.stdout).toContain("lock=free");
-  });
-
-  it("skips acquisition when a parent already holds the lock", () => {
-    const repoDir = makeLockRepoDir();
-    const result = runGatesBash(
-      [
-        "acquire_pr_gates_lock",
-        '[ -d .git/openclaw-local-checks/heavy-check.lock ] && echo "lock=held" || echo "lock=free"',
-        'echo "helper_pid=${PR_GATES_LOCK_PID:-none}"',
-      ].join("\n"),
-      { cwd: repoDir, env: { OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1" } },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("lock=free");
-    expect(result.stdout).toContain("helper_pid=none");
-  });
-
-  it("fails the gate run when the lock wait times out", () => {
-    const repoDir = makeLockRepoDir();
-    const lockDir = heavyCheckLockDir(repoDir);
-    mkdirSync(lockDir, { recursive: true });
-    writeFileSync(
-      join(lockDir, "owner.json"),
-      `${JSON.stringify({ pid: process.pid, tool: "test-holder", cwd: repoDir })}\n`,
-    );
-
-    const result = runGatesBash("acquire_pr_gates_lock", {
-      cwd: repoDir,
-      env: {
-        OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS: "200",
-        OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "50",
-      },
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
-      "Failed to acquire the shared local heavy-check lock for prepare gates.",
-    );
+    expect(result.stdout.trim().split("\n")).toEqual(["pin", "bootstrap"]);
   });
 });

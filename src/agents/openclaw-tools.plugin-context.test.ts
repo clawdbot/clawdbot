@@ -1,12 +1,10 @@
 /**
- * Regression coverage for plugin tool context and delivery defaults.
- * Verifies requester metadata, plugin tool wrapping, and default preservation.
+ * Regression coverage for plugin tool context and delivery metadata.
+ * Verifies requester metadata, workspace selection, and delivery routing.
  */
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
-import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 describe("openclaw plugin tool context", () => {
   it("forwards trusted requester sender identity", () => {
@@ -307,95 +305,5 @@ describe("openclaw plugin tool context", () => {
     });
 
     expect(result.context.deliveryContext?.to).toBe("user:U123");
-  });
-
-  it("does not inject ambient thread defaults into plugin tools", async () => {
-    const executeMock = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: {},
-    }));
-    const sharedTool: AnyAgentTool = {
-      name: "plugin-thread-default",
-      label: "plugin-thread-default",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: {
-          threadId: { type: "string" },
-        },
-      },
-      execute: executeMock,
-    };
-
-    const [first] = applyPluginToolDeliveryDefaults({
-      tools: [sharedTool],
-      deliveryContext: { threadId: "111.222" },
-    });
-    const [second] = applyPluginToolDeliveryDefaults({
-      tools: [sharedTool],
-      deliveryContext: { threadId: "333.444" },
-    });
-
-    expect(first).toBe(sharedTool);
-    expect(second).toBe(sharedTool);
-
-    await first?.execute("call-1", {});
-    await second?.execute("call-2", {});
-
-    expect(executeMock).toHaveBeenNthCalledWith(1, "call-1", {});
-    expect(executeMock).toHaveBeenNthCalledWith(2, "call-2", {});
-  });
-
-  it.each([
-    {
-      name: "does not inject messageThreadId defaults for missing params objects",
-      toolName: "plugin-message-thread-default",
-      property: "messageThreadId",
-      propertySchema: { type: "number" as const },
-      ambientThreadId: "77",
-      params: undefined,
-    },
-    {
-      name: "does not infer string thread ids for tools that declare thread parameters",
-      toolName: "plugin-string-thread-default",
-      property: "threadId",
-      propertySchema: { type: "string" as const },
-      ambientThreadId: "77",
-      params: {},
-    },
-    {
-      name: "preserves explicit thread params when ambient defaults exist",
-      toolName: "plugin-thread-override",
-      property: "threadId",
-      propertySchema: { type: "string" as const },
-      ambientThreadId: "111.222",
-      params: { threadId: "explicit" },
-    },
-  ])("$name", async (row) => {
-    const executeMock = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: {},
-    }));
-    const tool: AnyAgentTool = {
-      name: row.toolName,
-      label: row.toolName,
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: {
-          [row.property]: row.propertySchema,
-        },
-      },
-      execute: executeMock,
-    };
-
-    const [wrapped] = applyPluginToolDeliveryDefaults({
-      tools: [tool],
-      deliveryContext: { threadId: row.ambientThreadId },
-    });
-
-    await wrapped?.execute("call-1", row.params);
-
-    expect(executeMock).toHaveBeenCalledWith("call-1", row.params);
   });
 });

@@ -117,7 +117,7 @@ describe("OpenAI realtime queued audio buffer ownership", () => {
         const copyBuffer = vi.spyOn(Buffer, "from");
         try {
           bridge.sendAudio(oversized);
-          expect(copyBuffer).not.toHaveBeenCalled();
+          expect(copyBuffer.mock.calls.some(([source]) => source === oversized)).toBe(false);
         } finally {
           copyBuffer.mockRestore();
         }

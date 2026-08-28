@@ -39,6 +39,7 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     loading: false,
     error: null,
     tasks: [],
+    activeCount: 0,
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:current",

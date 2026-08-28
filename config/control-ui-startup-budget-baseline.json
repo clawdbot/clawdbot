@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 330586,
-  "reason": "cumulative 2026-08-14 growth (run 31798463207 baseline) plus redacted-rename guard i18n string (#123571); CI-measured build-artifacts bytes",
-  "updatedAt": "2026-08-14"
+  "startupJsGzipBytes": 345371,
+  "reason": "Queued-send transcript bubbles (#131909), rebuilt on main a79e6517be8: measured 345371 B. Replace the conflicting 348449 B main baseline with this fresh measurement; retain the 512 B growth allowance, 64 B build variance, and 350 KiB ceiling.",
+  "updatedAt": "2026-08-28"
 }

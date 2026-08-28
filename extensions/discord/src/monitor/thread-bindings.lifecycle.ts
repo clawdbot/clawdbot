@@ -1,4 +1,5 @@
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord plugin module implements thread bindings.lifecycle behavior.
 import {
@@ -6,7 +7,6 @@ import {
   normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap from "p-map";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
@@ -15,10 +15,6 @@ import {
   resolveThreadBindingThreadName,
 } from "./thread-bindings.messages.js";
 import { resolveBindingIdsForTargetSession } from "./thread-bindings.session-shared.js";
-export {
-  setThreadBindingIdleTimeoutBySessionKey,
-  setThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings.session-updates.js";
 import {
   BINDINGS_BY_THREAD_ID,
   MANAGERS_BY_ACCOUNT_ID,
@@ -30,6 +26,10 @@ import {
   shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
+export {
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
+} from "./thread-bindings.session-updates.js";
 
 export type AcpThreadBindingReconciliationResult = {
   checked: number;
@@ -266,9 +266,8 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
   }
 
   if (params.healthProbe && probeTargets.length > 0) {
-    const probeResults = await pMap(
-      probeTargets,
-      async ({ binding, sessionKey, session }) => {
+    const { results: probeResults } = await runTasksWithConcurrency({
+      tasks: probeTargets.map(({ binding, sessionKey, session }) => async () => {
         try {
           const result = await params.healthProbe?.({
             cfg: params.cfg,
@@ -288,12 +287,11 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
             status: "uncertain" satisfies AcpThreadBindingHealthStatus,
           };
         }
-      },
-      {
-        concurrency: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
-        stopOnError: true,
-      },
-    );
+      }),
+      limit: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
+      errorMode: "stop",
+      throwOnError: true,
+    });
 
     for (const probeResult of probeResults) {
       if (probeResult.status === "stale") {

@@ -130,8 +130,12 @@ type BufferedCommandOptions = {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   maxOutputBytes?: number | { stdout?: number; stderr?: number };
+  maxCombinedOutputBytes?: number;
   discardOutput?: { stdout?: boolean; stderr?: boolean };
   tolerateOutputError?: { stdout?: boolean; stderr?: boolean };
+  terminateOnOutputError?: boolean | { stdout?: boolean; stderr?: boolean };
+  killProcessTree?: boolean;
+  killGraceMs?: number;
 };
 
 type BufferedCommandResult = {
@@ -165,13 +169,24 @@ export async function runCommandBuffered(
 
   const chunks: Record<CommandOutputStream, Buffer[]> = { stdout: [], stderr: [] };
   const capturedBytes: Record<CommandOutputStream, number> = { stdout: 0, stderr: 0 };
+  const maxCombinedOutputBytes =
+    typeof options.maxCombinedOutputBytes === "number" &&
+    Number.isFinite(options.maxCombinedOutputBytes) &&
+    options.maxCombinedOutputBytes > 0
+      ? Math.max(1, Math.floor(options.maxCombinedOutputBytes))
+      : undefined;
   let outputLimitStream: CommandOutputStream | undefined;
   const appendChunk = (chunk: Buffer, stream: CommandOutputStream): boolean => {
     if (options.discardOutput?.[stream]) {
       return true;
     }
     const maxBytes = resolveMaxOutputBytes(options.maxOutputBytes, stream);
-    const remaining = Math.max(0, maxBytes - capturedBytes[stream]);
+    const combinedBytes = capturedBytes.stdout + capturedBytes.stderr;
+    const combinedRemaining =
+      maxCombinedOutputBytes === undefined
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, maxCombinedOutputBytes - combinedBytes);
+    const remaining = Math.max(0, Math.min(maxBytes - capturedBytes[stream], combinedRemaining));
     if (remaining > 0) {
       const captured = Buffer.from(chunk.subarray(0, remaining));
       chunks[stream].push(captured);
@@ -192,7 +207,8 @@ export async function runCommandBuffered(
       cwd: options.cwd,
       env: options.env,
       input: options.input,
-      killProcessTree: true,
+      killProcessTree: options.killProcessTree ?? true,
+      killGraceMs: options.killGraceMs,
       onOutputChunk: appendChunk,
       outputCapture: "discard",
       signal: options.signal,
@@ -201,6 +217,7 @@ export async function runCommandBuffered(
         stdout: options.discardOutput?.stdout || options.tolerateOutputError?.stdout,
         stderr: options.discardOutput?.stderr || options.tolerateOutputError?.stderr,
       },
+      terminateOnOutputError: options.terminateOnOutputError,
     });
     const termination: BufferedCommandResult["termination"] = result.outputLimitExceeded
       ? "output-limit"

@@ -1,4 +1,5 @@
 // Coverage for model-call diagnostic events around attempt stream functions.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,9 +8,12 @@ import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPrivateData,
+  type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../../../infra/diagnostic-model-request.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
@@ -17,11 +21,15 @@ import {
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
-async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
+async function collectModelCallEvents(
+  run: () => Promise<void>,
+  onEvent?: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void,
+): Promise<DiagnosticEventPayload[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
   // events and flush one tick after the stream completes.
   const events: DiagnosticEventPayload[] = [];
-  const stop = onInternalDiagnosticEvent((event) => {
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    onEvent?.(event, metadata);
     if (event.type.startsWith("model.call.")) {
       events.push(event);
     }
@@ -138,7 +146,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
     const events = await collectModelCallEvents(async () => {
       const returned = wrapped(
-        {} as never,
+        { requestTimeoutMs: 300_000 } as never,
         {} as never,
         {} as never,
       ) as unknown as typeof originalStream;
@@ -173,6 +181,132 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it("normalizes the timeout from each exact model request", async () => {
+    let callSequence = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const ownerGeneration = Object.freeze({});
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() =>
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
+      {
+        runId: "run-timeouts",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `call-${++callSequence}`,
+        ownerGeneration,
+      },
+    );
+
+    await collectModelCallEvents(
+      async () => {
+        await drain(await wrapped({ requestTimeoutMs: 60_000 } as never, {} as never, {} as never));
+        await drain(await wrapped({} as never, {} as never, {} as never));
+        await drain(await wrapped({ requestTimeoutMs: 90_000 } as never, {} as never, {} as never));
+        await drain(
+          await wrapped(
+            { requestTimeoutMs: Number.MAX_SAFE_INTEGER } as never,
+            {} as never,
+            {} as never,
+          ),
+        );
+        await drain(await wrapped({ requestTimeoutMs: -1 } as never, {} as never, {} as never));
+      },
+      (event, metadata) => {
+        if (event.type === "model.call.started") {
+          const lifecycle = resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata);
+          requestTimeouts.push(
+            lifecycle?.phase === "started" ? lifecycle.requestTimeoutMs : undefined,
+          );
+        }
+      },
+    );
+
+    expect(requestTimeouts).toEqual([60_000, undefined, 90_000, MAX_TIMER_TIMEOUT_MS, undefined]);
+  });
+
+  it("propagates the resolved local transport deadline to diagnostic recovery", async () => {
+    let callSequence = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() =>
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
+      {
+        runId: "run-local-no-gap",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "ollama",
+        model: "qwen3.5:9b-q8_0",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `call-${++callSequence}`,
+        ownerGeneration: Object.freeze({}),
+        requestTimeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+      },
+    );
+
+    await collectModelCallEvents(
+      async () => {
+        await drain(await wrapped({} as never, {} as never, {} as never));
+      },
+      (event, metadata) => {
+        if (event.type === "model.call.started") {
+          const lifecycle = resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata);
+          requestTimeouts.push(
+            lifecycle?.phase === "started" ? lifecycle.requestTimeoutMs : undefined,
+          );
+        }
+      },
+    );
+
+    expect(requestTimeouts).toEqual([DEFAULT_UNDICI_STREAM_TIMEOUT_MS]);
+  });
+
+  it("preserves an explicit provider deadline over the caller transport allowance", async () => {
+    let callSequence = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() =>
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
+      {
+        runId: "run-resolved-policy",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `call-${++callSequence}`,
+        ownerGeneration: Object.freeze({}),
+        requestTimeoutMs: 45_000,
+      },
+    );
+
+    await collectModelCallEvents(
+      async () => {
+        await drain(
+          await wrapped({ requestTimeoutMs: 300_000 } as never, {} as never, {} as never),
+        );
+      },
+      (event, metadata) => {
+        if (event.type === "model.call.started") {
+          const lifecycle = resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata);
+          requestTimeouts.push(
+            lifecycle?.phase === "started" ? lifecycle.requestTimeoutMs : undefined,
+          );
+        }
+      },
+    );
+
+    expect(requestTimeouts).toEqual([300_000]);
   });
 
   it("captures output and completes when callers only await stream.result()", async () => {

@@ -81,6 +81,36 @@ const readOnlyRetainedTask = {
 };
 
 const readOnlyRetainedResult = "Synthetic retained result copied by a read-only operator.";
+const olderRetainedResult = "Older retained result from the first copy activation.";
+const newestRetainedResult = "Newest retained result from the second copy activation.";
+
+type ClipboardFaultState = {
+  asyncWrites: string[];
+  execSucceeds: boolean;
+  legacyWrites: string[];
+  mode: "defer" | "missing" | "reject";
+  pending: Array<{
+    reject: (reason?: unknown) => void;
+    resolve: () => void;
+  }>;
+};
+
+const retryBlockedTask = {
+  ...readOnlyRetainedTask,
+  id: "task-retry-blocked",
+  taskId: "task-retry-blocked",
+  title: "Automation report delivery",
+  deliveryStatus: "failed",
+  terminalSummary: "Automation completed; result delivery is blocked.",
+};
+
+const dismissBlockedTask = {
+  ...retryBlockedTask,
+  id: "task-dismiss-blocked",
+  taskId: "task-dismiss-blocked",
+  title: "Automation cleanup delivery",
+  updatedAt: baseTime - 51_000,
+};
 
 const pageTwoSentinel = {
   id: "task-page-two-sentinel",
@@ -113,6 +143,226 @@ const activePageOneTasks = [
 ];
 
 suite.define(() => {
+  it("keeps completed tasks visible when active work fills the unfiltered page", async () => {
+    await mkdir(artifactDir, { recursive: true });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    try {
+      const activeTasks = activePageOneTasks.slice(0, 200);
+      const terminalStatuses = ["completed", "failed", "timed_out", "cancelled"];
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "tasks.list": {
+            cases: [
+              {
+                match: { agentId: "main", limit: 500, status: ["queued", "running"] },
+                response: { tasks: activeTasks },
+              },
+              {
+                match: { agentId: "main", limit: 200, status: terminalStatuses },
+                response: { tasks: [completedTask, failedTask] },
+              },
+              {
+                match: { agentId: "main", limit: 200 },
+                response: { tasks: activeTasks },
+              },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}tasks`);
+      const active = page.locator('[data-task-section="active"]');
+      const recent = page.locator('[data-task-section="recent"]');
+      await active.locator('[data-task-id="task-running"]').waitFor({ state: "visible" });
+      await recent.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(artifactDir, "10-recent-terminal-starvation.png") });
+
+      expect(await recent.textContent()).toContain("Generate media index");
+      expect(await recent.textContent()).toContain("Worker exited");
+      expect(await gateway.getRequests("tasks.list")).toContainEqual({
+        id: expect.any(String),
+        method: "tasks.list",
+        params: { agentId: "main", limit: 200, status: terminalStatuses },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps retry and dismiss outcomes authoritative across a stale refresh and reconnect", async () => {
+    const actionArtifactDir = path.resolve(
+      process.cwd(),
+      ".artifacts/control-ui-e2e/task-action-outcomes",
+    );
+    const rawVideoDir = path.join(actionArtifactDir, "raw-video");
+    await rm(actionArtifactDir, { force: true, recursive: true });
+    await mkdir(rawVideoDir, { recursive: true });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: rawVideoDir, size: { width: 1440, height: 900 } },
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    const video = page.video();
+    const listResponses = {
+      cases: [
+        {
+          match: { agentId: "main", limit: 500, status: ["queued", "running"] },
+          response: { tasks: [] },
+        },
+        {
+          match: { agentId: "main", limit: 200 },
+          response: { tasks: [retryBlockedTask, dismissBlockedTask] },
+        },
+      ],
+    };
+    const retriedTask = {
+      ...retryBlockedTask,
+      deliveryStatus: "session_queued",
+      terminalOutcome: "succeeded",
+      updatedAt: baseTime + 1_000,
+    };
+    const dismissedTask = {
+      ...dismissBlockedTask,
+      deliveryStatus: "dismissed",
+      updatedAt: baseTime + 2_000,
+    };
+    try {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "tasks.list": listResponses,
+          "tasks.retry": {
+            results: [{ taskId: retryBlockedTask.taskId, ok: true, task: retriedTask }],
+          },
+          "tasks.dismiss": {
+            results: [{ taskId: dismissBlockedTask.taskId, ok: true, task: dismissedTask }],
+          },
+        },
+      });
+
+      const response = await page.goto(`${suite.server.baseUrl}tasks`);
+      expect(response?.status()).toBe(200);
+      const retryRow = page.locator(`[data-task-id="${retryBlockedTask.id}"]`);
+      const dismissRow = page.locator(`[data-task-id="${dismissBlockedTask.id}"]`);
+      await retryRow.waitFor({ state: "visible" });
+      await dismissRow.waitFor({ state: "visible" });
+      await page.screenshot({ path: path.join(actionArtifactDir, "01-blocked.png") });
+
+      await page.setViewportSize({ width: 320, height: 844 });
+      const recoveryActions = ["Copy result", "Retry delivery", "Dismiss delivery"];
+      for (const name of recoveryActions) {
+        const action = retryRow.getByRole("button", { name });
+        await action.waitFor({ state: "visible" });
+        const bounds = await action.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds?.x ?? -1).toBeGreaterThanOrEqual(0);
+        expect((bounds?.x ?? 321) + (bounds?.width ?? 0)).toBeLessThanOrEqual(320);
+      }
+      await page.screenshot({ path: path.join(actionArtifactDir, "01-blocked-mobile.png") });
+      await page.setViewportSize({ width: 1440, height: 900 });
+
+      await gateway.deferNext("tasks.retry", { taskIds: [retryBlockedTask.taskId] });
+      const retryButton = retryRow.getByRole("button", { name: "Retry delivery" });
+      await retryButton.evaluate((element) => {
+        (element as HTMLButtonElement).click();
+        (element as HTMLButtonElement).click();
+      });
+      await expect.poll(async () => gateway.getRequests("tasks.retry")).toHaveLength(1);
+      await expect.poll(() => retryButton.isDisabled()).toBe(true);
+      await gateway.rejectDeferred("tasks.retry", { message: "Synthetic delivery retry failed" });
+      await expect
+        .poll(() => page.locator(".callout.danger").textContent())
+        .toContain("Synthetic delivery retry failed");
+      await expect.poll(() => retryButton.isEnabled()).toBe(true);
+      await page.screenshot({ path: path.join(actionArtifactDir, "02-retry-failed.png") });
+
+      await gateway.deferNext("tasks.list", {
+        agentId: "main",
+        limit: 500,
+        status: ["queued", "running"],
+      });
+      await gateway.deferNext("tasks.list", { agentId: "main", limit: 200 });
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await expect.poll(async () => gateway.getRequests("tasks.list")).toHaveLength(4);
+
+      await gateway.deferNext("tasks.retry", { taskIds: [retryBlockedTask.taskId] });
+      await gateway.deferNext("tasks.dismiss", { taskIds: [dismissBlockedTask.taskId] });
+      await retryButton.click();
+      await dismissRow.getByRole("button", { name: "Dismiss delivery" }).click();
+      await expect.poll(async () => gateway.getRequests("tasks.retry")).toHaveLength(2);
+      await expect.poll(async () => gateway.getRequests("tasks.dismiss")).toHaveLength(1);
+      await gateway.resolveDeferred("tasks.dismiss", {
+        results: [{ taskId: dismissBlockedTask.taskId, ok: true, task: dismissedTask }],
+      });
+      await gateway.resolveDeferred("tasks.retry", {
+        results: [{ taskId: retryBlockedTask.taskId, ok: true, task: retriedTask }],
+      });
+      await expect
+        .poll(() => retryRow.getByRole("button", { name: "Retry delivery" }).count())
+        .toBe(0);
+      await expect
+        .poll(() => dismissRow.getByRole("button", { name: "Dismiss delivery" }).count())
+        .toBe(0);
+      await page.screenshot({ path: path.join(actionArtifactDir, "03-actions-succeeded.png") });
+
+      await gateway.emitGatewayEvent("task", {
+        action: "deleted",
+        taskId: dismissBlockedTask.taskId,
+      });
+      await dismissRow.waitFor({ state: "detached" });
+      await gateway.resolveDeferred("tasks.list", { tasks: [] });
+      await gateway.resolveDeferred("tasks.list", {
+        tasks: [retryBlockedTask, dismissBlockedTask],
+      });
+
+      await expect
+        .poll(() => retryRow.getByRole("button", { name: "Retry delivery" }).count())
+        .toBe(0);
+      await expect.poll(() => retryRow.locator(".callout.warn").count()).toBe(0);
+      await dismissRow.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("tasks.retry")).toHaveLength(2);
+      expect((await gateway.getRequests("tasks.retry")).map((request) => request.params)).toEqual([
+        { taskIds: [retryBlockedTask.taskId] },
+        { taskIds: [retryBlockedTask.taskId] },
+      ]);
+      expect((await gateway.getRequests("tasks.dismiss"))[0]?.params).toEqual({
+        taskIds: [dismissBlockedTask.taskId],
+      });
+      await page.screenshot({
+        path: path.join(actionArtifactDir, "04-stale-refresh-suppressed.png"),
+      });
+
+      const socketCount = await gateway.getSocketCount();
+      await gateway.closeLatest(1012, "Replace the task action client");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await retryRow.waitFor({ state: "visible" });
+      await expect
+        .poll(() => retryRow.getByRole("button", { name: "Retry delivery" }).count())
+        .toBe(1);
+      await retryRow.getByRole("button", { name: "Retry delivery" }).click();
+      await expect.poll(async () => gateway.getRequests("tasks.retry")).toHaveLength(3);
+      await expect
+        .poll(() => retryRow.getByRole("button", { name: "Retry delivery" }).count())
+        .toBe(0);
+      await page.screenshot({ path: path.join(actionArtifactDir, "05-reconnect-retry.png") });
+    } finally {
+      await context.close();
+      if (video) {
+        await copyFile(
+          await video.path(),
+          path.join(actionArtifactDir, "task-action-outcomes.webm"),
+        );
+      }
+      await rm(rawVideoDir, { force: true, recursive: true });
+    }
+  });
+
   it("renders every active page, applies pushed completion, and cancels a page-two task", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });
@@ -152,7 +402,11 @@ suite.define(() => {
                 },
               },
               {
-                match: { agentId: "main", limit: 200 },
+                match: {
+                  agentId: "main",
+                  limit: 200,
+                  status: ["completed", "failed", "timed_out", "cancelled"],
+                },
                 response: { tasks: [completedTask, failedTask] },
               },
             ],
@@ -184,12 +438,12 @@ suite.define(() => {
         listRequests.filter(
           (request) => (request.params as { status?: unknown }).status !== undefined,
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
       expect(
         listRequests.filter(
           (request) => (request.params as { status?: unknown }).status === undefined,
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       expect(listRequests).toContainEqual({
         id: expect.any(String),
         method: "tasks.list",
@@ -198,6 +452,15 @@ suite.define(() => {
           cursor: "active-page-2",
           limit: 500,
           status: ["queued", "running"],
+        },
+      });
+      expect(listRequests).toContainEqual({
+        id: expect.any(String),
+        method: "tasks.list",
+        params: {
+          agentId: "main",
+          limit: 200,
+          status: ["completed", "failed", "timed_out", "cancelled"],
         },
       });
       await page.screenshot({
@@ -247,15 +510,50 @@ suite.define(() => {
     }
   });
 
-  it("lets an operator.read-only user copy a retained result without mutations", async () => {
+  it("copies retained results through fallback and announces total failure", async () => {
     await mkdir(artifactDir, { recursive: true });
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { width: 1440, height: 900 },
     });
-    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-      origin: new URL(suite.server.baseUrl).origin,
+    await context.addInitScript(() => {
+      const state: ClipboardFaultState = {
+        asyncWrites: [],
+        execSucceeds: true,
+        legacyWrites: [],
+        mode: "reject",
+        pending: [],
+      };
+      Object.defineProperty(window, "tasksClipboardFault", { value: state });
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        get: () =>
+          state.mode === "missing"
+            ? undefined
+            : {
+                writeText(text: string) {
+                  state.asyncWrites.push(text);
+                  if (state.mode === "defer") {
+                    return new Promise<void>((resolve, reject) => {
+                      state.pending.push({ reject, resolve });
+                    });
+                  }
+                  return Promise.reject(
+                    new DOMException("Clipboard access denied", "NotAllowedError"),
+                  );
+                },
+              },
+      });
+      document.execCommand = (command: string) => {
+        if (command !== "copy") {
+          return false;
+        }
+        state.legacyWrites.push(
+          document.querySelector<HTMLTextAreaElement>("textarea")?.value ?? "",
+        );
+        return state.execSucceeds;
+      };
     });
     const page = await context.newPage();
     try {
@@ -275,7 +573,13 @@ suite.define(() => {
             ],
           },
           "tasks.get": {
-            task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult },
+            sequence: [
+              { task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult } },
+              { task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult } },
+              { task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult } },
+              { task: { ...readOnlyRetainedTask, result: olderRetainedResult } },
+              { task: { ...readOnlyRetainedTask, result: newestRetainedResult } },
+            ],
           },
         },
       });
@@ -296,11 +600,166 @@ suite.define(() => {
       const copyButton = task.getByRole("button", { name: "Copy result" });
       await copyButton.waitFor({ state: "visible" });
       await copyButton.click();
-      const getRequest = await gateway.waitForRequest("tasks.get");
-      expect(getRequest.params).toEqual({ taskId: readOnlyRetainedTask.taskId });
       await expect
-        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-        .toBe(readOnlyRetainedResult);
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+                .tasksClipboardFault,
+          ),
+        )
+        .toMatchObject({
+          asyncWrites: [readOnlyRetainedResult],
+          legacyWrites: [readOnlyRetainedResult],
+        });
+
+      await page.evaluate(() => {
+        (
+          window as typeof window & { tasksClipboardFault: ClipboardFaultState }
+        ).tasksClipboardFault.mode = "missing";
+      });
+      await copyButton.click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+                .tasksClipboardFault,
+          ),
+        )
+        .toMatchObject({
+          asyncWrites: [readOnlyRetainedResult],
+          legacyWrites: [readOnlyRetainedResult, readOnlyRetainedResult],
+        });
+
+      await page.evaluate(() => {
+        const state = (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+          .tasksClipboardFault;
+        state.mode = "reject";
+        state.execSucceeds = false;
+      });
+      await copyButton.click();
+      await expect.poll(() => page.getByRole("alert").textContent()).toBe("Copy failed");
+      await page.screenshot({ path: path.join(artifactDir, "05-copy-failed.png") });
+      expect(
+        await page.evaluate(
+          () =>
+            (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+              .tasksClipboardFault,
+        ),
+      ).toMatchObject({
+        asyncWrites: [readOnlyRetainedResult, readOnlyRetainedResult],
+        legacyWrites: [readOnlyRetainedResult, readOnlyRetainedResult, readOnlyRetainedResult],
+      });
+
+      await page.evaluate(() => {
+        const state = (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+          .tasksClipboardFault;
+        state.mode = "defer";
+        state.execSucceeds = false;
+      });
+      await copyButton.click();
+      await copyButton.click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+                .tasksClipboardFault.pending.length,
+          ),
+        )
+        .toBe(2);
+      await page.evaluate(() => {
+        (
+          window as typeof window & { tasksClipboardFault: ClipboardFaultState }
+        ).tasksClipboardFault.pending[1]?.reject(
+          new DOMException("Clipboard access denied", "NotAllowedError"),
+        );
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+                .tasksClipboardFault.legacyWrites.length,
+          ),
+        )
+        .toBe(4);
+      await page.evaluate(() => {
+        (
+          window as typeof window & { tasksClipboardFault: ClipboardFaultState }
+        ).tasksClipboardFault.pending[0]?.reject(
+          new DOMException("Clipboard access denied", "NotAllowedError"),
+        );
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      const currentAlert = page.getByRole("alert");
+      expect(await currentAlert.count()).toBe(1);
+      expect(await currentAlert.textContent()).toBe("Copy failed");
+      expect(
+        await page.evaluate(
+          () =>
+            (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+              .tasksClipboardFault.legacyWrites,
+        ),
+      ).toEqual([
+        readOnlyRetainedResult,
+        readOnlyRetainedResult,
+        readOnlyRetainedResult,
+        newestRetainedResult,
+      ]);
+
+      await gateway.deferNext("tasks.get", { taskId: readOnlyRetainedTask.taskId });
+      await copyButton.click();
+      await expect.poll(() => gateway.getRequests("tasks.get")).toHaveLength(6);
+      expect(await page.getByRole("alert").textContent()).toBe("Copy failed");
+      const socketCount = await gateway.getSocketCount();
+      await gateway.closeLatest(1012, "retire retained-result copy");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await gateway.resolveDeferred("tasks.get", {
+        task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult },
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.getByRole("alert").count()).toBe(0);
+      expect(
+        await page.evaluate(
+          () =>
+            (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+              .tasksClipboardFault,
+        ),
+      ).toMatchObject({
+        asyncWrites: [
+          readOnlyRetainedResult,
+          readOnlyRetainedResult,
+          olderRetainedResult,
+          newestRetainedResult,
+        ],
+        legacyWrites: [
+          readOnlyRetainedResult,
+          readOnlyRetainedResult,
+          readOnlyRetainedResult,
+          newestRetainedResult,
+        ],
+      });
+
+      expect((await gateway.getRequests("tasks.get")).map((request) => request.params)).toEqual([
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+      ]);
       expect(await gateway.getRequests("tasks.retry")).toHaveLength(0);
       expect(await gateway.getRequests("tasks.dismiss")).toHaveLength(0);
       expect(await gateway.getRequests("tasks.cancel")).toHaveLength(0);

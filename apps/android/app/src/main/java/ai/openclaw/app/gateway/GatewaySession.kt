@@ -30,6 +30,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -181,9 +182,7 @@ data class GatewayErrorDetails(
   val clientMaxProtocol: Int? = null,
   val expectedProtocol: Int? = null,
   val minimumProbeProtocol: Int? = null,
-  val clawhubTrustCode: String? = null,
   val clawhubWarning: String? = null,
-  val clawhubVersion: String? = null,
   val missingScope: String? = null,
   val requiredScopes: List<String> = emptyList(),
 )
@@ -214,7 +213,8 @@ data class GatewayHelloSummary(
   val updateAvailable: GatewayUpdateAvailableSummary?,
   val authRole: String? = null,
   val authScopes: List<String> = emptyList(),
-  val methods: Set<String> = emptySet(),
+  val methods: Set<String>? = null,
+  val capabilities: Set<String>? = null,
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -950,6 +950,7 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+    private var lastEventSequence: Long? = null
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
     private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
@@ -1095,7 +1096,7 @@ class GatewaySession(
         } else {
           ticketedPath
         }
-      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$playbackPath"
+      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}$playbackPath"
       val headers = mediaTransportHeaders()
       return TicketedMediaRequest(url = url, headers = headers)
     }
@@ -1441,7 +1442,13 @@ class GatewaySession(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { method -> method.isNotEmpty() } }
           ?.toSet()
-          .orEmpty()
+      val capabilities =
+        obj["features"]
+          .asObjectOrNull()
+          ?.get("capabilities")
+          .asArrayOrNull()
+          ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { capability -> capability.isNotEmpty() } }
+          ?.toSet()
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
@@ -1506,6 +1513,7 @@ class GatewaySession(
             authRole = authRole,
             authScopes = authScopes,
             methods = methods,
+            capabilities = capabilities,
           ),
       )
     }
@@ -1669,9 +1677,7 @@ class GatewaySession(
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),
                 minimumProbeProtocol = it["minimumProbeProtocol"].asIntOrNull(),
-                clawhubTrustCode = it["clawhubTrustCode"].asStringOrNull(),
                 clawhubWarning = it["warning"].asStringOrNull(),
-                clawhubVersion = it["version"].asStringOrNull(),
                 missingScope = it["missingScope"].asStringOrNull(),
                 requiredScopes =
                   it["requiredScopes"]
@@ -1708,6 +1714,15 @@ class GatewaySession(
       }
       // Retired sockets can still drain queued frames after reconnect. Never let them mutate current state.
       if (currentConnection !== this) return
+      gatewayEvent.seq?.let { sequence ->
+        val previous = lastEventSequence
+        if (previous != null && sequence > previous + 1) {
+          onEvent("seqGap", null)
+          // Recovery can retire this socket before its triggering event is delivered.
+          if (currentConnection !== this || !isReady()) return
+        }
+        lastEventSequence = sequence
+      }
       if (event == GatewayEvent.NodeInvokeRequest.rawValue && payloadJson != null && onInvoke != null) {
         handleInvokeEvent(payloadJson)
         return
@@ -1949,42 +1964,42 @@ class GatewaySession(
     val trimmed = raw?.trim().orEmpty()
     val parsed = trimmed.takeIf { it.isNotBlank() }?.let { runCatching { java.net.URI(it) }.getOrNull() }
     val host = parsed?.host?.trim().orEmpty()
-    val port = parsed?.port ?: -1
-    val scheme =
-      parsed
-        ?.scheme
-        ?.trim()
-        .orEmpty()
-        .ifBlank { "http" }
-    val suffix = buildUrlSuffix(parsed)
-
-    // If raw URL is a non-loopback address and this connection uses TLS,
-    // normalize scheme/port to the endpoint we actually connected to.
-    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackGatewayHost(host)) {
-      val needsTlsRewrite =
-        isTlsConnection &&
-          (
-            !scheme.equals("https", ignoreCase = true) ||
-              (port > 0 && port != endpoint.port) ||
-              (port <= 0 && endpoint.port != 443)
-          )
-      if (needsTlsRewrite) {
-        return buildCanvasUrl(host = host, scheme = "https", port = endpoint.port, suffix = suffix)
+    val scheme = parsed?.scheme ?: "http"
+    val port = parsed?.port?.takeIf { it > 0 } ?: if (scheme.equals("https", ignoreCase = true)) 443 else 80
+    val usesFallbackHost = host.isBlank() || isLoopbackGatewayHost(host)
+    val isGatewayAuthority = usesFallbackHost || endpoint.matchesGatewayAuthority(host, port)
+    val path = parsed?.rawPath.orEmpty()
+    val capability = path.removePrefix("/__openclaw__/cap/")
+    val isRootCapability = path != capability && capability.isNotEmpty() && !capability.contains('/')
+    val hasUriExtras = parsed?.rawUserInfo != null || parsed?.rawQuery != null || parsed?.rawFragment != null
+    val isHttpSurface = scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)
+    // Only gateway-hosted root capabilities inherit its proxy prefix. Judge the original
+    // authority before TLS rewriting, and leave explicit surface paths and token bytes intact.
+    val contextPath =
+      if (isGatewayAuthority && isRootCapability && !hasUriExtras && isHttpSurface) {
+        endpoint.contextPath
+      } else {
+        ""
       }
-      return trimmed
-    }
+    val suffix = contextPath + buildUrlSuffix(parsed)
 
-    val fallbackHost =
-      endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.host.trim()
-    if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
-
-    // For TLS connections, use the connected endpoint's scheme/port instead of raw canvas metadata.
-    val fallbackScheme = if (isTlsConnection) "https" else scheme
-    // For TLS, always use the connected endpoint port.
-    val fallbackPort = if (isTlsConnection) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
-    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = fallbackPort, suffix = suffix)
+    val needsTlsRewrite = isTlsConnection && (!scheme.equals("https", ignoreCase = true) || port != endpoint.port)
+    if (!usesFallbackHost && !needsTlsRewrite && contextPath.isEmpty()) return trimmed
+    val resolvedHost =
+      if (usesFallbackHost) {
+        endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
+          ?: endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
+          ?: endpoint.host.trim()
+      } else {
+        host
+      }
+    if (resolvedHost.isEmpty()) return trimmed.ifBlank { null }
+    return buildCanvasUrl(
+      host = resolvedHost,
+      scheme = if (isTlsConnection) "https" else scheme,
+      port = if (usesFallbackHost || isTlsConnection) endpoint.port else port,
+      suffix = suffix,
+    )
   }
 
   private fun buildCanvasUrl(
@@ -2153,7 +2168,15 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   }
 }
 
-/** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
+private fun GatewayEndpoint.matchesGatewayAuthority(
+  surfaceHost: String,
+  surfacePort: Int,
+): Boolean =
+  "http://${formatGatewayAuthority(host.trim().trimEnd('.'), port)}".toHttpUrlOrNull()?.let {
+    it == "http://${formatGatewayAuthority(surfaceHost.trim().trimEnd('.'), surfacePort)}".toHttpUrlOrNull()
+  } == true
+
+/** Retains pins for the same TLS authority, canonicalizing numeric hosts without adding DNS aliases. */
 internal fun gatewayTlsFingerprintForCanvasSurface(
   fingerprint: String?,
   surfaceUrl: String,
@@ -2164,11 +2187,8 @@ internal fun gatewayTlsFingerprintForCanvasSurface(
   val surface = runCatching { java.net.URI(surfaceUrl) }.getOrNull() ?: return null
   if (!surface.scheme.equals("https", ignoreCase = true)) return null
   val surfaceHost = surface.host?.trim()?.trimEnd('.') ?: return null
-  val gatewayHost = endpoint.host.trim().trimEnd('.')
-  val surfacePort = surface.port.takeIf { it > 0 } ?: 443
-  return fingerprint.takeIf {
-    surfaceHost.equals(gatewayHost, ignoreCase = true) && surfacePort == endpoint.port
-  }
+  if (!surfaceHost.equals(endpoint.host.trim().trimEnd('.'), ignoreCase = true) && ':' !in surfaceHost && ':' !in endpoint.host) return null
+  return fingerprint.takeIf { endpoint.matchesGatewayAuthority(surfaceHost, surface.port.takeIf { it > 0 } ?: 443) }
 }
 
 internal fun buildGatewayWebSocketUrl(

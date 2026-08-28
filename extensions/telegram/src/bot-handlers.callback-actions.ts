@@ -1,7 +1,7 @@
-import type { Message } from "grammy/types";
+import type { Message, User } from "grammy/types";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
-import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
+import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
 
@@ -44,9 +44,9 @@ export interface TelegramCallbackMessageActions {
 export function createTelegramCallbackMessageActions(params: {
   bot: RegisterTelegramHandlerParams["bot"];
   callbackMessage: Message;
-  isForum: boolean;
+  threadSpec: TelegramThreadSpec;
 }): TelegramCallbackMessageActions {
-  const { bot, callbackMessage, isForum } = params;
+  const { bot, callbackMessage, threadSpec } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
       ? { business_connection_id: callbackMessage.business_connection_id }
@@ -85,13 +85,15 @@ export function createTelegramCallbackMessageActions(params: {
   };
 
   const deleteCallbackMessage = async () => {
-    return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+    return callbackBusinessParams
+      ? await bot.api.deleteBusinessMessages(callbackBusinessParams.business_connection_id, [
+          callbackMessage.message_id,
+        ])
+      : await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
   };
 
   const replyToCallbackChat = async (text: string, replyParams?: TelegramCallbackReplyParams) => {
-    const threadParams = buildTelegramThreadParams(
-      resolveTelegramMessageThreadSpec(callbackMessage, isForum),
-    );
+    const threadParams = buildTelegramThreadParams(threadSpec);
     const mergedParams =
       callbackBusinessParams || threadParams || replyParams
         ? { ...replyParams, ...callbackBusinessParams, ...threadParams }
@@ -134,31 +136,88 @@ type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOpt
 type QuestionResolver = (
   params: ResolveQuestionParams,
 ) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
+type QuestionFeedbackMode = "terminal" | "retry" | "custom-input";
+
+export async function sendTelegramQuestionFeedback(params: {
+  actions: TelegramCallbackMessageActions;
+  text: string;
+  mode: QuestionFeedbackMode;
+  isGroup: boolean;
+  user: User;
+}): Promise<void> {
+  if (params.mode === "terminal") {
+    await params.actions.clearCallbackButtons().catch(() => {});
+  }
+  const groupCustomInput = params.mode === "custom-input" && params.isGroup;
+  const text = groupCustomInput
+    ? `${params.user.first_name}, reply with your own answer.`
+    : params.text;
+  await params.actions.replyToCallbackChat(
+    text,
+    params.mode === "custom-input"
+      ? {
+          ...(groupCustomInput
+            ? {
+                // Selective Force Reply targets mentioned users or the sender of the
+                // replied-to message. The question is bot-authored, so mention the tapper.
+                entities: [
+                  {
+                    type: "text_mention" as const,
+                    offset: 0,
+                    length: params.user.first_name.length,
+                    user: params.user,
+                  },
+                ],
+              }
+            : {}),
+          reply_markup: { force_reply: true, selective: groupCustomInput },
+        }
+      : undefined,
+  );
+  if (params.mode === "custom-input") {
+    // Keep the existing answer route until Telegram accepts its replacement.
+    await params.actions.clearCallbackButtons().catch(() => {});
+  }
+}
 
 export async function handleTelegramQuestionCallback(params: {
   callback: TelegramQuestionCallback;
   cfg: ResolveQuestionParams["cfg"];
   senderId: string;
-  feedback: (text: string, terminal: boolean) => Promise<unknown>;
+  feedback: (text: string, mode: QuestionFeedbackMode) => Promise<unknown>;
   resolveQuestion?: QuestionResolver;
 }): Promise<void> {
-  let result: Awaited<ReturnType<QuestionResolver>>;
   try {
-    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+    if (params.callback.intent === "custom-input") {
+      const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+        cfg: params.cfg,
+        questionId: params.callback.questionId,
+        customInput: true,
+        senderId: params.senderId,
+        clientDisplayName: "Telegram question",
+      });
+      if (result.status === "already-terminal") {
+        await params.feedback("This question was already answered.", "terminal");
+        return;
+      }
+      await params.feedback("Reply with your own answer.", "custom-input");
+      return;
+    }
+    const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
       cfg: params.cfg,
       questionId: params.callback.questionId,
       optionIndex: params.callback.optionIndex,
       senderId: params.senderId,
       clientDisplayName: "Telegram question",
     });
+    await params
+      .feedback(
+        result.status === "answered" ? "Answer submitted." : "This question was already answered.",
+        "terminal",
+      )
+      .catch(() => {});
   } catch (error) {
-    await params.feedback("Could not submit this answer.", false).catch(() => {});
+    await params.feedback("Could not submit this answer.", "retry").catch(() => {});
     throw error;
   }
-  await params
-    .feedback(
-      result.status === "answered" ? "Answer submitted." : "This question was already answered.",
-      true,
-    )
-    .catch(() => {});
 }

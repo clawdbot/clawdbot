@@ -34,14 +34,15 @@ binary presence.
 OpenClaw loads from these sources, **highest precedence first**. When the same
 skill name appears in multiple places, the highest source wins.
 
-| Priority    | Source                 | Path                                    |
-| ----------- | ---------------------- | --------------------------------------- |
-| 1 — highest | Workspace skills       | `<workspace>/skills`                    |
-| 2           | Project agent skills   | `<workspace>/.agents/skills`            |
-| 3           | Personal agent skills  | `~/.agents/skills` (default state only) |
-| 4           | Managed / local skills | `<state-dir>/skills`                    |
-| 5           | Bundled skills         | shipped with the install                |
-| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills |
+| Priority    | Source                 | Path                                     |
+| ----------- | ---------------------- | ---------------------------------------- |
+| 1 — highest | Workspace skills       | `<workspace>/skills`                     |
+| 2           | Project agent skills   | `<workspace>/.agents/skills`             |
+| 3           | Personal agent skills  | `~/.agents/skills` (default state only)  |
+| 4           | Managed / local skills | `<state-dir>/skills`                     |
+| 5           | Bundled skills         | shipped with the install                 |
+| 5           | Custodian skills       | shipped; configured Custodian agent only |
+| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills  |
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
@@ -54,6 +55,10 @@ Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 The folder path is for organization only. The skill's name and slash command
 come from the `name` frontmatter field (or the directory name when `name` is
 missing). Agent allowlists (below) also match on this `name`.
+
+The release-versioned [Custodian skill library](/tools/custodian-skills) shares
+the bundled precedence tier but is absent for every agent except the configured
+system/Custodian agent.
 
 <Note>
   Codex CLI's native `$CODEX_HOME/skills` directory is **not** an OpenClaw
@@ -142,6 +147,12 @@ Plugin skill directories merge at the same low-precedence level as
 skill overrides them. Gate a plugin skill's own eligibility via
 `metadata.openclaw.requires` in its frontmatter, same as any other skill.
 
+For multi-account channel plugins, gate general messaging skills on the channel
+subtree (for example, `channels.discord`), not a root token field: credentials
+may live under a named account. This is a coarse skill-visibility check. The
+plugin still owns credential resolution, account enablement, action availability,
+and authorization; an eligible skill does not grant tool access.
+
 See [Plugins](/tools/plugin) and [Tools](/tools) for the full plugin system.
 
 ## Reference a skill in a prompt
@@ -156,15 +167,18 @@ Use $github and $release_notes to summarize this change for the release.
 ```
 
 OpenClaw resolves explicit references from authorized senders on every channel
-against the current agent's eligible, user-invocable skills and tells the model
-to read each referenced `SKILL.md` before acting. A single message can reference up to eight distinct skills;
-OpenClaw returns a visible error instead of ignoring extra references. The `$`
-form is composable prompt text; `/release_notes ...`
-remains the standalone command form and may use direct tool dispatch when the
-skill declares `command-dispatch: tool`. Common uppercase shell variables such
-as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase
-`$home`, `$path`, or `$editor` to reference skills with those names. Escape a
-reference as `\$name` when it should stay literal.
+and on generic Gateway, CLI, and webhook agent turns. It matches the current
+agent's eligible, user-invocable skills and tells the model to read each
+referenced `SKILL.md` before acting. A single message can reference up to eight
+distinct skills; OpenClaw returns a visible error instead of ignoring extra or
+allowlist-hidden references. The `$` form is composable prompt text. On channel
+messages, `/release_notes ...` remains the standalone command form and may use
+direct tool dispatch when the skill declares `command-dispatch: tool`; generic
+agent turns expand the same leading skill command as model instructions without
+running the channel command dispatcher. Common uppercase shell variables such
+as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase `$home`,
+`$path`, or `$editor` to reference skills with those names. Escape a reference
+as `\$name` when it should stay literal.
 
 Skills with `disable-model-invocation: true` stay out of the `$` picker and the
 model's normal prompt, so the model cannot select them on its own. An authorized
@@ -384,6 +398,10 @@ metadata:
   At least one binary must exist on `PATH`.
 </ParamField>
 
+Fresh dependency checks detect binaries installed into directories already on
+`PATH`. This does not refresh an existing session's skill snapshot; see
+[Snapshots and refresh](/tools/skills#snapshots-and-refresh).
+
 <ParamField path="requires.env" type="string[]">
   Each env var must exist in the process or be provided via config.
 </ParamField>
@@ -463,9 +481,13 @@ metadata:
       (Homebrew's `bin` on a fresh install, else `~/.local/bin`) rather than
       your configured `GOBIN` — your own `GOBIN`, `GOPATH`, and `GOTOOLCHAIN`
       env vars are read but never overwritten.
-    - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
-      `extract` (default: auto when archive detected), `stripComponents`,
-      `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+    - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
+      digest, verified after download and before the file is installed or extracted),
+      `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
+      archive detected), `stripComponents`, `targetDir` (default:
+      `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
+      previous download behavior. Response bodies are capped at 256 MiB; larger
+      transfers are aborted while streaming, and partial staging data is removed.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent

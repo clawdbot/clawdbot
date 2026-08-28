@@ -569,11 +569,9 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("scopes configured-default wording to direct model selections", () => {
+  it("documents explicit model persistence scopes", () => {
     const model = requireChatCommand("model");
-    expect(model.description).toBe(
-      "Show or set the model; direct owner/admin selections request a default update.",
-    );
+    expect(model.description).toBe("Show or set the model; use -s, -a, or -g to choose scope.");
   });
 
   it("detects known text commands", () => {
@@ -658,6 +656,21 @@ describe("commands registry", () => {
     expect(normalizeCommandBody("/help@otherbot", { botUsername: "openclaw" })).toBe(
       "/help@otherbot",
     );
+  });
+
+  it("normalizes targeted command bodies before bot identity only when requested", () => {
+    expect(
+      normalizeCommandBody("/help@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe("/help");
+    expect(normalizeCommandBody("/help@unresolved_bot")).toBe("/help@unresolved_bot");
+    expect(
+      normalizeCommandBody("/help@some_other_bot", {
+        botUsername: "openclaw_bot",
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe("/help@some_other_bot");
   });
 
   it("keeps unregistered dock underscore aliases unchanged", () => {

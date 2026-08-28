@@ -5,6 +5,7 @@ import {
   resolveMergedModelProviderModels,
   resolveModelProviderRouteOverridePresence,
 } from "../config/model-provider-config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { ModelApi, ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -84,6 +85,11 @@ export function createProviderModelRoutesResolver(params: {
       : params.surface;
   const resolveModelRoutes = surface?.resolveModelRoutes;
   const providerConfig = resolveMergedModelProviderConfig(params.config, provider);
+  // Runtime defaults copy catalog capabilities into configured model rows. Route
+  // eligibility must read the authored view or metadata looks like request behavior.
+  const authoredConfig = params.config
+    ? projectConfigOntoRuntimeSourceSnapshot(params.config)
+    : undefined;
   const configuredProvider = providerConfig
     ? { api: providerConfig.api, baseUrl: providerConfig.baseUrl }
     : undefined;
@@ -105,7 +111,7 @@ export function createProviderModelRoutesResolver(params: {
       ? "present"
       : resolveModelProviderRouteOverridePresence({
           provider,
-          config: params.config,
+          authoredConfig,
         });
   const routeOverridePresenceByModel = new Map(
     [...configuredModels.keys()].map(
@@ -117,7 +123,7 @@ export function createProviderModelRoutesResolver(params: {
             : resolveModelProviderRouteOverridePresence({
                 provider,
                 modelId,
-                config: params.config,
+                authoredConfig,
                 canonicalizeModelId,
               }),
         ] as const,

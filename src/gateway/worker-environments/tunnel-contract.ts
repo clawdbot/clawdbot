@@ -1,16 +1,20 @@
+import type { WorkerTunnelStatus } from "@openclaw/gateway-protocol";
+import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import type { NodeWorkerWorkspaceSeedInput } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-reconcile.js";
 
-export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+export type { WorkerTunnelStatus };
 
 export class WorkerTunnelOwnerDisconnectedError extends Error {
-  constructor() {
-    super("Worker tunnel owner is no longer connected");
+  constructor(message = "Worker tunnel owner is no longer connected") {
+    super(message);
     this.name = "WorkerTunnelOwnerDisconnectedError";
   }
 }
@@ -26,10 +30,22 @@ export class WorkerRunnerUnavailableError extends Error {
   }
 }
 
+export class WorkerRunnerCapacityError extends Error {
+  readonly code = NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE;
+
+  constructor() {
+    super("device worker capacity remained full");
+    this.name = "WorkerRunnerCapacityError";
+  }
+}
+
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
 };
+
+/** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
+export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed";
 
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
@@ -39,12 +55,14 @@ export type WorkerWorkspaceCommand = {
   timeoutMs?: number;
   signal?: AbortSignal;
   transfer?: NodeWorkerWorkspaceTransferInput;
+  seed?: NodeWorkerWorkspaceSeedInput;
 };
 
 export type WorkerWorkspaceSyncRequest = {
   localPath: string;
   sessionId: string;
   generation: number;
+  gitAuthor?: { name?: string; email?: string };
 };
 
 export type WorkerWorkspaceSyncResult = {
@@ -89,16 +107,19 @@ export type WorkerWorkspaceQuiescence = {
 
 type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
-  placementGeneration: number;
+  turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
+  // Expiry of the minted admission credential; launch adapters cap admission
+  // re-arms so no advertised retry can outlive it.
+  credentialExpiresAtMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
 };
 
-export type WorkerTunnelHandle = {
+export type WorkerWorkspaceTunnelHandle = {
   environmentId: string;
   ownerEpoch: number;
-  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
+  launchTurn?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
@@ -107,3 +128,9 @@ export type WorkerTunnelHandle = {
   ): Promise<WorkerWorkspaceReconcileResult>;
   stop(): Promise<void>;
 };
+
+export type WorkerTurnTunnelHandle = Omit<WorkerWorkspaceTunnelHandle, "launchTurn"> & {
+  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
+};
+
+export type WorkerTunnelHandle = WorkerWorkspaceTunnelHandle | WorkerTurnTunnelHandle;

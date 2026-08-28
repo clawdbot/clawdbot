@@ -1,7 +1,7 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { createAbortError } from "../infra/abort-signal.js";
+import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import type {
   ContextEngineFactory,
   ContextEngineFactoryContext,
@@ -46,16 +46,18 @@ const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
   ),
 );
 export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
-  "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
+  "sessionKey prompt runtimeSettings sessionTarget runtimeContext abortSignal".split(" "),
 );
 type ResolvedContextEngineMetadata = {
   owner: string;
   engineId: string;
+  sourceEngine?: ContextEngine;
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
 function projectContextEngineHostParams(
   engine: ContextEngine,
+  methodName: PropertyKey,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   const accepted = engine.info.acceptedHostParams;
@@ -64,7 +66,10 @@ function projectContextEngineHostParams(
   }
   return Object.fromEntries(
     Object.entries(params).filter(
-      ([key]) => accepted.includes(key) || !CONTEXT_ENGINE_HOST_PARAMS.has(key),
+      ([key]) =>
+        accepted.includes(key) ||
+        !CONTEXT_ENGINE_HOST_PARAMS.has(key) ||
+        (methodName === "compact" && key === "abortSignal"),
     ),
   );
 }
@@ -88,11 +93,14 @@ function wrapContextEngineHostParamProjection(
           return method.bind(engine);
         }
         return (params: Record<string, unknown>) =>
-          method.call(engine, projectContextEngineHostParams(engine, params));
+          method.call(engine, projectContextEngineHostParams(engine, property, params));
       },
     },
   );
-  resolvedEngineMetadata.set(wrapped, metadata);
+  resolvedEngineMetadata.set(wrapped, {
+    ...metadata,
+    sourceEngine: resolvedEngineMetadata.get(engine)?.sourceEngine ?? engine,
+  });
   return wrapped;
 }
 
@@ -148,12 +156,12 @@ function wrapResolvedContextEngine(
         if (!GUARDED_CONTEXT_ENGINE_METHODS.has(property)) {
           return method.bind(engine);
         }
+        const methodName = property as GuardedContextEngineMethodName;
         if (!fallback || !getFallbackEngine) {
           return (params: Record<string, unknown>) =>
-            method.call(engine, projectContextEngineHostParams(engine, params));
+            method.call(engine, projectContextEngineHostParams(engine, methodName, params));
         }
 
-        const methodName = property as GuardedContextEngineMethodName;
         return async (methodParams: Record<string, unknown>) => {
           const abortSignal = contextEngineAbortSignal(methodParams);
           if (abortSignal?.aborted) {
@@ -174,7 +182,10 @@ function wrapResolvedContextEngine(
           }
 
           try {
-            return await method.call(engine, projectContextEngineHostParams(engine, methodParams));
+            return await method.call(
+              engine,
+              projectContextEngineHostParams(engine, methodName, methodParams),
+            );
           } catch (error) {
             if (isContextEngineAbortRejection(error, abortSignal)) {
               // Abort is caller intent, not engine instability; never quarantine for it.
@@ -198,7 +209,10 @@ function wrapResolvedContextEngine(
       },
     },
   );
-  resolvedEngineMetadata.set(wrapped, metadata);
+  resolvedEngineMetadata.set(wrapped, {
+    ...metadata,
+    sourceEngine: resolvedEngineMetadata.get(engine)?.sourceEngine ?? engine,
+  });
   return wrapped;
 }
 
@@ -351,29 +365,74 @@ export function registerContextEngineInRegistry(
   return { ok: true };
 }
 
-/** Carries runtime-safe factories into a matching non-activating prepared registry. */
-export function promoteMatchingRuntimeContextEngineRegistrations(
+function canAdoptRuntimeContextEngineFromRoot(params: {
+  pluginId: string | undefined;
+  targetRegistry: PluginRegistry;
+  runtimeRegistry: PluginRegistry;
+}): boolean {
+  if (!params.pluginId) {
+    return false;
+  }
+  const targetPlugin = params.targetRegistry.plugins.find(
+    (plugin) => plugin.id === params.pluginId,
+  );
+  const runtimePlugin = params.runtimeRegistry.plugins.find(
+    (plugin) => plugin.id === params.pluginId,
+  );
+  // Same ids can come from workspace shadows. Only carry a factory across registry generations
+  // when both registrations came from the exact same trusted plugin source.
+  return Boolean(
+    targetPlugin &&
+    runtimePlugin &&
+    targetPlugin.status === "loaded" &&
+    runtimePlugin.status === "loaded" &&
+    targetPlugin.source === runtimePlugin.source,
+  );
+}
+
+/**
+ * Scoped production handles stay in discovery mode so full-only plugins cannot
+ * mutate process-global backends. Runtime context engines are adopted from the
+ * composition-root registry instead of re-running `registrationMode: "full"`.
+ */
+export function adoptRuntimeContextEngineRegistrations(
   targetRegistry: PluginRegistry,
   runtimeRegistry: PluginRegistry,
-): void {
-  for (const [id, target] of targetRegistry.contextEngines) {
-    if (target.lifecycle !== "readOnlyDiscovery") {
+): PluginRegistry {
+  let adopted: Map<string, ContextEngineRegistration> | undefined;
+  const takeAdopted = () => {
+    adopted ??= new Map(targetRegistry.contextEngines);
+    return adopted;
+  };
+
+  for (const [id, runtime] of runtimeRegistry.contextEngines) {
+    if (runtime.lifecycle !== "runtime") {
       continue;
     }
-    const runtime = runtimeRegistry.contextEngines.get(id);
-    if (!runtime || runtime.lifecycle !== "runtime" || runtime.owner !== target.owner) {
+    const target = targetRegistry.contextEngines.get(id);
+    if (target?.lifecycle === "runtime") {
       continue;
     }
-    const pluginId = pluginIdFromContextEngineOwner(target.owner);
-    const targetPlugin = targetRegistry.plugins.find((plugin) => plugin.id === pluginId);
-    const runtimePlugin = runtimeRegistry.plugins.find((plugin) => plugin.id === pluginId);
-    // Same ids can come from workspace shadows. Only carry a factory across registry generations
-    // when both registrations came from the exact same trusted plugin source.
-    if (!targetPlugin || !runtimePlugin || targetPlugin.source !== runtimePlugin.source) {
+    if (target && target.owner !== runtime.owner) {
       continue;
     }
-    targetRegistry.contextEngines.set(id, runtime);
+    if (
+      !canAdoptRuntimeContextEngineFromRoot({
+        pluginId: pluginIdFromContextEngineOwner(runtime.owner),
+        targetRegistry,
+        runtimeRegistry,
+      })
+    ) {
+      continue;
+    }
+    takeAdopted().set(id, runtime);
   }
+
+  if (!adopted) {
+    return targetRegistry;
+  }
+  // Copy-on-write so cached discovery snapshots are not mutated into runtime handles.
+  return { ...targetRegistry, contextEngines: adopted };
 }
 
 /** Clear runtime quarantine only after a complete builder-local registry becomes active. */
@@ -397,19 +456,9 @@ function listContextEngineIds(): string[] {
   return [...getContextEngines().keys()].toSorted();
 }
 
-export function clearContextEnginesForOwner(owner: string): void {
-  const normalizedOwner = requireContextEngineOwner(owner);
-  const registry = getContextEngines();
-  for (const [id, entry] of registry.entries()) {
-    if (entry.owner === normalizedOwner) {
-      registry.delete(id);
-      clearContextEngineRuntimeQuarantine(id);
-    }
-  }
-}
-
 /**
  * Return the trusted plugin id that registered a resolved context engine.
+ * Downgraded engines intentionally report no plugin owner.
  */
 export function resolveContextEngineOwnerPluginId(
   engine: ContextEngine | undefined | null,
@@ -420,6 +469,10 @@ export function resolveContextEngineOwnerPluginId(
     metadata && !getContextEngineQuarantine(metadata.engineId) ? metadata.owner : undefined;
   return owner ? pluginIdFromContextEngineOwner(owner) : undefined;
 }
+
+export const hasSameContextEngineInstance = (left: ContextEngine, right: ContextEngine): boolean =>
+  (resolvedEngineMetadata.get(left)?.sourceEngine ?? left) ===
+  (resolvedEngineMetadata.get(right)?.sourceEngine ?? right);
 
 function pluginIdFromContextEngineOwner(owner: string): string | undefined {
   if (!owner.startsWith("plugin:")) {
@@ -490,17 +543,28 @@ function contextEngineAbortSignal(methodParams: unknown): AbortSignal | undefine
     : undefined;
 }
 
-function isContextEngineAbortRejection(error: unknown, signal: AbortSignal | undefined): boolean {
+export function isContextEngineAbortRejection(
+  error: unknown,
+  signal: AbortSignal | undefined,
+): boolean {
   if (!signal?.aborted) {
     return false;
   }
-  if (error === signal.reason) {
+  if (error === signal.reason || isAbortError(error)) {
     return true;
   }
-  if (error instanceof Error) {
-    return error.name === "AbortError" || /abort|cancelled|canceled/iu.test(error.message);
+  const seen = new Set<Error>();
+  for (
+    let current = error;
+    current instanceof Error && !seen.has(current);
+    current = current.cause
+  ) {
+    seen.add(current);
+    if (current.cause === signal.reason) {
+      return true;
+    }
   }
-  return typeof error === "string" && /abort|cancelled|canceled/iu.test(error);
+  return false;
 }
 
 async function invokeFallbackContextEngineMethod(params: {

@@ -35,7 +35,10 @@ export type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "ownerAgentId">;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "mediaMaxMb" | "ownerAgentId" | "dispatchReplyFromConfig"
+  >;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /**
@@ -46,6 +49,7 @@ export type DispatchTelegramMessageParams = {
     admission?: "exclusive" | "cancel-only";
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
+    onDeferredHeartbeat?: () => void;
     onAbandoned?: () => void;
     abortSignal?: AbortSignal;
   };
@@ -131,22 +135,6 @@ type ReplyOptions = NonNullable<BufferedDispatchParams["replyOptions"]>;
 type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 
-export type TelegramProgressSummaryCounters = {
-  reasoningSteps: number;
-  commentaryNotes: number;
-  toolCalls: number;
-};
-
-export type TelegramProgressSummaryTracker = {
-  noteReasoningActivity: () => void;
-  closeReasoningBurst: () => void;
-  noteToolCall: () => void;
-  noteCommentary: (itemId?: string, text?: string) => void;
-  closeCommentaryBurst: () => void;
-  counts: () => TelegramProgressSummaryCounters;
-  hasActivity: () => boolean;
-};
-
 type TelegramProgressCompositor = {
   readonly commentaryProgressEnabled: boolean;
   readonly hasStatusHeadline: boolean;
@@ -175,17 +163,12 @@ type TelegramProgressCompositor = {
   pushPatchEvent: (payload: CallbackPayload<"onPatchSummary">) => Promise<boolean>;
 };
 
-export type TelegramBufferedFinalAnswer = {
-  payload: ReplyPayload;
-  text: string;
-};
-
 export type TelegramReasoningStepState = {
   noteReasoningHint: () => void;
   noteReasoningDelivered: () => void;
   shouldBufferFinalAnswer: () => boolean;
-  bufferFinalAnswer: (value: TelegramBufferedFinalAnswer) => void;
-  takeBufferedFinalAnswer: () => TelegramBufferedFinalAnswer | undefined;
+  bufferFinalAnswer: (value: ReplyPayload) => void;
+  takeBufferedFinalAnswer: () => ReplyPayload | undefined;
   resetForNextStep: () => void;
 };
 
@@ -209,13 +192,8 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  progressSummary: TelegramProgressSummaryTracker;
-  progressSummaryStartedAt: number;
-  summaryDelivered: boolean;
-  draftEverRendered: boolean;
   finalAnswerDeliveryStarted: boolean;
   finalAnswerDelivered: boolean;
-  sawProgressFinal: boolean;
   verboseProgressActive: () => boolean;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;

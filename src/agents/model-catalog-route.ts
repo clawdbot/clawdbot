@@ -34,7 +34,16 @@ export type ModelCatalogRouteProjection =
     };
 
 type ModelCatalogLogicalOverrides = Partial<
-  Pick<ModelCatalogEntry, "name" | "contextWindow" | "contextTokens" | "reasoning" | "input">
+  Pick<
+    ModelCatalogEntry,
+    | "name"
+    | "contextWindow"
+    | "contextTokens"
+    | "reasoning"
+    | "configuredReasoning"
+    | "thinkingLevelMap"
+    | "input"
+  >
 >;
 
 function normalizeExactModelId(value: string): string {
@@ -62,17 +71,11 @@ export function resolveConfiguredModelCatalogOverrides(params: {
   }).get(configuredIdentity?.key ?? normalizeExactModelId(params.entry.id));
   const overrides: ModelCatalogLogicalOverrides = {
     ...(model?.name ? { name: model.name } : {}),
-    ...(model?.contextWindow !== undefined
-      ? { contextWindow: model.contextWindow }
-      : providerConfig.contextWindow !== undefined
-        ? { contextWindow: providerConfig.contextWindow }
-        : {}),
-    ...(model?.contextTokens !== undefined
-      ? { contextTokens: model.contextTokens }
-      : providerConfig.contextTokens !== undefined
-        ? { contextTokens: providerConfig.contextTokens }
-        : {}),
+    ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+    ...(model?.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     ...(model?.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+    ...(model?.reasoning !== undefined ? { configuredReasoning: model.reasoning } : {}),
+    ...(model?.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     ...(model?.input !== undefined ? { input: model.input } : {}),
   };
   return Object.keys(overrides).length > 0 ? overrides : undefined;
@@ -150,7 +153,7 @@ export function projectModelCatalogEntryForRoute(params: {
   overrides?: ModelCatalogLogicalOverrides;
 }): ModelCatalogEntry {
   if (params.projection.kind === "unmanaged") {
-    return params.entry;
+    return applyLogicalOverrides(params.entry, params.overrides);
   }
   const identity = params.projection.policy.resolveIdentity(params.entry) ?? {
     id: splitTrailingAuthProfile(params.entry.id).model,
@@ -184,6 +187,7 @@ export function projectModelCatalogEntryForRoute(params: {
       ...(donor?.contextWindow !== undefined ? { contextWindow: donor.contextWindow } : {}),
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
       ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
+      ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
       ...(donor?.input !== undefined ? { input: donor.input } : {}),
     },
     params.overrides,

@@ -7,6 +7,7 @@ import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../../../auto-reply/reply-payload.js";
+import { splitMediaFromOutput } from "../../../media/parse.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 
 /** Channel payload shape produced by embedded runs after auto-reply normalization. */
@@ -26,9 +27,31 @@ export function mergeAttemptToolMediaPayloads(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): EmbeddedRunPayload[] | undefined {
   // Trim and dedupe tool media before merging with assistant-owned payload media.
-  const mediaUrls = Array.from(
+  let mediaUrls = Array.from(
     new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
   );
+  const payloads = params.payloads?.length ? [...params.payloads] : [];
+  const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
+  const visiblePayload = payloads.at(payloadIndex);
+  const isSourceReplyTranscriptMirror =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    visiblePayload &&
+    getReplyPayloadMetadata(visiblePayload)?.sourceReplyTranscriptMirror;
+  if (visiblePayload?.text && mediaUrls.length > 0 && !isSourceReplyTranscriptMirror) {
+    const selected = splitMediaFromOutput(visiblePayload.text, {
+      extractAudioDirectives: false,
+      extractMediaDirectives: false,
+      markdownImageAllowlist: mediaUrls,
+    });
+    if (selected.mediaUrls?.length) {
+      const selectedMediaUrls = new Set(selected.mediaUrls);
+      mediaUrls = mediaUrls.filter((url) => selectedMediaUrls.has(url));
+      payloads[payloadIndex] = copyReplyPayloadMetadata(visiblePayload, {
+        ...visiblePayload,
+        text: selected.text,
+      });
+    }
+  }
   const mediaUrlSet = new Set(mediaUrls);
   const hostOwnedMediaUrls = Array.from(
     new Set(
@@ -65,17 +88,12 @@ export function mergeAttemptToolMediaPayloads(params: {
     ];
   };
 
-  const payloads = params.payloads?.length ? [...params.payloads] : [];
-  const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
   if (payloadIndex >= 0) {
     const payload = payloads.at(payloadIndex);
     if (!payload) {
       return payloads;
     }
-    if (
-      params.sourceReplyDeliveryMode === "message_tool_only" &&
-      getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror
-    ) {
+    if (isSourceReplyTranscriptMirror) {
       // Message-tool-only source replies are transcript mirrors of a send that
       // already happened elsewhere; attaching generated media here would create
       // a duplicate channel delivery.

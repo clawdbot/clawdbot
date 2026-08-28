@@ -1,4 +1,5 @@
 // Model list forward-compat tests cover list command behavior with future catalog shapes.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 
@@ -32,6 +33,19 @@ const mocks = vi.hoisted(() => {
     plugins: [],
     diagnostics: [],
   };
+  const knownModelProviderOwners = new Map(
+    [
+      "anthropic",
+      "azure-openai-responses",
+      "codex",
+      "google",
+      "moonshot",
+      "openai",
+      "opencode-go",
+      "xiaomi",
+      "z.ai",
+    ].map((providerId) => [providerId, ["test-provider-plugin"]]),
+  );
   const emptyPluginMetadataSnapshot = {
     policyHash: "models-list-command-forward-compat-test",
     configFingerprint: "models-list-command-forward-compat-test",
@@ -45,7 +59,7 @@ const mocks = vi.hoisted(() => {
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
-      providers: new Map(),
+      providers: knownModelProviderOwners,
       modelCatalogProviders: new Map(),
       cliBackends: new Map(),
       setupProviders: new Map(),
@@ -89,6 +103,7 @@ const mocks = vi.hoisted(() => {
     ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
     resolveDefaultAgentDir: vi.fn(),
+    resolveModelsTargetAgent: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
@@ -112,6 +127,10 @@ function resetMocks() {
   mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
   mocks.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-agent");
+  mocks.resolveModelsTargetAgent.mockReturnValue({
+    agentId: "main",
+    agentDir: "/tmp/openclaw-agent",
+  });
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
     availableKeys: new Set(),
@@ -145,7 +164,7 @@ function resetMocks() {
 }
 
 function createRuntime() {
-  return { log: vi.fn(), error: vi.fn() };
+  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
 function primeModelRegistry(
@@ -203,7 +222,6 @@ function modelRegistryOptions(index = 0): Record<string, unknown> {
 
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
 let listRowsModule: typeof import("./list.rows.js");
-let listRegistryModule: typeof import("./list.registry.js");
 
 function installModelsListCommandForwardCompatMocks() {
   const suppressOpenAiSpark = ({
@@ -218,18 +236,19 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("../../agents/model-suppression.js", () => ({
     shouldSuppressBuiltInModelCore: suppressOpenAiSpark,
-    shouldSuppressBuiltInModelFromManifest: suppressOpenAiSpark,
-    createManifestBuiltInModelSuppressor: vi.fn(
-      () => (model: { provider?: string | null; id?: string | null }) => suppressOpenAiSpark(model),
-    ),
   }));
 
   vi.doMock("./load-config.js", () => ({
     loadModelsConfigWithSource: mocks.loadModelsConfigWithSource,
   }));
 
-  vi.doMock("./list.configured.js", () => ({
-    resolveConfiguredEntries: mocks.resolveConfiguredEntries,
+  vi.doMock("../../agents/configured-model-entries.js", () => ({
+    resolveConfiguredModelEntries: mocks.resolveConfiguredEntries,
+  }));
+
+  vi.doMock("./shared.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./shared.js")>()),
+    resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
   }));
 
   vi.doMock("./list.table.js", () => ({
@@ -242,10 +261,10 @@ function installModelsListCommandForwardCompatMocks() {
     printAvailablePromotionsSection: mocks.printAvailablePromotionsSection,
   }));
 
-  vi.doMock("./list.registry-load.js", () => ({
-    loadListModelRegistry: async (
+  vi.doMock("./list.registry.js", () => ({
+    loadModelRegistry: async (
       cfg: unknown,
-      opts?: { providerFilter?: string; normalizeModels?: boolean; loadAvailability?: boolean },
+      opts?: { providerFilter?: string; normalizeModels?: boolean },
     ): Promise<{
       models: Array<{ provider: string; id: string }>;
       availableKeys?: Set<string>;
@@ -346,8 +365,6 @@ function installModelsListCommandForwardCompatMocks() {
 beforeAll(async () => {
   installModelsListCommandForwardCompatMocks();
   listRowsModule = await import("./list.rows.js");
-  listRegistryModule = await import("./list.registry.js");
-  vi.spyOn(listRegistryModule, "loadModelRegistry").mockImplementation(mocks.loadModelRegistry);
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });
 
@@ -364,6 +381,7 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
       }),
     },
     availableKeys: loaded.availableKeys,
+    canonicalizeProvider: normalizeProviderId,
     configuredByKey: new Map(),
     discoveredKeys: new Set(
       loaded.models.map(
@@ -394,6 +412,39 @@ beforeEach(() => {
 });
 
 describe("modelsListCommand forward-compat", () => {
+  it("uses the explicitly selected agent for auth and catalog discovery", async () => {
+    mocks.resolveModelsTargetAgent.mockReturnValueOnce({
+      agentId: "research",
+      agentDir: "/tmp/openclaw-agent-research",
+    });
+
+    await modelsListCommand({ agent: "research", json: true }, createRuntime() as never);
+
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research", {
+      kind: "read",
+    });
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research", {
+      inheritedAuthDir: expect.any(String),
+    });
+  });
+
+  it("rejects unknown provider filters before loading the model registry", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      modelsListCommand({ provider: "autoqa-no-such-provider", json: true }, runtime as never),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      humanOutput: expect.stringContaining('Unknown provider filter "autoqa-no-such-provider"'),
+      machineOutput: expect.stringContaining('Unknown provider filter "autoqa-no-such-provider"'),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.printModelTable).not.toHaveBeenCalled();
+  });
+
   describe("empty model lists", () => {
     it.each([
       { name: "JSON", options: { json: true } },
@@ -401,7 +452,7 @@ describe("modelsListCommand forward-compat", () => {
     ])("renders empty $name output through the canonical model table", async ({ options }) => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       const runtime = createRuntime();
-      const opts = { ...options, provider: "autoqa-no-such-provider" };
+      const opts = { ...options, provider: "openai" };
 
       await modelsListCommand(opts, runtime as never);
 
@@ -416,7 +467,7 @@ describe("modelsListCommand forward-compat", () => {
       mocks.startPromotionsFeedRefresh.mockReturnValueOnce(refreshToken);
       const runtime = createRuntime();
 
-      await modelsListCommand({ provider: "autoqa-no-such-provider" }, runtime as never);
+      await modelsListCommand({ provider: "openai" }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("No models found.");
       expect(mocks.printModelTable).not.toHaveBeenCalled();
@@ -442,9 +493,14 @@ describe("modelsListCommand forward-compat", () => {
       mocks.loadModelRegistry.mockRejectedValueOnce(new Error("registry failed"));
       const runtime = createRuntime();
 
-      await modelsListCommand({ all: true }, runtime as never);
+      await expect(modelsListCommand({ all: true }, runtime as never)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: "Model registry unavailable: registry failed",
+        humanOutput: expect.stringContaining("Model registry unavailable:\nError: registry failed"),
+        machineOutput: "Model registry unavailable: registry failed",
+      });
 
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("registry failed"));
+      expect(runtime.error).not.toHaveBeenCalled();
       expect(mocks.startPromotionsFeedRefresh).not.toHaveBeenCalled();
       expect(mocks.printAvailablePromotionsSection).not.toHaveBeenCalled();
     });
@@ -1565,6 +1621,7 @@ describe("modelsListCommand forward-compat", () => {
             evaluateModelAuth: () => ({ availability: false, routeResolution: null }),
           },
           availableKeys: new Set(["openai/gpt-5.4"]),
+          canonicalizeProvider: normalizeProviderId,
           configuredByKey: new Map(),
           discoveredKeys: new Set(),
           filter: {},

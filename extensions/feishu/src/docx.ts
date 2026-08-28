@@ -5,7 +5,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
@@ -76,28 +75,20 @@ const BLOCK_TYPE_NAMES: Record<number, string> = {
 // Block types that cannot be created via documentBlockChildren.create API
 const UNSUPPORTED_CREATE_TYPES = new Set([31, 32]);
 
-/** Clean blocks for insertion (remove unsupported types and read-only fields) */
+/** Remove block types unsupported by the children insertion API. */
 function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
   cleaned: FeishuDocxBlock[];
   skipped: string[];
 } {
   const skipped: string[] = [];
-  const cleaned = blocks
-    .filter((block) => {
-      if (UNSUPPORTED_CREATE_TYPES.has(block.block_type)) {
-        const typeName = BLOCK_TYPE_NAMES[block.block_type] || `type_${block.block_type}`;
-        skipped.push(typeName);
-        return false;
-      }
-      return true;
-    })
-    .map((block) => {
-      if (block.block_type === 31 && block.table?.merge_info) {
-        const { merge_info: _merge_info, ...tableRest } = block.table;
-        return Object.assign({}, block, { table: tableRest });
-      }
-      return block;
-    });
+  const cleaned = blocks.filter((block) => {
+    if (UNSUPPORTED_CREATE_TYPES.has(block.block_type)) {
+      const typeName = BLOCK_TYPE_NAMES[block.block_type] || `type_${block.block_type}`;
+      skipped.push(typeName);
+      return false;
+    }
+    return true;
+  });
   return { cleaned, skipped };
 }
 
@@ -874,7 +865,8 @@ async function insertDoc(
   // parents require multiple requests.
   const items: FeishuDocxBlock[] = [];
   let pageToken: string | undefined;
-  do {
+  const seenPageTokens = new Set<string>();
+  while (true) {
     const childrenRes = await client.docx.documentBlockChildren.get({
       path: { document_id: docToken, block_id: parentId },
       params: pageToken ? { page_token: pageToken } : {},
@@ -883,8 +875,23 @@ async function insertDoc(
       throw new Error(childrenRes.msg);
     }
     items.push(...(childrenRes.data?.items ?? []));
-    pageToken = childrenRes.data?.page_token ?? undefined;
-  } while (pageToken);
+    if (childrenRes.data?.has_more !== true) {
+      break;
+    }
+    const nextPageToken = childrenRes.data.page_token?.trim();
+    if (!nextPageToken) {
+      throw new Error(
+        `Feishu document children pagination is missing its next page token for parent block "${parentId}"`,
+      );
+    }
+    if (seenPageTokens.has(nextPageToken)) {
+      throw new Error(
+        `Feishu document children pagination repeated token for parent block "${parentId}"`,
+      );
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
 
   const blockIndex = items.findIndex((item) => item.block_id === afterBlockId);
   if (blockIndex === -1) {
@@ -1200,16 +1207,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     return;
   }
 
-  // Check if any account is configured
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    return;
-  }
-
   // Register if enabled on any account; account routing is resolved per execution.
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
 
-  const registered: string[] = [];
   type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string };
 
   const getClient = (params: { accountId?: string } | undefined, defaultAccountId?: string) =>
@@ -1434,7 +1434,6 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
       },
       { name: "feishu_doc" },
     );
-    registered.push("feishu_doc");
   }
 
   // Keep feishu_app_scopes as independent tool
@@ -1464,7 +1463,6 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
       }),
       { name: "feishu_app_scopes" },
     );
-    registered.push("feishu_app_scopes");
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

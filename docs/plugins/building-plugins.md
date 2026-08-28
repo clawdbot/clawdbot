@@ -64,7 +64,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.39"
+    "typebox": "1.3.16"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -244,12 +244,17 @@ loads the owning plugin runtime.
 
 Tool factories receive trusted runtime context, including `deliveryContext`,
 `nativeChannelId` for the active platform conversation when available, and
-`requesterSenderId`.
+`requesterSenderId`. A factory can use
+`toolContext.delivery?.send({ text, mediaUrl })` to send text or media to the
+current conversation. The property is unavailable outside an active channel
+turn or when the channel uses Gateway-owned delivery. OpenClaw binds the route,
+account, thread, and media access policy; the capability expires when the turn
+ends.
 
 ```typescript
 register(api) {
   api.registerTool(
-    {
+    (toolContext) => ({
       name: "workflow_tool",
       description: "Run a workflow",
       parameters: Type.Object({ pipeline: Type.String() }),
@@ -258,13 +263,16 @@ register(api) {
         { additionalProperties: false },
       ),
       async execute(_id, params) {
+        await toolContext.delivery?.send({
+          text: `Workflow started: ${params.pipeline}`,
+        });
         return {
           content: [{ type: "text", text: params.pipeline }],
           details: { pipeline: params.pipeline },
         };
       },
-    },
-    { optional: true },
+    }),
+    { name: "workflow_tool", optional: true },
   );
 }
 ```
@@ -303,6 +311,11 @@ Optional tools control whether a tool is exposed to the model. Use
 [plugin permission requests](/plugins/plugin-permission-requests) when a tool
 or hook should ask for approval after the model selects it and before the
 action runs.
+
+`toolMetadata.<tool>.profiles` adds a plugin tool to named built-in profile
+allowlists. For example, `"profiles": ["coding", "messaging"]` exposes it in
+those profiles without adding a core catalog entry. Explicit operator
+allowlists and deny rules remain authoritative.
 
 Use optional tools for side effects, unusual binaries, or capabilities that
 should not be exposed by default. Tool names must not conflict with core tool

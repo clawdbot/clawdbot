@@ -9,6 +9,7 @@ import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
   isLikelyContextOverflowError,
+  isProviderRequestSizeCeilingError,
 } from "../../embedded-agent-helpers.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
@@ -34,6 +35,20 @@ import {
 
 type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
+function renderOverflowResetGuidance(
+  attempt: EmbeddedRunCompactionRecoveryInput["attempt"],
+): string {
+  const replayMetadata = attempt.currentAttemptReplayMetadata ?? attempt.replayMetadata;
+  const sideEffectCaution = replayMetadata.hadPotentialSideEffects
+    ? " Completed tool actions were not replayed; verify their effects before retrying."
+    : "";
+  return (
+    "Context overflow: prompt too large for the model. " +
+    "Try /reset (or /new) to start a fresh session, or use a larger-context model." +
+    sideEffectCaution
+  );
+}
+
 type EmbeddedRunOverflowRecoveryOutcome =
   | { action: "none" }
   | { action: "retry" }
@@ -54,7 +69,7 @@ export async function recoverEmbeddedRunOverflow(
     toolResultPromptProjectionState: ToolResultPromptProjectionState;
     attemptCompactionCount: number;
     prepareCurrentTranscriptRetry: () => void;
-    prepareCompactedTranscriptRetry: () => Promise<void>;
+    markOwnedTranscriptRetry: () => void;
   },
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const contextOverflowError =
@@ -94,9 +109,9 @@ export async function recoverEmbeddedRunOverflow(
     return { action: "none" };
   }
 
+  const terminal = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const providerPromptRejection =
-    contextOverflowError.source === "assistantError" ||
-    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "prompt"
+    contextOverflowError.source === "assistantError" || terminal.promptErrorSource === "prompt"
       ? markLastProviderPromptContextRejected(getProviderPromptState(input.runParams.runId))
       : undefined;
 
@@ -105,6 +120,14 @@ export async function recoverEmbeddedRunOverflow(
   const errorText = contextOverflowError.text;
   const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
   const preflightRecovery = input.attempt.preflightRecovery;
+  const preflightPromptBudget =
+    terminal.promptErrorSource === "precheck" &&
+    preflightRecovery?.source === "mid-turn" &&
+    typeof preflightRecovery.promptBudgetBeforeReserve === "number" &&
+    Number.isFinite(preflightRecovery.promptBudgetBeforeReserve) &&
+    preflightRecovery.promptBudgetBeforeReserve > 0
+      ? Math.floor(preflightRecovery.promptBudgetBeforeReserve)
+      : undefined;
   const preflightEstimatedPromptTokens =
     typeof preflightRecovery?.estimatedPromptTokens === "number" &&
     Number.isFinite(preflightRecovery.estimatedPromptTokens) &&
@@ -129,11 +152,36 @@ export async function recoverEmbeddedRunOverflow(
   );
 
   const isCompactionFailure = isCompactionFailureError(errorText);
+
+  // Compaction here budgets against the model's context window, so it cannot make the request fit
+  // under the provider's own ceiling, and every retry re-sends a payload already rejected. Stop
+  // the run instead of compacting, adopting a successor transcript, or truncating and retrying:
+  // declining would return this to the same-model rate-limit retry that reported the refusal.
+  if (isProviderRequestSizeCeilingError(errorText)) {
+    log.warn(
+      `[context-overflow-recovery] provider request-size ceiling for ${input.provider}/${input.modelId}; ` +
+        `livenessState=blocked suggestedAction=reset_or_new kind=${isCompactionFailure ? "compaction_failure" : "context_overflow"} ` +
+        `compaction=skipped retry=skipped`,
+    );
+    return {
+      action: "surface",
+      kind: isCompactionFailure ? "compaction_failure" : "context_overflow",
+      errorText,
+      userText: renderOverflowResetGuidance(input.attempt),
+    };
+  }
+
+  // A parked code-mode run is bound to the session it started in and `wait`
+  // rejects any other session, so a compaction that adopts a successor cannot
+  // redeem parked nested work. The compaction itself stays committed (hooks and
+  // maintenance still run); only the mid-turn continuation is withheld.
+  let parkedWorkBlocksContinuation = false;
   if (
     !isCompactionFailure &&
     input.attemptCompactionCount > 0 &&
     input.state.overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
   ) {
+    input.markOwnedTranscriptRetry();
     input.state.overflowCompactionAttempts += 1;
     log.warn(
       `context overflow persisted after in-attempt compaction (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${input.provider}/${input.modelId}`,
@@ -165,7 +213,7 @@ export async function recoverEmbeddedRunOverflow(
     await input.runOwnsCompactionBeforeHook("overflow recovery");
     try {
       const compaction = await compactEmbeddedRunForRecovery(input, {
-        tokenBudget: input.contextTokenBudget,
+        tokenBudget: preflightPromptBudget ?? input.contextTokenBudget,
         trigger: "overflow",
         diagId: overflowDiagId,
         attempt: input.state.overflowCompactionAttempts,
@@ -173,20 +221,43 @@ export async function recoverEmbeddedRunOverflow(
         currentTokenCount: overflowTokenCountForCompaction,
       });
       compactResult = compaction.result;
-      if (compactResult.ok && compactResult.compacted) {
+      const sessionAfterCompaction = input.getActiveSession();
+      const stillOwnsCompactionTarget =
+        sessionAfterCompaction.id === activeSession.id &&
+        sessionAfterCompaction.file === activeSession.file;
+      if (!stillOwnsCompactionTarget) {
+        compactResult = {
+          ok: false,
+          compacted: false,
+          reason: "active session changed during overflow compaction",
+        };
+      } else if (compactResult.ok && compactResult.compacted) {
         previousSessionId = await input.adoptCompactionTranscript(compactResult);
-        const sessionAfterCompaction = input.getActiveSession();
+        const adoptedSession = input.getActiveSession();
+        // Key off the recorded parked-run fact, not lifecycle counters: a local
+        // yield_control parks the exec without any nested lifecycle item.
+        parkedWorkBlocksContinuation =
+          previousSessionId !== undefined &&
+          preflightRecovery?.source === "mid-turn" &&
+          input.attempt.toolMetas.some((entry) => entry.codeModeSuspended === true);
+        if (parkedWorkBlocksContinuation) {
+          log.warn(
+            `[context-overflow-recovery] compaction rotated ${previousSessionId} -> ${adoptedSession.id} ` +
+              `while nested tool work was parked; not continuing mid-turn for ${input.provider}/${input.modelId}`,
+          );
+        }
         await runContextEngineMaintenance({
           contextEngine: input.contextEngine,
-          sessionId: sessionAfterCompaction.id,
+          sessionId: adoptedSession.id,
           sessionKey: runParams.sessionKey,
-          sessionTarget: sessionAfterCompaction.target,
-          sessionFile: sessionAfterCompaction.file,
+          sessionTarget: adoptedSession.target,
+          sessionFile: adoptedSession.file,
           reason: "compaction",
           runtimeContext: compaction.runtimeContext,
           runtimeSettings: compaction.runtimeSettings,
           config: runParams.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: input.contextEngineAgentId,
         });
       }
     } catch (compactErr) {
@@ -204,6 +275,7 @@ export async function recoverEmbeddedRunOverflow(
         config: runParams.config,
         sessionKey: runParams.sessionKey,
         agentId: input.sessionAgentId,
+        sessionPersistence: runParams.sessionPersistence,
       });
       log.info(
         `[context-overflow-precheck] stale token state had no real conversation messages for ` +
@@ -216,7 +288,6 @@ export async function recoverEmbeddedRunOverflow(
     }
 
     if (compactResult.compacted) {
-      await input.adoptCompactionTranscript(compactResult);
       const tokensAfter = compactResult.result?.tokensAfter;
       if (typeof tokensAfter === "number" && Number.isFinite(tokensAfter) && tokensAfter >= 0) {
         input.state.lastCompactionTokensAfter = Math.floor(tokensAfter);
@@ -250,21 +321,31 @@ export async function recoverEmbeddedRunOverflow(
         }
       }
       input.state.autoCompactionCount += 1;
-      log.info(`auto-compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`);
       input.armPostCompactionGuard();
-      if (preflightRecovery?.source === "mid-turn") {
-        input.prepareCurrentTranscriptRetry();
+      if (parkedWorkBlocksContinuation) {
+        log.warn(
+          `auto-compaction succeeded for ${input.provider}/${input.modelId}, but parked nested tool work cannot follow the rotated session; surfacing overflow guidance`,
+        );
       } else {
-        await input.prepareCompactedTranscriptRetry();
+        log.info(
+          `auto-compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
+        );
+        input.markOwnedTranscriptRetry();
+        if (preflightRecovery?.source === "mid-turn") {
+          input.prepareCurrentTranscriptRetry();
+        } else {
+          await input.prepareCompactedTranscriptRetry();
+        }
+        return { action: "retry" };
       }
-      return { action: "retry" };
+    } else {
+      log.warn(
+        `auto-compaction failed for ${input.provider}/${input.modelId}: ${compactResult.reason ?? "nothing to compact"}`,
+      );
     }
-    log.warn(
-      `auto-compaction failed for ${input.provider}/${input.modelId}: ${compactResult.reason ?? "nothing to compact"}`,
-    );
   }
 
-  if (!input.state.toolResultTruncationAttempted) {
+  if (!parkedWorkBlocksContinuation && !input.state.toolResultTruncationAttempted) {
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: input.contextTokenBudget,
     });
@@ -297,6 +378,7 @@ export async function recoverEmbeddedRunOverflow(
         projectionState: input.toolResultPromptProjectionState,
       });
       if (truncResult.truncated) {
+        input.markOwnedTranscriptRetry();
         log.info(
           `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
         );
@@ -323,9 +405,7 @@ export async function recoverEmbeddedRunOverflow(
     );
   }
   const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
-  const userText =
-    "Context overflow: prompt too large for the model. " +
-    "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+  const userText = renderOverflowResetGuidance(input.attempt);
   log.warn(
     `[context-overflow-recovery] exhausted provider overflow recovery for ${input.provider}/${input.modelId}; ` +
       `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,

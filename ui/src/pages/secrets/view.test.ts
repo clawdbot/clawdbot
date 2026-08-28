@@ -47,7 +47,7 @@ function mount(
     onDraftNameChange: noop,
     onDraftValueChange: noop,
     onDraftAllowedHostsChange: noop,
-    onDraftSecretChange: noop,
+    onDraftKindChange: noop,
     onSubmitDraft: noop,
     onOpenBulk: noop,
     onCloseBulk: noop,
@@ -89,6 +89,8 @@ describe("secrets store view", () => {
     expect(container.textContent).toContain("••••••••");
     expect(container.textContent).toContain("https://service.test");
     expect(container.textContent).toContain("api.example.com");
+    expect(container.textContent).toContain("Protected secret");
+    expect(container.textContent).toContain("Agent-readable environment");
   });
 
   it("shows the allowed-host field for secret add and edit dialogs", () => {

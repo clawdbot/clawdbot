@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
+import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
@@ -71,11 +72,6 @@ type ScheduledCodexAppAuthorityPayload = {
     tools: Record<string, CodexAppToolApprovalMode>;
   }>;
 };
-
-function readConnectorId(tool: unknown): string | undefined {
-  const meta = asOptionalRecord(asOptionalRecord(tool)?.["_meta"]);
-  return normalizeOptionalString(meta?.connector_id) ?? normalizeOptionalString(meta?.connectorId);
-}
 
 function normalizeApprovalMode(value: unknown): CodexPluginDestructiveApprovalMode | undefined {
   return value === "allow" || value === "deny" || value === "auto" || value === "ask"
@@ -181,7 +177,7 @@ async function readCodexScheduledAppToolNamesByApp(params: {
         continue;
       }
       for (const [toolName, tool] of Object.entries(status.tools)) {
-        const connectorId = readConnectorId(tool);
+        const connectorId = readCodexMcpToolConnectorId(tool);
         if (connectorId) {
           const names = toolNamesByApp.get(connectorId) ?? new Set<string>();
           names.add(toolName);

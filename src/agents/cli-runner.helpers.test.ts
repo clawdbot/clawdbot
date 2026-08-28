@@ -194,6 +194,27 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     }
   });
 
+  it("does not hydrate media suppressed during current-turn admission", async () => {
+    await expect(
+      prepareCliPromptImagePayload({
+        backend: { command: "claude" },
+        prompt: "describe the attachment",
+        imagePrompt: "describe the attachment",
+        workspaceDir: "/workspace",
+        images: [],
+        imageOrder: [],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+        media: [
+          {
+            path: "/openclaw-test-missing/current.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      }),
+    ).resolves.toEqual({ prompt: "describe the attachment" });
+  });
+
   it("delivers readable structured images when an unresolved attachment is hydration-suppressed", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-mixed-media-"),
@@ -676,6 +697,10 @@ describe("writeCliImages", () => {
           },
         ],
         imageOrder: ["offloaded", "inline"],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }, { kind: "inline" }],
+          suppressedFactIndexes: [],
+        },
         media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
       });
 
@@ -803,6 +828,19 @@ describe("resolveCliRunQueueKey", () => {
         ownerKey: "abcd1234",
       }),
     ).toBe("claude-cli:owner:abcd1234");
+  });
+
+  it("keeps third-party live sessions serialized on their exact owner even when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "acme-cli",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-third-party-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "third-party-owner",
+      }),
+    ).toBe("acme-cli:owner:third-party-owner");
   });
 
   it("keeps resumed Claude live sessions on the owner lane", () => {

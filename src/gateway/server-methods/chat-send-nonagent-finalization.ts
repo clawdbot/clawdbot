@@ -1,10 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -242,14 +242,16 @@ export async function finalizeChatSendNonAgentReplies(params: {
     getAgentScopedMediaLocalRoots(cfg, transcriptAgentId),
     latestStorePath ? [latestStorePath] : undefined,
   );
+  let managedMediaPrepareFailed = false;
   const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-    sessionKey,
-    agentId,
+    sessionKey: transcriptSessionKey,
+    agentId: transcriptAgentId,
     payloads: finalPayloads,
     managedMediaLocalRoots: mediaLocalRoots,
     includeSensitiveMedia: false,
     includeSensitiveDisplay: true,
     onManagedMediaPrepareError: (message) => {
+      managedMediaPrepareFailed = true;
       context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
     },
     onSensitiveDisplayPrepareError: (message) => {
@@ -269,12 +271,13 @@ export async function finalizeChatSendNonAgentReplies(params: {
   const persistedAssistantContent = replaceAssistantContentTextBlocks(
     hasSensitiveMedia
       ? await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey,
-          agentId,
+          sessionKey: transcriptSessionKey,
+          agentId: transcriptAgentId,
           payloads: finalPayloads,
           managedMediaLocalRoots: mediaLocalRoots,
           includeSensitiveMedia: false,
           onManagedMediaPrepareError: (message) => {
+            managedMediaPrepareFailed = true;
             context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
           },
         })
@@ -292,12 +295,12 @@ export async function finalizeChatSendNonAgentReplies(params: {
   const displayReply =
     extractAssistantDisplayTextFromContent(assistantContent) ??
     buildTranscriptReplyText(finalPayloads);
-  const transcriptDisplayReply = displayReply
-    ? stripInlineDirectiveTagsForDisplay(displayReply).text.trim()
-    : "";
+  const transcriptDisplayReply = displayReply?.trim() ?? "";
   const transcriptReply =
     mediaMessage?.transcriptText ||
-    buildTranscriptReplyText(finalPayloads) ||
+    (managedMediaPrepareFailed
+      ? transcriptDisplayReply
+      : buildTranscriptReplyText(finalPayloads)) ||
     transcriptDisplayReply;
   let message: Record<string, unknown> | undefined;
   const shouldAppendAssistantTranscript = Boolean(
@@ -319,13 +322,16 @@ export async function finalizeChatSendNonAgentReplies(params: {
     });
     if (appended.ok) {
       if (appended.messageId && assistantContent?.length) {
-        await attachManagedOutgoingMediaToMessage({
+        attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
         });
       }
       message = broadcastAssistantContent?.length
-        ? { ...appended.message, content: broadcastAssistantContent }
+        ? applyAssistantDeliveryDirectives({
+            ...appended.message,
+            content: broadcastAssistantContent.map((block) => ({ ...block })),
+          })
         : appended.message;
     } else {
       context.logGateway.warn(

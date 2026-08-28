@@ -14,7 +14,7 @@ import {
   compactEmbeddedAgentSessionMock,
   loadModelCatalogMock,
   resolveCommandSecretRefsViaGatewayMock,
-  resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelectionMock,
   runDirectiveBehaviorReplyAgent,
   runEmbeddedAgentMock,
   runDirectiveBehaviorPreparedReply,
@@ -123,8 +123,8 @@ export function installDirectiveBehaviorE2EHooks() {
     }));
     clearSessionAuthProfileOverrideMock.mockReset();
     clearSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
-    resolveSessionAuthProfileOverrideMock.mockReset();
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockReset();
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     runReplyAgentMock.mockReset();
     runReplyAgentMock.mockImplementation(runDirectiveBehaviorReplyAgent);
     runPreparedReplyMock.mockReset();

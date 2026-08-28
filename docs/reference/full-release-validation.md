@@ -14,36 +14,147 @@ whole release. Run release preparation before freezing the Code SHA; it
 refreshes Control UI locale output when the background bot has not landed it
 yet, then enforces the same strict zero-fallback check used by release CI.
 
-Freeze the product-complete pre-changelog commit as the **Code SHA** and select
-one trusted workflow commit as the **Tooling SHA**, then run:
+Freeze the product-complete pre-changelog commit and its target context as the
+**Code SHA/ref**, and select one trusted workflow commit and context as the
+**Tooling SHA/ref**, then run:
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
 pnpm ci:full-release \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
+Record the candidate SHA/ref and Tooling SHA/ref once for the release and reuse
+them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
+authorizes the initial Tooling SHA selection; it does not authorize refreshing
+the tooling from moving `main`.
+
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
-end-to-end agent turn. The helper infers the `beta` profile from alpha/beta
-package versions and `stable` otherwise. Pass alternate workflow inputs with
-`-f key=value`; use `-f release_profile=full` only for the broad advisory sweep.
+end-to-end agent turn. Regular `release/*` targets accept only the branch's final
+package version or a matching beta prerelease. Tideclaw alpha validation uses
+its exact alpha tag and matching alpha branch. The helper maps beta releases and
+exact alpha tags to the `beta` profile and final versions to `stable`. Pass
+alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
+only for the broad advisory sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose
-independent failures together. Pass `-f fail_fast=true` when the shorter
-first-failure cancellation path is preferable.
+independent failures together. In that mode, the parent makes no child
+cancellation calls. Pass `-f fail_fast=true` only when the shorter
+first-failure path is preferable; Release Decision then cancels only the exact
+still-active child that owns the blocking failure.
+Same-parent continuation requires the original root to have been dispatched
+with `fail_fast=false`. The controller verifies that exact logged input before
+any rerun mutation.
+
+After dispatch, the parent writes one immutable
+`full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
+an exact run-ID Actions cache. It records selected and
+required coverage, gate results, reuse identity, the original parent attempt,
+the fresh candidate request plus producer and publisher evidence when preparation ran, and
+every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
+Decision, Drain, manifest generation, evidence verification, and the final
+verifier consume the artifact for their current attempt. Collector retries
+use the exact run-ID cache as an acceleration. If that cache is unavailable,
+they restore the same immutable plan from the parent-run artifact, validate it,
+and upload the artifact again for the retry; they never rebuild the plan or
+redispatch tests. A missing or invalid artifact fails closed, so start a new
+validation instead of retrying that stale parent.
+Release Decision also repeats canonical reuse-chain validation before a reused
+run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
+selected run, root run, source manifest, trusted tooling identity, and child
+tuple must all still match.
+
+On a parent retry, final verification selects the newest available Release
+Decision and Diagnostic Drain artifacts independently. Both must bind the same
+immutable plan and exact child tuple; their source attempts remain recorded in
+the artifacts and may differ when only one collector needed a retry.
+
+## Continue failed child jobs
+
+Full Release Validation can adopt monotonically newer attempts of the exact
+child runs recorded in its immutable plan. A newer attempt is accepted only
+when the run ID, workflow path, workflow ref, Tooling SHA, dispatch title, and
+event are unchanged. For each logical job, the newest observed attempt wins,
+including a newer failure; a job absent from a newer attempt carries forward
+from the last attempt that included it. Duplicate job names within one attempt,
+missing attempts, or provenance drift fail closed.
+
+Inspect or continue an existing parent:
+
+```bash
+pnpm frv status --run <parent-run-id>
+pnpm frv continue --failed --run <parent-run-id>
+pnpm frv verify --run <successful-parent-run-id>
+```
+
+`continue --failed` waits for active child attempts instead of starting a
+duplicate. Once every active attempt is terminal, it reruns failed child jobs
+in parallel, leaves green child workflows untouched, and reruns the parent
+once. The parent restores its immutable execution plan, observes the effective
+child attempts, and writes the final all-group manifest. The manifest records
+the planned and effective attempt, accepted attempt for every logical job, and
+a digest of the composite job evidence.
+
+The command stores no continuation ledger or local journal. GitHub run
+attempts, the immutable execution plan, Decision/Drain artifacts, and the final
+manifest are the complete state model. It never tags, publishes, changes a
+registry, or prepares a new candidate.
+
+Parents whose immutable plan predates attempt-aware evidence cannot be
+continued. Start a fresh all-group Full Release Validation instead; the
+controller never reconstructs old state or dispatches a replacement parent.
 
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
-deletes the temporary ref after validation. The Validation SHA equals the Code
-SHA for product validation or the Release SHA for changelog-only validation; it
-is not a third release identity. The workflow rejects malformed or mismatched
-expected SHAs before child dispatch. Every child must report the same Tooling
-SHA. Pass
-`-f reuse_evidence=false` to force a fresh run or
-`--workflow-sha <trusted-main-sha>` to select a compatible older workflow
-commit still reachable from current `origin/main`. The helper rejects a pinned
-Tooling SHA that does not declare the `expected_sha` dispatch input; it never
-silently substitutes newer tooling. The workflow never creates or updates
-repository refs itself.
+deletes the temporary ref after successful validation and strict evidence
+verification. The helper reads Release Decision artifacts while the parent is
+active so blockers can surface while Diagnostic Drain collects failures. It
+waits 15 minutes between run-discovery attempts and between parent polling
+iterations. One parent iteration may perform status, decision-artifact, and
+progress-job reads together; the delay limits repeated polling cycles rather
+than spacing every GitHub call. Run discovery makes one immediate check and one
+delayed retry before failing. A not-yet-created artifact remains an unavailable
+polling result; terminal handling and temporary-ref cleanup wait for the parent
+to complete with a conclusion. Failed validations retain both refs for reruns
+and diagnosis. The
+Validation SHA equals the Code SHA for product validation or the Release SHA
+for changelog-only validation; it is not a third release identity. The workflow
+rejects malformed or mismatched expected SHAs before child dispatch. Every
+child must report the same Tooling SHA. Pass
+`-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
+require `--workflow-sha` with the recorded full SHA, which must remain reachable
+from current `origin/main`. The helper rejects a pinned Tooling SHA that does
+not declare the current release-isolation contract or the `expected_sha`
+dispatch input; it never silently substitutes newer tooling. The workflow never
+creates or updates repository refs itself.
+
+### Post-merge continuation proof
+
+Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only
+after the reviewed SHA lands on protected `main`. The fixture contains one
+fixed no-op job that intentionally fails on attempt one and passes on attempt
+two. The broker validates the exact maintainer, pull request head, protected
+main SHA, fixture workflow, and run tuple before rerunning only that failed job.
+
+Accept the hosted mutation proof only when the exact fixture run advances to
+attempt two and passes. The broker emits a receipt and must create no release
+candidate, release artifact, publication, repository ref, replacement parent,
+or other workflow mutation. This proves the GitHub failed-job rerun boundary;
+the focused controller tests prove plan eligibility, green-attempt
+preservation, same-parent collection, and strict-verifier invocation. Do not
+use a real Full Release Validation run for this proof.
+
+The main-lineage requirement above applies to the initial validation tooling
+selection. Once release publication binds that Tooling SHA to an exact protected
+lightweight `release-publish/<12sha>-<provenance-run>` tag, the live tag-to-SHA
+mapping remains authoritative even when `main` advances. The suffix records
+tag-creation provenance, not the current parent run id. Publication must re-read
+that exact tag and revalidate the exact parent run tuple immediately before each
+core or plugin npm publish or dist-tag mutation. A missing, moved, annotated, or
+wrong-SHA tag, parent mismatch, or disallowed parent state fails closed. Other
+privileged writers require their dependent enforcement changes before the
+protected-tag publication route is globally complete.
 
 ## Extended-stable exception
 
@@ -122,13 +233,29 @@ run. Evidence reuse runs only from `main` or a canonical SHA-pinned
 `release-ci/*` ref whose workflow commit remains on trusted `main` lineage;
 other workflow refs run the selected lanes fresh.
 
-Fresh package-facing validation prepares one immutable tarball plus one Docker
-image artifact before dispatching Plugin Prerelease and OpenClaw Release Checks.
-Both children verify the same package SHA, artifact IDs, service digests,
+Fresh package-facing validation calls the `Full Release Candidate` reusable
+workflow once. Plugin Prerelease and OpenClaw Release Checks each dispatch an
+independent phase immediately, while their candidate phases wait for acquisition.
+Both candidate phases verify the same package SHA, artifact IDs, service digests,
 producer run attempt, and Docker archive digest before use. The package-independent
 bare Docker layer uses a content-addressed GHCR cache; candidate-specific images
 remain immutable GitHub artifacts. Focused runs with an explicit published
 package spec keep the existing package path instead.
+
+Preparation also emits a canonical request digest and a seven-day
+`full-release-candidate-v2-<request-sha256>` evidence artifact. Its bounded
+manifest binds the exact target and Tooling SHAs, release and soak policy,
+effective survivor baselines and scenarios, preparation-plan digest, sorted
+plugin package set, producer and publisher workflow/job/run identities, and
+package, registry, and image artifact identities and expiry timestamps. The
+execution plan seals that evidence. Before preparing a candidate, the umbrella may reuse
+the newest artifact with at least fourteen hours of remaining lifetime for the
+same canonical request only after it revalidates the exact workflow run,
+publisher job identity, archive digest, manifest, producer attempt and job, and
+live metadata for every package, registry, and image artifact.
+A proven absence creates a fresh candidate. Bounded lookup uncertainty and
+failures after selection are blocking so the run cannot silently switch
+candidates.
 
 Also for `rerun_group=all`, a `Verify Docker runtime image assets` job builds
 the `runtime-assets` Docker target with
@@ -136,17 +263,37 @@ the `runtime-assets` Docker target with
 other stages and is enforced by the umbrella verifier; lanes no longer wait for
 it before dispatching. A narrower `rerun_group` skips this preflight.
 
-| Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                  |
-| Shared candidate        | **Job:** `Prepare shared release candidate`<br />**Child workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, and records immutable package and image artifact tuples for both package-facing child workflows.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group.                                                                                                                                                       |
-| Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target still succeeds before any other stage dispatches. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                                                               |
-| Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                                                                                                |
-| Plugin prerelease       | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full plugin batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                                                |
-| Release checks          | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, and QA Lab parity. QA-live Matrix, Buzz, and Telegram plus gated advisory Discord, WhatsApp, and Slack run for stable/full, beta with `run_release_soak=true`, or explicit `qa`/`qa-live` groups. Stable and full profiles also run exhaustive live/E2E suites and Docker release-path chunks.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle. |
-| Package Telegram        | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. Full candidate validation uses the canonical Package Acceptance Telegram E2E instead.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                                                                                                                                    |
-| Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance run (`profile=release`, `repeat=3`, `fail_on_regression=true`, `publish_reports=false`) against the target SHA. Kova output stays in workflow artifacts and the child must prove its report publisher was skipped. Required (blocking) only for `rerun_group=all` or `rerun_group=performance`; not required for narrower rerun groups.<br />**Rerun:** `rerun_group=performance`.                                       |
-| Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                                                                                                                                       |
+| Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                                     |
+| Shared candidate        | **Job:** `Acquire full release candidate`<br />**Child workflow:** `Full Release Candidate`, which exact-reuses a trusted candidate or calls `OpenClaw Live And E2E Checks (Reusable)` on a cache miss<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, and emits content-addressed producer and publisher evidence for the package, plugin registry, image, and preparation plan. Both paths produce the same sealed downstream binding.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group. |
+| Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target still succeeds before any other stage dispatches. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                                                                                  |
+| Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                                                                                                                   |
+| Plugin prerelease       | **Jobs:** `Run plugin prerelease independent validation` and `Run plugin prerelease candidate validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** independent static and agentic coverage can start before acquisition, while candidate-dependent Docker lanes consume the sealed package and plugin registry identities.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                                     |
+| Release checks          | **Jobs:** `Run release checks independent validation` and `Run release checks candidate validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** independent install, QA, and live coverage can start before acquisition, while package, cross-OS, and candidate-dependent Docker lanes consume the sealed candidate. Stable and full profiles retain exhaustive live/E2E and release-path coverage.<br />**Rerun:** classify the failed surface and select one concrete release-check group.                                                                 |
+| Package Telegram        | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. Full candidate validation uses the canonical Package Acceptance Telegram E2E instead.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                                                                                                                                                       |
+| Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance run (`profile=release`, `repeat=3`, `fail_on_regression=true`, `publish_reports=false`) against the target SHA. Kova output stays in workflow artifacts and the child must prove its report publisher was skipped. Required (blocking) only for `rerun_group=all` or `rerun_group=performance`; not required for narrower rerun groups.<br />**Rerun:** `rerun_group=performance`.                                                          |
+| Release decision        | **Job:** `Release Decision`<br />**Child workflow:** none<br />**Proves:** polls the exact recorded child run IDs and attempts, enforces release policy, and publishes an attempt-bound decision artifact. A decisive failure becomes `blocked_diagnostics_running` while unrelated child diagnostics continue.<br />**Rerun:** fix or rerun only the blocking surface.                                                                                                                                                                                                              |
+| Diagnostic drain        | **Job:** `Diagnostic Drain`<br />**Child workflow:** none<br />**Proves:** with `fail_fast=false`, follows every selected exact child to terminal without cancellation and writes timing, failed-job, run-attempt, and Tooling-SHA evidence. Collector cancellation instead writes an immediate `cancelled_with_children` handoff containing active child identities.<br />**Rerun:** recover collection only for `orchestration_error`; product failures do not invalidate the drain.                                                                                               |
+| Execution plan          | **Job:** `Seal release execution plan`<br />**Child workflow:** none<br />**Proves:** persists the original parent attempt, exact child identities and titles, required coverage, gates, reuse identity, and fresh candidate request with exact producer and publisher binding in a stable run-bound artifact. Attempt-two collector recovery restores this artifact instead of redispatching.<br />**Rerun:** restore the existing plan only; a missing plan is an orchestration error.                                                                                             |
+| Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** downloads the immutable execution plan plus the exact attempt-bound Release Decision and Diagnostic Drain artifacts, verifies their common digest and parent tuple, and accepts only a strict green decision plus terminal drain.<br />**Rerun:** recover the existing collectors or rerun only the failed product surface; the verifier never reclassifies or redispatches children.                                                                                                               |
+
+The seven child-dispatch jobs own dispatch and exact identity capture only. They
+emit the child run ID, run attempt, and URL, then finish. Release Decision owns
+the blocking answer; Diagnostic Drain owns complete terminal evidence. The
+immutable execution plan owns child identity across collector attempts. The
+decision state is one of `qualifying`, `blocked_diagnostics_running`, `passed`,
+`blocked_complete`, `orchestration_error`, or `cancelled_with_children`.
+Persistent GitHub API failures are orchestration errors. A child whose workflow
+path, display title, ref, Tooling SHA, or run ID changes is a distinct
+provenance mismatch. A monotonically newer attempt is accepted only through the
+composite-attempt rules above.
+
+`blocked_diagnostics_running` is safe for immediate diagnosis but not for a
+retry until Diagnostic Drain is terminal. `orchestration_error` authorizes
+collector recovery against the same exact child identities, never test
+redispatch. `blocked_complete` means diagnostics are complete; it does not
+claim a drain is still running.
 
 The umbrella always dispatches product performance in artifact-only mode.
 `OpenClaw Performance` permits report publication only for scheduled runs or a
@@ -168,9 +315,13 @@ as a transition, it accepts the stable name only for an attempt-1 manifest v2
 producer. It rejects that legacy name for later attempts and manifest v3.
 
 Concurrency is keyed by Validation SHA, Tooling SHA, and rerun group and does
-not cancel an older run. Parent cancellation or timeout leaves an adopted
-identity-checked child running. Cancel that exact child explicitly when it is
-no longer useful.
+not cancel an older run. Parent cancellation or timeout leaves adopted
+identity-checked children running and records `cancelled_with_children` when
+the state collector can complete its cancellation handoff. Cancel an exact
+child explicitly when it is no longer useful. Do not run a second foreground
+watcher when the SHA-pinned helper already owns the parent; use
+`release-ci-summary --watch` only after the helper has returned or when the
+parent was dispatched separately.
 
 ## Release checks stages
 
@@ -181,20 +332,20 @@ artifact when package or Docker-facing stages need it.
 
 | Stage                    | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Release target           | **Job:** `Resolve target ref`<br />**Backing workflow:** none<br />**Tests:** selected ref, optional expected Validation SHA, profile, rerun group, and focused live suite filter.<br />**Rerun:** `rerun_group=release-checks`.                                                                                                                                                                                                                                                                                                                                                  |
+| Release target           | **Job:** `Resolve target ref`<br />**Backing workflow:** none<br />**Tests:** selected ref, optional expected Validation SHA, profile, concrete release-check groups, and focused live suite filter.<br />**Rerun:** select the concrete group for the failed surface.                                                                                                                                                                                                                                                                                                            |
 | Package artifact         | **Job:** `Prepare release package artifact`<br />**Backing workflow:** none<br />**Tests:** validates the umbrella's immutable package tuple, or packs one candidate tarball for a direct/focused Release Checks dispatch, then exposes it to downstream package-facing checks.<br />**Rerun:** the affected package, cross-OS, or live/E2E group.                                                                                                                                                                                                                                |
-| Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install image-provider smoke.<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                                                                                           |
+| Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install plus CLI/local-agent/Gateway runtime smoke.<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                                                                     |
 | Cross-OS                 | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                                                                                                                                                 |
 | Repo and live E2E        | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`.                                                                                |
 | Docker release path      | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                                                                                                     |
 | Package Acceptance       | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, the canonical mock-OpenAI Telegram package E2E, and published-upgrade survivor checks against the same tarball. Blocking release checks use the default latest published baseline; soak checks (`run_release_soak=true`) expand to the last 4 stable npm releases plus 3 pinned historical versions (`2026.4.23`, `2026.5.2`, `2026.4.15`), run against reported-issue upgrade fixtures.<br />**Rerun:** `rerun_group=package`. |
-| Maturity scorecard       | **Job:** `Render maturity scorecard release docs`<br />**Backing workflow:** `maturity-scorecard.yml`<br />**Tests:** renders the advisory maturity scorecard docs against the target ref. Only runs when `run_maturity_scorecard=true` is passed.<br />**Rerun:** `rerun_group=qa` with `run_maturity_scorecard=true`.                                                                                                                                                                                                                                                           |
-| QA parity                | **Job:** `Run QA Lab parity lane` and `Run QA Lab parity report`<br />**Backing workflow:** direct jobs<br />**Tests:** candidate and baseline agentic parity packs, then the parity report.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                                                                                                                                                         |
-| QA runtime parity        | **Job:** `Verify QA Lab runtime-pair lanes`<br />**Backing workflow:** direct job<br />**Tests:** the canonical core `openclaw`/`codex` lane (`pnpm openclaw qa suite --runtime-pair openclaw,codex --runtime-pair-lane core`) and, with `run_release_soak=true`, the soak lane. Advisory: individual lane jobs do not block the release-check verifier.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                             |
-| QA runtime tool coverage | **Job:** `Enforce QA Lab runtime tool coverage`<br />**Backing workflow:** direct job<br />**Tests:** dynamic tool drift between `openclaw` and `codex` in the canonical core runtime-pair lane (`pnpm openclaw qa coverage --tools`), using that lane's output. Blocking: this job is not advisory-overridable.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                                     |
-| QA live Matrix           | **Job:** `Run QA Live Matrix catalog`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** catalog-derived YAML scenarios through the shared Matrix live adapter in the `qa-live-shared` environment, distributed across deterministic shards.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`; use `live_suite_filter=qa-live-matrix` for a focused Matrix rerun.                                                                                                                                                                         |
-| QA live Buzz             | **Job:** `Run QA Lab live Buzz lane`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** signed canary and mention-gating round trips through the real Buzz plugin using dedicated Convex-leased identities and a hosted relay room.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`; use `live_suite_filter=qa-live-buzz` for a focused Buzz rerun.                                                                                                                                                                                      |
-| QA live Telegram         | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** trusted `OpenClaw Release Telegram QA` dispatch<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                                                                                                                                                                                 |
+| Maturity scorecard       | **Job:** `Render maturity scorecard release docs`<br />**Backing workflow:** `maturity-scorecard.yml`<br />**Tests:** renders the advisory maturity scorecard docs against the target ref. Only runs when `run_maturity_scorecard=true` is passed.<br />**Rerun:** direct manual `rerun_group=qa` with `run_maturity_scorecard=true`.                                                                                                                                                                                                                                             |
+| QA parity                | **Job:** `Run QA Lab parity lane` and `Run QA Lab parity report`<br />**Backing workflow:** direct jobs<br />**Tests:** candidate and baseline agentic parity packs, then the parity report.<br />**Rerun:** `rerun_group=qa-parity`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                                                                                                                                       |
+| QA runtime parity        | **Job:** `Verify QA Lab runtime-pair lanes`<br />**Backing workflow:** direct job<br />**Tests:** the canonical core `openclaw`/`codex` lane (`pnpm openclaw qa suite --runtime-pair openclaw,codex --runtime-pair-lane core`) and, with `run_release_soak=true`, the soak lane. Advisory: individual lane jobs do not block the release-check verifier.<br />**Rerun:** `rerun_group=qa-parity`; direct manual child dispatch may aggregate with `qa`.                                                                                                                           |
+| QA runtime tool coverage | **Job:** `Enforce QA Lab runtime tool coverage`<br />**Backing workflow:** direct job<br />**Tests:** dynamic tool drift between `openclaw` and `codex` in the canonical core runtime-pair lane (`pnpm openclaw qa coverage --tools`), using that lane's output. Blocking: this job is not advisory-overridable.<br />**Rerun:** `rerun_group=qa-parity`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                   |
+| QA live Matrix           | **Job:** `Run QA Live Matrix catalog`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** catalog-derived YAML scenarios through the shared Matrix live adapter in the `qa-live-shared` environment, distributed across deterministic shards.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-matrix`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                  |
+| QA live Buzz             | **Job:** `Run QA Lab live Buzz lane`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** signed canary and mention-gating round trips through the real Buzz plugin using dedicated Convex-leased identities and a hosted relay room.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-buzz`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                             |
+| QA live Telegram         | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** trusted `OpenClaw Release Telegram QA` dispatch<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live`; direct manual child dispatch may aggregate with `qa`.                                                                                                                                                                                                                                                                                               |
 | QA live Discord          | **Job:** `Run QA Lab live Discord lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live Discord QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-discord`.                                                                                                                                                                                                                                                                            |
 | QA live WhatsApp         | **Job:** `Run QA Lab live WhatsApp lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live WhatsApp QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-whatsapp`.                                                                                                                                                                                                                                                                        |
 | QA live Slack            | **Job:** `Run QA Lab live Slack lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live Slack QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-slack`.                                                                                                                                                                                                                                                                                    |
@@ -226,9 +377,10 @@ commands with package artifact and image reuse inputs when available.
 It does not remove normal full CI, Plugin Prerelease, install smoke, package
 acceptance, or QA parity. Stable and full profiles always run exhaustive
 repo/live E2E, Docker release-path, and QA-live soak coverage. The beta profile
-adds those lanes only with `run_release_soak=true` or an explicit `qa` or
-`qa-live` rerun. Package Acceptance supplies the canonical package Telegram
-E2E for every candidate, so the umbrella does not duplicate that live poller.
+adds those lanes only with `run_release_soak=true`, an explicit `qa-live`
+controller retry, or the direct child's manual `qa` aggregate. Package
+Acceptance supplies the canonical package Telegram E2E for every candidate, so
+the umbrella does not duplicate that live poller.
 
 | Profile  | Intended use                      | Included live/provider coverage                                                                                                                                                                            |
 | -------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -260,26 +412,31 @@ Use `rerun_group` to avoid repeating unrelated release boxes:
 
 | Handle              | Scope                                                                                           |
 | ------------------- | ----------------------------------------------------------------------------------------------- |
-| `all`               | Phase-default stages; beta without soak excludes broad live/E2E and QA-live.                    |
+| `all`               | Deliberate full validation; beta without soak excludes broad live/E2E and QA-live.              |
 | `ci`                | Manual full CI child only.                                                                      |
 | `plugin-prerelease` | Plugin Prerelease child only.                                                                   |
-| `release-checks`    | All OpenClaw Release Checks stages.                                                             |
 | `install-smoke`     | Install Smoke through release checks.                                                           |
 | `cross-os`          | Cross-OS release checks.                                                                        |
 | `live-e2e`          | Repo/live E2E and Docker release-path validation.                                               |
 | `package`           | Package Acceptance.                                                                             |
-| `qa`                | QA parity plus QA live lanes.                                                                   |
 | `qa-parity`         | QA parity lanes and report only.                                                                |
 | `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.  |
 | `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |
 | `performance`       | Product performance evidence only.                                                              |
 
 Use `live_suite_filter` with `rerun_group=live-e2e` when one live suite failed.
+The former `release-checks` aggregate retry handle is invalid. It silently
+expanded to every release-check lane, including package and Docker setup. Pick
+one concrete group after classifying the failed surface.
+The umbrella/controller also rejects `qa`; direct `OpenClaw Release Checks`
+dispatches may use it only as a deliberate manual aggregate of `qa-parity` and
+`qa-live`. Live, QA-live, and cross-OS filters must match their owning group.
+Mismatches fail before scheduling and never widen to an unfiltered run.
 Valid filter ids are defined in the reusable live/E2E workflow, including
 `docker-live-models`, `live-gateway-docker`,
 `live-gateway-anthropic-docker`, `live-gateway-google-docker`,
 `live-gateway-minimax-docker`, `live-gateway-advisory-docker`,
-`live-cli-backend-docker`, `live-acp-bind-docker`, and
+`live-cli-backend-docker`, `live-cli-cache-docker`, `live-acp-bind-docker`, and
 `live-codex-harness-docker`.
 
 For a focused QA transport rerun, set `rerun_group=qa-live` and use the
@@ -308,8 +465,8 @@ them blocking. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
 variable must be enabled; otherwise input capture fails instead of silently skipping the lane.
-Rerun `rerun_group=qa`, `qa-parity`, or `qa-live` when you
-need fresh QA evidence.
+Use controller groups `qa-parity` or `qa-live` for fresh QA evidence. A direct
+manual `OpenClaw Release Checks` dispatch may use `qa` to aggregate both.
 
 ## Evidence to keep
 
@@ -338,6 +495,7 @@ Useful artifacts:
 ## Workflow files
 
 - `.github/workflows/full-release-validation.yml`
+- `.github/workflows/full-release-candidate.yml`
 - `.github/workflows/openclaw-release-checks.yml`
 - `.github/workflows/openclaw-live-and-e2e-checks-reusable.yml`
 - `.github/workflows/plugin-prerelease.yml`

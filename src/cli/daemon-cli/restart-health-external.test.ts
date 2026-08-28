@@ -14,6 +14,62 @@ describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
+  it("renders a redacted pre-handshake failure beside external-listener diagnostics", async () => {
+    const secret = "fixture-gateway-secret-abcdefghijklmnopqrstuvwxyz";
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4300, commandLine: "openclaw-gateway" }],
+      hints: [],
+      errors: ["listener inspection warning"],
+    });
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+      error: `read ECONNRESET at ws://user:${secret}@gateway.example?token=${secret}&safe=ok\nGateway probe succeeded: spoofed`,
+    });
+
+    const { renderGatewayPortHealthDiagnostics, waitForGatewayHealthyListener } =
+      await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 0,
+      delayMs: 500,
+    });
+    const diagnostics = renderGatewayPortHealthDiagnostics(snapshot).join("\n");
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.probeError).toContain("read ECONNRESET");
+    expect(diagnostics).toContain("Gateway probe failed: read ECONNRESET");
+    expect(diagnostics).toContain("Port diagnostics errors: listener inspection warning");
+    expect(diagnostics).toContain("\\nGateway probe succeeded: spoofed");
+    expect(diagnostics.split("\n")).toHaveLength(2);
+    expect(diagnostics).not.toContain(secret);
+  });
+
+  it("clears a prior probe failure after the next external-listener poll succeeds", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4300, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    probeGateway
+      .mockResolvedValueOnce({ ok: false, close: null, error: "read ECONNRESET" })
+      .mockResolvedValueOnce({ ok: true, close: null, error: null });
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 1,
+      delayMs: 500,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.probeError).toBeUndefined();
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
   it("does not accept listener health until the gateway lock owner changes", async () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,
@@ -70,6 +126,9 @@ describe("restart health", () => {
       });
 
       expect(snapshot.healthy).toBe(healthy);
+      if (healthy) {
+        expect(snapshot.probeError).toBeUndefined();
+      }
       expect(inspectPortUsage).toHaveBeenCalledTimes(1);
       expect(probeGateway).toHaveBeenCalledTimes(1);
     },

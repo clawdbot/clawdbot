@@ -270,6 +270,23 @@ describe("session cost usage", () => {
     });
   });
 
+  it.each(["main", "opus"])("validates the owner of a legacy %s entry marker", async (agentId) => {
+    const root = await makeSessionCostRoot("entry-marker-owner");
+    const sessionId = "shared";
+    const marker = `sqlite:${agentId}:${sessionId}:${path.join(root, "agents", agentId, "sessions", "sessions.json")}`;
+    await withStateDir(root, async () => {
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionId,
+          sessionEntry: { sessionId, updatedAt: 1, sessionFile: marker } as SessionEntry & {
+            sessionFile: string;
+          },
+        }),
+      ).toBe(agentId === "main" ? marker : undefined);
+    });
+  });
+
   afterAll(async () => {
     await suiteRootTracker.cleanup();
   });
@@ -725,7 +742,6 @@ describe("session cost usage", () => {
         const row = readSessionCostUsageRollupRows("main").find(
           (candidate) => candidate.key === sessionFile,
         );
-        expect(row).toBeDefined();
         expect(Buffer.byteLength(row?.valueJson ?? "")).toBeLessThan(32 * 1024);
         expect(JSON.parse(row?.valueJson ?? "null")).toMatchObject({
           pricingFingerprint,
@@ -1032,23 +1048,18 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       const session = { sessionId: "sess-batch-range", sessionFile };
-      await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
+      await refreshSessionCostUsageForTest(sessionFile);
       const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
-      await waitForFast(
-        async () => {
-          const ranged = await loadSessionCostSummariesFromCache({
-            sessions: [session],
-            agentId: "main",
-            startMs: Date.UTC(2026, 1, 5),
-            endMs: rangeEndMs,
-            requestRefresh: false,
-          });
-          expect(ranged.cacheStatus.status).toBe("fresh");
-          expect(ranged.summaries[0]?.totalTokens).toBe(20);
-          expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
-        },
-        { interval: 10, timeout: 2_000 },
-      );
+      const ranged = await loadSessionCostSummariesFromCache({
+        sessions: [session],
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: rangeEndMs,
+        requestRefresh: false,
+      });
+      expect(ranged.cacheStatus.status).toBe("fresh");
+      expect(ranged.summaries[0]?.totalTokens).toBe(20);
+      expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
       const cachedEntry = readSessionCostUsageRollupRows("main").find(
         (row) => row.key === sessionFile,
