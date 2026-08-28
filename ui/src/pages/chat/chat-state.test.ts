@@ -844,6 +844,54 @@ describe("canonical session message recovery", () => {
     },
   );
 
+  it("recovers once when history completed the run before its message-less terminal arrives", async () => {
+    const runId = "run-completed-by-history-before-terminal";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Finish after the tool call" }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const persistedReply = {
+      role: "assistant",
+      content: [{ type: "text", text: "The durable final arrived after the snapshot." }],
+      stopReason: "stop",
+      __openclaw: { id: "reply-1", runId, seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [prompt, persistedReply],
+      sessionId: "selected-session",
+      sessionInfo: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "done",
+      },
+    });
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatHistoryPagination: { hasMore: false },
+      chatRunId: runId,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    reduceChatSessionProjection(state, { type: "runTerminal", runId, status: "completed" });
+
+    const terminalEvent = {
+      type: "event",
+      event: "chat",
+      payload: { sessionKey: state.sessionKey, runId, state: "final" },
+    } satisfies Parameters<typeof handlePageGatewayEvent>[1];
+    handlePageGatewayEvent(state, terminalEvent);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(state.chatMessages).toContainEqual(persistedReply));
+
+    request.mockClear();
+    handlePageGatewayEvent(state, terminalEvent);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("stops terminal recovery after a media-only reply becomes durable", async () => {
     vi.useFakeTimers();
     try {
@@ -889,6 +937,60 @@ describe("canonical session message recovery", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(1);
       expect(state.chatMessages).toContainEqual(persistedReply);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds terminal recovery when no durable reply appears", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-without-durable-reply";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish without persisting a reply" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request).toHaveBeenCalledTimes(5);
+      expect(renderedTranscript(state)).toEqual([
+        { role: "user", text: "Finish without persisting a reply" },
+      ]);
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(5);
     } finally {
       vi.useRealTimers();
     }
@@ -1122,6 +1224,7 @@ describe("canonical session message recovery", () => {
       const persistedReply = {
         role: "assistant",
         content: [{ type: "text", text: "The current reply is now durable." }],
+        stopReason: "stop",
         __openclaw: { id: "current-reply", runId, seq: 3 },
       };
       const sessionInfo = {
