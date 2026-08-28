@@ -50,14 +50,26 @@ describe("extended-stable Full Release Validation workflow", () => {
         target: '-f target_ref="$TARGET_SHA"',
       },
       {
-        job: "plugin_prerelease",
-        step: "Dispatch plugin prerelease",
+        job: "plugin_prerelease_independent",
+        step: "Dispatch plugin prerelease independent phase",
         workflow: "plugin-prerelease.yml",
         target: '-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA"',
       },
       {
-        job: "release_checks",
-        step: "Dispatch release checks",
+        job: "plugin_prerelease_candidate",
+        step: "Dispatch plugin prerelease candidate phase",
+        workflow: "plugin-prerelease.yml",
+        target: '-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA"',
+      },
+      {
+        job: "release_checks_independent",
+        step: "Dispatch release checks independent phase",
+        workflow: "openclaw-release-checks.yml",
+        target: '-f expected_sha="$TARGET_SHA"',
+      },
+      {
+        job: "release_checks_candidate",
+        step: "Dispatch release checks candidate phase",
         workflow: "openclaw-release-checks.yml",
         target: '-f expected_sha="$TARGET_SHA"',
       },
@@ -74,6 +86,9 @@ describe("extended-stable Full Release Validation workflow", () => {
       expect(run).toContain(child.workflow);
       expect(run).toContain('--ref "$CHILD_WORKFLOW_REF"');
       expect(run).toContain(child.target);
+      if (child.job.includes("plugin_prerelease") || child.job.includes("release_checks")) {
+        expect(run).toContain('-f phase="$PHASE"');
+      }
     }
 
     expect(fullValidation).toContain("PARENT_WORKFLOW_SHA: ${{ github.sha }}");
