@@ -52,13 +52,26 @@ export async function startTelegramTestApiProxy({
   port = 0,
   upstream = "https://api.telegram.org",
   fetchImpl = fetch,
+  leaseHealth,
 } = {}) {
   let responseHold;
   let heldResponse;
+  let leaseError;
   const upstreamControllers = new Set();
   const holdEvents = [];
   const methodOrdinals = new Map();
   const heldWaiters = new Set();
+
+  const assertLeaseHealthy = () => {
+    if (leaseError) throw leaseError;
+    leaseHealth?.assertHealthy();
+  };
+
+  leaseHealth?.whenUnhealthy.then((error) => {
+    leaseError = error;
+    heldResponse?.release.resolve();
+    for (const controller of upstreamControllers) controller.abort(error);
+  });
 
   const claimResponseHold = (method) => {
     const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
@@ -85,6 +98,7 @@ export async function startTelegramTestApiProxy({
     request.once("aborted", abortUpstream);
     response.once("close", abortUpstream);
     try {
+      assertLeaseHealthy();
       const incoming = new URL(request.url || "/", `http://${host}`);
       const upstreamUrl = new URL(upstream);
       upstreamUrl.pathname = telegramTestApiPath(incoming.pathname);
@@ -96,6 +110,7 @@ export async function startTelegramTestApiProxy({
         ...(hasBody ? { body: request, duplex: "half" } : {}),
         signal: upstreamController.signal,
       });
+      assertLeaseHealthy();
       const method = telegramApiMethod(incoming.pathname);
       const hold = method ? claimResponseHold(method) : undefined;
       if (hold) {
@@ -114,11 +129,13 @@ export async function startTelegramTestApiProxy({
         } finally {
           clearInterval(heartbeat);
         }
+        assertLeaseHealthy();
         heldResponse.event.releasedAt = Date.now();
         heldResponse = undefined;
         response.end(body);
         return;
       }
+      assertLeaseHealthy();
       response.writeHead(result.status, responseHeaders(result.headers));
       if (!result.body) {
         response.end();

@@ -304,6 +304,27 @@ function readConfigPatch(name) {
   return patch;
 }
 
+function assertNoTelegramCredentialOverride(patch, label) {
+  for (const key of ["botToken", "apiRoot"]) {
+    if (Object.hasOwn(patch, key)) {
+      throw new Error(`${label} cannot override channels.telegram.${key}.`);
+    }
+  }
+}
+
+export function assertTelegramConfigPatchesSafe(telegramPatch, rootPatch) {
+  assertNoTelegramCredentialOverride(telegramPatch, "E2E_TELEGRAM_CONFIG_PATCH");
+  if (!Object.hasOwn(rootPatch, "channels")) return;
+  if (!isPlainObject(rootPatch.channels)) {
+    throw new Error("E2E_ROOT_CONFIG_PATCH cannot replace channels.");
+  }
+  if (!Object.hasOwn(rootPatch.channels, "telegram")) return;
+  if (!isPlainObject(rootPatch.channels.telegram)) {
+    throw new Error("E2E_ROOT_CONFIG_PATCH cannot replace channels.telegram.");
+  }
+  assertNoTelegramCredentialOverride(rootPatch.channels.telegram, "E2E_ROOT_CONFIG_PATCH");
+}
+
 function writePrivateJson(pathname, data) {
   fs.mkdirSync(dirname(pathname), { recursive: true });
   fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`);
@@ -345,6 +366,12 @@ async function readTester(driverEnv, leaseFailure, repoRoot) {
 export function assertTesterMatchesLease(tester, credential) {
   if (String(tester.id) !== String(credential.testerUserId)) {
     throw new Error("TDLib Test Server user identity does not match the lease.");
+  }
+}
+
+export function assertSutMatchesLease(sut, credential) {
+  if (String(sut.id) !== String(credential.sutBotId) || sut.username !== credential.sutUsername) {
+    throw new Error("Telegram Test Server bot identity does not match the lease.");
   }
 }
 
@@ -445,11 +472,11 @@ function writeConfig(params) {
     },
     messages: { groupChat: { visibleReplies: "automatic" } },
   };
-  config.channels.telegram = mergeConfig(
-    config.channels.telegram,
-    readConfigPatch("E2E_TELEGRAM_CONFIG_PATCH"),
-  );
-  config = mergeConfig(config, readConfigPatch("E2E_ROOT_CONFIG_PATCH"));
+  const telegramPatch = readConfigPatch("E2E_TELEGRAM_CONFIG_PATCH");
+  const rootPatch = readConfigPatch("E2E_ROOT_CONFIG_PATCH");
+  assertTelegramConfigPatchesSafe(telegramPatch, rootPatch);
+  config.channels.telegram = mergeConfig(config.channels.telegram, telegramPatch);
+  config = mergeConfig(config, rootPatch);
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   return { root, stateDir, workspace, configPath };
 }
@@ -518,12 +545,14 @@ export async function drainSutUpdates(sutToken, lease, fetchImpl = fetch) {
   };
 }
 
-async function sutIdentity(sutToken, lease) {
-  const me = await telegram(sutToken, "getMe", {}, lease);
+async function sutIdentity(credential, lease) {
+  const me = await telegram(credential.sutToken, "getMe", {}, lease);
   if (!me.username) {
     throw new Error("SUT bot has no username; DM mode and mention targeting need a bot username.");
   }
-  return { id: String(me.id), username: me.username };
+  const sut = { id: String(me.id), username: me.username };
+  assertSutMatchesLease(sut, credential);
+  return sut;
 }
 
 function spawnProcess(command, args, options) {
@@ -883,7 +912,12 @@ async function main() {
 }
 
 async function drive(args, repoRoot, creds) {
-  const telegramProxy = await startTelegramTestApiProxy();
+  const telegramProxy = await startTelegramTestApiProxy({
+    leaseHealth: {
+      assertHealthy: creds.assertLeaseHealthy,
+      whenUnhealthy: creds.whenLeaseUnhealthy,
+    },
+  });
   try {
     await driveWithTelegramProxy(args, repoRoot, {
       ...creds,
@@ -903,6 +937,16 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
   }));
   const tester = await readTester(driverEnv, leaseFailure, repoRoot);
   assertTesterMatchesLease(tester, creds);
+  const lease = { assertHealthy: creds.assertLeaseHealthy, whenUnhealthy: leaseFailure };
+  const sut = await sutIdentity(creds, lease);
+  const drained = await drainSutUpdates(creds.sutToken, lease);
+  let selectedChatTarget = selectChatTarget({
+    dm: args.dm,
+    explicitChat: args.chat,
+    leasedGroupId: creds.groupId,
+    sutUsername: sut.username,
+    testerId: tester.id,
+  });
   const evidenceDir = args.output ? dirname(resolve(args.output)) : "";
   if (evidenceDir) fs.mkdirSync(evidenceDir, { recursive: true });
   const temp = writeConfig({
@@ -931,16 +975,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
   let gateway;
   try {
     creds.assertLeaseHealthy();
-    const lease = { assertHealthy: creds.assertLeaseHealthy, whenUnhealthy: leaseFailure };
-    const drained = await drainSutUpdates(creds.sutToken, lease);
-    const sut = await sutIdentity(creds.sutToken, lease);
-    let selectedChatTarget = selectChatTarget({
-      dm: args.dm,
-      explicitChat: args.chat,
-      leasedGroupId: creds.groupId,
-      sutUsername: sut.username,
-      testerId: tester.id,
-    });
     if (args.backend === "mock") {
       fs.writeFileSync(requestLog, "");
       mock = spawnProcess(

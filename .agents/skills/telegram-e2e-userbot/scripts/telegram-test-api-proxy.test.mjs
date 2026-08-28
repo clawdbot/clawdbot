@@ -121,3 +121,43 @@ test("proxy close aborts the in-flight Test Server request", async () => {
   await request;
   assert.equal(upstreamAborted, true);
 });
+
+test("lease revocation blocks every later Bot API request", async () => {
+  const leaseError = new Error("lease revoked");
+  let healthy = true;
+  let revoke;
+  let upstreamRequests = 0;
+  const whenUnhealthy = new Promise((resolve) => {
+    revoke = () => {
+      healthy = false;
+      resolve(leaseError);
+    };
+  });
+  const proxy = await startTelegramTestApiProxy({
+    leaseHealth: {
+      assertHealthy: () => {
+        if (!healthy) throw leaseError;
+      },
+      whenUnhealthy,
+    },
+    fetchImpl: async () => {
+      upstreamRequests += 1;
+      return new Response('{"ok":true}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  const before = await fetch(`${proxy.apiRoot}/bot123:ABC/getMe`);
+  assert.equal(before.status, 200);
+  revoke();
+  await new Promise((resolve) => setImmediate(resolve));
+  const after = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    body: "{}",
+  });
+  assert.equal(after.status, 502);
+  assert.equal(upstreamRequests, 1);
+  await proxy.close();
+});

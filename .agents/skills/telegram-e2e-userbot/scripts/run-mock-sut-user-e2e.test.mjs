@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  assertSutMatchesLease,
+  assertTelegramConfigPatchesSafe,
   assertTesterMatchesLease,
   cleanupOwnedRuntime,
   createGatewayEnvironment,
@@ -37,6 +39,37 @@ test("runner rejects a live tester identity that differs from the lease", () => 
     /identity does not match the lease/u,
   );
   assert.doesNotThrow(() => assertTesterMatchesLease({ id: "42" }, { testerUserId: "42" }));
+});
+
+test("runner rejects a live SUT identity that differs from the lease", () => {
+  const credential = { sutBotId: "42", sutUsername: "sut_bot" };
+  assert.throws(
+    () => assertSutMatchesLease({ id: "43", username: "sut_bot" }, credential),
+    /bot identity does not match the lease/u,
+  );
+  assert.throws(
+    () => assertSutMatchesLease({ id: "42", username: "other_bot" }, credential),
+    /bot identity does not match the lease/u,
+  );
+  assert.doesNotThrow(() => assertSutMatchesLease({ id: "42", username: "sut_bot" }, credential));
+});
+
+test("config patches cannot replace the leased Telegram credential boundary", () => {
+  assert.doesNotThrow(() =>
+    assertTelegramConfigPatchesSafe({ streaming: "partial" }, { messages: {} }),
+  );
+  assert.throws(
+    () => assertTelegramConfigPatchesSafe({ apiRoot: "https://example.invalid" }, {}),
+    /cannot override channels\.telegram\.apiRoot/u,
+  );
+  assert.throws(
+    () => assertTelegramConfigPatchesSafe({}, { channels: { telegram: { botToken: "other" } } }),
+    /cannot override channels\.telegram\.botToken/u,
+  );
+  assert.throws(
+    () => assertTelegramConfigPatchesSafe({}, { channels: null }),
+    /cannot replace channels/u,
+  );
 });
 
 test("successful probe cleanup removes private runner scratch without an output directory", () => {

@@ -43,7 +43,12 @@ export async function runTelegramTestDoctor({
     ) {
       throw new Error("TDLib Test Server user identity does not match the lease.");
     }
-    proxy = await startProxy();
+    proxy = await startProxy({
+      leaseHealth: {
+        assertHealthy: credential.assertLeaseHealthy,
+        whenUnhealthy: credential.whenLeaseUnhealthy,
+      },
+    });
     lease.assertHealthy();
     const botResponse = await fetchWithLease(
       `${proxy.apiRoot}/bot${credential.sutToken}/getMe`,
