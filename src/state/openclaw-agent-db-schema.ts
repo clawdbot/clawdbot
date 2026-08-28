@@ -33,6 +33,7 @@ import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-perm
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
   assertExistingAgentSchemaOwner,
+  assertNoForeignKeyViolationsAfterMigration,
   assertOpenClawAgentSchemaContains,
   assertOpenClawAgentCurrentRuntimeSchema,
   assertSupportedAgentSchemaVersion,
@@ -721,6 +722,7 @@ function ensureAgentSchema(
           ),
       );
       assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });
+      assertNoForeignKeyViolationsAfterMigration(db, pathname);
     });
   } finally {
     db.exec("PRAGMA foreign_keys = ON;");

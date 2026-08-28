@@ -7,6 +7,7 @@ import {
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import { runSqliteForeignKeyCheck } from "../infra/sqlite-integrity.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
@@ -294,4 +295,20 @@ export function assertExistingAgentSchemaOwner(
       `OpenClaw agent database ${pathname} belongs to agent ${existing.agentId}; requested agent ${agentId}.`,
     );
   }
+}
+
+/**
+ * Assert no foreign key violations remain after a schema migration transaction.
+ *
+ * The migration transaction intentionally disables FK enforcement so legacy
+ * table rebuilds don't cascade-delete children. While FK enforcement is off,
+ * ON DELETE CASCADE constraints don't fire, so orphaned rows can accumulate.
+ * This check runs inside the migration transaction so a detected violation
+ * rolls back the migration instead of persisting orphaned rows.
+ */
+export function assertNoForeignKeyViolationsAfterMigration(
+  db: DatabaseSync,
+  pathname: string,
+): void {
+  runSqliteForeignKeyCheck(db, pathname);
 }
