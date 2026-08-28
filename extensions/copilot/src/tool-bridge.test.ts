@@ -1680,6 +1680,28 @@ describe("createCopilotToolBridge", () => {
       expect(options?.toolConstructionPlan?.includeOpenClawTools).toBe(true);
     });
 
+    it("constructs shell tools through the shared glob-aware plan", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "exec" }),
+        makeTool({ name: "read" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        attemptParams: { toolsAllow: ["exec*"] } as never,
+        createOpenClawCodingTools,
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec"]);
+      const options = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        toolConstructionPlan?: {
+          includeBaseCodingTools?: boolean;
+          includeShellTools?: boolean;
+        };
+      };
+      expect(options?.toolConstructionPlan).toMatchObject({
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+      });
+    });
+
     it("does not keep apply_patch for a write-only allowlist", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [
         makeTool({ name: "write" }),

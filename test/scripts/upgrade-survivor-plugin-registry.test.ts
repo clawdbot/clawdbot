@@ -43,7 +43,7 @@ fi
 printf '%s\n' "$*" >>"$CAPTURE_DIR/node-args"
 printf '%s|%s|%s\n' \
   "$OPENCLAW_DOCKER_ALL_LANES" \
-  "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS" \
+  "\${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:-}" \
   "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS" >>"$CAPTURE_DIR/node-env"
 mkdir -p "$OPENCLAW_DOCKER_ALL_LOG_DIR/prepublish-plugin-registry"
 printf '%s' "$REGISTRY_MANIFEST" \
@@ -92,6 +92,36 @@ done
 }
 
 describe("standalone upgrade survivor plugin registry", () => {
+  it("prepares and mounts the direct auto-auth planner registry", () => {
+    const { captureDir, result } = runSurvivor({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: undefined,
+      OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "0",
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(join(captureDir, "node-env"), "utf8")).toBe("update-restart-auth||base\n");
+  });
+
+  it("preserves an explicitly supplied direct registry", () => {
+    const registryDir = tempDirs.make("openclaw-direct-plugin-registry-");
+    const manifestPath = join(registryDir, "prepublish-plugin-registry.json");
+    writeFileSync(manifestPath, registryManifest());
+
+    const { captureDir, result } = runSurvivor({
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registryDir,
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: createHash("sha256")
+        .update(readFileSync(manifestPath))
+        .digest("hex"),
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: undefined,
+      OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "0",
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(join(captureDir, "node-args"))).toBe(false);
+  });
+
   it("prepares and mounts a planner-owned registry for the current candidate", () => {
     const { captureDir, result } = runSurvivor({
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",

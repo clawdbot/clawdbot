@@ -106,7 +106,13 @@ function appConfig(cfg: OpenClawConfig, fixture: HttpFixture): OpenClawConfig {
         },
       },
     },
-    tools: { ...cfg.tools, profile: "full", toolSearch: false, codeMode: false },
+    tools: {
+      ...cfg.tools,
+      profile: "full",
+      toolSearch: false,
+      codeMode: false,
+      exec: { ...cfg.tools?.exec, mode: "ask" },
+    },
     channels: {},
   };
 }

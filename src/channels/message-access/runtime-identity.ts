@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { IdentifierAuthentication } from "./identifier-authentication.js";
+import {
+  identifierAuthenticationFrom,
+  meetsIdentifierAuthentication,
+  type IdentifierAuthentication,
+} from "./identifier-authentication.js";
 /**
  * Channel ingress identity adapter helpers.
  *
@@ -35,6 +39,33 @@ export function defineStableChannelIngressIdentity(
   };
 }
 
+/** Classify configured entries without needing a sender or granting admission. */
+export function identityEntryAuthenticationClassifier(
+  identity: ChannelIngressIdentityDescriptor | StableChannelIngressIdentityParams,
+) {
+  const descriptor =
+    "primary" in identity ? identity : defineStableChannelIngressIdentity(identity);
+  const fields = identityFields(descriptor);
+  const isWildcardEntry = descriptor.isWildcardEntry ?? ((value: string) => value === "*");
+  return (raw: string): IdentifierAuthentication | undefined => {
+    if (isWildcardEntry(raw)) {
+      return undefined;
+    }
+    let strongest: IdentifierAuthentication | undefined;
+    // An entry accepted by a stable field does not depend solely on its alias match.
+    for (const field of fields) {
+      if (!normalizeFieldValue(field, raw, "entry")) {
+        continue;
+      }
+      const authentication = fieldAuthentication(field, raw, fieldDangerous(field, raw));
+      if (strongest === undefined || meetsIdentifierAuthentication(authentication, strongest)) {
+        strongest = authentication;
+      }
+    }
+    return strongest;
+  };
+}
+
 function defaultNormalize(value: string): string {
   return value;
 }
@@ -59,10 +90,11 @@ function fieldDangerous(field: ResolvedIdentityField, value: string): boolean | 
 function fieldAuthentication(
   field: ResolvedIdentityField,
   value: string,
-): IdentifierAuthentication | undefined {
-  return typeof field.authentication === "function"
-    ? field.authentication(value)
-    : field.authentication;
+  dangerous: boolean | undefined,
+): IdentifierAuthentication {
+  const authentication =
+    typeof field.authentication === "function" ? field.authentication(value) : field.authentication;
+  return identifierAuthenticationFrom({ authentication, dangerous });
 }
 
 function identityFields(identity: ChannelIngressIdentityDescriptor): ResolvedIdentityField[] {
@@ -109,8 +141,7 @@ function adapterEntry(params: {
     value: params.value,
     identityFieldKey: params.field.key,
     ...(params.wildcard ? { wildcard: true } : {}),
-    authentication:
-      fieldAuthentication(params.field, params.entry) ?? (dangerous ? "mutable" : "asserted"),
+    authentication: fieldAuthentication(params.field, params.entry, dangerous),
     dangerous,
     sensitivity: params.field.sensitivity,
   };
@@ -231,7 +262,7 @@ export function createIdentitySubject(
     const authentication =
       input.authentication !== undefined
         ? (input.authentication[field.key] ?? "unverified")
-        : (fieldAuthentication(field, value) ?? (dangerous ? "mutable" : "asserted"));
+        : fieldAuthentication(field, value, dangerous);
     return [
       {
         opaqueId: field.key,

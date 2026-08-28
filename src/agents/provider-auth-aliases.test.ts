@@ -49,15 +49,15 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
 }));
 
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { resetProviderAuthAliasMapCacheForTest } from "./provider-auth-aliases.test-support.js";
 
 function createPluginManifestRecord(
   plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id" | "origin">,
@@ -143,7 +143,6 @@ function createPluginMetadataSnapshot(params: {
 describe("provider auth aliases", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
-    resetProviderAuthAliasMapCacheForTest();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
@@ -153,6 +152,38 @@ describe("provider auth aliases", () => {
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+  });
+
+  it("does not reuse implicit auth aliases across fresh operation owners", () => {
+    const config = {};
+    const env = { HOME: "/home/owner-test" };
+    const firstOwner = createPluginCache();
+    const secondOwner = createPluginCache();
+    const snapshot = (target: string) =>
+      createPluginMetadataSnapshot({
+        config,
+        plugins: [
+          createPluginManifestRecord({
+            id: "owner-fixture",
+            origin: "bundled",
+            providerAuthAliases: { fixture: target },
+          }),
+        ],
+      });
+    const firstSnapshot = snapshot("first-provider");
+    const secondSnapshot = snapshot("second-provider");
+    pluginRegistryMocks.loadPluginMetadataSnapshot.withImplementation(
+      () => (getPluginCache() === firstOwner ? firstSnapshot : secondSnapshot),
+      () => {
+        expect(
+          withPluginCache(firstOwner, () => resolveProviderIdForAuth("fixture", { config, env })),
+        ).toBe("first-provider");
+        expect(
+          withPluginCache(secondOwner, () => resolveProviderIdForAuth("fixture", { config, env })),
+        ).toBe("second-provider");
+        expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+      },
+    );
   });
 
   it("treats deprecated auth choice ids as provider auth aliases", () => {

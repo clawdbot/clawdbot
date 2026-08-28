@@ -115,12 +115,12 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
-  // A configured UI root can be built independently from the Gateway. Exact
-  // comparison is authoritative only for the package-owned bundled artifact.
+  // Gateway runtime provenance is independent of the UI artifact source.
+  // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
     ? ("configured" as const)
     : ("bundled" as const);
-  const serverBuildId = controlUiBuildSource === "bundled" ? resolveRuntimeServiceBuildId() : null;
+  const serverBuildId = resolveRuntimeServiceBuildId();
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -144,6 +144,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
         GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+        GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,

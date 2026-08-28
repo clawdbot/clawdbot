@@ -1,6 +1,7 @@
 // Systemd unavailable tests cover fallback behavior when systemd is not present.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { execFileUtf8 } from "./exec-file.js";
@@ -10,6 +11,10 @@ import {
   isSystemctlAvailable,
   isSystemdUserServiceAvailable,
 } from "./systemd-exec.js";
+import {
+  uninstallLegacySystemdUnits,
+  uninstallUserSystemdGatewayUnit,
+} from "./systemd-lifecycle.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
@@ -57,6 +62,7 @@ describe("classifySystemdUnavailableDetail", () => {
 describe.skipIf(process.platform === "win32")("systemd process availability", () => {
   function systemctlEnv(dir: string) {
     return {
+      HOME: dir,
       PATH: dir,
       XDG_RUNTIME_DIR: dir,
       DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(dir, "bus")}`,
@@ -131,9 +137,77 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
       );
       expect(isLaunchctlNotLoaded(result)).toBe(false);
       if (termination === "signal") {
-        await expect(isSystemctlAvailable(env)).resolves.toBe(false);
+        await expect(isSystemctlAvailable(env)).resolves.toBe(true);
         await expect(isSystemdUserServiceAvailable(env)).resolves.toBe(false);
       }
     });
+  });
+
+  describe.each([
+    { unitName: "clawdbot-gateway.service", uninstall: uninstallLegacySystemdUnits },
+    { unitName: "openclaw-gateway.service", uninstall: uninstallUserSystemdGatewayUnit },
+  ])("$unitName cleanup", ({ unitName, uninstall }) => {
+    it.each([
+      { availability: "signal", disableFails: true },
+      { availability: "signal", disableFails: false },
+      { availability: "missing", disableFails: false },
+    ])(
+      "handles $availability status with disable failure $disableFails",
+      async ({ availability, disableFails }) => {
+        await withTempDir("openclaw-systemctl-cleanup-", async (dir) => {
+          const env = systemctlEnv(dir);
+          const unitPath = path.join(dir, ".config/systemd/user", unitName);
+          const definition = "[Unit]\nDescription=Gateway cleanup fixture\n";
+          await fs.mkdir(path.dirname(unitPath), { recursive: true });
+          await fs.writeFile(unitPath, definition);
+          if (availability !== "missing") {
+            await fs.writeFile(
+              path.join(dir, "systemctl"),
+              [
+                "#!/bin/sh",
+                'printf "%s\\n" "$*" >> "$HOME/systemctl.calls"',
+                'case " $* " in',
+                '*" status "*) kill -TERM $$ ;;',
+                '*" is-enabled "*) printf "enabled\\n" ;;',
+                '*" disable "*)',
+                `  test -f "$HOME/.config/systemd/user/${unitName}" || exit 98`,
+                disableFails ? "  kill -TERM $$ ;;" : "  exit 0 ;;",
+                "esac",
+              ].join("\n"),
+              { mode: 0o700 },
+            );
+          }
+          let output = "";
+          const stdout = new Writable({
+            write(chunk, _encoding, callback) {
+              output += chunk.toString();
+              callback();
+            },
+          });
+          if (disableFails) {
+            await expect(uninstall({ env, stdout })).rejects.toThrow("systemctl disable failed:");
+            await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(definition);
+            expect(output).not.toContain("Removed");
+          } else {
+            await uninstall({ env, stdout });
+            await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+            expect(output).toContain("Removed");
+          }
+          if (availability === "missing") {
+            await expect(fs.access(path.join(dir, "systemctl.calls"))).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+            expect(output).toContain("systemctl unavailable");
+          } else {
+            const calls = (await fs.readFile(path.join(dir, "systemctl.calls"), "utf8"))
+              .trim()
+              .split("\n");
+            expect(calls).toContain(`--user disable --now ${unitName}`);
+            expect(calls.includes("--user daemon-reload")).toBe(!disableFails);
+            expect(output).not.toContain("systemctl unavailable");
+          }
+        });
+      },
+    );
   });
 });

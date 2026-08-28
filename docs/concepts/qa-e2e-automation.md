@@ -1324,7 +1324,10 @@ for machine-readable output). When choosing focused proof for a touched
 behavior or file path, run `pnpm openclaw qa coverage --match <query>`. The
 match report searches scenario metadata, docs refs, code refs, coverage IDs,
 plugins, and provider requirements, then prints matching `qa suite
---scenario ...` targets.
+--scenario ...` targets. Generated commands preserve declared channel-driver
+requirements and separate scenarios with different driver requirements. Without
+a driver requirement, non-QA channels use `live` and `qa-channel` keeps its
+default driver.
 
 Every `qa suite` run writes top-level `qa-evidence.json`,
 `qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected

@@ -41,6 +41,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
@@ -681,6 +683,65 @@ describe("session message-cut methods", () => {
         }),
       }),
     );
+  });
+
+  it("preserves the authenticated creator and required sandbox when a harness materializes an upstream fork", async () => {
+    const profile = ensureProfileForEmail("sandbox-required-upstream-fork@example.com");
+    setUserProfileRole(profile.id, "guest");
+    const client = {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as GatewayClient;
+    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              sandbox: "required",
+            },
+          },
+        },
+      },
+    });
+    linkToUpstreamConversation();
+    installUpstreamForkHarness();
+    mocks.upstreamFork.mockImplementation(async ({ targetKey }: { targetKey: string }) => {
+      const created = await createRuntimeAgent().session.createSessionEntry({
+        cfg: runtimeConfig(),
+        key: targetKey,
+        initialEntry: { agentHarnessId: "test-harness" },
+      });
+      return { status: "created", key: created.key };
+    });
+
+    const fork = await withPluginRuntimeGatewayRequestScope(
+      { client, isWebchatConnect: () => false },
+      () => invoke("sessions.fork", "user-entry", client, false, runtimeConfig),
+    );
+    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
+
+    expect(fork).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
+    expect(mocks.upstreamFork).toHaveBeenCalledWith(
+      expect.objectContaining({ sandbox: "required" }),
+    );
+    expect(loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" })).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
   });
 
   it("does not mutate the local session when the upstream fork fails", async () => {

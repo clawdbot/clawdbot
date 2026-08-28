@@ -679,7 +679,8 @@ describe("runHeartbeatOnce ack handling", () => {
       if (!("reason" in res)) {
         throw new Error("expected skipped heartbeat result reason");
       }
-      expect(res.reason).toBe("whatsapp-not-linked");
+      expect(res.reason).toBe("channel-not-ready");
+      expect(getLastHeartbeatEvent()).toMatchObject({ reason: "whatsapp-not-linked" });
       expect(sendWhatsApp).not.toHaveBeenCalled();
     });
   });

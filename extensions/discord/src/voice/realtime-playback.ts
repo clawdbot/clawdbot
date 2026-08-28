@@ -85,7 +85,7 @@ export class DiscordRealtimePlayback<TState> {
       onTerminalError: (error: Error) => void;
       providerId: () => string | undefined;
       realtimeConfig: () => DiscordRealtimeVoiceConfig;
-      stopTerminally: (reason: string) => void;
+      stopTerminally: () => void;
       stopped: () => boolean;
       wakeNameRequired: () => boolean;
     },
@@ -382,7 +382,7 @@ export class DiscordRealtimePlayback<TState> {
   }
 
   private stopAfterOverflow(reason: string, error: Error): void {
-    this.params.stopTerminally(reason);
+    this.params.stopTerminally();
     this.queuedExactSpeechMessages = [];
     this.exactSpeechState = { status: "idle" };
     this.clearOutputAudio(reason);

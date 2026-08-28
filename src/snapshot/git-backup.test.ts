@@ -30,7 +30,15 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.executeGitCommand>
     ): ReturnType<typeof actual.executeGitCommand> => {
       if (args[1][0] === "push" && mocks.pushDiagnostic) {
-        return { code: 1, stdout: "", stderr: mocks.pushDiagnostic };
+        return {
+          code: 1,
+          stdout: "",
+          stderr: mocks.pushDiagnostic,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          timeoutMs: args[2]?.timeoutMs ?? actual.GIT_TIMEOUT_MS,
+        };
       }
       return await actual.executeGitCommand(...args);
     },

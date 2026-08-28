@@ -88,7 +88,6 @@
   --danger-subtle: rgba(255, 255, 255, 0.1);
   --info: #8ecdff;
   --info-subtle: rgba(255, 255, 255, 0.1);
-  --run: #5ee88a;
 
   /* Diff ink is a status pair too: it sits on the same neutral tints. */
   --hljs-deletion: #ffaba3;
@@ -102,7 +101,7 @@
 
   --grid-line: rgba(255, 255, 255, 0.08);
   /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
-     the accessibility contract, not an accent (see styles fonts/beacon.css). */
+     the accessibility contract, not an accent (see styles fonts/atkinson-hyperlegible.css). */
   --font-body:
     "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-chat: var(--font-body);
@@ -184,7 +183,6 @@
   --danger-subtle: rgba(0, 0, 0, 0.07);
   --info: #09428d;
   --info-subtle: rgba(0, 0, 0, 0.07);
-  --run: #0c5024;
 
   /* Diff ink is a status pair too: it sits on the same neutral tints. */
   --hljs-deletion: #8b0c20;
@@ -198,7 +196,7 @@
 
   --grid-line: rgba(0, 0, 0, 0.12);
   /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
-     the accessibility contract, not an accent (see styles fonts/beacon.css). */
+     the accessibility contract, not an accent (see styles fonts/atkinson-hyperlegible.css). */
   --font-body:
     "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-chat: var(--font-body);

@@ -277,7 +277,7 @@ export function findCanvasInsertionIndex(
   return maximumIndex;
 }
 
-export function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
+function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
   for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
     const value = message[field];
     if (typeof value === "string" && value.trim()) {
@@ -301,15 +301,21 @@ export function isPendingSendMessage(message: unknown): boolean {
 export function readPendingSendFailure(message: unknown): {
   error?: string;
   id: string;
+  state: "failed" | "unconfirmed";
 } | null {
   const metadata = asRecord(asRecord(message)?.["__openclaw"]);
   const state = metadata?.state;
   const id = metadata?.id;
-  if (metadata?.kind !== "pending-send" || state !== "failed" || typeof id !== "string") {
+  if (
+    metadata?.kind !== "pending-send" ||
+    (state !== "failed" && state !== "unconfirmed") ||
+    typeof id !== "string"
+  ) {
     return null;
   }
   return {
     id,
+    state,
     ...(typeof metadata.error === "string" ? { error: metadata.error } : {}),
   };
 }
@@ -562,7 +568,9 @@ export function hasRenderableNormalizedMessage(
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
   const media = role === "user" && readTranscriptMediaEntries(message).length;
-  return Boolean(normalized.content.length || normalized.replyTarget || label || media);
+  return Boolean(
+    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+  );
 }
 
 export function sanitizeStreamText(text: string): string {

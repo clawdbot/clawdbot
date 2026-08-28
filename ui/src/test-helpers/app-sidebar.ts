@@ -52,6 +52,7 @@ const sidebarSessionGatewayBindings = new WeakMap<
 >();
 
 export type SidebarLifecycleState = HTMLElement & {
+  basePath: string;
   hiddenSessionCatalogIds: ReadonlySet<string>;
   activeRouteId?: string;
   activeWorkboardBoardId: string;
@@ -284,8 +285,6 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       })),
     }),
   );
-  const setOwnerFilter = vi.fn(() => Promise.resolve());
-  const setInvolvingMeFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
     Promise.resolve({ key, agentId: options?.agentId ?? null }),
   );
@@ -364,9 +363,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     create,
     patch,
     archiveVisibility: (key: string) => archiveVisibilityByKey.get(key),
-    setArchiveVisibility(key: string, visibility: "pending" | "archived" | undefined) {
-      if (visibility) {
-        archiveVisibilityByKey.set(key, visibility);
+    setArchivePending(key: string, pending: boolean) {
+      if (pending) {
+        archiveVisibilityByKey.set(key, "pending");
+      } else if (state.result?.sessions.find((row) => row.key === key)?.archived) {
+        archiveVisibilityByKey.set(key, "archived");
       } else {
         archiveVisibilityByKey.delete(key);
       }
@@ -380,7 +381,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteMany,
     list,
     listSnapshot(scope: Parameters<SessionCapability["listSnapshot"]>[0]) {
-      if (!scope.archivedFilter || scope.archivedFilter === "active") {
+      if (
+        (!scope.archivedFilter || scope.archivedFilter === "active") &&
+        !scope.ownerId &&
+        !scope.involvingMe
+      ) {
         return {
           result: state.result,
           agentId: state.agentId,
@@ -397,14 +402,16 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return scopedSessions!.subscribeList(scope, listener);
     },
     refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
-      if (!options?.archivedFilter || options.archivedFilter === "active") {
+      if (
+        (!options?.archivedFilter || options.archivedFilter === "active") &&
+        !options?.ownerId &&
+        !options?.involvingMe
+      ) {
         return refresh(options);
       }
       return scopedSessions!.refreshList(options);
     },
     reconcile,
-    setOwnerFilter,
-    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -441,12 +448,12 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
           const { archived, ...options } = (params ?? {}) as SessionListOptions & {
             archived?: true | "all";
           };
-          if (!archived) {
+          if (!archived && !options.ownerId && !options.involvingMe) {
             return state.result as T;
           }
           return (await list({
             ...options,
-            archivedFilter: archived === true ? "archived" : "all",
+            ...(archived ? { archivedFilter: archived === true ? "archived" : "all" } : {}),
           })) as T;
         },
       } as GatewayBrowserClient;
@@ -483,8 +490,6 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteMany,
     list,
     reconcile,
-    setOwnerFilter,
-    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,

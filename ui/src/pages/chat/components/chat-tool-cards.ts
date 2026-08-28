@@ -64,7 +64,9 @@ function formatToolOutputForSidebar(text: string): string {
   const trimmed = text.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      return "```json\n" + JSON.stringify(JSON.parse(trimmed), null, 2) + "\n```";
+      JSON.parse(trimmed);
+      // Keep the source literal: reserialization can change numbers, escapes, and duplicate keys.
+      return "```json\n" + trimmed + "\n```";
     } catch {
       return text;
     }

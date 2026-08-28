@@ -37,6 +37,7 @@ export async function getPluginCliCommandDescriptors(
     let selectedMemoryPluginId: string | null = null;
     const memorySlot = context.config.plugins?.slots?.memory;
     const normalizedConfig = normalizePluginsConfig(context.config.plugins);
+    const sourceConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
 
     for (const plugin of snapshot.plugins) {
       if (seenPluginIds.has(plugin.id)) {
@@ -52,6 +53,9 @@ export async function getPluginCliCommandDescriptors(
           schema: plugin.configSchema,
           cacheKey: plugin.schemaCacheKey,
           value: pluginConfig,
+          sourceValue: plugin.configContracts?.secretInputs
+            ? sourceConfig.entries[normalizePluginPolicyId(plugin.id)]?.config
+            : undefined,
         }).ok
       ) {
         continue;

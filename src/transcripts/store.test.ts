@@ -263,9 +263,9 @@ describe("TranscriptsStore", () => {
     const artifacts = await store.materializeSessionArtifacts(target, "transcript");
     fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
 
-    await expect(store.updateStopped(target.sessionId, "2026-07-01T11:00:00.000Z")).resolves.toBe(
-      undefined,
-    );
+    await expect(
+      store.writeSession({ ...target, stoppedAt: "2026-07-01T11:00:00.000Z" }),
+    ).resolves.toBeUndefined();
     await expect(store.readSession(target.sessionId)).resolves.toMatchObject({
       stoppedAt: "2026-07-01T11:00:00.000Z",
     });

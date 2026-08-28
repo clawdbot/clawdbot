@@ -82,6 +82,31 @@ export function buildSessionCreationStamp(params: {
   };
 }
 
+/** A required node keeps its original isolation identity across every write and rollover. */
+export function preserveCreationStamp<
+  T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,
+>(entry: T, authoritative: Partial<ReturnType<typeof buildSessionCreationStamp>> | undefined): T {
+  return authoritative?.sandbox === "required"
+    ? {
+        ...entry,
+        createdVia: authoritative.createdVia,
+        createdActor: authoritative.createdActor,
+        createdAt: authoritative.createdAt,
+        sandbox: authoritative.sandbox,
+      }
+    : entry;
+}
+
+/** Delegation keeps a required parent's human isolation identity, regardless of current roles. */
+export function inheritSessionCreationPolicy(
+  source: { createdActor?: SessionCreatedActor; sandbox?: "required" } | undefined,
+  actor?: SessionCreatedActor,
+): { actor?: SessionCreatedActor; sandbox?: "required" } {
+  return source?.sandbox === "required"
+    ? { actor: source.createdActor, sandbox: "required" }
+    : { actor };
+}
+
 export type SessionEntryProvenance = {
   /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;

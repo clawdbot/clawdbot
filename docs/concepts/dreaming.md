@@ -17,7 +17,7 @@ Dreaming is enabled by default. Set
 
 ## What dreaming writes
 
-- **Machine state** in `memory/.dreams/` (recall store, phase signals, ingestion checkpoints, locks).
+- **Machine state** in SQLite-backed plugin state (recall store, phase signals, ingestion checkpoints, locks).
 - **Rewrite preimages** in SQLite-backed plugin state before an accepted `MEMORY.md` rewrite.
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
@@ -149,7 +149,7 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 | Consolidation       | 0.10   | Multi-day recurrence strength                     |
 | Conceptual richness | 0.06   | Concept-tag density from snippet/path             |
 
-Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
+Light and REM phase hits recorded in SQLite-backed plugin state add a small recency-decayed boost.
 
 ## Scheduling
 

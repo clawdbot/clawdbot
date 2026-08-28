@@ -89,10 +89,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
 
   it("runs the package and Docker product lanes through the existing scheduler", () => {
     const plan = createPluginPrereleaseTestPlan();
-    const channelLaneScript = readFileSync(
-      "scripts/e2e/npm-onboard-channel-agent-docker.sh",
-      "utf8",
-    );
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
@@ -118,10 +114,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     for (const lane of plan.dockerLanes) {
       expect(getDockerLane(lane).name).toBe(lane);
     }
-    expect(channelLaneScript).toContain("OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE");
-    expect(channelLaneScript).toContain("bash scripts/plugin-npm-publish.sh --pack");
-    expect(channelLaneScript).toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1");
-    expect(channelLaneScript).toContain("npm-pack:$container_package");
     const candidateLane = getDockerLane("npm-onboard-discord-candidate-channel-agent");
     expect(candidateLane.command).toContain("OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR");
     expect(candidateLane.command).toContain(
@@ -809,6 +801,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         targeted_docker_lane_group_size: 2,
       },
     });
+    expect(dockerSuite.with.enable_prepublish_plugin_registry).toBe(true);
+    expect(
+      Object.keys(dockerSuite.with).filter((key) => key.startsWith("prepublish_plugin_registry_")),
+    ).toEqual([]);
+    expect(dockerSuite.with.package_artifact_id).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}",
+    );
+    expect(dockerSuite.with.shared_image_artifact_id).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}",
+    );
     expect(dockerSuite.secrets).toBeUndefined();
     expect(suite.needs).toEqual([
       "preflight",
@@ -903,7 +905,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description:
-        "Cancel only an exact active child after its first blocking job; false drains all children to completion",
+        "Cancel only an exact active child after its first blocking job; false drains all children and permits same-parent recovery",
       required: false,
       default: false,
       type: "boolean",

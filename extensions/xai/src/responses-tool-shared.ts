@@ -98,7 +98,7 @@ export async function requestXaiResponsesTool<T>(
   );
 }
 
-export function extractXaiWebSearchContent(
+function extractXaiWebSearchContent(
   data: XaiWebSearchResponse,
   maxContentChars?: number,
 ): {

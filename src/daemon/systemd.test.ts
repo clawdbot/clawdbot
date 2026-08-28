@@ -2707,9 +2707,11 @@ describe("stageSystemdService", () => {
       // operator previously wrote there but staging now supplies inline.
       await fs.writeFile(
         envFilePath,
-        ["OPENCLAW_GATEWAY_TOKEN=stale-gateway-token", "OPENROUTER_API_KEY=or-operator-key"].join(
-          "\n",
-        ) + "\n",
+        [
+          "OPENCLAW_GATEWAY_TOKEN=stale-gateway-token",
+          "OPENROUTER_API_KEY=or-operator-key",
+          "NODE_OPTIONS=--require=/tmp/stale-preload.cjs",
+        ].join("\n") + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
 
@@ -2728,12 +2730,14 @@ describe("stageSystemdService", () => {
           OPENCLAW_GATEWAY_TOKEN: "fresh-gateway-token",
           LLM_API_KEY: "dotenv-key",
           OPENROUTER_API_KEY: "or-operator-key",
+          NODE_OPTIONS: "",
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_TOKEN",
         },
         environmentValueSources: {
           OPENCLAW_GATEWAY_TOKEN: "inline-and-file",
           LLM_API_KEY: "inline",
           OPENROUTER_API_KEY: "file",
+          NODE_OPTIONS: "inline",
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
         },
       });
@@ -2745,6 +2749,8 @@ describe("stageSystemdService", () => {
       // Stale inline-managed key must be removed from the env file so the
       // fresh inline Environment= value wins (EnvironmentFile would override it).
       expect(envFile).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+      expect(envFile).not.toContain("NODE_OPTIONS");
+      expect(unit).toContain("Environment=NODE_OPTIONS=\n");
       // Operator-added key not managed inline must survive.
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
       expect(envFile).not.toContain("LLM_API_KEY");
@@ -3377,37 +3383,48 @@ describe("uninstallLegacySystemdUnits", () => {
     execFileMock.mockReset();
   });
 
-  it("preserves a legacy unit file when systemctl cannot disable it", async () => {
-    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-unit-"));
-    const env = { HOME: path.join(tempHomeRoot, "home") };
-    const unitPath = path.join(env.HOME, ".config", "systemd", "user", "clawdbot-gateway.service");
-    try {
-      await fs.mkdir(path.dirname(unitPath), { recursive: true });
-      await fs.writeFile(unitPath, "[Unit]\nDescription=Clawdbot Gateway\n", "utf8");
-      execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce(
-          systemctlUserResult([null, "enabled\n", ""], "is-enabled", "clawdbot-gateway.service"),
-        )
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce(
-          systemctlUserResult(
-            [createExecFileError("permission denied", { code: 1 }), "", "Permission denied"],
-            "disable",
-            "--now",
-            "clawdbot-gateway.service",
-          ),
-        );
-
-      const { stdout } = createWritableStreamMock();
-      await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toThrow(
-        "systemctl disable failed: Permission denied",
+  it.each(["exit", "signal"] as const)(
+    "preserves a legacy unit file when disable fails after status %s",
+    async (termination) => {
+      const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-unit-"));
+      const env = { HOME: path.join(tempHomeRoot, "home") };
+      const unitPath = path.join(
+        env.HOME,
+        ".config",
+        "systemd",
+        "user",
+        "clawdbot-gateway.service",
       );
-      await expect(fs.access(unitPath)).resolves.toBeUndefined();
-    } finally {
-      await fs.rm(tempHomeRoot, { recursive: true, force: true });
-    }
-  });
+      try {
+        await fs.mkdir(path.dirname(unitPath), { recursive: true });
+        await fs.writeFile(unitPath, "[Unit]\nDescription=Clawdbot Gateway\n", "utf8");
+        execFileMock.mockImplementation((_command, args, _options, callback) => {
+          if (args[1] === "status") {
+            callback(
+              termination === "signal"
+                ? createExecFileError("status interrupted", { termination })
+                : null,
+              "",
+              "",
+            );
+          } else if (args[1] === "is-enabled") {
+            callback(null, "enabled\n", "");
+          } else {
+            assertUserSystemctlArgs(args, "disable", "--now", "clawdbot-gateway.service");
+            callback(createExecFileError("permission denied"), "", "Permission denied");
+          }
+        });
+
+        const { stdout } = createWritableStreamMock();
+        await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toThrow(
+          "systemctl disable failed: Permission denied",
+        );
+        await expect(fs.access(unitPath)).resolves.toBeUndefined();
+      } finally {
+        await fs.rm(tempHomeRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("uninstallUserSystemdGatewayUnit", () => {
@@ -3485,28 +3502,42 @@ describe("uninstallUserSystemdGatewayUnit", () => {
     });
   });
 
-  it("preserves the unit file when systemctl cannot disable the service", async () => {
-    await withUserUnitFixture(async ({ env, unitPath }) => {
-      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
-      execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce(
-          systemctlUserResult(
-            [createExecFileError("permission denied", { code: 1 }), "", "Permission denied"],
-            "disable",
-            "--now",
-            GATEWAY_SERVICE,
-          ),
-        );
+  it.each(["exit", "signal"] as const)(
+    "preserves the unit file when disable fails after status %s",
+    async (termination) => {
+      await withUserUnitFixture(async ({ env, unitPath }) => {
+        await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
+        execFileMock
+          .mockImplementationOnce(
+            systemctlUserResult(
+              [
+                termination === "signal"
+                  ? createExecFileError("status interrupted", { termination })
+                  : null,
+                "",
+                "",
+              ],
+              "status",
+            ),
+          )
+          .mockImplementationOnce(
+            systemctlUserResult(
+              [createExecFileError("permission denied", { code: 1 }), "", "Permission denied"],
+              "disable",
+              "--now",
+              GATEWAY_SERVICE,
+            ),
+          );
 
-      const { stdout } = createWritableStreamMock();
-      await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toThrow(
-        "systemctl disable failed: Permission denied",
-      );
-      await expect(fs.access(unitPath)).resolves.toBeUndefined();
-      expect(execFileMock).toHaveBeenCalledTimes(2);
-    });
-  });
+        const { stdout } = createWritableStreamMock();
+        await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toThrow(
+          "systemctl disable failed: Permission denied",
+        );
+        await expect(fs.access(unitPath)).resolves.toBeUndefined();
+        expect(execFileMock).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
 
   it("surfaces daemon-reload failure after removing the disabled unit", async () => {
     await withUserUnitFixture(async ({ env, unitPath }) => {

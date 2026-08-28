@@ -60,7 +60,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
-import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/session-requests.ts";
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
 export type TranscriptSearchState =
   | { status: "idle" }
@@ -1121,7 +1121,7 @@ function renderSessionsAdvancedFilters(props: SessionsProps) {
   ) => props.onFiltersChange({ activeMinutes, limit, includeGlobal, includeUnknown, [key]: value });
   const active =
     activeMinutes.trim() !== "" ||
-    limit.trim() !== String(DEFAULT_SESSION_LIST_QUERY.limit) ||
+    limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
     !includeGlobal ||
     includeUnknown ||
     props.groupBy !== "none";

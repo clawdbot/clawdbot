@@ -36,7 +36,10 @@ import {
   readConfigMachineStateWithMetadata,
 } from "./config-machine-state.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
-import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
+import {
+  FIRST_USE_STATE_TABLES,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "./openclaw-state-db-contract.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   findOpenClawStateDatabaseSchemaMigrationRequiredError,
@@ -51,7 +54,6 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
   repairOpenClawStateDatabaseSchemaIfNeeded,
   runWithOpenClawStateBusyTimeout,
@@ -1560,14 +1562,14 @@ describe("openclaw state database", () => {
     );
   });
 
-  it("keeps test default state under a worker-sharded temp directory", () => {
-    expect(
-      resolveOpenClawStateSqlitePath({
-        VITEST: "true",
-        VITEST_WORKER_ID: "7",
-      } as NodeJS.ProcessEnv),
-    ).toBe(
-      path.join(os.tmpdir(), "openclaw-test-state", `${process.pid}-7`, "state", "openclaw.sqlite"),
+  it.each([
+    { NODE_ENV: "production" },
+    { NODE_ENV: "test" },
+    { VITEST: "true", VITEST_WORKER_ID: "7" },
+  ])("resolves default SQLite state through HOME with %j", (runtimeEnv) => {
+    const home = createTempStateDir();
+    expect(resolveOpenClawStateSqlitePath({ ...runtimeEnv, HOME: home })).toBe(
+      path.join(home, ".openclaw", "state", "openclaw.sqlite"),
     );
   });
 

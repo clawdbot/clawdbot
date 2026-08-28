@@ -101,6 +101,7 @@ const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
+const UPGRADE_SURVIVOR_CONFIG_PARKING_PATH = "scripts/e2e/lib/upgrade-survivor/config-parking.mjs";
 const GATEWAY_NETWORK_DOCKER_E2E_PATH = "scripts/e2e/gateway-network-docker.sh";
 const BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH = "scripts/e2e/browser-cdp-snapshot-docker.sh";
 const SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH = "scripts/e2e/sandbox-browser-sidecar-docker.sh";
@@ -1408,7 +1409,7 @@ stderr="$(<"$TMPDIR/stderr")"
 node() {
   local script="$1"
   shift
-  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
     command node "$script" "$@"
     return
   fi
@@ -1551,7 +1552,7 @@ export PATH="$TMPDIR/bin:$PATH"
 node() {
   local script="$1"
   shift
-  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
     command node "$script" "$@"
     return
   fi
@@ -2525,9 +2526,13 @@ docker_e2e_docker_run_cmd run demo
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
     const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
-    expect(runner.indexOf("\nconfigure_plugin_registry\n")).toBeLessThan(
-      runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
+    const runnerPluginRegistryIndex = runner.indexOf("\nconfigure_plugin_registry\n");
+    const runnerCompanionInstallIndex = runner.indexOf("\ninstall_companion_plugins\n");
+    const runnerUpdateIndex = runner.indexOf(
+      '\necho "Running package update against the mounted tarball..."\n',
     );
+    expect(runnerPluginRegistryIndex).toBeLessThan(runnerCompanionInstallIndex);
+    expect(runnerCompanionInstallIndex).toBeLessThan(runnerUpdateIndex);
     expect(
       publishedRunner.indexOf("phase configure-plugin-registry configure_plugin_registry"),
     ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
@@ -2535,13 +2540,11 @@ docker_e2e_docker_run_cmd run demo
     const runnerPrepareIndex = runner.indexOf(
       'prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"',
     );
-    const runnerPluginRegistryIndex = runner.indexOf("\nconfigure_plugin_registry\n");
     expect(runnerClawHubIndex).toBeGreaterThan(-1);
-    expect(runnerClawHubIndex).toBeLessThan(runnerPrepareIndex);
-    expect(runnerPrepareIndex).toBeLessThan(runnerPluginRegistryIndex);
-    expect(runnerPluginRegistryIndex).toBeLessThan(
-      runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
-    );
+    expect(runnerClawHubIndex).toBeLessThan(runnerPluginRegistryIndex);
+    expect(runnerPluginRegistryIndex).toBeLessThan(runnerCompanionInstallIndex);
+    expect(runnerCompanionInstallIndex).toBeLessThan(runnerPrepareIndex);
+    expect(runnerPrepareIndex).toBeLessThan(runnerUpdateIndex);
     const publishedClawHubIndex = publishedRunner.indexOf(
       "phase configure-clawhub-fixture configure_clawhub_fixture",
     );
@@ -2579,24 +2582,55 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
       publishedRunner.indexOf("phase doctor run_doctor"),
     );
-    expect(runner.indexOf('openclaw "${update_args[@]}"')).toBeLessThan(
-      runner.indexOf(
-        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
-      ),
+    const discordInstallIndex = runner.indexOf(
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n    plugins install "npm:@openclaw/discord@$package_version" --pin',
     );
+    const whatsappInstallIndex = runner.indexOf(
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n      plugins install "clawhub:@openclaw/whatsapp@$package_version"',
+    );
+    const clawhubRequestIndex = runner.indexOf(
+      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
+    );
+    const codexInstallIndex = runner.indexOf(
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n      plugins install "npm:@openclaw/codex@$package_version" --pin',
+    );
+    const restoreCompanionIndex = runner.indexOf(
+      'restore "$OPENCLAW_CONFIG_PATH" "$authored_config"',
+    );
+    const assertCompanionIndex = runner.indexOf('assert-companion-installs "$package_version"');
+    expect(discordInstallIndex).toBeGreaterThan(-1);
+    expect(discordInstallIndex).toBeLessThan(whatsappInstallIndex);
+    expect(whatsappInstallIndex).toBeLessThan(clawhubRequestIndex);
+    expect(clawhubRequestIndex).toBeLessThan(codexInstallIndex);
+    expect(codexInstallIndex).toBeLessThan(restoreCompanionIndex);
+    expect(restoreCompanionIndex).toBeLessThan(assertCompanionIndex);
+    expect(assertCompanionIndex).toBeLessThan(runnerPrepareIndex);
     expect(
-      runner.indexOf(
-        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
-      ),
-    ).toBeLessThan(runner.indexOf("openclaw doctor --fix --non-interactive"));
-    expect(runner).toContain(
-      'if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then',
-    );
+      runner.match(/openclaw_e2e_fixture_plugin_command openclaw -- \\\n\s+plugins install/gu),
+    ).toHaveLength(3);
+    expect(runner).not.toContain("--accept-capabilities");
+    expect(runner).toContain('park-companion-install "$OPENCLAW_CONFIG_PATH" "$authored_config"');
+    expectTextToIncludeAll(runner, [
+      "install_status=$?",
+      "restore_status=$?",
+      'if [ "$install_status" -ne 0 ]; then',
+      'return "$install_status"',
+      'if [ "$restore_status" -ne 0 ]; then',
+      'return "$restore_status"',
+    ]);
+    expect(runner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
     expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
     expect(publishedRunner).toContain(
       [
         'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
+        '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
+        "fi",
+      ].join("\n"),
+    );
+    expect(runner).toContain(
+      [
+        'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
         "fi",
       ].join("\n"),
@@ -2622,12 +2656,11 @@ docker_e2e_docker_run_cmd run demo
     }
     expectTextToIncludeAll(publishedRunner, [
       "park_prepublish_authored_config",
-      "park-prepublish-auth-config",
+      "park-prepublish",
       "assert_prepublish_fixture_idle",
       "assert-no-requests",
       "restore_prepublish_authored_config",
-      "restore-prepublish-auth-config",
-      "cmp -s",
+      "config-parking.mjs",
       "'^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)='",
       "OPENCLAW_CLAWHUB_URL=%s",
     ]);
@@ -2641,15 +2674,22 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.lastIndexOf("write_update_restart_service_env"),
     );
     for (const script of [runner, updateRestartAuth]) {
-      expect(script).not.toContain("park-prepublish-auth-config");
       expect(script).not.toContain("assert-no-requests");
     }
+    expect(updateRestartAuth).toContain("park-restart-probe");
+    expect(updateRestartAuth).toContain('"$OPENCLAW_CONFIG_PATH"');
     expect(publishedRunner).not.toContain(
       '\nexport MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"\n',
     );
     expect(publishedRunner).not.toContain(
       '\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n',
     );
+    expect(runner).not.toContain('\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n');
+    expect(runner).toContain(
+      'source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"',
+    );
+    expect(runner).toContain("openclaw_prepublish_plugin_registry_configure_docker_args");
+    expect(runner).not.toContain("configure_prepublish_plugin_registry()");
     expect(
       runner.match(
         /-v "\$HARNESS_ROOT_DIR\/scripts\/e2e\/lib\/clawhub-fixture-server\.cjs:\/tmp\/openclaw-clawhub-fixture-server\.cjs:ro"/gu,
@@ -2658,6 +2698,16 @@ docker_e2e_docker_run_cmd run demo
     expect(
       runner.match(
         /-e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=\/tmp\/openclaw-clawhub-fixture-server\.cjs/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-v "\$HARNESS_ROOT_DIR\/scripts\/e2e\/lib\/upgrade-survivor\/config-parking\.mjs:\/tmp\/openclaw-config-parking\.mjs:ro"/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=\/tmp\/openclaw-config-parking\.mjs/gu,
       ),
     ).toHaveLength(2);
   });
@@ -3121,6 +3171,200 @@ fi
     expect(updateRestartAuth).toContain(
       'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"',
     );
+  });
+
+  it("scopes candidate device identity doctor markers to the doctor process", () => {
+    const workDir = tempDirs.make("openclaw-upgrade-survivor-doctor-env-");
+    writeExecutables(join(workDir, "bin"), {
+      openclaw: `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" >"$CAPTURE_DIR/doctor-argv"
+{
+  printf 'OPENCLAW_UPDATE_IN_PROGRESS=%s\\n' "\${OPENCLAW_UPDATE_IN_PROGRESS-unset}"
+  printf 'OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=%s\\n' "\${OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR-unset}"
+  printf 'OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=%s\\n' "\${OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE-unset}"
+} >"$CAPTURE_DIR/doctor-env"
+exit 23
+`,
+    });
+
+    const script = repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+export CAPTURE_DIR="$TMPDIR"
+export OPENCLAW_CONFIG_PATH="$TMPDIR/openclaw.json"
+export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
+printf '%s\n' '{"gateway":{"mode":"local"}}' >"$OPENCLAW_CONFIG_PATH"
+unset OPENCLAW_UPDATE_IN_PROGRESS
+unset OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR
+unset OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE
+source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
+install_update_restart_systemctl_shim() { :; }
+seed_update_restart_probe_device_auth() { :; }
+openclaw_e2e_maybe_timeout() {
+  shift
+  "$@"
+}
+if prepare_update_restart_probe_current_install 18789 "$TMPDIR/gateway.log" >/dev/null 2>&1; then
+  echo "doctor unexpectedly succeeded" >&2
+  exit 3
+fi
+{
+  printf 'OPENCLAW_UPDATE_IN_PROGRESS=%s\\n' "\${OPENCLAW_UPDATE_IN_PROGRESS-unset}"
+  printf 'OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=%s\\n' "\${OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR-unset}"
+  printf 'OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=%s\\n' "\${OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE-unset}"
+} >"$CAPTURE_DIR/parent-env"
+`;
+
+    const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(readFileSync(join(workDir, "doctor-argv"), "utf8").trimEnd().split("\n")).toEqual([
+      "doctor",
+      "--fix",
+      "--non-interactive",
+    ]);
+    expect(readFileSync(join(workDir, "doctor-env"), "utf8")).toBe(
+      [
+        "OPENCLAW_UPDATE_IN_PROGRESS=1",
+        "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=1",
+        "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1",
+        "",
+      ].join("\n"),
+    );
+    expect(readFileSync(join(workDir, "parent-env"), "utf8")).toBe(
+      [
+        "OPENCLAW_UPDATE_IN_PROGRESS=unset",
+        "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=unset",
+        "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=unset",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it.each([
+    ["doctor", 41],
+    ["readiness", 42],
+    ["service-env", 43],
+    ["install", 44],
+  ] as const)(
+    "restores the canonical authored config after %s failure",
+    (failureStage, expectedStatus) => {
+      const workDir = tempDirs.make(`openclaw-upgrade-survivor-${failureStage}-failure-`);
+      writeExecutables(join(workDir, "bin"), {
+        openclaw: `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s %s\n' "$OPENCLAW_CONFIG_PATH" "$*" >>"$CAPTURE_DIR/openclaw-calls"
+if [ "$FAILURE_STAGE" = doctor ] && [ "\${1:-}" = doctor ]; then
+  exit 41
+fi
+if [ "\${1:-}" = gateway ] && [ "\${2:-}" = install ]; then
+  [ "$FAILURE_STAGE" != install ] || exit 44
+  exit 0
+fi
+sleep 30
+`,
+      });
+
+      const script = repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+export CAPTURE_DIR="$TMPDIR"
+export FAILURE_STAGE="${failureStage}"
+export OPENCLAW_STATE_DIR="$TMPDIR/state"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$TMPDIR/gateway.pid"
+export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON="$TMPDIR/install.json"
+export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$TMPDIR/install.err"
+export GATEWAY_AUTH_TOKEN_REF=upgrade-survivor-token
+mkdir -p "$OPENCLAW_STATE_DIR"
+authored_config='{"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}}}'
+printf '%s\n' "$authored_config" >"$OPENCLAW_CONFIG_PATH"
+source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
+install_update_restart_systemctl_shim() { :; }
+seed_update_restart_probe_device_auth() { :; }
+openclaw_e2e_maybe_timeout() {
+  shift
+  "$@"
+}
+openclaw_e2e_wait_gateway_ready() {
+  [ "$FAILURE_STAGE" != readiness ] || return 42
+}
+write_update_restart_service_auth_env() {
+  [ "$FAILURE_STAGE" != service-env ] || return 43
+}
+status=0
+prepare_update_restart_probe_current_install 18789 "$TMPDIR/gateway.log" >/dev/null 2>&1 || status=$?
+printf '%s\n' "$status" >"$CAPTURE_DIR/status"
+cmp -s "$OPENCLAW_CONFIG_PATH" <(printf '%s\n' "$authored_config")
+[ ! -e "$TMPDIR/gateway.log.authored-config" ]
+if [ -n "\${gateway_pid:-}" ]; then
+  kill "$gateway_pid" >/dev/null 2>&1 || true
+  wait "$gateway_pid" >/dev/null 2>&1 || true
+fi
+`;
+
+      const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(workDir, "status"), "utf8")).toBe(`${expectedStatus}\n`);
+      const calls = readFileSync(join(workDir, "openclaw-calls"), "utf8");
+      expect(calls).toContain(join(workDir, "state", "openclaw.json"));
+      expect(calls).not.toContain("OPENCLAW_CONFIG_PATH=");
+    },
+  );
+
+  it("prefers restore failure and retains the authored config snapshot", () => {
+    const workDir = tempDirs.make("openclaw-upgrade-survivor-restore-failure-");
+    writeExecutables(join(workDir, "bin"), {
+      openclaw: `#!/usr/bin/env bash
+set -euo pipefail
+exit 41
+`,
+      "config-parking-wrapper.mjs": `import { spawnSync } from "node:child_process";
+
+const args = process.argv.slice(2);
+if (args[0] === "restore") {
+  process.exit(57);
+}
+const result = spawnSync(
+  process.execPath,
+  [process.env.REAL_CONFIG_PARKING_HELPER, ...args],
+  { stdio: "inherit", env: process.env },
+);
+process.exit(result.status ?? 1);
+`,
+    });
+
+    const script = repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_STATE_DIR="$TMPDIR/state"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+export REAL_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
+export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$TMPDIR/bin/config-parking-wrapper.mjs"
+mkdir -p "$OPENCLAW_STATE_DIR"
+printf '%s\n' '{"channels":{"discord":{"dm":{"policy":"allowlist"}}}}' >"$OPENCLAW_CONFIG_PATH"
+source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
+install_update_restart_systemctl_shim() { :; }
+seed_update_restart_probe_device_auth() { :; }
+openclaw_e2e_maybe_timeout() {
+  shift
+  "$@"
+}
+status=0
+prepare_update_restart_probe_current_install 18789 "$TMPDIR/gateway.log" >/dev/null 2>&1 || status=$?
+printf '%s\n' "$status" >"$TMPDIR/status"
+`;
+
+    const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(join(workDir, "status"), "utf8")).toBe("57\n");
+    expect(existsSync(join(workDir, "gateway.log.authored-config"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(workDir, "state", "openclaw.json"), "utf8"))).toEqual({
+      plugins: { enabled: false },
+      gateway: expect.objectContaining({ reload: { mode: "off" } }),
+    });
   });
 
   it("keeps upgrade survivor auto-auth success summary set -u safe", () => {
@@ -4499,7 +4743,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'KITCHEN_SINK_CLI_TIMEOUT="${KITCHEN_SINK_CLI_TIMEOUT:-180s}"',
       "run_kitchen_sink_openclaw_logged()",
       "run_kitchen_sink_openclaw_capture()",
-      'openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$log_file" 2>&1',
       'local log_file="${KITCHEN_SINK_TMP_DIR}/${safe_label}.log"',
     ]);
 
@@ -4652,7 +4895,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "assert-config-channel beta",
       "assert-installed-version",
       "assert-status-kind package",
-      "openclaw update --channel dev",
       "openclaw update --channel stable",
     ]);
     expect(updateRunner).toContain("openclaw update --channel beta --yes --json --no-restart");
@@ -4791,10 +5033,6 @@ done
     expect(scheduler).toContain("env.npm_execpath ? path.dirname(env.npm_execpath)");
     expect(scheduler).toContain("path.dirname(process.execPath)");
     expect(scheduler).toContain("env.PATH = [...new Set(pathEntries)].join(path.delimiter)");
-    expect(scheduler).toContain(
-      "const pnpmCommand = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();",
-    );
-    expect(scheduler).toContain("lane.command.replace(/(^|\\s)pnpm(?=\\s)/g");
     expect(scheduler).toContain(
       'env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);',
     );
@@ -5179,8 +5417,16 @@ done
   });
 
   it("uses the account home for upgrade survivor auto-auth state", () => {
-    const runner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
-    expectTextToIncludeAll(runner, [
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const wrapper = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const directRunner = extractUpgradeSurvivorPayload(wrapper);
+
+    expectTextToIncludeAll(wrapper, [
+      'OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"',
+      '-e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64"',
+    ]);
+    expect(wrapper).not.toContain("OPENCLAW_TEST_STATE_SCRIPT_B64");
+    expectTextToIncludeAll(publishedRunner, [
       'if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
       'account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"',
       'if [ -z "$account_home" ]; then',
@@ -5191,12 +5437,39 @@ done
       'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
     ]);
 
-    expect(runner.indexOf("unset OPENCLAW_HOME")).toBeLessThan(
-      runner.indexOf('export OPENCLAW_STATE_DIR="$account_home/.openclaw"'),
+    expect(publishedRunner.indexOf("unset OPENCLAW_HOME")).toBeLessThan(
+      publishedRunner.indexOf('export OPENCLAW_STATE_DIR="$account_home/.openclaw"'),
     );
     expect(
-      runner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
-    ).toBeLessThan(runner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"));
+      publishedRunner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
+    ).toBeLessThan(
+      publishedRunner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"),
+    );
+
+    expectTextToIncludeAll(directRunner, [
+      'openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"',
+      'if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
+      'account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"',
+      'openclaw_test_state_create "$account_home" upgrade-survivor',
+      'export HOME="$account_home"',
+      'export USERPROFILE="$account_home"',
+      'export OPENCLAW_STATE_DIR="$account_home/.openclaw"',
+      'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
+      "unset OPENCLAW_HOME",
+      "else",
+      "openclaw_test_state_create upgrade-survivor upgrade-survivor",
+    ]);
+    expect(directRunner.indexOf('openclaw_test_state_create "$account_home"')).toBeLessThan(
+      directRunner.indexOf("unset OPENCLAW_HOME"),
+    );
+    expect(directRunner.indexOf("unset OPENCLAW_HOME")).toBeLessThan(
+      directRunner.indexOf("prepare_update_restart_probe_current_install"),
+    );
+    expect(
+      directRunner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
+    ).toBeLessThan(
+      directRunner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"),
+    );
   });
 
   it("bounds doctor install switch command log diagnostics", () => {
@@ -5588,7 +5861,6 @@ done
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file"',
       "plugins_lifecycle_trace_enabled()",
       "print_plugins_stderr_log()",
-      'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"',
       "Plugin sweep command timed out after %s: %s",
       "Plugin sweep command failed with status %s: %s",
       "Plugin sweep capture timed out after %s: %s",
@@ -5638,7 +5910,6 @@ done
     expectTextToIncludeAll(clawhub, [
       'plugins install "$CLAWHUB_PLUGIN_SPEC"',
       'plugins update "$CLAWHUB_PLUGIN_ID"',
-      "run_plugins_openclaw_logged install-clawhub",
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT"',
       "clawhub:@openclaw/kitchen-sink",
     ]);

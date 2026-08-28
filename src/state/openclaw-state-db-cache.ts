@@ -2,7 +2,7 @@ import path from "node:path";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   registerNodeSqliteKyselyQueryErrorHandler,
-} from "../infra/kysely-sync.js";
+} from "../infra/kysely-sync-cache-state.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";

@@ -93,9 +93,11 @@ advisory: they do not by themselves make a hook unloadable.
 openclaw hooks info <name> [--agent <id>] [--json]
 ```
 
-Accepts a hook name or its metadata `hookKey`. Shows source, descriptor and
-handler paths, homepage, events, unknown-event warnings, blocked reason, and
-per-requirement status. A missing hook exits with code 1.
+Accepts a hook name or its metadata `hookKey`. Exact hook names take precedence
+over matching keys; a key must identify a single hook. Shows source, descriptor
+and handler paths, homepage, events, unknown-event warnings, blocked reason, and
+per-requirement status. A missing or ambiguous hook exits with code 1; an
+ambiguous selector lists candidates so you can choose a unique name or key.
 
 JSON includes the list fields plus `filePath`, `baseDir`, `handlerPath`,
 `hookKey`, `always`, `requirements`, `configChecks`, and normalized `install`

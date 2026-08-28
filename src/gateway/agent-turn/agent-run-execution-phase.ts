@@ -13,9 +13,8 @@ import {
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
-import { loadPublishedGatewayReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   setChannelSourceTurnId,
@@ -112,16 +111,27 @@ export function startAgentRunExecution(params: {
 }): void {
   const { prepared } = params;
   let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
+  let preparedModelRuntimeLease: typeof prepared.preparedModelRuntimeLease | undefined =
+    prepared.preparedModelRuntimeLease;
   let releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = (options) => {
     const refsToDiscard = unpersistedOffloadedRefs;
     unpersistedOffloadedRefs = [];
     prepared.activeRunAbort.cleanup(options);
     prepared.activeGatewayWorkAdmission.release();
+    const runtimeLease = preparedModelRuntimeLease;
+    preparedModelRuntimeLease = undefined;
+    runtimeLease?.release();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
     void discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
   };
+  const dispatchAdmittedAgentRun = (dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0]) =>
+    withPreparedModelRuntimePluginGenerationScope(
+      prepared.replyDispatchRuntime.pluginGeneration,
+      () => dispatchAgentRunFromGateway(dispatch),
+      () => preparedModelRuntimeLease?.snapshot,
+    );
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
@@ -212,15 +222,6 @@ export function startAgentRunExecution(params: {
       const ingressAgentId = params.resolvedSessionKey
         ? params.activeSessionAgentId
         : params.agentId;
-      const replyDispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({
-        agentId: params.activeSessionAgentId,
-        abortSignal: prepared.activeRunAbort.controller.signal,
-      });
-      if (!replyDispatchRuntime?.pluginGeneration) {
-        throw new Error(
-          `prepared reply dispatch runtime was not published for ${params.activeSessionAgentId}`,
-        );
-      }
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -280,16 +281,15 @@ export function startAgentRunExecution(params: {
       } else if (localUserIngress) {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
-      // Routing and runtime publication await after admission. Retired owners
-      // must fail before the prepared user turn becomes an agent run.
+      // Awaited routing can retire this owner before final dispatch.
       params.assertContextCurrent?.();
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
-      dispatchAgentRunFromGateway(
+      dispatchAdmittedAgentRun(
         withAgentRunDispatchExecutionIdentity(
           {
             commandRuntimeContext: {
-              config: replyDispatchRuntime.config,
-              pluginGeneration: replyDispatchRuntime.pluginGeneration,
+              config: prepared.replyDispatchRuntime.config,
+              pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,
             },
             cronCreatorAuthority: prepared.cronCreatorAuthority,
             ingressOpts: {
@@ -425,11 +425,7 @@ export function startAgentRunExecution(params: {
                   prepared.activeRunAbort.entry.sessionId = sessionId;
                 }
               },
-              workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
-                spawnedBy: params.spawnedBy,
-                workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
-                cwd: params.sessionEntry?.spawnedCwd,
-              }),
+              workspaceDir: prepared.workspaceOverride,
               cwd: resolveSessionRuntimeCwd({
                 requestedCwd: params.request.cwd,
                 sessionEntry: params.sessionEntry,

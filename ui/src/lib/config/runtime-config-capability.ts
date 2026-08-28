@@ -145,8 +145,8 @@ export function createRuntimeConfigCapability(
     refresh: (isCurrent) =>
       loadOnce("config", () => loadConfig(state, { background: true }, isCurrent)),
   });
-  const refreshConnectionState = () => {
-    const config = run(() => loadConfig(state));
+  const refreshConnectionState = (beforeApplySnapshot?: () => void) => {
+    const config = run(() => loadConfig(state, { beforeApplySnapshot }));
     void trackLoad("config", config);
     if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
       void trackLoad(

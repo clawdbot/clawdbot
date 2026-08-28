@@ -226,9 +226,8 @@ async function readResponsePrefixFromReader(
         }
         size = nextTotal;
         truncated = true;
-        try {
-          await reader.cancel();
-        } catch {}
+        // A capture tee can retain cancellation until the caller releases its request.
+        void reader.cancel().catch(() => undefined);
         break;
       }
       chunks.push(value);
@@ -261,7 +260,7 @@ async function readResponsePrefix(
   try {
     timeoutMs = typeof options?.timeoutMs === "function" ? options.timeoutMs() : options?.timeoutMs;
   } catch (error) {
-    await response.body?.cancel(error).catch(() => undefined);
+    void response.body?.cancel(error).catch(() => undefined);
     throw error;
   }
   const body = response.body;

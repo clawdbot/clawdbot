@@ -275,24 +275,17 @@ type ClaudeCliPromptTextCandidate = {
   blockIndex?: number;
 };
 
-// Claude marks harness-written user turns with isMeta (skill instruction
-// bodies, injected notices), isCompactSummary (compaction summaries), and
-// isVisibleInTranscriptOnly (transcript-only synthetic rows); its own UI
-// groups these flags as "not a real operator turn" (verified against the
-// v2.1.246 bundle). The operator never typed these rows.
-function isClaudeCliHarnessInjectedEntry(entry: ClaudeCliProjectEntry): boolean {
-  return (
-    entry.isMeta === true ||
-    entry.isCompactSummary === true ||
-    entry.isVisibleInTranscriptOnly === true
-  );
+// Claude keeps compact summaries and transcript-only rows as visible harness
+// context. isMeta rows are private injections and never reach this projection.
+function isClaudeCliVisibleHarnessContext(entry: ClaudeCliProjectEntry): boolean {
+  return entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true;
 }
 
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
 ): ClaudeCliPromptTextCandidate[] {
-  if (isClaudeCliHarnessInjectedEntry(entry)) {
+  if (entry.isMeta === true || isClaudeCliVisibleHarnessContext(entry)) {
     return [];
   }
   if (typeof content === "string") {
@@ -328,7 +321,12 @@ export function parseClaudeCliHistoryEntry(
     reseedState?: ReseedImportState;
   },
 ): TranscriptLikeMessage | null {
-  if (entry.isSidechain === true || !entry.message || typeof entry.message !== "object") {
+  if (
+    entry.isSidechain === true ||
+    entry.isMeta === true ||
+    !entry.message ||
+    typeof entry.message !== "object"
+  ) {
     return null;
   }
   const type = typeof entry.type === "string" ? entry.type : undefined;
@@ -412,7 +410,7 @@ export function parseClaudeCliHistoryEntry(
     }
     // Record provenance here, where the native flags are known, so downstream
     // display never has to infer operator authorship from message text.
-    const harnessInjected = isClaudeCliHarnessInjectedEntry(entry);
+    const harnessInjected = isClaudeCliVisibleHarnessContext(entry);
     return attachOpenClawTranscriptMeta(
       {
         role: "user",

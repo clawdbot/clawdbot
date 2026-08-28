@@ -3,6 +3,7 @@ import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureSettingsSidebarUiProof,
   createSidebarCustomizationSuite,
@@ -11,6 +12,80 @@ import {
 const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocked Gateway E2E");
 
 suite.define(() => {
+  it.each([
+    { state: "ready", pending: false, focusSearch: false },
+    { state: "pending with trigger focus", pending: true, focusSearch: false },
+    { state: "pending with search focus", pending: true, focusSearch: true },
+  ])(
+    "dismisses $state Inbox before exiting Settings with Escape",
+    async ({ pending, focusSearch }) => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      });
+      const page = await context.newPage();
+      const held = await holdModuleResponse(
+        page,
+        /\/assets\/sidebar-attention-panel\.runtime-[^/?]+\.js(?:\?.*)?$/u,
+      );
+      await installMockGateway(page);
+
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+        await page.keyboard.press("Control+Shift+,");
+        const { search, sidebar } = await waitForControlUiSettingsTakeover(page);
+        const attention = await page.locator(".sidebar-attention--floating").elementHandle();
+        expect(attention).not.toBeNull();
+        const inbox = page.locator(".sidebar-attention--floating .sidebar-issues-button");
+        const dialog = page.getByRole("dialog", { name: "Inbox" });
+        if (!pending) {
+          held.release();
+        }
+        await inbox.click();
+        const moduleUrl = await held.request;
+        if (pending) {
+          expect(await dialog.count()).toBe(0);
+          if (focusSearch) {
+            expect(await search.inputValue()).toBe("");
+            // Move focus without an outside pointer that would cancel the pending open.
+            await search.focus();
+          }
+        } else {
+          await dialog.waitFor({ state: "visible" });
+          await expect
+            .poll(() => dialog.evaluate((element) => element.contains(document.activeElement)))
+            .toBe(true);
+        }
+
+        await page.keyboard.press("Escape");
+        held.release();
+        // Keep the import native: Vitest rewrites imports inside serialized callbacks.
+        await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
+        await attention!.evaluate(
+          (element) =>
+            (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
+        );
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
+        expect(await sidebar.isVisible()).toBe(true);
+        expect(await dialog.count()).toBe(0);
+        const focusTarget = focusSearch ? search : inbox;
+        await expect
+          .poll(() => focusTarget.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+
+        await page.keyboard.press("Escape");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+        await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+        expect(held.requests()).toBe(1);
+      } finally {
+        held.release();
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
   it("keeps Gateway access fields editable by their visible labels", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

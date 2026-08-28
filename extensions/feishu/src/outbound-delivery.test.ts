@@ -23,11 +23,11 @@ vi.mock("./media.js", () => ({
   shouldSuppressFeishuTextForVoiceMedia: () => false,
 }));
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   editMessageFeishu: vi.fn(),
   getMessageFeishu: vi.fn(),
   sendCardFeishu: sendCardFeishuMock,
-  sendMarkdownCardFeishu: vi.fn(),
   sendMessageFeishu: sendMessageFeishuMock,
   sendStructuredCardFeishu: vi.fn(),
 }));

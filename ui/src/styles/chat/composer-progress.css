@@ -1,6 +1,11 @@
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-main__conversation-column {
+  :root {
+    /* The mobile pane header leaves flow; top-owned overlays consume this same
+       clearance so new transcript notices cannot cover its controls. */
     --chat-mobile-pane-header-height: 52px;
+  }
+
+  .chat-main__conversation-column {
     --chat-mobile-pane-header-fade-overhang: 8px;
     --chat-mobile-pane-header-paint-height: calc(
       var(--chat-mobile-pane-header-height) + var(--chat-mobile-pane-header-fade-overhang)
@@ -220,6 +225,37 @@
   width: 100%;
   max-width: none;
   margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-progress-underlap));
+}
+
+.agent-chat__goal-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+}
+
+.agent-chat__goal-mode-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.agent-chat__goal-mode-label svg {
+  width: 16px;
+  height: 16px;
+}
+
+.agent-chat__goal-mode-hint {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .agent-chat__goal {

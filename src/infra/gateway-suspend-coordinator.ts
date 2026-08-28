@@ -1,4 +1,4 @@
-// Coordinates atomic host suspension preparation and preserve-only drain leases.
+// Coordinates atomic host suspension preparation and terminal-policy-aware drain leases.
 import { randomUUID } from "node:crypto";
 import type {
   GatewaySuspendPrepareParams,
@@ -238,7 +238,10 @@ function refreshHeldSuspension(held: HeldGatewaySuspension): HeldGatewaySuspensi
   if (held.phase.status === "ready") {
     return held.phase;
   }
-  const snapshot = createGatewayActiveWorkSnapshot(held.phase.inspect);
+  // Polls and renewals must retain the update's terminal policy until the lease is ready.
+  const snapshot = createGatewayActiveWorkSnapshot(held.phase.inspect, {
+    ignoreTerminalSessions: held.terminalPolicy === "terminate",
+  });
   if (!snapshot.idle) {
     held.phase.snapshot = snapshot;
     return held.phase;
@@ -279,9 +282,6 @@ export function prepareGatewaySuspend(params: {
 }): GatewaySuspendPrepareResult {
   const terminalPolicy = params.terminalPolicy ?? "preserve";
   const drain = params.drain === true;
-  if (drain && terminalPolicy !== "preserve") {
-    throw new TypeError("gateway suspension draining requires terminalPolicy preserve");
-  }
   const activeWorkOptions = {
     ignoreTerminalSessions: terminalPolicy === "terminate",
   };

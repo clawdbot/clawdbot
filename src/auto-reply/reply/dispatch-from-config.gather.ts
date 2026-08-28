@@ -24,6 +24,7 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -282,6 +283,7 @@ export async function gatherDispatchRequest(
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
+  const dispatchKind = resolveSessionDispatchKind(acpDispatchSessionKey, sessionStoreEntry.entry);
   let preparedSessionBinding: ReplySessionBinding | undefined =
     sessionStoreEntry.sessionKey && sessionStoreEntry.entry?.sessionId
       ? {
@@ -384,6 +386,8 @@ export async function gatherDispatchRequest(
   const workspaceDir =
     preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
+    agentId: sessionAgentId,
+    cfg,
     ctx,
     dispatcher,
     dispatchOperationSessionKey,
@@ -520,6 +524,7 @@ export async function gatherDispatchRequest(
     markIdle,
     markInboundDedupeReplayUnsafe,
     acpDispatchSessionKey,
+    dispatchKind,
     markProgress,
     sessionStoreEntry,
     notePreparedSession,

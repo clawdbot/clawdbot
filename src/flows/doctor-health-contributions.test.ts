@@ -2740,6 +2740,7 @@ describe("doctor health contributions", () => {
   it("collects memory-search notes as structured findings", async () => {
     const contribution = requireDoctorContribution("doctor:memory-search");
     const check = contribution.healthChecks[0] as HealthCheck;
+    const env = { OPENCLAW_STATE_DIR: "/isolated-memory-state" };
     mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
       opts.noteFn(
         [
@@ -2752,13 +2753,14 @@ describe("doctor health contributions", () => {
       );
     });
 
-    const findings = await check.detect(createDoctorLintFixture());
+    const findings = await check.detect(createDoctorLintFixture({}, { env }));
 
     expect(contribution.healthCheckIds).toEqual(["core/doctor/memory-search"]);
     expect((check as HealthCheck & { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
     expect(mocks.noteMemorySearchHealth).toHaveBeenCalledWith(
       {},
       expect.objectContaining({
+        env,
         includeWorkspaceMemoryHealth: false,
         skipAuthProfileResolution: true,
         gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
@@ -2774,6 +2776,15 @@ describe("doctor health contributions", () => {
         fixHint: expect.stringContaining("OPENAI_API_KEY"),
       }),
     ]);
+  });
+
+  it("forwards the interactive Doctor environment to memory provider discovery", async () => {
+    const contribution = requireDoctorContribution("doctor:memory-search");
+    const env = { OPENCLAW_STATE_DIR: "/interactive-memory-state" };
+
+    await contribution.run(createDoctorContext({ env }));
+
+    expect(mocks.noteMemorySearchHealth).toHaveBeenCalledWith({}, expect.objectContaining({ env }));
   });
 
   it("does not report disabled memory search as a lint warning", async () => {
@@ -3189,6 +3200,48 @@ describe("doctor health contributions", () => {
         }),
       ],
     });
+  });
+
+  it("defers channel package-state loading only until post-core plugin convergence", async () => {
+    const contribution = requireDoctorContribution("doctor:channel-package-state-capabilities");
+    mocks.collectBundledChannelPackageStateLoadFailures.mockReturnValue([
+      {
+        detail: "plugin module path not found: /plugins/example-chat/auth-presence",
+        metadataKey: "persistedAuthState",
+        pluginId: "example-chat",
+      },
+    ]);
+    mocks.runDoctorHealthRepairs.mockImplementation(async (ctx, options) => {
+      const findings = await options.checks[0]!.detect(ctx);
+      return {
+        config: ctx.cfg,
+        findings,
+        remainingFindings: findings,
+        changes: [],
+        warnings: [],
+        diffs: [],
+        effects: [],
+        checksRun: 1,
+        checksRepaired: 0,
+        checksValidated: 0,
+      };
+    });
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR", "1");
+    const ctx = createDoctorContext();
+
+    await contribution.run(ctx);
+
+    expect(mocks.collectBundledChannelPackageStateLoadFailures).not.toHaveBeenCalled();
+
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
+
+    await contribution.run(ctx);
+
+    expect(mocks.collectBundledChannelPackageStateLoadFailures).toHaveBeenCalledOnce();
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("core/doctor/channel-package-state-capabilities"),
+    );
   });
 
   it("keeps channel preview warnings opt-in for default lint selection", async () => {

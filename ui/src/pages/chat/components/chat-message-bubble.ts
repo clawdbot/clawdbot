@@ -114,10 +114,6 @@ function renderInlineToolCards(
   `;
 }
 
-/**
- * Max characters for auto-detecting and pretty-printing JSON.
- * Prevents DoS from large JSON payloads in assistant/tool messages.
- */
 type ReplyPreview = {
   sourceMessageId?: string;
   senderLabel?: string | null;
@@ -564,7 +560,7 @@ export function renderGroupedMessage(
                                 >${jsonSummaryLabel(jsonResult.parsed)}</span
                               >
                             </summary>
-                            <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                            <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
                           </details>`
                         : bodyMarkdown
                           ? renderMarkdownText(
@@ -635,7 +631,7 @@ export function renderGroupedMessage(
                     <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
                     <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
                   </summary>
-                  <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                  <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
                 </details>`
               : bodyMarkdown
                 ? normalizedRole === "user"

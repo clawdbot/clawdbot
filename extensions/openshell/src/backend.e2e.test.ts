@@ -15,6 +15,7 @@ import {
   runBackendExec,
   runPreparedBackendExec,
   stressBackend,
+  verifyRemoteExecOverlap,
 } from "./backend.e2e.test-support.js";
 import {
   createOpenShellSandboxBackendFactory,
@@ -420,7 +421,7 @@ describe("openshell sandbox backend e2e", () => {
       const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
       const previousXdgCacheHome = process.env.XDG_CACHE_HOME;
       const workspaceDir = path.join(rootDir, "workspace");
-      const mirrorWorkspaceDir = path.join(rootDir, "mirror-workspace");
+      const mirrorWorkspaceDir = path.join(rootDir, "mirror");
       const dockerfileDir = path.join(rootDir, "custom-image");
       const dockerfilePath = path.join(dockerfileDir, "Dockerfile");
       const denyPolicyPath = path.join(rootDir, "deny-policy.yaml");
@@ -430,6 +431,7 @@ describe("openshell sandbox backend e2e", () => {
       const testRunId = `${process.pid.toString(36)}${Date.now().toString(36)}`;
       const openShellWorkspace = `oc-w-${testRunId.slice(-14)}`;
       let hostPolicyServer: HostPolicyServer | null | undefined;
+      let mirrorSocketServer: net.Server | undefined;
       let workspaceCreated = false;
       const sandboxCfg = {
         mode: "all" as const,
@@ -539,6 +541,35 @@ describe("openshell sandbox backend e2e", () => {
           await fs.mkdir(protectedPath, { recursive: true });
           await fs.writeFile(path.join(protectedPath, "host-only.txt"), "private\n", "utf8");
         }
+        const hostLinkTarget = path.join(rootDir, "host-link-target.txt");
+        await fs.writeFile(hostLinkTarget, "host-only-link-target\n");
+        const hostLinks = [
+          "host-link",
+          "links/nested/link",
+          "links/removed/link",
+          "links/conflict/link",
+        ];
+        for (const relativePath of hostLinks) {
+          const linkPath = path.join(mirrorWorkspaceDir, relativePath);
+          await fs.mkdir(path.dirname(linkPath), { recursive: true });
+          await fs.symlink(hostLinkTarget, linkPath);
+        }
+        await fs.link(hostLinkTarget, path.join(mirrorWorkspaceDir, "links", "hardlinked.txt"));
+        const mirrorFifoPath = path.join(mirrorWorkspaceDir, "host.fifo");
+        const mirrorSocketPath = path.join(mirrorWorkspaceDir, "host.sock");
+        const mkfifoResult = await runCommand({
+          command: "mkfifo",
+          args: [mirrorFifoPath],
+          timeoutMs: 10_000,
+        });
+        expect(mkfifoResult.code).toBe(0);
+        const socketServer = net.createServer();
+        mirrorSocketServer = socketServer;
+        socketServer.listen(mirrorSocketPath);
+        await new Promise<void>((resolve, reject) => {
+          socketServer.once("listening", resolve);
+          socketServer.once("error", reject);
+        });
         await fs.writeFile(dockerfilePath, CUSTOM_IMAGE_DOCKERFILE, "utf8");
         await fs.writeFile(
           denyPolicyPath,
@@ -652,6 +683,33 @@ describe("openshell sandbox backend e2e", () => {
         });
         expect(mirrorExecResult.stdout).toContain("/sandbox/project");
         expect(mirrorExecResult.stdout).toContain("mirror-from-local");
+        expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
+        expect((await fs.lstat(mirrorSocketPath)).isSocket()).toBe(true);
+        for (const relativePath of hostLinks) {
+          await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
+            hostLinkTarget,
+          );
+        }
+        await runBackendExec({
+          backend: mirrorBackend,
+          command:
+            "test ! -e host-link && test ! -L host-link && test ! -e links/nested/link && test ! -L links/nested/link && rm -rf links/removed links/conflict && printf remote-file > links/conflict && printf remote-write > links/hardlinked.txt && ln -s /etc/passwd links/remote-link",
+          timeoutMs: 60_000,
+        });
+        for (const relativePath of hostLinks) {
+          await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
+            hostLinkTarget,
+          );
+        }
+        await expect(fs.readFile(hostLinkTarget, "utf8")).resolves.toBe("host-only-link-target\n");
+        await expect(
+          fs.readFile(path.join(mirrorWorkspaceDir, "links", "hardlinked.txt"), "utf8"),
+        ).resolves.toBe("remote-write");
+        await expect(
+          fs.lstat(path.join(mirrorWorkspaceDir, "links", "remote-link")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
         for (const protectedDirectory of [".git", "hooks", "git-hooks"]) {
           await expect(
             fs.readFile(path.join(mirrorWorkspaceDir, protectedDirectory, "host-only.txt"), "utf8"),
@@ -735,6 +793,9 @@ describe("openshell sandbox backend e2e", () => {
           agentWorkspaceDir: workspaceDir,
           cfg: sandboxCfg,
         });
+        if (stressMode === "remote") {
+          await verifyRemoteExecOverlap({ backend, twin: remoteTwin, bridge });
+        }
         await stressBackend(
           stressMode === "mirror"
             ? {
@@ -751,7 +812,17 @@ describe("openshell sandbox backend e2e", () => {
               },
         );
 
-        for (const candidate of [mirrorBackend, backend]) {
+        for (const [candidate, candidateBridge] of [
+          [mirrorBackend, mirrorBridge],
+          [backend, bridge],
+        ] as const) {
+          await expect(
+            runBackendExec({ backend: candidate, command: "exit 23", timeoutMs: 60_000 }),
+          ).rejects.toThrow("exit: 23");
+          await candidateBridge.writeFile({ filePath: "after-failed-exec.txt", data: "recovered" });
+          await expect(
+            runBackendExec({ backend: candidate, command: "cat after-failed-exec.txt" }),
+          ).resolves.toMatchObject({ code: 0, stdout: "recovered" });
           await expect(
             candidate.buildExecSpec({
               command: "true",
@@ -765,7 +836,6 @@ describe("openshell sandbox backend e2e", () => {
           await expect(candidate.validateWorkdir?.(candidate.workdir)).resolves.toBe(
             candidate.workdir,
           );
-          candidate.discardPreparedWorkdir?.(candidate.workdir);
           const unspawned = await candidate.buildExecSpec({
             command: "exit 99",
             env: {},
@@ -823,6 +893,12 @@ describe("openshell sandbox backend e2e", () => {
             env,
             allowFailure: true,
             timeoutMs: 30_000,
+          });
+        }
+        const socketServer = mirrorSocketServer;
+        if (socketServer) {
+          await new Promise<void>((resolve) => {
+            socketServer.close(() => resolve());
           });
         }
         await hostPolicyServer?.close().catch(() => {});

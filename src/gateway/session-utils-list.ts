@@ -444,11 +444,11 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     opts,
     now,
     entryFilter,
+    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     getRowContext:
       hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
         ? getRowContext
         : undefined,
-    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     userProfileIdentityById,
     configuredAgentIds,
     involvingActorId: params.involvingActorId,

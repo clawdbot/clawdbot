@@ -358,6 +358,7 @@ describe("pw-tools-core", () => {
   it("lets only the latest overlapping explicit waiter save the download", async () => {
     const harness = createDownloadEventHarness();
     const state = sessionMocks.ensurePageState();
+    const cancel = vi.fn(async () => {});
     const saveAs = vi.fn(async (outPath: string) => {
       await fs.writeFile(outPath, "latest-content", "utf8");
     });
@@ -380,10 +381,12 @@ describe("pw-tools-core", () => {
       url: () => "https://example.com/latest.bin",
       suggestedFilename: () => "latest.bin",
       saveAs,
+      cancel,
     });
 
     await expect(first).rejects.toThrow("superseded by another waiter");
     await expect(latest).resolves.toMatchObject({ suggestedFilename: "latest.bin" });
+    expect(cancel).not.toHaveBeenCalled();
     expect(saveAs).toHaveBeenCalledOnce();
     expect(state.downloadWaiterDepth).toBe(0);
     expect(harness.activeHandlerCount()).toBe(0);

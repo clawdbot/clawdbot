@@ -5,6 +5,7 @@ import {
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -39,6 +40,12 @@ import {
 import { createMatrixThreadContextResolver } from "./thread-context.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType } from "./types.js";
+
+// Core emits this stable error code across the plugin boundary; Matrix cannot import the
+// core lifecycle module that owns it. Keep the notice actionable or replay will dead-end.
+const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
+const RESTART_RECOVERY_TOMBSTONE_NOTICE =
+  "This session ended during gateway restart recovery and cannot accept more messages. Send /new or /reset to start a replacement session.";
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
@@ -473,7 +480,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }
         : undefined;
 
-      const turnResult = await core.channel.inbound.run({
+      const turnResultPromise = core.channel.inbound.run({
         channel: "matrix",
         accountId: _route.accountId,
         raw: event,
@@ -590,6 +597,34 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }),
         },
       });
+      let turnResult: Awaited<typeof turnResultPromise>;
+      try {
+        turnResult = await turnResultPromise;
+      } catch (err) {
+        if (extractErrorCode(err) !== SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE) {
+          throw err;
+        }
+        try {
+          const { sendMessageMatrix } = await loadMatrixSendModule();
+          await sendMessageMatrix(roomId, RESTART_RECOVERY_TOMBSTONE_NOTICE, {
+            cfg,
+            client,
+            accountId: _route.accountId,
+            replyToId: threadTarget ?? (replyToMode === "off" ? undefined : messageId),
+            threadId: threadTarget,
+            deliveryQueueId: `matrix:restart-recovery-tombstone:${_route.accountId}:${roomId}:${eventId}`,
+            deliveryPartIndex: 0,
+            deliveryPartCount: 1,
+            extraContent: { msgtype: "m.notice" },
+          });
+          await commitInboundEventIfClaimed();
+        } catch (noticeError) {
+          runtime.error?.(
+            `matrix: failed completing restart-recovery tombstone notice room=${roomId} id=${eventId || "unknown"}: ${String(noticeError)}`,
+          );
+        }
+        return;
+      }
       if (!turnResult.dispatched) {
         if (
           turnResult.admission.kind === "drop" &&

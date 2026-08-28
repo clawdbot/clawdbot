@@ -515,7 +515,6 @@ describe("SessionHistorySseState", () => {
           {
             type: "attachment",
             attachment: {
-              url: "/tmp/tts.mp3",
               kind: "audio",
               label: "tts.mp3",
               mimeType: "audio/mpeg",
@@ -775,6 +774,49 @@ describe("SessionHistorySseState", () => {
     });
 
     expectOnlyAssistantText(snapshot, "clean child result", 2);
+  });
+
+  test("drops generated media completion wakes while retaining final media", () => {
+    const assistantReply = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "Created." },
+        {
+          type: "image" as const,
+          source: { type: "url" as const, url: "/api/chat/media/outgoing/generated.png" },
+        },
+      ],
+      __openclaw: { seq: 2 },
+    };
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "A background task completed. Use this result to reply normally.",
+                "session_key: image_generate:task-123",
+                'path="/root/.openclaw/media/tool-image-generation/private.png"',
+              ].join("\n"),
+            },
+          ],
+          provenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceSessionKey: "image_generate:task-123",
+            sourceTool: "image_generate",
+          },
+          __openclaw: { seq: 1 },
+        },
+        assistantReply,
+      ],
+    });
+
+    expect(snapshot.history.messages).toEqual([assistantReply]);
+    expect(JSON.stringify(snapshot.history.messages)).not.toContain("image_generate:task-123");
+    expect(JSON.stringify(snapshot.history.messages)).not.toContain("/root/.openclaw/media");
   });
 
   test("hides heartbeat prompt and ok acknowledgements from visible history", () => {

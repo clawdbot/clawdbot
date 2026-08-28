@@ -324,9 +324,10 @@ export function applyCodeModeCatalog(params: {
   const catalogRef = params.catalogRef;
   const execTool = compacted.tools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
   if (catalogRef?.current && execTool) {
-    catalogRef.onDispose?.();
+    // Refreshing descriptions replaces their observer, not the catalog's parked consumers.
+    catalogRef.disposeObserver?.();
     const descriptionUpdater = createCodeModeExecDescriptionUpdater(execTool);
-    catalogRef.onDispose = descriptionUpdater.dispose;
+    catalogRef.disposeObserver = descriptionUpdater.dispose;
     catalogRef.onChange = () => {
       descriptionUpdater.update(
         createCodeModeExecDescription(

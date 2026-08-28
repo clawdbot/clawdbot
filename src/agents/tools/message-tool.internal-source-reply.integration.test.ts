@@ -119,6 +119,13 @@ describe("WebChat message tool internal source reply", () => {
         const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
         expect(sourceReply).toMatchObject({ text: "Attached proof." });
         expect(sourceReply?.mediaUrls).toHaveLength(1);
+        expect(sourceReply?.attachments).toEqual([
+          expect.objectContaining({
+            name: "proof.txt",
+            mimeType: "text/plain",
+            trustedLocalMedia: true,
+          }),
+        ]);
         const mediaPath = sourceReply?.mediaUrls?.[0];
         expect(mediaPath).toBeTruthy();
         await expect(fs.readFile(mediaPath as string)).resolves.toEqual(attachment);
@@ -147,7 +154,7 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("publishes managed images with the current run owner", async () => {
+  it("publishes managed media with aligned metadata and the current run owner", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
@@ -157,12 +164,14 @@ describe("WebChat message tool internal source reply", () => {
         const sessionKey = "agent:main:webchat:dm:restart-proof";
         const sessionId = "restart-proof-session";
         const imagePaths = ["first.png", "second.png"].map((name) => path.join(workspaceDir, name));
+        const documentPath = path.join(workspaceDir, "report.json");
         await fs.mkdir(workspaceDir, { recursive: true });
         await Promise.all(
           imagePaths.map((imagePath) =>
             fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64")),
           ),
         );
+        await fs.writeFile(documentPath, '{"status":"ready"}\n');
 
         await replaceSessionEntry(
           { agentId: "main", sessionKey, storePath },
@@ -195,7 +204,7 @@ describe("WebChat message tool internal source reply", () => {
         const sendParams = {
           action: "send" as const,
           message: "Durable image reply",
-          mediaUrls: imagePaths,
+          mediaUrls: [...imagePaths, documentPath],
         };
         const updates: SessionTranscriptUpdate[] = [];
         const publishedDownloads: Array<Promise<unknown>> = [];
@@ -239,6 +248,18 @@ describe("WebChat message tool internal source reply", () => {
           reasoningLevel: "off",
           toolResultFormat: "plain",
         });
+        expect(sourcePayloads[0]).toMatchObject({
+          attachments: [
+            expect.objectContaining({ name: "first.png", trustedLocalMedia: true }),
+            expect.objectContaining({ name: "second.png", trustedLocalMedia: true }),
+            expect.objectContaining({
+              name: "report.json",
+              mimeType: "application/json",
+              trustedLocalMedia: true,
+            }),
+          ],
+          trustedLocalMedia: true,
+        });
         const mirror = getReplyPayloadMetadata(
           sourcePayloads[0] as object,
         )?.sourceReplyTranscriptMirror;
@@ -262,6 +283,7 @@ describe("WebChat message tool internal source reply", () => {
           ? (assistant.content as Array<Record<string, unknown>>)
           : [];
         const image = content.find((block) => block.type === "image");
+        const document = content.find((block) => block.type === "attachment");
         expect(toolResult.details).toMatchObject({
           sourceReplySink: "internal-ui",
           idempotencyKey: expect.any(String),
@@ -272,8 +294,17 @@ describe("WebChat message tool internal source reply", () => {
           artifactId: expect.stringMatching(/^artifact_managed_image_/u),
         });
         expect(content.filter((block) => block.type === "image")).toHaveLength(2);
+        expect(document).toMatchObject({
+          type: "attachment",
+          attachment: {
+            artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+            kind: "document",
+            label: "report.json",
+            mimeType: "application/json",
+          },
+        });
         expect(JSON.stringify(assistant)).not.toContain(workspaceDir);
-        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(3);
         const published = updates.find(
           (update) =>
             update.runId === "restart-proof-run" &&
@@ -303,6 +334,15 @@ describe("WebChat message tool internal source reply", () => {
             }),
           ).resolves.toMatchObject({ type: "image" });
         }
+        const documentAttachment = document?.attachment as { artifactId?: unknown } | undefined;
+        await expect(
+          resolveManagedOutgoingMediaArtifactDownload({
+            sessionKey,
+            agentId: "main",
+            artifactId: String(documentAttachment?.artifactId),
+            stateDir,
+          }),
+        ).resolves.toMatchObject({ type: "file", title: "report.json" });
       },
     );
   });

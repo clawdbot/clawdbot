@@ -10,20 +10,10 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 type PluginUpdateOptions = {
   all?: boolean;
   acceptCapabilities?: boolean;
-  acknowledgeClawhubRisk?: boolean;
   acknowledgeInstallPolicyWarning?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
-
-type CommanderClawHubRiskOptions = Record<string, unknown> & {
-  acknowledgeClawHubRisk?: boolean;
-  acknowledgeClawhubRisk?: boolean;
-};
-
-function normalizeCommanderClawHubRiskOption(opts: CommanderClawHubRiskOptions): boolean {
-  return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;
-}
 
 export type PluginMarketplaceListOptions = {
   json?: boolean;
@@ -199,18 +189,13 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
-      false,
-    )
-    .option(
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
     .action(
       async (
         raw: string,
-        opts: CommanderClawHubRiskOptions & {
+        opts: {
           acceptCapabilities?: boolean;
           acknowledgeInstallPolicyWarning?: boolean;
           dangerouslyForceUnsafeInstall?: boolean;
@@ -221,10 +206,7 @@ export function registerPluginsCli(program: Command) {
         },
       ) => {
         const { runPluginsInstallAction } = await loadPluginsRuntime();
-        await runPluginsInstallAction(raw, {
-          ...opts,
-          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
-        });
+        await runPluginsInstallAction(raw, opts);
       },
     );
 
@@ -245,20 +227,9 @@ export function registerPluginsCli(program: Command) {
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
-    .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
-      false,
-    )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
-      await runPluginUpdateCommand({
-        id,
-        opts: {
-          ...opts,
-          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
-        },
-      });
+      await runPluginUpdateCommand({ id, opts });
     });
 
   plugins

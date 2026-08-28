@@ -46,7 +46,7 @@ import {
 } from "./chat-server-timing.js";
 import type { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { prepareSessionProjectWorkspace } from "./session-create-project.js";
+import { prepareSessionWorkspace } from "./session-create-project.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type PreparedChatSendAttachments = Extract<
@@ -115,7 +115,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   const {
     activeRunScopeKey,
     agentId,
-    backingSessionId,
     cfg,
     clientRunId,
     entry,
@@ -160,7 +159,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     context,
     runId: clientRunId,
     controller: activeRunAbort.controller,
-    sessionId: backingSessionId ?? clientRunId,
+    sessionId: admittedSessionId,
     sessionKey,
     agentId: selectedAgent.agentId,
     ownerConnId: client?.connId,
@@ -224,8 +223,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // Preparation stays after the ACK but inside admitted dispatch, so the
           // same visible run owns workspace progress, cancellation, and errors.
           let assertWorkspaceRunOwnership: (() => void) | undefined;
-          if (entry && Object.hasOwn(entry, "pendingProjectGitUrl")) {
-            assertWorkspaceRunOwnership = await prepareSessionProjectWorkspace({
+          if (entry && (Object.hasOwn(entry, "pendingProjectGitUrl") || entry.pendingWorktree)) {
+            assertWorkspaceRunOwnership = await prepareSessionWorkspace({
               admission,
               client,
               context,
@@ -294,6 +293,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   ? {
                       expectedExistingSessionId: admittedSessionId,
                       pinExpectedExistingSession: true,
+                      newlyCreatedSessionId: admission.initialSessionEntry?.sessionId,
                     }
                   : entry?.sessionId
                     ? { expectedExistingSessionId: entry.sessionId }

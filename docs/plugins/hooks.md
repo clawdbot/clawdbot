@@ -194,6 +194,7 @@ modifications explicitly instead of relying on in-place mutation.
 | `registrationId`        | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
 | `timeoutMs`             | Per-handler asynchronous await budget. Expiry applies the hook's failure policy below; it does not cancel the handler or its side effects. Omit to use the runner's default, if any.                                                                   |
 | `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| `eligibleDispatchKinds` | For `reply_dispatch` only, limits host dispatch to `agent`, `acp`, or both. Omit to handle all dispatch kinds.                                                                                                                                         |
 | `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                     |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
@@ -1018,6 +1019,16 @@ claim, not an API for rewriting outbound or inbound content.
 message context and a host dispatcher, and a handled result reports
 `queuedFinal` and delivery `counts`. Use `before_agent_reply` for a simple
 synthetic reply, and the sending hooks below to transform outgoing payloads.
+
+Use `eligibleDispatchKinds: ["acp"]` for an ACP-only dispatcher. The host
+classifies the resolved target, including conversation bindings, and passes
+`ctx.dispatchKind` as `acp` or `agent`. Stored ACP metadata and ACP session keys
+both select `acp`; a missing ACP binding does not fall back to agent dispatch.
+The host applies the same eligibility check before invocation and when deciding
+whether a hook prevents durable chat admission. An ACP-only hook therefore
+does not block ordinary agent sessions. Omitted, empty, malformed, or partly
+unknown eligibility lists remain unrestricted. Missing or unknown dispatch
+context also keeps the hook eligible.
 
 Use message hooks for channel-level routing and delivery policy:
 

@@ -2015,32 +2015,114 @@ describe("Codex app-server native code mode config", () => {
 });
 
 describe("Codex app-server turn input image sanitizing", () => {
-  it("carries native workspace temporary-root overrides into turn policy", () => {
-    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
-      threadId: "thread-1",
-      cwd: "/tmp/qa/workspace",
-      appServer: {
-        ...createAppServerOptions(),
-        start: {
-          args: [
-            "app-server",
-            "-c",
-            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-            "-c",
-            "sandbox_workspace_write.exclude_slash_tmp=true",
-          ],
-        },
-      } as never,
-    });
-
-    expect(request.sandboxPolicy).toEqual({
-      type: "workspaceWrite",
-      writableRoots: ["/tmp/qa/workspace"],
-      networkAccess: false,
-      excludeTmpdirEnvVar: true,
-      excludeSlashTmp: true,
-    });
-  });
+  it.each([
+    {
+      name: "separate",
+      args: [
+        "-c",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config",
+        "sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      tmpdir: true,
+      slashTmp: true,
+    },
+    {
+      name: "attached short",
+      args: [
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "-c=sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      tmpdir: true,
+      slashTmp: true,
+    },
+    {
+      name: "mixed last true",
+      args: [
+        "--config=sandbox_workspace_write.exclude_tmpdir_env_var=false",
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      tmpdir: true,
+      slashTmp: true,
+    },
+    {
+      name: "mixed last false",
+      args: [
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=false",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+        "-c=sandbox_workspace_write.exclude_slash_tmp=false",
+      ],
+      tmpdir: false,
+      slashTmp: false,
+    },
+    {
+      name: "commented true across separate and attached forms",
+      args: [
+        "-c",
+        "sandbox_workspace_write.exclude_tmpdir_env_var = false # earlier",
+        "--config=sandbox_workspace_write.exclude_tmpdir_env_var = true # exclusion retained",
+        "--config",
+        "sandbox_workspace_write.exclude_slash_tmp = false # earlier",
+        "-c=sandbox_workspace_write.exclude_slash_tmp = true # exclusion retained",
+      ],
+      tmpdir: true,
+      slashTmp: true,
+    },
+    {
+      name: "commented false wins last",
+      args: [
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=false # explicit last value",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+        "-csandbox_workspace_write.exclude_slash_tmp=false # explicit last value",
+      ],
+      tmpdir: false,
+      slashTmp: false,
+    },
+    {
+      name: "quoted booleans remain strings",
+      args: [
+        '-csandbox_workspace_write.exclude_tmpdir_env_var="true" # not a boolean',
+        "--config=sandbox_workspace_write.exclude_slash_tmp='true' # not a boolean",
+      ],
+      tmpdir: false,
+      slashTmp: false,
+    },
+    {
+      name: "option value and terminator",
+      args: [
+        "--ws-issuer",
+        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      tmpdir: false,
+      slashTmp: false,
+    },
+  ])(
+    "carries native workspace temporary-root overrides into turn policy: $name",
+    ({ args, tmpdir, slashTmp }) => {
+      const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+        threadId: "thread-1",
+        cwd: "/tmp/qa/workspace",
+        appServer: {
+          ...createAppServerOptions(),
+          start: { args: ["app-server", ...args] },
+        } as never,
+      });
+      expect(request.sandboxPolicy).toEqual({
+        type: "workspaceWrite",
+        writableRoots: ["/tmp/qa/workspace"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: tmpdir,
+        excludeSlashTmp: slashTmp,
+      });
+    },
+  );
 
   it("preserves implicit temporary writable roots for ordinary Codex turns", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
@@ -2062,7 +2144,16 @@ describe("Codex app-server turn input image sanitizing", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
-      appServer: createAppServerOptions() as never,
+      appServer: {
+        ...createAppServerOptions(),
+        start: {
+          args: [
+            "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "-csandbox_workspace_write.exclude_slash_tmp=true",
+            "app-server",
+          ],
+        },
+      } as never,
       sandboxPolicy: {
         type: "workspaceWrite",
         writableRoots: ["/repo"],
@@ -2085,7 +2176,16 @@ describe("Codex app-server turn input image sanitizing", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
-      appServer: createNetworkProxyAppServerOptions() as never,
+      appServer: {
+        ...createNetworkProxyAppServerOptions(),
+        start: {
+          args: [
+            "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "-csandbox_workspace_write.exclude_slash_tmp=true",
+            "app-server",
+          ],
+        },
+      } as never,
     });
 
     expect(request).not.toHaveProperty("permissions");
@@ -2096,7 +2196,16 @@ describe("Codex app-server turn input image sanitizing", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
-      appServer: createNetworkProxyAppServerOptions() as never,
+      appServer: {
+        ...createNetworkProxyAppServerOptions(),
+        start: {
+          args: [
+            "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "-csandbox_workspace_write.exclude_slash_tmp=true",
+            "app-server",
+          ],
+        },
+      } as never,
       sandboxPolicy: {
         type: "externalSandbox",
         networkAccess: "enabled",

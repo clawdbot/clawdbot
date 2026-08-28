@@ -65,11 +65,12 @@ describe("channel ingress drain watchdog", () => {
     });
   });
 
-  it("guillotines deferred stalls", async () => {
+  it("rearms a live deferred wait, then guillotines silence", async () => {
     await withTempState(async (stateDir) => {
       let clock = 30_000;
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
       await queue.enqueue("evt-def-stall", { text: "x" }, { laneKey: "l1" });
+      let heartbeat: (() => void) | undefined;
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
@@ -77,6 +78,7 @@ describe("channel ingress drain watchdog", () => {
         adoptionStallTimeoutMs: 5_000,
         dispatchClaimedEvent: async (_event, lifecycle) => {
           lifecycle.onDeferred();
+          heartbeat = lifecycle.onDeferredHeartbeat;
           // Stay deferred without adoption -- watchdog must still fire.
           await new Promise(() => {});
         },
@@ -84,8 +86,14 @@ describe("channel ingress drain watchdog", () => {
 
       await drain.drainOnce();
       expect(await queue.listClaims()).toHaveLength(1);
-      clock += 5_000;
-      await vi.advanceTimersByTimeAsync(5_000);
+      clock += 4_000;
+      await vi.advanceTimersByTimeAsync(4_000);
+      heartbeat?.();
+      clock += 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await queue.listClaims()).toHaveLength(1);
+      clock += 4_000;
+      await vi.advanceTimersByTimeAsync(4_000);
       await drain.waitForIdle();
 
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);

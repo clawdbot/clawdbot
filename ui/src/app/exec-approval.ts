@@ -1,9 +1,11 @@
 // Application-owned approval parsing and queue state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  scope?: ApprovalScope | null;
   cwd?: string | null;
   host?: string | null;
   security?: string | null;
@@ -104,6 +106,53 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
+function parseApprovalScope(value: unknown): ApprovalScope | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  switch (value.kind) {
+    case "standing-grant":
+      return typeof value.automation === "string" && typeof value.command === "string"
+        ? {
+            kind: "standing-grant",
+            automation: value.automation,
+            command: value.command,
+            ...(typeof value.expiresInDays === "number"
+              ? { expiresInDays: value.expiresInDays }
+              : {}),
+          }
+        : null;
+    case "message-send":
+      return typeof value.target === "string" && typeof value.recipientCount === "number"
+        ? {
+            kind: "message-send",
+            target: value.target,
+            recipientCount: value.recipientCount,
+            ...(Array.isArray(value.recipients) &&
+            value.recipients.every((recipient) => typeof recipient === "string")
+              ? { recipients: value.recipients }
+              : {}),
+            ...(value.audience === "internal" || value.audience === "external"
+              ? { audience: value.audience }
+              : {}),
+          }
+        : null;
+    case "payment":
+      return typeof value.amount === "string" &&
+        typeof value.currency === "string" &&
+        typeof value.target === "string"
+        ? { kind: "payment", amount: value.amount, currency: value.currency, target: value.target }
+        : null;
+    case "external-post":
+      return typeof value.target === "string" &&
+        (value.visibility === "public" || value.visibility === "restricted")
+        ? { kind: "external-post", target: value.target, visibility: value.visibility }
+        : null;
+    default:
+      return null;
+  }
+}
+
 function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -137,6 +186,7 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
       runId: typeof request.runId === "string" ? request.runId : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+      scope: parseApprovalScope(request.scope),
     },
     createdAtMs,
     expiresAtMs,

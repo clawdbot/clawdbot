@@ -281,9 +281,11 @@ describe("renderUsageHeatmap", () => {
       "Token Activity",
     );
     expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
-    expect(container.querySelector(".usage-heatmap__cell--l4 title")?.textContent).toContain(
-      "20 tokens",
-    );
+    expect(
+      container
+        .querySelector(".usage-heatmap__svg .usage-heatmap__cell--l4")
+        ?.getAttribute("data-tooltip"),
+    ).toContain("20 tokens");
   });
 
   it("keeps short ranges at their natural cell width", () => {

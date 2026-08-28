@@ -47,6 +47,9 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const proofVideo = page.video();
     const firstKey = "agent:main:session-a";
     const secondKey = "agent:main:session-b";
@@ -139,6 +142,9 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const key = "agent:main:session-a";
     const runId = "run-sidebar-metadata";
     const running = chatSessionListResponse([
@@ -403,12 +409,71 @@ suite.define(() => {
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
+      expect(await busyRow.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      expect(await busyRow.getAttribute("class")).toContain("sidebar-recent-session--single-line");
+      if (captureUiProofEnabled) {
+        await page.locator(".shell-nav").screenshot({
+          path: path.join(sessionSecondRowProofDir, "00-default-hidden-preview.png"),
+        });
+      }
+      await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
+      const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
+      expect(
+        await previewToggle.evaluate(
+          (item) => (item as HTMLElement & { checked: boolean }).checked,
+        ),
+      ).toBe(false);
+      await previewToggle.click();
+      await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
       const sidebar = page.locator("openclaw-app-sidebar");
-      const homeBoard = sidebar.locator(".nav-item--home .sidebar-board-glyph svg");
-      const sessionBoard = busyRow.locator(".sidebar-board-glyph svg");
+      const homeBoard = sidebar
+        .locator(".nav-item--home")
+        .getByRole("img", { name: "Dashboard available" })
+        .locator("svg");
+      const sessionBoard = busyRow.getByRole("img", { name: "Dashboard available" }).locator("svg");
       const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
       await homeBoard.waitFor({ state: "visible" });
       await sessionBoard.waitFor({ state: "visible" });
+      const automationBadge = busyRow
+        .getByRole("img", { name: "Automation attached" })
+        .locator("svg");
+      for (const colorScheme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme });
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(colorScheme);
+        const automationStyle = await automationBadge.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { color: style.color, strokeWidth: style.strokeWidth };
+        });
+        for (const board of [homeBoard, sessionBoard]) {
+          expect
+            .soft(
+              await board.evaluate((element) => {
+                const style = getComputedStyle(element);
+                return { color: style.color, strokeWidth: style.strokeWidth };
+              }),
+            )
+            .toEqual(automationStyle);
+        }
+        for (const reducedMotion of ["no-preference", "reduce"] as const) {
+          await page.emulateMedia({ reducedMotion });
+          const spinnerColors = await busyRow
+            .locator(".session-run-spinner")
+            .evaluate((element) => {
+              const style = getComputedStyle(element);
+              const accent = document.createElement("span").style;
+              accent.color = style.getPropertyValue("--accent").trim();
+              return { actual: style.borderTopColor, expected: accent.color };
+            });
+          expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
+        }
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        if (captureUiProofEnabled) {
+          await page.locator(".shell-nav").screenshot({
+            animations: "disabled",
+            path: path.join(sessionSecondRowProofDir, `indicators-${colorScheme}.png`),
+          });
+        }
+      }
       const shellNav = page.locator(".shell-nav");
       const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
       const badgeSizes = [];

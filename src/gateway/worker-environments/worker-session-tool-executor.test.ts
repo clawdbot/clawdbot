@@ -430,72 +430,83 @@ describe("worker session tool topology", () => {
     });
   }
 
-  it("creates no local turn, awaits active cloud placement, then sends the initial task once", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+  it.each([false, true])(
+    "creates and replays a cloud child with inherited required isolation (%s)",
+    async (required) => {
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+      const creator = { type: "human", id: "profile-worker-creator" } as const;
+      Object.assign(sessionEntries.get(SOURCE.sessionKey)!, {
+        createdActor: creator,
+        ...(required ? { sandbox: "required" as const } : {}),
+      });
 
-    const request = {
-      identity,
-      toolName: "sessions_spawn" as const,
-      request: {
-        toolCallId: "spawn-cloud-child",
-        task: "run in the nested cloud session",
-      },
-    };
-    const first = await execute(request);
-    const replay = await execute(request);
-
-    expect(childSessionKey).toMatch(/^agent:main:dashboard:cloud-[a-f0-9]{32}$/u);
-    expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
-    expect(gatewayCreate).toHaveBeenCalledOnce();
-    expect(gatewayCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        creation: expect.objectContaining({
-          actor: { type: "agent", id: SOURCE.agentId },
-          requesterSessionKey: SOURCE.sessionKey,
-          via: "spawn",
-        }),
-        method: "sessions.create",
-        options: {
-          resolveGatewayContext,
-          sessionMutationCommitGuard: expect.any(Function),
-          timeoutMs: null,
+      const request = {
+        identity,
+        toolName: "sessions_spawn" as const,
+        request: {
+          toolCallId: "spawn-cloud-child",
+          task: "run in the nested cloud session",
         },
-        params: expect.not.objectContaining({ task: expect.anything() }),
-      }),
-    );
-    expect(dispatchChild).toHaveBeenCalledWith({
-      sessionId: CHILD.sessionId,
-      sessionKey: childSessionKey,
-      agentId: CHILD.agentId,
-      executionMode: "worker-turn",
-      profileId: "cloud-profile",
-      inheritedProfile: {
-        providerId: "fake",
-        profileSnapshot: { install: "bundle", settings: { region: "source" } },
-      },
-    });
-    expect(gatewayRequest).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        agentRunTracking: "native_subagent",
-        method: "agent",
-        params: expect.objectContaining({
-          idempotencyKey: expect.stringMatching(/^worker-session-spawn:/u),
-          message: "run in the nested cloud session",
-          sessionId: CHILD.sessionId,
+      };
+      const first = await execute(request);
+      const replay = await execute(request);
+
+      expect(childSessionKey).toMatch(/^agent:main:dashboard:cloud-[a-f0-9]{32}$/u);
+      expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
+      expect(gatewayCreate).toHaveBeenCalledOnce();
+      expect(gatewayCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          creation: expect.objectContaining({
+            actor: required ? creator : { type: "agent", id: SOURCE.agentId },
+            requesterSessionKey: SOURCE.sessionKey,
+            via: "spawn",
+          }),
+          method: "sessions.create",
+          options: {
+            resolveGatewayContext,
+            sessionMutationCommitGuard: expect.any(Function),
+            timeoutMs: null,
+          },
+          params: expect.not.objectContaining({ task: expect.anything() }),
         }),
-      }),
-    );
-    expect(spawnArgs).toHaveBeenCalledWith(
-      expect.objectContaining({ expectsCompletionMessage: false, visible: true, worktree: true }),
-    );
-    expect(placements.get(CHILD.sessionId)?.state).toBe("active");
-    expect(sessionEntries.get(childSessionKey!)).toMatchObject({
-      sessionId: CHILD.sessionId,
-      parentSessionKey: SOURCE.sessionKey,
-      parentSessionId: SOURCE.sessionId,
-    });
-    expect(replay.resultJson).toBe(first.resultJson);
-  });
+      );
+      expect(gatewayCreate.mock.calls[0]?.[0]?.creation?.sandbox).toBe(
+        required ? "required" : undefined,
+      );
+      expect(dispatchChild).toHaveBeenCalledWith({
+        sessionId: CHILD.sessionId,
+        sessionKey: childSessionKey,
+        agentId: CHILD.agentId,
+        executionMode: "worker-turn",
+        profileId: "cloud-profile",
+        inheritedProfile: {
+          providerId: "fake",
+          profileSnapshot: { install: "bundle", settings: { region: "source" } },
+        },
+      });
+      expect(gatewayRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agentRunTracking: "native_subagent",
+          method: "agent",
+          params: expect.objectContaining({
+            idempotencyKey: expect.stringMatching(/^worker-session-spawn:/u),
+            message: "run in the nested cloud session",
+            sessionId: CHILD.sessionId,
+          }),
+        }),
+      );
+      expect(spawnArgs).toHaveBeenCalledWith(
+        expect.objectContaining({ expectsCompletionMessage: false, visible: true, worktree: true }),
+      );
+      expect(placements.get(CHILD.sessionId)?.state).toBe("active");
+      expect(sessionEntries.get(childSessionKey!)).toMatchObject({
+        sessionId: CHILD.sessionId,
+        parentSessionKey: SOURCE.sessionKey,
+        parentSessionId: SOURCE.sessionId,
+      });
+      expect(replay.resultJson).toBe(first.resultJson);
+    },
+  );
 
   it.each([
     { label: "default", mode: undefined },

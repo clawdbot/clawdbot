@@ -399,7 +399,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       ownerViewing,
       personActivity,
       catalog,
-      editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
+      editing: this.headerEditing && this.headerRenameSession?.key === row?.key,
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,

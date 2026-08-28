@@ -1,6 +1,8 @@
 // Daemon program argument tests cover CLI argument construction for services.
+import { spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -24,6 +26,7 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
@@ -35,13 +38,131 @@ const missingSelectedNodeError =
 const missingSelectedBunError =
   "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry.";
 
+beforeEach(() => {
+  vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+});
+
 afterEach(() => {
   process.argv = [...originalArgv];
   process.execPath = originalExecPath;
+  vi.restoreAllMocks();
   vi.resetAllMocks();
 });
 
 describe("resolveGatewayProgramArguments", () => {
+  it.skipIf(Boolean(process.versions.bun))(
+    "sizes only the Gateway in an ordinary Node spawn tree",
+    async () => {
+      const entryPath = path.resolve("/opt/openclaw/dist/index.js");
+      process.argv = [originalExecPath, entryPath];
+      fsMocks.realpath.mockResolvedValue(entryPath);
+      fsMocks.access.mockResolvedValue(undefined);
+      const { programArguments } = await resolveGatewayProgramArguments({
+        port: 18789,
+        runtime: "node",
+        runtimePath: originalExecPath,
+      });
+      const measurement = "console.log(require('node:v8').getHeapStatistics().heap_size_limit)";
+      const environment = { NODE_OPTIONS: resolveGatewayHeapNodeOptions(undefined) };
+      const nativeDefault = spawnSync(originalExecPath, ["-e", measurement], {
+        env: environment,
+        encoding: "utf8",
+      });
+      const parent = spawnSync(
+        originalExecPath,
+        [
+          ...programArguments.slice(1, programArguments.indexOf(entryPath)),
+          "-e",
+          `const child = require('node:child_process').spawnSync(process.execPath, ['-e', ${JSON.stringify(measurement)}], { encoding: 'utf8' });
+       if (child.status !== 0) throw new Error(child.stderr);
+       console.log(JSON.stringify({ heap: require('node:v8').getHeapStatistics().heap_size_limit, used: process.memoryUsage().heapUsed, child: Number(child.stdout), options: process.env.NODE_OPTIONS }));`,
+        ],
+        { env: environment, encoding: "utf8" },
+      );
+      expect(nativeDefault.status, nativeDefault.stderr).toBe(0);
+      expect(parent.status, parent.stderr).toBe(0);
+      const result = JSON.parse(parent.stdout);
+      expect(result.heap).toBeGreaterThanOrEqual(16384 * 1024 ** 2);
+      expect(result.used).toBeLessThan(64 * 1024 ** 2);
+      expect(result.child).toBe(Number(nativeDefault.stdout));
+      expect(result.options).toBe("");
+    },
+  );
+
+  it.each([
+    { nodeOptions: "--max-old-space-size=24576", existing: [], expected: [] },
+    { nodeOptions: "--max-old-space-size-percentage=25", existing: [], expected: [] },
+    { nodeOptions: "--max-heap-size=24576", existing: [], expected: [] },
+    { nodeOptions: "--max-old-space-size=0", existing: [], expected: [] },
+    {
+      nodeOptions: "",
+      existing: ["--max-old-space-size=24576"],
+      expected: ["--max-old-space-size=24576"],
+    },
+    {
+      nodeOptions: "",
+      existing: ["--require", "gateway", "--max-old-space-size=24576"],
+      expected: ["--max-old-space-size=24576"],
+    },
+    {
+      nodeOptions: "--max-old-space-size-percentage=25",
+      existing: ["--max-old-space-size=24576", "--require=/tmp/preload.js"],
+      expected: ["--max-old-space-size=24576"],
+    },
+  ])(
+    "preserves stored controls without adding an automatic override: $nodeOptions $existing",
+    async ({ nodeOptions, existing, expected }) => {
+      const entryPath = path.resolve("/opt/openclaw/dist/index.js");
+      process.argv = ["node", entryPath];
+      fsMocks.realpath.mockResolvedValue(entryPath);
+      fsMocks.access.mockResolvedValue(undefined);
+      const result = await resolveGatewayProgramArguments({
+        port: 18789,
+        runtime: "node",
+        runtimePath: validatedNodePath,
+        existingCommand: {
+          programArguments: [validatedNodePath, ...existing, entryPath, "gateway"],
+          environment: { NODE_OPTIONS: nodeOptions },
+        },
+      });
+      expect(result.programArguments).toEqual([
+        validatedNodePath,
+        ...expected,
+        entryPath,
+        "gateway",
+        "--port",
+        "18789",
+      ]);
+    },
+  );
+
+  it("ignores installer execArgv and keeps native defaults when capacity is unknown", async () => {
+    vi.spyOn(os, "totalmem").mockReturnValue(Number.NaN);
+    const originalExecArgv = process.execArgv;
+    const entryPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    process.execArgv = ["--max-old-space-size=24576", "--require=/tmp/preload.js"];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    try {
+      const result = await resolveGatewayProgramArguments({
+        port: 18789,
+        runtime: "node",
+        runtimePath: validatedNodePath,
+      });
+      expect(result.programArguments).toEqual([
+        validatedNodePath,
+        entryPath,
+        "gateway",
+        "--port",
+        "18789",
+      ]);
+    } finally {
+      process.execArgv = originalExecArgv;
+    }
+  });
+
   it("prefers index.js over legacy entry.js when both exist in the same dist directory", async () => {
     const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
     const indexPath = path.resolve("/opt/openclaw/dist/index.js");
@@ -57,6 +178,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
+      "--max-old-space-size=16384",
       indexPath,
       "gateway",
       "--port",
@@ -84,6 +206,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
+      "--max-old-space-size=16384",
       entryPath,
       "gateway",
       "--port",
@@ -111,6 +234,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
+      "--max-old-space-size=16384",
       entryPath,
       "gateway",
       "--port",
@@ -139,10 +263,10 @@ describe("resolveGatewayProgramArguments", () => {
 
     // Should use the symlinked canonical index.js path, not the realpath-resolved versioned path
     expect(result.programArguments[0]).toBe(validatedNodePath);
-    expect(result.programArguments[1]).toBe(
+    expect(result.programArguments[2]).toBe(
       path.resolve("/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js"),
     );
-    expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
+    expect(result.programArguments[2]).not.toContain("@2026.1.21-2");
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
@@ -165,6 +289,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
+      "--max-old-space-size=16384",
       indexPath,
       "gateway",
       "--port",
@@ -188,6 +313,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
+      "--max-old-space-size=16384",
       "--import",
       "tsx",
       repoEntryPath,

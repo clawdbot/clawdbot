@@ -317,40 +317,26 @@ async function startCodexConversationThread(
     authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
     ...agentLookup,
   });
-  const incognito = isIncognitoSessionKey(params.sessionKey);
-  if (params.threadId?.trim()) {
-    await attachExistingThread({
-      pluginConfig: params.pluginConfig,
-      bindingStore: params.bindingStore,
-      identity,
-      threadId: params.threadId.trim(),
-      workspaceDir,
-      ...(agentDir ? { agentDir } : {}),
-      model: params.model,
-      modelProvider: params.modelProvider,
-      authProfileId,
-      serviceTier: params.serviceTier,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      incognito,
-      agentId: params.agentId,
-    });
+  const bindingParams: CodexThreadBindingParams = {
+    pluginConfig: params.pluginConfig,
+    bindingStore: params.bindingStore,
+    identity,
+    workspaceDir,
+    ...(agentDir ? { agentDir } : {}),
+    model: params.model,
+    modelProvider: params.modelProvider,
+    authProfileId,
+    serviceTier: params.serviceTier,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    incognito: isIncognitoSessionKey(params.sessionKey),
+    agentId: params.agentId,
+  };
+  const threadId = params.threadId?.trim();
+  if (threadId) {
+    await attachExistingThread({ ...bindingParams, threadId });
   } else {
-    await bindThread({
-      pluginConfig: params.pluginConfig,
-      bindingStore: params.bindingStore,
-      identity,
-      workspaceDir,
-      ...(agentDir ? { agentDir } : {}),
-      model: params.model,
-      modelProvider: params.modelProvider,
-      authProfileId,
-      serviceTier: params.serviceTier,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      incognito,
-      agentId: params.agentId,
-    });
+    await bindThread(bindingParams);
   }
   const storedBinding = await params.bindingStore.read(identity);
   if (!storedBinding) {
@@ -543,18 +529,9 @@ type CodexThreadBindingParams = {
 
 type ConversationAppServerRuntime = Awaited<ReturnType<typeof resolveConversationAppServerRuntime>>;
 
-type CodexThreadBindingRuntime = ConversationAppServerRuntime & {
-  agentLookup: ReturnType<typeof buildAgentLookup>;
-  client: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>>;
-  clientLease: CodexAppServerClientLease;
-  clientOptions: CodexAppServerClientOptions;
-  model?: string;
-  modelProvider?: string;
-};
+type CodexThreadBindingRuntime = Awaited<ReturnType<typeof resolveThreadBindingRuntime>>;
 
-async function resolveThreadBindingRuntime(
-  params: CodexThreadBindingParams,
-): Promise<CodexThreadBindingRuntime> {
+async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
   const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
   const modelProvider = resolveThreadRequestModelProvider({
     authProfileId: params.authProfileId,
@@ -598,32 +575,25 @@ async function resolveThreadBindingRuntime(
     authProfileId: params.authProfileId,
     ...agentLookup,
   } satisfies CodexAppServerClientOptions;
-  const client = await getLeasedSharedCodexAppServerClient(clientOptions);
   return {
     runtime: modelScopedRuntime,
     workspaceDir,
     agentLookup,
     model: modelSelection?.model,
     modelProvider: modelSelection?.modelProvider ?? modelProvider,
-    client,
-    clientLease: { client },
     clientOptions,
   };
 }
 
-function buildThreadRequestRuntimeOptions(
-  params: CodexThreadBindingParams,
-  resolved: CodexThreadBindingRuntime,
-): {
-  approvalPolicy: ConversationAppServerRuntime["runtime"]["approvalPolicy"];
-  approvalsReviewer: ConversationAppServerRuntime["runtime"]["approvalsReviewer"];
-  sandbox?: ConversationAppServerRuntime["runtime"]["sandbox"];
-  runtimeWorkspaceRoots?: string[];
-  serviceTier?: CodexServiceTier;
-  config?: JsonObject;
-} {
-  const serviceTier = params.serviceTier ?? resolved.runtime.serviceTier;
+function buildConversationThreadRequest(
+  resolved: ConversationAppServerRuntime & { model?: string; modelProvider?: string },
+  serviceTier?: CodexServiceTier | null,
+): CodexThreadStartParams {
   return {
+    cwd: resolved.workspaceDir,
+    ...(resolved.model ? { model: resolved.model } : {}),
+    ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
+    personality: CODEX_NATIVE_PERSONALITY_NONE,
     approvalPolicy: resolved.runtime.approvalPolicy,
     approvalsReviewer: resolved.runtime.approvalsReviewer,
     ...(resolved.runtime.sessionRoot
@@ -658,6 +628,7 @@ function codexConversationSandboxOrPermissions(
 async function writeThreadBindingFromResponse(
   params: CodexThreadBindingParams,
   resolved: CodexThreadBindingRuntime,
+  client: CodexAppServerClient,
   response: CodexThreadResumeResponse | CodexThreadStartResponse,
   requestOptions: () => CodexAppServerLeasedRequestOptions,
 ): Promise<void> {
@@ -666,16 +637,15 @@ async function writeThreadBindingFromResponse(
   try {
     const current = await params.bindingStore.read(params.identity);
     assertCodexBindingMayBeReplaced(current, "storing a conversation-bound Codex thread");
-    const trackSubscription =
-      !params.incognito && isCodexAppServerClientRuntimeLive(resolved.client);
+    const trackSubscription = !params.incognito && isCodexAppServerClientRuntimeLive(client);
     sameOwner = isSameCodexAppServerThreadOwner(current, {
       threadId: response.thread.id,
-      clientId: resolved.client.getInstanceId(),
+      clientId: client.getInstanceId(),
     });
     requestOptions();
     assertCodexThreadAcceptsDirectInput(response.thread);
     if (trackSubscription) {
-      retained = await retainCodexAppServerBindingSubscription(resolved.client, response.thread.id);
+      retained = await retainCodexAppServerBindingSubscription(client, response.thread.id);
       if (!retained) {
         throw new Error("Codex conversation thread lost its native subscription owner.");
       }
@@ -693,7 +663,7 @@ async function writeThreadBindingFromResponse(
         kind: "set",
         binding: {
           threadId: response.thread.id,
-          clientId: resolved.client.getInstanceId(),
+          clientId: client.getInstanceId(),
           cwd: resolved.workspaceDir,
           authProfileId: params.authProfileId,
           model: response.model ?? resolved.model ?? params.model,
@@ -715,15 +685,8 @@ async function writeThreadBindingFromResponse(
   } catch (error) {
     // A matching stored binding may already have lost its idle subscription.
     // Keep existing live owners, but never leave an accepted resume untracked.
-    if (
-      (retained && !sameOwner) ||
-      !hasCodexAppServerLiveThread(resolved.client, response.thread.id)
-    ) {
-      await rollbackCodexAppServerBindingSubscription(
-        resolved.client,
-        response.thread.id,
-        retained,
-      );
+    if ((retained && !sameOwner) || !hasCodexAppServerLiveThread(client, response.thread.id)) {
+      await rollbackCodexAppServerBindingSubscription(client, response.thread.id, retained);
     }
     throw error;
   }
@@ -746,18 +709,18 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string): 
   const current = await params.bindingStore.read(params.identity);
   assertCodexBindingMayBeReplaced(current, "binding a conversation-bound Codex thread");
   const resolved = await resolveThreadBindingRuntime(params);
+  const clientLease: CodexAppServerClientLease = {
+    client: await getLeasedSharedCodexAppServerClient(resolved.clientOptions),
+  };
   try {
     await withLeasedCodexAppServerClientStartSelectionRetry({
-      lease: resolved.clientLease,
+      lease: clientLease,
       options: resolved.clientOptions,
       run: async (client, requestOptions) => {
-        const request = {
-          cwd: resolved.workspaceDir,
-          ...(resolved.model ? { model: resolved.model } : {}),
-          ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
-          personality: CODEX_NATIVE_PERSONALITY_NONE,
-          ...buildThreadRequestRuntimeOptions(params, resolved),
-        } satisfies CodexThreadStartParams;
+        const request = buildConversationThreadRequest(
+          resolved,
+          params.serviceTier ?? resolved.runtime.serviceTier,
+        );
         let response: CodexThreadResumeResponse | CodexThreadStartResponse;
         // Codex applies network-proxy permission profiles at thread/start. Resuming
         // an arbitrary existing thread cannot prove that profile is active.
@@ -801,14 +764,11 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string): 
             requestOptions(),
           );
         }
-        await writeThreadBindingFromResponse(params, resolved, response, requestOptions);
-      },
-      onClientChange: (client) => {
-        resolved.client = client;
+        await writeThreadBindingFromResponse(params, resolved, client, response, requestOptions);
       },
     });
   } finally {
-    releaseCodexAppServerClientLease(resolved.clientLease);
+    releaseCodexAppServerClientLease(clientLease);
   }
 }
 
@@ -878,6 +838,7 @@ async function runBoundTurn(params: {
         ...agentLookup,
       })
     : undefined;
+  const threadRequestRuntime = { runtime: modelScopedRuntime, workspaceDir, ...modelSelection };
 
   const clientOptions = {
     startOptions: runtime.start,
@@ -930,17 +891,7 @@ async function runBoundTurn(params: {
             await requestClient.request(
               "thread/start",
               {
-                cwd: workspaceDir,
-                ...(sessionRoot ? { runtimeWorkspaceRoots: [sessionRoot] } : {}),
-                ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-                ...(modelSelection?.modelProvider
-                  ? { modelProvider: modelSelection.modelProvider }
-                  : {}),
-                personality: CODEX_NATIVE_PERSONALITY_NONE,
-                approvalPolicy,
-                approvalsReviewer: modelScopedRuntime.approvalsReviewer,
-                ...codexConversationSandboxOrPermissions(modelScopedRuntime, sandbox),
-                ...(serviceTier ? { serviceTier } : {}),
+                ...buildConversationThreadRequest(threadRequestRuntime, serviceTier),
                 developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                 experimentalRawEvents: true,
                 ...(params.incognito ? { ephemeral: true } : {}),
@@ -1030,17 +981,7 @@ async function runBoundTurn(params: {
             },
             request: {
               threadId,
-              cwd: workspaceDir,
-              ...(sessionRoot ? { runtimeWorkspaceRoots: [sessionRoot] } : {}),
-              ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-              ...(modelSelection?.modelProvider
-                ? { modelProvider: modelSelection.modelProvider }
-                : {}),
-              personality: CODEX_NATIVE_PERSONALITY_NONE,
-              approvalPolicy,
-              approvalsReviewer: modelScopedRuntime.approvalsReviewer,
-              ...codexConversationSandboxOrPermissions(modelScopedRuntime, sandbox),
-              ...(serviceTier ? { serviceTier } : {}),
+              ...buildConversationThreadRequest(threadRequestRuntime, serviceTier),
             },
             requestResume: (request) =>
               requestClient.request("thread/resume", request, requestOptions()),

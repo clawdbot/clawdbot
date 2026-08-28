@@ -644,6 +644,97 @@ test("sessions.recover rejects a healthy session", async () => {
   });
 });
 
+test.each([false, true])(
+  "sessions.recover uses the recovering creator's sandbox requirement (%s), not its source's",
+  async (required) => {
+    const { storePath } = await createSessionStoreDir();
+    const owner = ensureProfileForEmail("recovery-source-owner@example.test");
+    const recovering = ensureProfileForEmail("recovery-requester@example.test");
+    setUserProfileRole(recovering.id, "requester");
+    const sourceKey = "agent:main:dashboard:creator-policy-recovery";
+    const sourceStamp = {
+      createdVia: "operator" as const,
+      createdActor: { type: "human" as const, id: owner.id },
+      createdAt: 123,
+      ...(!required ? { sandbox: "required" as const } : {}),
+    };
+    await seedRecoverableSession({
+      sourceKey,
+      sourceSessionId: "creator-policy-recovery-source",
+      storePath,
+      overrides: { ...sourceStamp, visibility: "shared" },
+    });
+    const cfg = {
+      ...getRuntimeConfig(),
+      gateway: {
+        ...getRuntimeConfig().gateway,
+        roles: {
+          default: "requester",
+          definitions: {
+            requester: {
+              sessions: { others: "write" as const },
+              agents: "*" as const,
+              scopes: ["operator.read" as const, "operator.write" as const],
+              ...(required ? { sandbox: "required" as const } : {}),
+            },
+          },
+        },
+      },
+    };
+    const request = {
+      client: {
+        connect: {
+          minProtocol: 3,
+          maxProtocol: 3,
+          client: { id: "test" as const, mode: "test" as const, platform: "test", version: "test" },
+          role: "operator",
+          scopes: ["operator.write"],
+        },
+        authenticatedUserProfile: {
+          profileId: recovering.id,
+          displayName: recovering.displayName,
+          hasAvatar: false,
+          updatedAt: recovering.updatedAt,
+        },
+      },
+      context: { getRuntimeConfig: () => cfg },
+    };
+    type RecoveryPayload = { key: string; continuation: { status: string } };
+    const recovered = await directSessionReq<RecoveryPayload>(
+      "sessions.recover",
+      { agentId: "main", key: sourceKey },
+      request,
+    );
+    expect(recovered).toMatchObject({
+      ok: true,
+      payload: { key: expect.any(String), continuation: { status: "started" } },
+    });
+    const scope = { agentId: "main", sessionKey: recovered.payload?.key ?? "", storePath };
+    const successor = loadSessionEntry(scope);
+    expect(successor).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: recovering.id },
+      createdAt: expect.any(Number),
+    });
+    expect(successor?.sandbox).toBe(required ? "required" : undefined);
+    expect(successor?.createdAt).not.toBe(sourceStamp.createdAt);
+    const repeated = await directSessionReq<RecoveryPayload>(
+      "sessions.recover",
+      { agentId: "main", key: sourceKey },
+      request,
+    );
+    expect(repeated.payload?.key).toBe(scope.sessionKey);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      createdActor: successor?.createdActor,
+      createdAt: successor?.createdAt,
+    });
+    expect(loadSessionEntry(scope)?.sandbox).toBe(successor?.sandbox);
+    const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    expect(source).toMatchObject(sourceStamp);
+    expect(source?.sandbox).toBe(required ? undefined : "required");
+  },
+);
+
 test("sessions.recover cannot create a successor on an agent excluded by the caller's role", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-recovery@example.com");

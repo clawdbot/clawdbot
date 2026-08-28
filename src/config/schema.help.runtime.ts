@@ -130,7 +130,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode":
     "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
   "tools.codeMode.enabled":
-    'Enables generic code mode. Default is `"auto"`, which engages only models whose catalog flags `compat.codeMode: "preferred"`. `true` engages every tool-capable run and fails closed if the runtime is unavailable instead of exposing the full tool list. `false` turns code mode off for every run.',
+    'Enables generic code mode. Default is off when Code Mode is otherwise unconfigured; an options object without `enabled` preserves the `"auto"` tier. `"auto"` engages only models whose catalog flags `compat.codeMode: "preferred"`. `true` engages every tool-capable run and fails closed if the runtime is unavailable instead of exposing the full tool list.',
   "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
@@ -409,6 +409,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
   "tools.exec.commandHighlighting":
     "Show parser-derived command highlights in exec approval prompts (default: false). Enable this to render highlighted command text without changing exec approval policy.",
+  "tools.exec.grantExpiryDays":
+    "Default lifetime, in days (1-3650), for standing grants minted by allow-always on automation approvals. Unset keeps grants valid until revoked or the owning automation changes. Terms freeze at mint, so changing this affects only future grants.",
   "tools.exec.safeBinTrustedDirs":
     "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
   "tools.exec.safeBinProfiles":

@@ -65,6 +65,16 @@ it.each([
   [["scripts/e2e/cron-mcp-cleanup-seed.ts"], ["cron-mcp-cleanup"]],
   [["scripts/e2e/mcp-code-mode-gateway-seed.ts"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
+  [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
+  [
+    [
+      "scripts/e2e/update-channel-switch-docker.sh",
+      "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+      "scripts/e2e/mcp-channels-seed.ts",
+    ],
+    ["mcp-channels", "update-channel-switch"],
+  ],
   [["scripts/e2e/docker-openai-seed.ts"], allDockerSeedLanes],
   [
     [
@@ -540,6 +550,17 @@ describe("CI changed Node test plan", () => {
         configs: ["test/vitest/vitest.extension-qa.config.ts"],
         pretestBuildMode: "private-qa",
       }),
+    ]);
+  });
+
+  it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
+    const target = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
+    expect(createChangedNodeTestShards([target])).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-qa.config.ts"],
+        pretestBuildMode: "private-qa",
+      }),
+      expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
     ]);
   });
 

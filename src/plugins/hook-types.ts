@@ -248,6 +248,11 @@ const pluginHookAgentTriggerSet = new Set<PluginHookAgentTrigger>(PLUGIN_HOOK_AG
 export const isPluginHookAgentTrigger = (trigger: unknown): trigger is PluginHookAgentTrigger =>
   typeof trigger === "string" && pluginHookAgentTriggerSet.has(trigger as PluginHookAgentTrigger);
 
+export type PluginHookReplyDispatchKind = "agent" | "acp";
+
+export const isPluginHookReplyDispatchKind = (kind: unknown): kind is PluginHookReplyDispatchKind =>
+  kind === "agent" || kind === "acp";
+
 export type PluginToolMatcher = readonly [string, ...string[]];
 
 export type PluginHookRegistrationOptions<K extends PluginHookName> = {
@@ -260,6 +265,15 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
       eligibleTriggers?: readonly [PluginHookAgentTrigger, ...PluginHookAgentTrigger[]];
     }
   : { eligibleTriggers?: never }) &
+  (K extends "reply_dispatch"
+    ? {
+        /** Host-enforced dispatch paths that may invoke this hook; unknown paths remain eligible. */
+        eligibleDispatchKinds?: readonly [
+          PluginHookReplyDispatchKind,
+          ...PluginHookReplyDispatchKind[],
+        ];
+      }
+    : { eligibleDispatchKinds?: never }) &
   (K extends "before_tool_call" | "after_tool_call"
     ? { matcher?: PluginToolMatcher }
     : { matcher?: never }) &
@@ -547,6 +561,8 @@ export type PluginHookReplyDispatchEvent = {
 };
 
 export type PluginHookReplyDispatchContext = {
+  /** Host-resolved dispatch path; omitted when the caller cannot establish it. */
+  dispatchKind?: PluginHookReplyDispatchKind;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
@@ -1368,6 +1384,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   priority?: number;
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
+  eligibleDispatchKinds?: readonly PluginHookReplyDispatchKind[];
   requiresToolAuthority?: true;
   source: string;
 };

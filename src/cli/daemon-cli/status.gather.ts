@@ -66,7 +66,7 @@ import {
   detectPluginVersionDrift,
   type PluginVersionDriftReport,
 } from "../../plugins/plugin-version-drift.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -133,45 +133,13 @@ type CliStatusSummary = {
 
 type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure>["kind"];
 
-const gatewayProbeAuthModuleLoader = createLazyImportLoader(
-  () => import("../../gateway/probe-auth.js"),
-);
-const daemonInspectModuleLoader = createLazyImportLoader(() => import("../../daemon/inspect.js"));
-const launchdModuleLoader = createLazyImportLoader(() => import("../../daemon/launchd.js"));
-const serviceAuditModuleLoader = createLazyImportLoader(
-  () => import("../../daemon/service-audit.js"),
-);
-const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../../infra/tls/gateway.js"));
-const daemonProbeModuleLoader = createLazyImportLoader(() => import("./probe.js"));
-const restartHealthModuleLoader = createLazyImportLoader(() => import("./restart-health.js"));
-
-function loadGatewayProbeAuthModule() {
-  return gatewayProbeAuthModuleLoader.load();
-}
-
-function loadDaemonInspectModule() {
-  return daemonInspectModuleLoader.load();
-}
-
-function loadLaunchdModule() {
-  return launchdModuleLoader.load();
-}
-
-function loadServiceAuditModule() {
-  return serviceAuditModuleLoader.load();
-}
-
-function loadGatewayTlsModule() {
-  return gatewayTlsModuleLoader.load();
-}
-
-function loadDaemonProbeModule() {
-  return daemonProbeModuleLoader.load();
-}
-
-function loadRestartHealthModule() {
-  return restartHealthModuleLoader.load();
-}
+const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
+const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
+const loadLaunchdModule = createLazyPromise(() => import("../../daemon/launchd.js"));
+const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
+const loadGatewayTlsModule = createLazyPromise(() => import("../../infra/tls/gateway.js"));
+const loadDaemonProbeModule = createLazyPromise(() => import("./probe.js"));
+const loadRestartHealthModule = createLazyPromise(() => import("./restart-health.js"));
 
 function resolveSnapshotRuntimeConfig(snapshot: ConfigFileSnapshot | null): OpenClawConfig | null {
   if (!snapshot?.valid || !snapshot.runtimeConfig) {
@@ -831,7 +799,13 @@ export async function gatherDaemonStatus(
       runtime,
       configAudit,
       ...(command
-        ? { gatewayHeap: inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS) }
+        ? {
+            gatewayHeap: inspectGatewayHeapLimit(
+              command.environment?.NODE_OPTIONS,
+              {},
+              command.programArguments,
+            ),
+          }
         : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
       ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),

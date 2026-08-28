@@ -462,8 +462,8 @@ prepublish_auto_auth_enabled() {
 
 park_prepublish_authored_config() {
   prepublish_auto_auth_enabled || return 0
-  node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-    park-prepublish-auth-config "$OPENCLAW_CONFIG_PATH" "$PREPUBLISH_AUTHORED_CONFIG"
+  node "${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}" \
+    park-prepublish "$OPENCLAW_CONFIG_PATH" "$PREPUBLISH_AUTHORED_CONFIG"
 }
 
 assert_prepublish_fixture_idle() {
@@ -474,15 +474,8 @@ assert_prepublish_fixture_idle() {
 
 restore_prepublish_authored_config() {
   prepublish_auto_auth_enabled || return 0
-  if ! node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-    restore-prepublish-auth-config "$OPENCLAW_CONFIG_PATH" "$PREPUBLISH_AUTHORED_CONFIG"; then
-    return 1
-  fi
-  if ! cmp -s "$PREPUBLISH_AUTHORED_CONFIG" "$OPENCLAW_CONFIG_PATH"; then
-    echo "restored prepublish config did not match authored bytes" >&2
-    return 1
-  fi
-  rm -f "$PREPUBLISH_AUTHORED_CONFIG"
+  node "${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}" \
+    restore "$OPENCLAW_CONFIG_PATH" "$PREPUBLISH_AUTHORED_CONFIG"
 }
 
 configure_plugin_registry() {

@@ -9,8 +9,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
 import { resolveInstalledPluginPackageOwnership } from "../../src/plugins/installed-plugin-package-ownership.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openOpenClawStateDatabase,
+} from "../../src/state/openclaw-state-db.js";
 
-const PLUGIN_UPDATE_DOCKER_SCRIPT = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
 const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
@@ -20,7 +23,7 @@ const PLUGIN_INDEX_MODULE_URL = pathToFileURL(
   path.resolve("scripts/e2e/lib/plugin-index-sqlite.mjs"),
 ).href;
 
-function seedInstallState(root: string) {
+function seedInstallState(root: string, initialized: boolean) {
   const stateDir = path.join(root, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const env = {
@@ -32,6 +35,10 @@ function seedInstallState(root: string) {
     OPENCLAW_VERSION: "2026.8.1",
     VITEST: "true",
   };
+  if (initialized) {
+    const database = openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseByPath(database.path);
+  }
   execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "seed"], {
     encoding: "utf8",
     env,
@@ -101,62 +108,62 @@ async function waitForPortFile(portFile: string): Promise<number> {
 }
 
 describe("plugin update unchanged Docker E2E", () => {
-  it("seeds current plugin install ledger state before checking config stability", async () => {
-    const runner = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
-    const scenario = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
-    const probe = readFileSync(PLUGIN_UPDATE_PROBE_SCRIPT, "utf8");
+  it.each([false, true])(
+    "seeds plugin ownership with initialized state=%s",
+    async (initialized) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-seed-"));
+      try {
+        const { configPath, env, stateDir } = seedInstallState(root, initialized);
+        const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+          plugins?: Record<string, unknown>;
+        };
+        expect(config).toEqual({ plugins: {} });
+        expect(
+          JSON.parse(
+            execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "snapshot"], {
+              encoding: "utf8",
+              env,
+            }),
+          ),
+        ).toMatchObject({ source: "npm", resolvedVersion: "0.9.0" });
 
-    expect(runner).toContain("scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
-    expect(scenario).toContain('node "$probe" seed');
-    expect(probe).toContain("writeJson(process.env.OPENCLAW_CONFIG_PATH, { plugins: {} });");
-    expect(probe).not.toContain(
-      "writeJson(process.env.OPENCLAW_CONFIG_PATH, { plugins: { installs",
-    );
-    expect(probe).toContain("installRecords: {");
-    expect(probe).toContain('"lossless-claw": {');
+        const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
+        const persisted = readPluginInstallIndex({ configPath, stateDir });
+        expect(persisted.installRecords).toMatchObject({
+          "lossless-claw": {
+            source: "npm",
+            installPath: "~/.openclaw/extensions/lossless-claw",
+          },
+        });
+        expect(persisted.plugins).toEqual([
+          expect.objectContaining({
+            pluginId: "lossless-claw",
+            installOwner: "lossless-claw",
+            rootDir: path.join(stateDir, "extensions", "lossless-claw"),
+          }),
+        ]);
 
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-seed-"));
-    try {
-      const { configPath, env, stateDir } = seedInstallState(root);
-      const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-        plugins?: Record<string, unknown>;
-      };
-      expect(config).toEqual({ plugins: {} });
-
-      const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
-      const persisted = readPluginInstallIndex({ configPath, stateDir });
-      expect(persisted.installRecords).toMatchObject({
-        "lossless-claw": {
-          source: "npm",
-          installPath: "~/.openclaw/extensions/lossless-claw",
-        },
-      });
-      expect(persisted.plugins).toEqual([
-        expect.objectContaining({
-          pluginId: "lossless-claw",
-          installOwner: "lossless-claw",
-          rootDir: path.join(stateDir, "extensions", "lossless-claw"),
-        }),
-      ]);
-
-      const liveIndex = loadInstalledPluginIndex({
-        config,
-        env,
-        stateDir,
-      });
-      expect(resolveInstalledPluginPackageOwnership(liveIndex, "lossless-claw", env)).toMatchObject(
-        {
+        const database = openOpenClawStateDatabase({ env });
+        closeOpenClawStateDatabaseByPath(database.path);
+        const liveIndex = loadInstalledPluginIndex({
+          config,
+          env,
+          stateDir,
+        });
+        expect(
+          resolveInstalledPluginPackageOwnership(liveIndex, "lossless-claw", env),
+        ).toMatchObject({
           ok: true,
           value: {
             installOwner: "lossless-claw",
             pluginIds: ["lossless-claw"],
           },
-        },
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("bounds the update command and prints diagnostics on hangs", () => {
     const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");

@@ -201,7 +201,8 @@ quote_json_string() {
       \\) JSON_STRING+="\\\\" ;;
       *)
         printf -v code '%d' "'$char"
-        if ((code < 32)); then
+        # Bash 3.2 reports high UTF-8 bytes as negative integers, not C0 controls.
+        if ((code >= 0 && code < 32)); then
           printf -v escaped '\\u%04x' "$code"
           JSON_STRING+="$escaped"
         else

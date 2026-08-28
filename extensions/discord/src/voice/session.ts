@@ -110,6 +110,7 @@ export type VoiceSessionEntry = {
   transcripts?: {
     sessionId: string;
     onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
+    onStop?: () => void | Promise<void>;
   };
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: (reason?: string) => void;

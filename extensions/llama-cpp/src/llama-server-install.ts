@@ -130,17 +130,13 @@ export async function downloadVerifiedFile(params: {
         (Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0);
       const handle = await fsp.open(partialPath, "wx", 0o600);
       const hash = createHash("sha256");
-      const reader = response.body.getReader();
       let downloadedSize = 0;
       let previousSize = 0;
       let previousAt = Date.now();
       let rollingBytesPerSecond = 0;
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
+        // Unlock on every exit; the guard owns aborting an unfinished download.
+        for await (const value of response.body.values({ preventCancel: true })) {
           const chunk = Buffer.from(value);
           await handle.writeFile(chunk);
           hash.update(chunk);

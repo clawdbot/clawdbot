@@ -275,7 +275,7 @@ export const en: TranslationMap = {
     refreshingStaleSnapshot:
       "Refreshing channel status in the background; showing the last successful snapshot.",
     hub: {
-      connectedTitle: "Your channels",
+      connectedTitle: "Connected channels",
       addTitle: "Add a channel",
       addSubtitle: "Pick a service and follow the guided setup.",
       updatedAgo: "Updated {ago}",
@@ -347,7 +347,7 @@ export const en: TranslationMap = {
       dialogLabel: "Set up {channel}",
       title: "Set up {channel}",
       genericTitle: "a channel",
-      subtitle: "A short guided setup — you can fine-tune everything later.",
+      subtitle: "Guided channel setup",
       starting: "Starting setup…",
       working: "Working…",
       sessionExpired:
@@ -356,7 +356,7 @@ export const en: TranslationMap = {
       finish: "Finish",
       copyText: "Copy",
       openLink: "Open link",
-      docs: "Docs",
+      viewDocs: "View docs",
       doneTitle: "Channel configured",
       doneBody:
         "Configuration saved. The gateway reloads the channel automatically; check its card for live status.",
@@ -889,7 +889,9 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
-    anyAvailableNode: "Any available node",
+    autoDevice: "Auto",
+    autoDeviceSub: "Least-busy device",
+    autoDeviceSubEligible: "First eligible device",
     noSessionHosts: "No session hosts are paired. Connect a machine with session hosting enabled.",
     neverConnected: "Never connected",
     offlineFor: "Offline for {duration}",
@@ -1251,8 +1253,6 @@ export const en: TranslationMap = {
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
-    newGroupMovePartial:
-      "Group created, but some selected sessions were not moved because the list changed. Move them from the row menu.",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
@@ -1526,11 +1526,8 @@ export const en: TranslationMap = {
   configForm: {
     redactedPlaceholder: "[redacted - click reveal to view]",
     sectionHelp: "Help for {section}",
-    readGuide: "Read the guide",
-    showAdvanced: "Show advanced",
-    advancedHidden: "{count} advanced setting hidden",
-    advancedHiddenPlural: "{count} advanced settings hidden",
     advancedDivider: "Advanced",
+    advancedSettings: "Advanced settings",
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
@@ -1897,6 +1894,30 @@ export const en: TranslationMap = {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
       chooseTheme: "Choose a theme family.",
+      typography: "Typography",
+      fonts: {
+        ui: "Interface",
+        chat: "Chat prose",
+        themeDefault: "Theme default",
+        themeFace: "{theme} · {face}",
+        system: "System",
+        previewCaption: "OpenClaw · A little clarity goes a long way",
+        previewProse:
+          "Good typography makes room for the conversation. Choose a face that feels comfortable to read.",
+        previewCode: 'const greeting = "Hello, world!";',
+      },
+      fontNotes: {
+        "instrument-sans": "Contemporary and crisp",
+        geist: "Clean and precise",
+        "dm-sans": "Warm and versatile",
+        "ibm-plex-sans": "Engineered and humanist",
+        "space-grotesk": "Geometric with character",
+        "atkinson-hyperlegible": "Distinct shapes for easy reading",
+        fraunces: "Expressive reading serif",
+        lora: "Calm, literary serif",
+        "jetbrains-mono": "Clear, evenly spaced letters",
+        system: "No webfont",
+      },
       accent: "Accent color",
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
@@ -2024,6 +2045,15 @@ export const en: TranslationMap = {
       "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
+    scope: {
+      standingGrant:
+        'Always allow runs this exact command for "{automation}" without asking, until revoked (revocable)',
+      standingGrantDays:
+        'Always allow runs this exact command for "{automation}" without asking, for {count} days (revocable)',
+      messageSend: "Sends to {count} recipient(s) via {target}",
+      payment: "Pays {amount} {currency} to {target}",
+      externalPost: "Posts externally to {target}",
+    },
     expiresIn: "expires in {time}",
     expired: "expired",
     execApprovalNeeded: "Exec approval needed",
@@ -2294,7 +2324,6 @@ export const en: TranslationMap = {
     clawHubSubtitle: "Search and install skills from the registry",
     searchClawHub: "Search ClawHub skills…",
     searching: "Searching…",
-    acknowledgeRisk: "Acknowledge risk and install",
     disconnected: "Not connected to gateway.",
     empty: "No skills found.",
     noClawHubResults: "No skills found on ClawHub.",
@@ -2611,7 +2640,6 @@ export const en: TranslationMap = {
   },
   cloudWorkersPage: {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
-    documentation: "Cloud worker documentation",
     sectionTitle: "Profiles",
     sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
@@ -2695,6 +2723,7 @@ export const en: TranslationMap = {
     retry: "Retry",
   },
   modelSetup: {
+    missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     heading: "Connect a verified AI model",
     intro:
       "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
@@ -3019,7 +3048,6 @@ export const en: TranslationMap = {
   },
   mcpPage: {
     intro: "Connect and manage MCP servers that provide tools to OpenClaw.",
-    connectorsLink: "Discover one-click connectors on the Plugins page.",
     servers: "Servers",
     oauth: "OAuth",
     filtered: "Filtered",
@@ -3416,8 +3444,6 @@ export const en: TranslationMap = {
     install: "Install",
     installing: "Installing…",
     installNamed: "Install {name}",
-    acknowledgeRisk: "Acknowledge risk and install",
-    defaultRiskWarning: "Review the ClawHub warning before installing this plugin.",
     policyReviewTitle: "Security review needed",
     policyReviewBodyKnown: "Policy warnings: {count}. Not installed.",
     policyReviewBodyReason: "{reason} Not installed.",
@@ -4306,6 +4332,8 @@ export const en: TranslationMap = {
     restarting: "Restarting…",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
+    settingsChangesUnavailable:
+      "Changes to settings are disabled while the Gateway is reconnecting.",
     sessionOperationCompletedPreviousConnection:
       "The session operation completed on the previous connection. Check the current session list before continuing.",
     sessionOperationCompletedPreviousConnectionWithRefreshError:
@@ -4405,6 +4433,25 @@ export const en: TranslationMap = {
         "These automations are overdue:\n{facts}\nExplain why they have not run and how to fix them.",
       modelAuthExpiredQuestion:
         "These model-provider credentials need attention:\n{facts}\nExplain what expired and how to re-authenticate them.",
+    },
+  },
+  standingGrants: {
+    title: "Standing grants",
+    description:
+      "Allow-always on an automation approval mints a standing grant for that exact command. Revoking one makes the next occurrence ask again.",
+    historyTitle: "Approval history",
+    empty: "No standing grants. Answer an automation approval with Always allow to mint one.",
+    stateUntilRevoked: "Until revoked",
+    stateExpiresIn: "Expires in {count}d",
+    stateExpired: "Expired",
+    stateRevoked: "Revoked",
+    revoke: "Revoke",
+    revoking: "Revoking…",
+    columns: {
+      automation: "Automation",
+      command: "Command",
+      uses: "Uses",
+      state: "State",
     },
   },
   approvalHistory: {
@@ -4940,13 +4987,9 @@ export const en: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning: "Usage cache is rebuilding in the background. Displayed totals may be stale.",
-      title: "{status}: {pending} pending, {stale} stale, {cached} cached",
-      status: {
-        refreshing: "refreshing",
-        stale: "stale",
-        partial: "partial",
-      },
+      warning: "Usage data may be incomplete. Checking for updated totals automatically.",
+      paused:
+        "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
     },
     empty: {
       title: "Start with a date range",
@@ -5234,6 +5277,9 @@ export const en: TranslationMap = {
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
+      namingWorktree: "Naming worktree…",
+      creatingWorktree: "Creating worktree…",
+      runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",
@@ -5721,6 +5767,7 @@ export const en: TranslationMap = {
     },
     queue: {
       notSent: "Not sent",
+      deliveryUnconfirmed: "Delivery unconfirmed",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
       steer: "Steer",
@@ -5741,6 +5788,19 @@ export const en: TranslationMap = {
       imageCount: "Image ({count})",
     },
     goals: {
+      composerMode: "Goal",
+      sessionChanged: "Conversation changed. Cancel and select Goal again.",
+      start: "Start goal",
+      save: "Save goal",
+      startHint: "Enter your objective.",
+      editHint: "Save without starting a run.",
+      objectivePlaceholder: "What should this goal accomplish?",
+      cancel: "Cancel goal entry",
+      offline: "Reconnect to manage goals.",
+      busy: "Wait for this run to finish. Your draft is unchanged.",
+      annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
+      actionPending: "Wait for the pending goal action.",
+      admissionImmutable: "Retry or remove this request. Editing requires a new goal.",
       edit: "Edit goal",
       pause: "Pause goal",
       resume: "Resume goal",
@@ -6190,6 +6250,7 @@ export const en: TranslationMap = {
     },
     selectors: {
       loadMoreSessions: "Show more",
+      loadMoreRosterSessions: "Load more sessions",
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",

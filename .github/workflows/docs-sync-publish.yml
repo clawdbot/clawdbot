@@ -20,8 +20,12 @@ permissions:
   contents: read
 
 concurrency:
+  # cancel-in-progress starved the mirror: every main push cancelled the in-flight
+  # sync and cancelled runs leave no successor, so under sustained merge velocity
+  # openclaw/docs never advanced. Queue instead — GitHub keeps only the newest
+  # pending run per group, and skip_stale_source keeps completed runs idempotent.
   group: docs-sync-publish-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  cancel-in-progress: false
 
 jobs:
   sync-publish-repo:

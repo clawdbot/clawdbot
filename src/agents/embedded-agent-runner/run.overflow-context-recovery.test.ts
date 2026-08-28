@@ -158,6 +158,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
     prepareCurrentTranscriptRetry: vi.fn(),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
+    markOwnedTranscriptRetry: vi.fn(),
     armPostCompactionGuard: vi.fn(),
     ...overrides,
     attempt,
@@ -592,12 +593,12 @@ describe("recoverEmbeddedRunOverflow", () => {
 
   it("does not reset the overflow-compaction budget after an in-attempt compaction", async () => {
     const state = createEmbeddedRunContextRecoveryState();
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ state, attemptCompactionCount: 1 }),
-    );
+    const input = makeInput({ state, attemptCompactionCount: 1 });
+    const result = await recoverEmbeddedRunOverflow(input);
 
     expect(result).toEqual({ action: "retry" });
     expect(state.overflowCompactionAttempts).toBe(1);
+    expect(input.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(mocks.compact).not.toHaveBeenCalled();
   });
 

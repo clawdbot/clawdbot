@@ -1,7 +1,6 @@
 // OpenClaw agent database tests cover agent-scoped DB storage and migrations.
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
@@ -993,26 +992,23 @@ describe("openclaw agent database", () => {
     ).toBe(path.join(stateDir, "agents", "worker-1", "agent", "openclaw-agent.sqlite"));
   });
 
-  it("keeps test default state under a worker-sharded temp directory", () => {
-    expect(
-      resolveOpenClawAgentSqlitePath({
-        agentId: "main",
-        env: {
-          VITEST: "true",
-          VITEST_WORKER_ID: "7",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).toBe(
-      path.join(
-        os.tmpdir(),
-        "openclaw-test-state",
-        `${process.pid}-7`,
-        "agents",
-        "main",
-        "agent",
-        "openclaw-agent.sqlite",
-      ),
-    );
+  it("opens the agent and its shared registry under the default HOME state owner", () => {
+    const home = createTempStateDir();
+    const env = { HOME: home, NODE_ENV: "test" };
+    const options = { agentId: "main", env };
+    const stateDir = path.join(home, ".openclaw");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+
+    // Fail before opening if path resolution escapes the test-owned home.
+    expect(resolveOpenClawAgentSqlitePath(options)).toBe(agentPath);
+    const agent = openOpenClawAgentDatabaseRuntime(options);
+    const shared = openOpenClawStateDatabase({ env });
+
+    expect(agent.path).toBe(agentPath);
+    expect(shared.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "main", path: agentPath }),
+    ]);
   });
 
   it("returns typed not-found without creating a missing read-only database", () => {
@@ -2821,6 +2817,8 @@ describe("openclaw agent database", () => {
             process.chdir(previousCwd);
             closeOpenClawAgentDatabasesForTest();
             closeOpenClawStateDatabaseForTest();
+            fs.rmSync(root, { recursive: true, force: true });
+            fs.rmSync(stateDir, { recursive: true, force: true });
           }
         `,
       ],

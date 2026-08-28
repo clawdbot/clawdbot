@@ -1,9 +1,4 @@
 // Shared Control UI plugin catalog Gateway contracts.
-import {
-  ClawHubTrustErrorCodes,
-  readClawHubTrustErrorDetails,
-  type ClawHubTrustErrorDetails,
-} from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
 import type {
   PluginCatalogEntry,
   PluginDeclaredSurface as ProtocolPluginDeclaredSurface,
@@ -19,7 +14,7 @@ import type {
   PluginsSetEnabledResult,
   PluginsUninstallResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 
 export type PluginCatalogItem = PluginCatalogEntry;
@@ -101,7 +96,7 @@ export async function runPluginConfigMutation<T>(
     try {
       return await task(client);
     } catch (error) {
-      // ClawHub risk acknowledgment requires the original structured Gateway error.
+      // Preserve structured Gateway failures for the caller.
       taskError = error instanceof Error ? error : new Error(String(error));
       throw taskError;
     }
@@ -113,18 +108,4 @@ export async function runPluginConfigMutation<T>(
     value: mutation.value,
     refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
   };
-}
-
-export function readPluginInstallTrustError(error: unknown): ClawHubTrustErrorDetails | undefined {
-  if (!(error instanceof GatewayRequestError)) {
-    return undefined;
-  }
-  return readClawHubTrustErrorDetails(error.details);
-}
-
-export function pluginInstallNeedsRiskAcknowledgement(error: unknown): boolean {
-  return (
-    readPluginInstallTrustError(error)?.clawhubTrustCode ===
-    ClawHubTrustErrorCodes.RISK_ACKNOWLEDGEMENT_REQUIRED
-  );
 }

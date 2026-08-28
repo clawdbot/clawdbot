@@ -1,4 +1,5 @@
 // Lobster tests cover lobster taskflow plugin behavior.
+import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { LobsterRunner } from "./lobster-runner.js";
 import { resumeManagedLobsterFlow, runManagedLobsterFlow } from "./lobster-taskflow.js";
@@ -25,6 +26,7 @@ function createRunFlowParams(
 ): Parameters<typeof runManagedLobsterFlow>[0] {
   return {
     taskFlow,
+    config: {},
     runner,
     runnerParams: {
       action: "run",
@@ -44,6 +46,7 @@ function createResumeFlowParams(
 ): Parameters<typeof resumeManagedLobsterFlow>[0] {
   return {
     taskFlow,
+    config: {},
     runner,
     flowId: "flow-1",
     expectedRevision: 4,
@@ -225,4 +228,71 @@ describe("resumeManagedLobsterFlow", () => {
       },
     });
   });
+});
+
+describe("cancelled managed Lobster flows", () => {
+  it.each(["run", "resume"])(
+    "persists a cancelled TaskFlow for a rejected Lobster %s",
+    async (action) => {
+      const taskFlow = createRuntimeTaskFlow().bindSession({
+        sessionKey: `agent:main:lobster-cancel-${action}`,
+      });
+      const runner = createRunner({
+        ok: true,
+        status: "cancelled",
+        output: [],
+        requiresApproval: null,
+      });
+      let result;
+      if (action === "run") {
+        result = await runManagedLobsterFlow(createRunFlowParams(taskFlow, runner));
+      } else {
+        const waitingFlow = taskFlow.createManaged({
+          controllerId: "tests/lobster",
+          goal: "Resume Lobster workflow",
+          status: "waiting",
+        });
+        result = await resumeManagedLobsterFlow({
+          ...createResumeFlowParams(taskFlow, runner),
+          flowId: waitingFlow.flowId,
+          expectedRevision: waitingFlow.revision,
+        });
+      }
+
+      if (!result.ok) {
+        throw result.error;
+      }
+      expect(taskFlow.get(result.flow.flowId)?.status).toBe("cancelled");
+    },
+  );
+
+  it.each(["unsettled", "rejected"])(
+    "does not finish or fail when TaskFlow cancellation is %s",
+    async (outcome) => {
+      const cancel =
+        outcome === "unsettled"
+          ? vi.fn().mockResolvedValue({
+              found: true,
+              cancelled: false,
+              reason: "One or more child tasks are still active.",
+              tasks: [],
+            })
+          : vi.fn().mockRejectedValue(new Error("cancel transport error"));
+      const taskFlow = createFakeTaskFlow({ cancel });
+      const runner = createRunner({
+        ok: true,
+        status: "cancelled",
+        output: [],
+        requiresApproval: null,
+      });
+
+      const result = expectManagedFlowFailure(
+        await resumeManagedLobsterFlow(createResumeFlowParams(taskFlow, runner)),
+      );
+
+      expect(result.error.message).toMatch(/cancellation failed|cancel transport error/u);
+      expect(taskFlow.finish).not.toHaveBeenCalled();
+      expect(taskFlow.fail).not.toHaveBeenCalled();
+    },
+  );
 });

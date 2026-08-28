@@ -13,6 +13,7 @@ import type {
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { applicationContext } from "../../app/context.ts";
 import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import type {
@@ -394,9 +395,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       config: SessionDiscussionPanelConfig;
     }
   >();
-  protected headerRenameInitialLabel: string | null = null;
   protected headerRenameInitialValue = "";
-  protected headerRenameSessionKey = "";
+  protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
+    null;
   protected headerCopiedTimer: number | null = null;
   protected composerPrefillAttentionTimer: number | null = null;
   protected composerPrefillAttentionTarget: HTMLElement | null = null;

@@ -12,6 +12,7 @@ import {
   createAnthropicGuard,
   createMonotonicUlidFactory,
   createOpenAiGuard,
+  effectiveGuardPolicyVersion,
   formatHandleEpoch,
   InvalidDeliveryReceiptError,
   parseHandleEpoch,
@@ -185,7 +186,7 @@ export class ReefMessageFlow {
       recipientEncryptionPublicKey: friend.x25519PublicKey,
       guard: this.options.guard,
       audit: this.options.audit,
-      policyVersion: this.requireGuardConfig().policyVersion,
+      policyVersion: this.guardPolicyVersion(),
       reviewGate: (request) => this.options.reviews.request(request),
     });
     signal?.throwIfAborted();
@@ -407,7 +408,7 @@ export class ReefMessageFlow {
         replayStore: this.options.replay,
         guard: this.options.guard,
         audit: this.options.audit,
-        policyVersion: this.requireGuardConfig().policyVersion,
+        policyVersion: this.guardPolicyVersion(),
         reviewGate: (request) => this.options.reviews.request(request),
       });
     } catch (error) {
@@ -458,6 +459,11 @@ export class ReefMessageFlow {
     }
     return this.options.config.guard;
   }
+
+  private guardPolicyVersion(): string {
+    const guard = this.requireGuardConfig();
+    return effectiveGuardPolicyVersion(guard.policyVersion, guard.rules);
+  }
 }
 
 export function createConfiguredGuard(
@@ -477,6 +483,7 @@ export function createConfiguredGuard(
     apiKey: guardCredential,
     pinnedModel: config.guard.pinnedModel,
     timeoutMs: config.guard.timeoutMs,
+    rules: config.guard.rules,
     fetch: fetcher,
   };
   return config.guard.provider === "openai"

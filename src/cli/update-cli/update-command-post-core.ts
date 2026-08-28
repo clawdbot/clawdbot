@@ -36,7 +36,7 @@ import {
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
-import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store.js";
+import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store-write.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -310,9 +310,6 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   }
   if (params.opts.yes) {
     argv.push("--yes");
-  }
-  if (params.opts.acknowledgeClawHubRisk) {
-    argv.push("--acknowledge-clawhub-risk");
   }
   if (params.opts.timeout) {
     argv.push("--timeout", params.opts.timeout);

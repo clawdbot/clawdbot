@@ -215,6 +215,27 @@ describe("forkCodexUpstreamSession", () => {
     expect(archiveThread).not.toHaveBeenCalled();
   });
 
+  it("requests a workspace sandbox when the fork creator requires isolation", async () => {
+    boundaryMocks.listTurns
+      .mockResolvedValueOnce([turn("turn-2", "edit me")])
+      .mockResolvedValueOnce([turn("turn-1", "one")]);
+    const { controlFactory, forkThread } = forkControl();
+    const requiredFork = { ...forkParams(), sandbox: "required" as const };
+
+    const result = await forkCodexUpstreamSession(requiredFork, {
+      bindingStore: { mutate: vi.fn(async () => true) } as unknown as CodexAppServerBindingStore,
+      controlFactory,
+      harnessRuntimeId: "codex-custom",
+      resolveConfig: () => ({}),
+      runtime: createPluginRuntimeMock(),
+    });
+
+    expect(result).toMatchObject({ status: "created" });
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.objectContaining({ sandbox: "workspace-write" }),
+    );
+  });
+
   it("forks through the secondary home selected by the upstream fingerprint", async () => {
     boundaryMocks.listTurns
       .mockResolvedValueOnce([turn("turn-2", "edit me")])

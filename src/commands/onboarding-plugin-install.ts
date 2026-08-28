@@ -9,6 +9,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
@@ -795,14 +796,15 @@ function logInstallWarningWithLineBreaks(runtime: RuntimeEnv, message: string): 
 }
 
 function isReviewRequiredClawHubTrustWarning(message: string): boolean {
-  return message.includes("WARNING - ClawHub found security risks");
+  return stripAnsi(message).startsWith("Warning\n");
 }
 
 function isClawHubTrustWarning(message: string): boolean {
+  const plain = stripAnsi(message);
   return (
     isReviewRequiredClawHubTrustWarning(message) ||
-    message.includes("BLOCKED - ClawHub") ||
-    message.includes("REVIEW RECOMMENDED - ClawHub")
+    plain.startsWith("Blocked\n") ||
+    plain.startsWith("Review\n")
   );
 }
 
@@ -1115,24 +1117,6 @@ async function installPluginFromClawHubSpecWithProgress(params: {
           }
           logInstallWarningWithSpacing(params.runtime, message);
         },
-      },
-      onClawHubRisk: async (request) => {
-        animated.stop();
-        progress.stop("Review ClawHub warning");
-        renderTrustWarning(request.warning);
-        const packageName = sanitizeTerminalText(request.packageName);
-        const releaseLabel = `${packageName}@${sanitizeTerminalText(request.version)}`;
-        if (request.acknowledgementKind === "type-package") {
-          const answer = await params.prompter.text({
-            message: `To install anyway, type the package name for "${releaseLabel}"`,
-            placeholder: packageName,
-          });
-          return answer.trim() === packageName;
-        }
-        return await params.prompter.confirm({
-          message: `Install ClawHub package "${releaseLabel}" after reviewing the warning above?`,
-          initialValue: false,
-        });
       },
     });
     animated.stop();

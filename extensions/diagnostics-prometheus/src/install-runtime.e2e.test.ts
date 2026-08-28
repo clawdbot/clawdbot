@@ -307,7 +307,11 @@ describe("diagnostics-prometheus managed install runtime", () => {
       stateDir,
     });
 
-    await runCli(["plugins", "install", `npm:${packageName}@${pluginVersion}`], env, true);
+    await runCli(
+      ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
+      env,
+      true,
+    );
     const inspect = JSON.parse(
       await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),
     ) as {

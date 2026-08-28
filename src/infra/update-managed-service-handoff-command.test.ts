@@ -9,6 +9,8 @@ import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-targ
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const getFileLockProcessStartTimeMock = vi.hoisted(() => vi.fn((_pid: number) => 17));
+const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
 const tempDirs = new Set<string>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-command-${process.pid}`);
@@ -40,7 +42,20 @@ vi.mock("node:child_process", async () => {
   });
 });
 
+vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
+  getFileLockProcessStartTime: getFileLockProcessStartTimeMock,
+}));
+
+vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/child-process-tree.js")>()),
+  forceKillChildProcessTree: forceKillChildProcessTreeMock,
+}));
+
 beforeEach(() => {
+  getFileLockProcessStartTimeMock.mockReset();
+  getFileLockProcessStartTimeMock.mockReturnValue(17);
+  forceKillChildProcessTreeMock.mockReset();
   spawnMock.mockReset();
   spawnMock.mockImplementation(createReadyChild);
 });
@@ -82,6 +97,7 @@ async function startHandoffAndReadCommand(params: {
     ...(params.devTarget ? { devTarget: params.devTarget } : {}),
     ...(params.env ? { env: params.env } : {}),
   });
+  expect(forceKillChildProcessTreeMock).not.toHaveBeenCalled();
   const spawnCall = spawnMock.mock.calls[0] as unknown as
     | [string, string[], { env?: NodeJS.ProcessEnv }]
     | undefined;

@@ -105,6 +105,9 @@ suite.define(() => {
         .poll(() => localOption.locator(".chat-controls__model-option-meta").textContent())
         .toBe("32.8k");
       await expect.poll(() => localOption.getAttribute("aria-label")).toContain("cannot use tools");
+      const infoIcon = localOption.locator(".chat-controls__model-chat-only-info");
+      await expect.poll(() => infoIcon.locator("svg").count()).toBe(1);
+      await expect.poll(async () => (await infoIcon.boundingBox())?.width).toBe(16);
       await expect
         .poll(async () => (await openAiOption.textContent())?.includes("Chat only"))
         .toBe(false);

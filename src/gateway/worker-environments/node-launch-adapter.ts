@@ -27,6 +27,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
@@ -167,26 +168,6 @@ function signalError(signal: AbortSignal, fallback: string): Error {
   return signal.reason instanceof Error ? signal.reason : new Error(fallback);
 }
 
-function raceWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    return Promise.reject(signalError(signal, "node worker operation aborted"));
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signalError(signal, "node worker operation aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    void operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error("node worker operation failed"));
-      },
-    );
-  });
-}
-
 function createDeadline(params: {
   now: () => number;
   timeoutMs: number;
@@ -228,7 +209,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   }): Promise<NodeWorkerSupervisorNodeProof> => {
     let nodes: readonly NodeWorkerSupervisorNodeProof[];
     try {
-      nodes = await raceWithSignal(params.transport.listCurrentNodes(), params.signal);
+      nodes = await raceNodeWorkerOperation(params.transport.listCurrentNodes(), params.signal);
     } catch (error) {
       if (params.signal.aborted) {
         throw error;
@@ -322,7 +303,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         isDispatchAuthorized: params.isAuthorized,
         ...(params.onDispatchReady ? { onDispatchReady: params.onDispatchReady } : {}),
       });
-      const result = await raceWithSignal(operation, signal);
+      const result = await raceNodeWorkerOperation(operation, signal);
       if (!result.ok) {
         const code = result.error?.code ?? "UNAVAILABLE";
         if (code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE) {
@@ -362,7 +343,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     if (remainingMs <= 0 || params.deadline.signal.aborted) {
       throw params.deadline.signal.reason ?? new Error("node worker operation timed out");
     }
-    await raceWithSignal(
+    await raceNodeWorkerOperation(
       sleep(Math.min(params.delayMs, remainingMs), params.deadline.signal),
       params.deadline.signal,
     );

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -14,11 +15,7 @@ import {
 } from "../../../plugins/capability-consent.js";
 import { isUnavailableClawHubTarget } from "../../../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
-import {
-  CLAWHUB_INSTALL_ERROR_CODE,
-  installPluginFromClawHub,
-  type ClawHubRiskAcknowledgementRequest,
-} from "../../../plugins/clawhub.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import {
   installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
@@ -61,25 +58,6 @@ function shouldFallbackClawHubToNpm(params: {
   );
 }
 
-export function appendClawHubRiskAcknowledgementGuidance(params: {
-  message: string;
-  spec: string | undefined;
-}): string {
-  if (!params.spec || !params.message.includes("--acknowledge-clawhub-risk")) {
-    return params.message;
-  }
-  const sanitizedSpec = sanitizeTerminalText(params.spec);
-  const shellSpec = shellQuotePosixArg(sanitizedSpec);
-  return `${params.message} To review and acknowledge this ClawHub package, run \`openclaw plugins install ${shellSpec} --acknowledge-clawhub-risk\` from a trusted shell, then rerun repair.`;
-}
-
-function shellQuotePosixArg(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(value)) {
-    return value;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 export function isActionableClawHubSkippedOutcome(outcome: {
   status: string;
   code?: string;
@@ -88,26 +66,8 @@ export function isActionableClawHubSkippedOutcome(outcome: {
 }
 
 export function isClawHubReviewNotice(message: string): boolean {
-  const trimmed = stripAnsi(message).trimStart();
-  return (
-    trimmed.startsWith("╭─ REVIEW RECOMMENDED - ClawHub ") ||
-    trimmed.startsWith("╭─ WARNING - ClawHub found security risks ")
-  );
-}
-
-export function recordClawHubInstallSpec(
-  record: PluginInstallRecord | undefined,
-): string | undefined {
-  if (!record || record.source !== "clawhub") {
-    return undefined;
-  }
-  if (record.spec) {
-    return record.spec;
-  }
-  if (record.clawhubPackage) {
-    return `clawhub:${record.clawhubPackage}`;
-  }
-  return undefined;
+  const audit = stripAnsi(message);
+  return audit.includes("ClawHub Security Audit") && audit.includes("Outcome: Review");
 }
 
 type InstallCandidateRepairReason = "stale-version-bound-runtime";
@@ -131,8 +91,6 @@ export async function installCandidate(params: {
   mode?: "install" | "update";
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
@@ -140,6 +98,7 @@ export async function installCandidate(params: {
   notices: string[];
   warnings: string[];
   failedPluginId?: string;
+  code?: string;
 }> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   try {
@@ -160,6 +119,7 @@ export async function installCandidate(params: {
       notices: [],
       warnings: [sanitizeTerminalText(error.message)],
       failedPluginId: params.candidate.pluginId,
+      ...(error.capabilityConsent ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED } : {}),
     };
   }
 }
@@ -266,8 +226,6 @@ async function installCandidatePackage(
             terminalLinks: false,
             warn: (message) => warnings.push(stripAnsi(message)),
           },
-          ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-          ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
         });
         return { result, capabilityConsent: attemptConsent };
       },
@@ -309,13 +267,7 @@ async function installCandidatePackage(
         records: params.records,
         changes: [],
         notices: [],
-        warnings: [
-          ...warnings,
-          appendClawHubRiskAcknowledgementGuidance({
-            message: failure,
-            spec: clawhubInstallSpec,
-          }),
-        ],
+        warnings: [...warnings, failure],
         failedPluginId: candidate.pluginId,
       };
     }

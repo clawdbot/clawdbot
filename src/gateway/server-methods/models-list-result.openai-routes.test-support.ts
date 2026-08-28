@@ -46,6 +46,7 @@ export async function listModels(params: {
   agentId?: string;
   catalog: ModelCatalogEntry[];
   catalogLoadDelayMs?: number;
+  preparedCatalog?: ModelCatalogEntry[];
   publishedCatalog?: ModelCatalogEntry[];
   refresh?: boolean;
   staticEntries?: ModelCatalogEntry[];
@@ -76,13 +77,16 @@ export async function listModels(params: {
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
       authMaterializations: [],
     }) satisfies PreparedGatewayModelCatalogSnapshot;
-  const loadGatewayModelCatalogSnapshot = async () => {
+  const loadGatewayModelCatalogSnapshot = async (loadParams?: object) => {
     if (params.catalogLoadDelayMs !== undefined) {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, params.catalogLoadDelayMs);
       });
     }
-    return createCatalogSnapshot(params.catalog);
+    const readOnly = loadParams && "readOnly" in loadParams && loadParams.readOnly === true;
+    return createCatalogSnapshot(
+      readOnly && params.preparedCatalog ? params.preparedCatalog : params.catalog,
+    );
   };
   registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
     loadDeferred: loadGatewayModelCatalogSnapshot,

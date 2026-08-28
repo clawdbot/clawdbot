@@ -86,6 +86,7 @@ const gatewayServiceRestart = vi.hoisted(() =>
 );
 const gatewayServiceUninstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
+const gatewayServiceReadCommand = vi.hoisted(() => vi.fn());
 const startGatewayService = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -227,6 +228,7 @@ vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
     label: "Mock Platform Service",
     isLoaded: gatewayServiceIsLoaded,
+    readCommand: gatewayServiceReadCommand,
     restart: gatewayServiceRestart,
     uninstall: gatewayServiceUninstall,
     install: gatewayServiceInstall,
@@ -467,6 +469,8 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceInstall.mockClear();
     gatewayServiceIsLoaded.mockReset();
     gatewayServiceIsLoaded.mockResolvedValue(false);
+    gatewayServiceReadCommand.mockReset();
+    gatewayServiceReadCommand.mockResolvedValue(null);
     startGatewayService.mockReset();
     gatewayServiceRestart.mockReset();
     gatewayServiceRestart.mockResolvedValue({ outcome: "completed" });
@@ -1557,6 +1561,23 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceInstall.mockImplementationOnce(async () => {
       expect(installed).toBe(true);
     });
+    const managedDefinition = {
+      programArguments: [
+        "/usr/bin/node",
+        "--max-old-space-size=24576",
+        "--require=/tmp/service-preload.js",
+        "/usr/local/bin/openclaw",
+        "gateway",
+      ],
+      environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+    };
+    const existingCommand = {
+      programArguments: ["/operator/drop-in-wrapper", "gateway"],
+      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    gatewayServiceReadCommand.mockResolvedValue(existingCommand);
     const prompter = buildWizardPrompter({ select: vi.fn(async () => "reinstall") as never });
 
     const result = await ensureGatewayServiceForOnboarding(
@@ -1564,6 +1585,12 @@ describe("finalizeSetupWizard", () => {
     );
 
     expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingCommand,
+      }),
+    );
+    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
     expect(gatewayServiceInstall).toHaveBeenCalledOnce();
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
   });

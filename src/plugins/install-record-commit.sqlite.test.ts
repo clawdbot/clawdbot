@@ -9,10 +9,10 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  computeDeclaredSurfaceHash,
   resolvePluginArtifactDeclaredSurface,
   resolvePluginCapabilityConsent,
 } from "./capability-consent.js";
+import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { commitConfigWriteWithPendingPluginInstalls } from "./install-record-commit.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";

@@ -121,7 +121,6 @@ type SystemRunParsePhase = {
   timeoutMs: number | undefined;
   needsScreenRecording: boolean;
   approved: boolean;
-  suppressNotifyOnExit: boolean;
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
@@ -281,6 +280,7 @@ type HandleSystemRunInvokeOptions = {
   runViaMacAppExecHost: (params: {
     approvals: ExecApprovalsResolved;
     request: ExecHostRequest;
+    signal?: AbortSignal;
   }) => Promise<ExecHostResponse | null>;
   sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
   buildExecEventPayload: (payload: ExecEventPayload) => ExecEventPayload;
@@ -537,7 +537,6 @@ async function parseSystemRunPhase(
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved,
-    suppressNotifyOnExit,
   };
 }
 
@@ -963,8 +962,7 @@ async function executeSystemRunPhase(
     return;
   }
 
-  const useMacAppExec = opts.preferMacAppExecHost;
-  if (useMacAppExec) {
+  if (opts.preferMacAppExecHost) {
     const macApprovalSource =
       phase.approvalSource ??
       (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
@@ -991,6 +989,7 @@ async function executeSystemRunPhase(
     const response = await opts.runViaMacAppExecHost({
       approvals: phase.approvals,
       request: execRequest,
+      signal: opts.signal,
     });
     if (opts.signal?.aborted) {
       return;

@@ -70,6 +70,31 @@ function sendAgentRpc(socket: WebSocket, params: { agentId: string; runId: strin
   return { accepted, final };
 }
 
+function sendPreacceptAgentRpc(socket: WebSocket, params: { agentId: string; runId: string }) {
+  const response = onceMessage<AgentRpcFrame>(
+    socket,
+    (frame) => frame.type === "res" && frame.id === params.runId,
+  );
+  const final = onceMessage<AgentRpcFrame>(
+    socket,
+    (frame) =>
+      frame.type === "res" && frame.id === params.runId && frame.payload?.status !== "accepted",
+  );
+  socket.send(
+    JSON.stringify({
+      type: "req",
+      id: params.runId,
+      method: "agent",
+      params: {
+        agentId: params.agentId,
+        message: `dispatch ${params.runId}`,
+        idempotencyKey: params.runId,
+      },
+    }),
+  );
+  return { response, final };
+}
+
 function agentCommandCallsFor(runId: string) {
   return vi
     .mocked(agentCommandMock)
@@ -101,6 +126,71 @@ describe("gateway agent auth refresh dispatch", () => {
 
   afterEach(() => {
     testState.agentsConfig = undefined;
+  });
+
+  test("keeps an accepted run on its admitted runtime generation", async () => {
+    const affectedAgentId = "auth-pinned";
+    const admittedRunId = "idem-agent-auth-admitted";
+    const subsequentRunId = "idem-agent-auth-next";
+    const before = await prepareAuthDispatchAgents(affectedAgentId);
+    const published = createDeferred();
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "published") {
+        published.resolve();
+      }
+    });
+    try {
+      const admitted = sendAgentRpc(gatewaySuite.ws, {
+        agentId: affectedAgentId,
+        runId: admittedRunId,
+      });
+      await admitted.accepted;
+      expect(agentCommandCallsFor(admittedRunId)).toHaveLength(0);
+
+      setRuntimeAuthProfileStoreSnapshot(
+        {
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "next-generation-key",
+            },
+          },
+        },
+        before.agentDir,
+      );
+      await published.promise;
+      const after = await loadPublishedGatewayReplyDispatchRuntime({
+        agentId: affectedAgentId,
+      });
+      expect(after).not.toBe(before.runtime);
+
+      await expect(admitted.final).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
+      });
+      expect(agentCommandCallsFor(admittedRunId)[0]?.[4]).toMatchObject({
+        config: before.runtime?.config,
+        pluginGeneration: before.runtime?.pluginGeneration,
+      });
+
+      const subsequent = sendAgentRpc(gatewaySuite.ws, {
+        agentId: affectedAgentId,
+        runId: subsequentRunId,
+      });
+      await subsequent.accepted;
+      await expect(subsequent.final).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
+      });
+      expect(agentCommandCallsFor(subsequentRunId)[0]?.[4]).toMatchObject({
+        config: after?.config,
+        pluginGeneration: after?.pluginGeneration,
+      });
+    } finally {
+      unregister();
+    }
   });
 
   test("aborts one affected waiter without cancelling shared auth publication", async () => {
@@ -142,15 +232,14 @@ describe("gateway agent auth refresh dispatch", () => {
         before.agentDir,
       );
 
-      const aborted = sendAgentRpc(gatewaySuite.ws, {
+      const aborted = sendPreacceptAgentRpc(gatewaySuite.ws, {
         agentId: affectedAgentId,
         runId: abortedRunId,
       });
-      const waiting = sendAgentRpc(gatewaySuite.ws, {
+      const waiting = sendPreacceptAgentRpc(gatewaySuite.ws, {
         agentId: affectedAgentId,
         runId: waitingRunId,
       });
-      await Promise.all([aborted.accepted, waiting.accepted]);
       const sibling = sendAgentRpc(gatewaySuite.ws, { agentId: "main", runId: siblingRunId });
       await sibling.accepted;
       await expect(sibling.final).resolves.toMatchObject({ ok: true, payload: { status: "ok" } });
@@ -168,7 +257,7 @@ describe("gateway agent auth refresh dispatch", () => {
         payload: { aborted: true, runIds: [abortedRunId] },
       });
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(activeWorkBefore + 1));
-      await expect(aborted.final).resolves.toMatchObject({
+      await expect(aborted.response).resolves.toMatchObject({
         ok: true,
         payload: {
           status: "timeout",
@@ -178,13 +267,17 @@ describe("gateway agent auth refresh dispatch", () => {
         },
       });
       await expect(
-        Promise.race([waiting.final.then(() => "settled"), Promise.resolve("pending")]),
+        Promise.race([waiting.response.then(() => "settled"), Promise.resolve("pending")]),
       ).resolves.toBe("pending");
 
       publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
       await published.promise;
       const after = await loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId });
       expect(after).not.toBe(before.runtime);
+      await expect(waiting.response).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "accepted" },
+      });
       await expect(waiting.final).resolves.toMatchObject({
         ok: true,
         payload: { status: "ok" },
@@ -253,14 +346,12 @@ describe("gateway agent auth refresh dispatch", () => {
         `prepared reply dispatch runtime owner was not published for ${affectedAgentId}`,
       );
 
-      const dispatched = sendAgentRpc(gatewaySuite.ws, { agentId: affectedAgentId, runId });
-      await expect(dispatched.accepted).resolves.toMatchObject({
-        ok: true,
-        payload: { status: "accepted" },
+      const rejected = sendPreacceptAgentRpc(gatewaySuite.ws, {
+        agentId: affectedAgentId,
+        runId,
       });
-      await expect(dispatched.final).resolves.toMatchObject({
+      await expect(rejected.response).resolves.toMatchObject({
         ok: false,
-        payload: { status: "error" },
         error: {
           code: "UNAVAILABLE",
           message: expect.stringContaining(

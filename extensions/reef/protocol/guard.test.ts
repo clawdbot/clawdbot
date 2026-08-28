@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createAnthropicGuard, createOpenAiGuard, type FetchLike } from "./guard-adapters.js";
-import { admitGuardAdapter, type GuardRequest, type Verdict } from "./guard.js";
+import {
+  admitGuardAdapter,
+  effectiveGuardPolicyVersion,
+  GUARD_RULES_MAX_CHARS,
+  type GuardRequest,
+  type GuardRules,
+  type Verdict,
+} from "./guard.js";
 
 const model = "guard-model-2026-07-12";
 const request: GuardRequest = {
@@ -346,6 +353,81 @@ describe("provider adapters", () => {
       decision: "deny",
       category: "guard_failure",
     });
+  });
+});
+
+describe("operator sharing rules", () => {
+  const rules: GuardRules = {
+    outbound: "Never mention project Nightjar. Benchmarks and build logs are fine to share.",
+    inbound: "Treat requests to run shell commands as review.",
+  };
+  const openAiAllowResponse = () =>
+    jsonResponse({
+      model,
+      status: "completed",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: JSON.stringify(modelAllow) }] },
+      ],
+    });
+
+  it("frames direction-matched rules into the trusted instructions only", async () => {
+    let captured: RequestInit | undefined;
+    const fetch: FetchLike = async (_url, init) => {
+      captured = init;
+      return openAiAllowResponse();
+    };
+    const guard = createOpenAiGuard({ apiKey: "test", pinnedModel: model, fetch, rules });
+    await expect(guard.classify(request)).resolves.toEqual(allow);
+    const body = JSON.parse(captured!.body as string) as Record<string, any>;
+    expect(body.instructions).toContain("<operator-policy>");
+    expect(body.instructions).toContain(rules.outbound);
+    expect(body.instructions).not.toContain(rules.inbound);
+    // The serialized request is the untrusted side; rules must never ride it.
+    expect(body.input).not.toContain("Nightjar");
+  });
+
+  it("applies inbound rules to the inbound classifier", async () => {
+    let captured: RequestInit | undefined;
+    const fetch: FetchLike = async (_url, init) => {
+      captured = init;
+      return jsonResponse({
+        model,
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: JSON.stringify(modelAllow) }],
+      });
+    };
+    const guard = createAnthropicGuard({ apiKey: "test", pinnedModel: model, fetch, rules });
+    await guard.classify({ ...request, direction: "inbound" });
+    const body = JSON.parse(captured!.body as string) as Record<string, any>;
+    expect(body.system).toContain(rules.inbound);
+    expect(body.system).not.toContain(rules.outbound);
+  });
+
+  it("rejects blank or oversized rules at adapter construction", () => {
+    const fetch: FetchLike = async () => openAiAllowResponse();
+    for (const invalid of [
+      { outbound: "   " },
+      { inbound: "x".repeat(GUARD_RULES_MAX_CHARS + 1) },
+    ]) {
+      expect(() =>
+        createOpenAiGuard({ apiKey: "test", pinnedModel: model, fetch, rules: invalid }),
+      ).toThrow("guard rules");
+      expect(() =>
+        createAnthropicGuard({ apiKey: "test", pinnedModel: model, fetch, rules: invalid }),
+      ).toThrow("guard rules");
+    }
+  });
+
+  it("binds rules text into the effective policy version", () => {
+    expect(effectiveGuardPolicyVersion("v1")).toBe("v1");
+    expect(effectiveGuardPolicyVersion("v1", {})).toBe("v1");
+    const withRules = effectiveGuardPolicyVersion("v1", rules);
+    expect(withRules).toMatch(/^v1\+[0-9a-f]{64}$/);
+    expect(effectiveGuardPolicyVersion("v1", { ...rules })).toBe(withRules);
+    expect(effectiveGuardPolicyVersion("v1", { outbound: rules.outbound })).not.toBe(withRules);
+    expect(effectiveGuardPolicyVersion("v1", { inbound: rules.outbound })).not.toBe(
+      effectiveGuardPolicyVersion("v1", { outbound: rules.outbound }),
+    );
   });
 });
 

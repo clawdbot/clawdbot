@@ -9,8 +9,6 @@ import {
 } from "../../lib/plugins/capability-consent-error.ts";
 import {
   installPlugin,
-  pluginInstallNeedsRiskAcknowledgement,
-  readPluginInstallTrustError,
   runPluginConfigMutation,
   setPluginEnabled,
   type PluginInstallRequest,
@@ -244,19 +242,6 @@ export class PluginsConsentController {
             kind: "warning",
             text: policyWarning.reason,
             installPolicyWarning: { details: policyWarning, request },
-          });
-          return;
-        }
-        const trust = readPluginInstallTrustError(error);
-        const packageName = request.source === "clawhub" ? request.packageName : null;
-        if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
-          this.host.setMessage(installIdentity, {
-            kind: "error",
-            text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
-            acknowledge: {
-              packageName,
-              ...(trust?.version ? { version: trust.version } : {}),
-            },
           });
           return;
         }

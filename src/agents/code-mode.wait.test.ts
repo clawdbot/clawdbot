@@ -538,6 +538,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     const { tools: codeModeTools } = createCodeModeHarness();
     testing.activeRuns.set("invalid-expiry-run", {
       expiresAt: 8_640_000_000_000_001,
+      releaseOwner: () => undefined,
     } as never);
 
     await expect(

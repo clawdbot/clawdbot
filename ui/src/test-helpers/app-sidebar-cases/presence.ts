@@ -19,6 +19,7 @@ describe("AppSidebar viewer presence", () => {
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main"]),
     );
+    sidebar.connected = true;
     const onNavigate = vi.fn();
     sidebar.onNavigate = onNavigate;
 
@@ -93,28 +94,18 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(3);
 
-    const aliceLink = sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')!;
-    for (const options of [
-      { ctrlKey: true },
-      { metaKey: true },
-      { shiftKey: true },
-      { button: 1 },
-    ]) {
-      const click = new MouseEvent("click", { ...options, bubbles: true, cancelable: true });
-      let intercepted = false;
-      aliceLink.addEventListener(
-        "click",
-        (event) => {
-          intercepted = event.defaultPrevented;
-          event.preventDefault(); // Keep jsdom from attempting a new browsing context.
-        },
-        { once: true },
-      );
-      aliceLink.dispatchEvent(click);
-      expect(intercepted).toBe(false);
-    }
+    const aliceRow = sidebar.querySelector<HTMLButtonElement>('[data-online-user-id="alice"]')!;
+    expect(aliceRow.tagName).toBe("BUTTON");
+    expect(aliceRow.closest(".sidebar-online__row")?.querySelectorAll("a, button")).toHaveLength(1);
+    aliceRow.click();
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
+    );
     expect(onNavigate).not.toHaveBeenCalled();
-    aliceLink.click();
+    document
+      .querySelector<HTMLAnchorElement>(".person-activity-card footer a")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(onNavigate).toHaveBeenCalledWith("activity", {
       href: "/activity?person=alice",
       pathname: "/activity",
@@ -169,7 +160,9 @@ describe("AppSidebar viewer presence", () => {
       })),
     });
     await sidebar.updateComplete;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-online__details")!.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-online__person")!.click();
+    // The click loads its interaction owner before the card can render.
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
@@ -231,9 +224,9 @@ describe("AppSidebar viewer presence", () => {
     const bob = { ts: now, user: { id: "bob", name: "Bob" }, lastInputSeconds: 0 };
     gateway.publishEvent("presence", { presence: [alice, bob] });
     await sidebar.updateComplete;
-    const aliceLink = sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')!;
-    const button = aliceLink.parentElement!.querySelector<HTMLButtonElement>("button")!;
+    const button = sidebar.querySelector<HTMLButtonElement>('[data-online-user-id="alice"]')!;
     button.click();
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
@@ -244,7 +237,7 @@ describe("AppSidebar viewer presence", () => {
       presence: [{ ...alice, lastInputSeconds: 600, lastActivityAt: now }, bob],
     });
     await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-online-user-id="alice"]')).toBe(aliceLink);
+    expect(sidebar.querySelector('[data-online-user-id="alice"]')).toBe(button);
     expect(
       sidebar.querySelector(".sidebar-online__person")?.getAttribute("data-online-user-id"),
     ).toBe("bob");
@@ -287,7 +280,8 @@ describe("AppSidebar viewer presence", () => {
       });
       await sidebar.updateComplete;
       vi.useFakeTimers();
-      sidebar.querySelector<HTMLButtonElement>(".sidebar-online__details")!.click();
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-online__person")!.click();
+      await vi.dynamicImportSettled();
       await vi.waitFor(() =>
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
       );
@@ -331,7 +325,7 @@ describe("AppSidebar viewer presence", () => {
           presence: [{ ...person, reason: "disconnect" }, returned],
         });
         await sidebar.updateComplete;
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-online__details")!.click();
+        sidebar.querySelector<HTMLButtonElement>(".sidebar-online__person")!.click();
         await vi.waitFor(() =>
           expect(
             document.querySelector(".person-activity-hovercard time")?.getAttribute("datetime"),

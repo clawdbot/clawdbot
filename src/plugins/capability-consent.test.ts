@@ -7,14 +7,17 @@ import type {
 } from "../config/types.plugins.js";
 import {
   buildPluginCapabilityConsentReview,
-  computeDeclaredSurfaceHash,
   createManagedPluginArtifactConsentHandler,
   diffDeclaredSurfaceWidening,
-  resolveAcceptedSurfaceCurrent,
   resolvePluginArtifactDeclaredSurface,
-  resolvePluginInstallRecordIntegrity,
 } from "./capability-consent.js";
-import { buildPluginCapabilitySummary, mergePluginDeclaredSurfaces } from "./capability-summary.js";
+import {
+  buildPluginCapabilitySummary,
+  computeDeclaredSurfaceHash,
+  mergePluginDeclaredSurfaces,
+  resolveAcceptedSurfaceCurrent,
+  resolvePluginInstallRecordIntegrity,
+} from "./capability-summary.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";

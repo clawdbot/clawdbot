@@ -172,6 +172,14 @@ are private-local.
     | `plugin-sdk/group-activation` | Private-local after July 2026; Narrow group activation mode and command parsing helpers |
   </Accordion>
 
+`createBoundedProviderBinaryStream` requires a request `cleanup` callback.
+Stream cancellation and `release()` start source cancellation, unlock the reader,
+and run cleanup once, then wait for both operations. Cancellation propagates
+source failures; `release()` ignores them. Cleanup failures take precedence in
+both cases. Overflow preserves its fitting prefix and error without waiting for
+cleanup; later `release()` reports cleanup failure. After EOF or a read error,
+the caller must still invoke and await `release()`.
+
 Provider usage snapshots normally report one or more quota `windows`, each with
 a label, percent used, and optional reset time. Providers that expose balance or
 account-state text instead of resettable quota windows should return

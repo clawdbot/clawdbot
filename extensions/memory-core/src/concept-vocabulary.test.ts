@@ -25,29 +25,28 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("2026-04-04.md");
   });
 
-  it("preserves short protected-glossary terms past the latin minimum-length gate", () => {
-    const tags = deriveConceptTags({
-      path: "memory/2026-04-04.md",
-      snippet: "Store the session in kv and back up to s3 nightly.",
-    });
-
-    // "kv" and "s3" are 2-char latin glossary entries that the generic min-length-3 gate would drop.
-    expect(tags).toContain("kv");
-    expect(tags).toContain("s3");
+  it.each([
+    ["Store the session in kv and back up to s3 nightly.", ["kv", "s3"], []],
+    ["Played the mkv recording and tuned the css3 layout.", ["mkv", "css3"], ["kv", "s3"]],
+    ["kv𐐀 𐐀kv s3𐐀 𐐀s3", ["kv𐐨", "𐐨kv", "s3𐐨", "𐐨s3"], ["kv", "s3"]],
+  ])("preserves short glossary terms only as whole words: %s", (snippet, present, absent) => {
+    const tags = deriveConceptTags({ path: "memory/2026-04-04.md", snippet });
+    expect(tags).toEqual(expect.arrayContaining(present));
+    for (const tag of absent) {
+      expect(tags).not.toContain(tag);
+    }
   });
 
-  it("does not surface short glossary terms that only appear inside longer words", () => {
-    const tags = deriveConceptTags({
-      path: "memory/2026-04-04.md",
-      snippet: "Played the mkv recording and tuned the css3 layout.",
-    });
-
-    // "kv"/"s3" are substrings of "mkv"/"css3"; whole-word matching must not emit them as tags.
-    expect(tags).not.toContain("kv");
-    expect(tags).not.toContain("s3");
-    expect(tags).toContain("mkv");
-    expect(tags).toContain("css3");
-  });
+  it.each(["42", "1.00", "51-54", "１.００", "５１-５４", "2026-04-04", "2026-04-04.md"])(
+    "rejects numeric and date noise without losing technical tags: %s",
+    (noise) => {
+      const tags = deriveConceptTags({
+        path: "memory/2026-04-04.md",
+        snippet: `${noise} kv s3 router`,
+      });
+      expect(tags).toStrictEqual(["kv", "router", "s3"]);
+    },
+  );
 
   it("extracts protected and segmented CJK concept tags", () => {
     const tags = deriveConceptTags({

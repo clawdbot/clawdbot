@@ -323,16 +323,16 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     **No API key found for provider after adding a new agent**
 
-    A new agent has an empty auth store — auth is per-agent, stored at:
+    A new agent can read shared auth profiles without copying them. Its
+    own profiles live in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+    and override the shared read-through base. See
+    [Auth credential semantics](/auth-credential-semantics#agent-copy-portability).
 
-    ```text
-    ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
-    ```
-
-    Fix: run `openclaw agents add <id>` and configure auth in the wizard, or
-    copy only portable static `api_key`/`token` profiles from the main
-    agent's store. For OAuth, sign in from the new agent when it needs its
-    own account. See [Multi-Agent Routing](/concepts/multi-agent) for the
+    Fix: run `openclaw models auth login --provider <providerId> --agent <agentId>`
+    on the Gateway host when the agent needs its own credentials. You can also
+    configure auth when creating an agent with `openclaw agents add <id>`.
+    For OAuth, sign in separately when the agent needs its own account.
+    See [Multi-Agent Routing](/concepts/multi-agent) for the
     full `agentDir` reuse and credential-sharing rules — never reuse
     `agentDir` across agents.
 
@@ -391,14 +391,14 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     **Fix checklist:**
 
-    - Confirm where profiles live — current:
-      `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`; legacy:
-      `~/.openclaw/agent/*` (migrated by `openclaw doctor`).
+    - Confirm where profiles live: shared and agent-local SQLite auth stores.
+      Run `openclaw doctor --fix` if an older install still has
+      `auth-profiles.json`; it is a migration source, not the runtime store.
     - Confirm the Gateway loads your env var. `ANTHROPIC_API_KEY` set only in
       your shell won't reach a Gateway run via systemd/launchd — put it in
       `~/.openclaw/.env` or enable `env.shellEnv`.
-    - Confirm you're editing the right agent — multi-agent setups have
-      multiple `auth-profiles.json` files.
+    - Confirm you're configuring the right agent — use `--agent <agentId>`
+      with `openclaw models auth login` to select its local store.
     - Run `openclaw models status` to see configured models and provider
       auth state.
 
@@ -445,12 +445,12 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
 <AccordionGroup>
   <Accordion title="What is an auth profile?">
-    A named credential record (OAuth or API key) tied to a provider, stored
-    at:
-
-    ```text
-    ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
-    ```
+    A named credential record (API key, token, or OAuth) tied to a provider,
+    stored in SQLite. Agent-local profiles in
+    `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` override the
+    shared read-through base in `~/.openclaw/state/openclaw.sqlite`.
+    Older installs keep the shared store in the main agent's database until
+    `openclaw doctor --fix` relocates it.
 
     Inspect saved profiles without dumping secrets: `openclaw models auth
     list` (optionally `--provider <id>` or `--json`). See

@@ -7,7 +7,9 @@ import type {
   CommandResult,
   GatewayHandle,
   LaneBaseParams,
+  LaneResult,
   LaneState,
+  PackagedUpgradeFallbackEvidence,
   ProviderConfig,
 } from "./config.ts";
 import {
@@ -16,6 +18,7 @@ import {
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
   normalizeRequestedRef,
+  parsePackagedUpgradeUpdateTimings,
   resolveDevUpdateVerificationRef,
   resolveExpectedDevUpdateRef,
   shouldRunMainChannelDevUpdate,
@@ -55,6 +58,7 @@ import {
   waitForInstalledGateway,
   waitForInstalledGatewayToStop,
 } from "./installed.ts";
+import { installLaneCompanions } from "./lane-companions.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
 import {
   reserveGatewayPortForLane,
@@ -74,45 +78,6 @@ import {
   waitForGateway,
 } from "./runtime.ts";
 import { formatError, trimForSummary } from "./shared.ts";
-
-async function installLaneCompanions(
-  params: LaneBaseParams & {
-    lane: LaneState;
-    env: NodeJS.ProcessEnv;
-    cliPath?: string;
-  },
-) {
-  if (params.companions.length === 0) {
-    return;
-  }
-  await runTimedLanePhase(params.lane, "install-companions", async () => {
-    for (const companion of params.companions) {
-      const logPath = join(
-        params.logsDir,
-        `companion-${companion.name.replace(/[^a-z0-9]+/giu, "-")}.log`,
-      );
-      const args = ["plugins", "install", `npm-pack:${companion.tarballPath}`, "--force"];
-      if (params.cliPath) {
-        await runInstalledCli({
-          cliPath: params.cliPath,
-          args,
-          env: params.env,
-          cwd: params.lane.homeDir,
-          logPath,
-          timeoutMs: 10 * 60 * 1000,
-        });
-        continue;
-      }
-      await runOpenClaw({
-        lane: params.lane,
-        args,
-        env: params.env,
-        logPath,
-        timeoutMs: 10 * 60 * 1000,
-      });
-    }
-  });
-}
 
 export async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");
@@ -242,6 +207,11 @@ export async function runUpgradeLane(
   const lane = createLaneState("upgrade");
   const cleanup: Cleanup[] = [];
   const gatewayHolder: { current: GatewayHandle | null } = { current: null };
+  const result: LaneResult = {
+    status: "pending",
+    phaseTimings: lane.phaseTimings,
+    updateTimings: [],
+  };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-baseline", async () => {
@@ -310,9 +280,17 @@ export async function runUpgradeLane(
     if (!updateResult) {
       throw new Error("Packaged update completed without a command result.");
     }
-    const usedWindowsPackagedUpgradeFallback =
-      usedWindowsPackagedUpgradeTimeoutFallback ||
-      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform);
+    result.updateTimings = parsePackagedUpgradeUpdateTimings(updateResult.stdout);
+    const updateFallback: PackagedUpgradeFallbackEvidence | undefined =
+      usedWindowsPackagedUpgradeTimeoutFallback
+        ? { reason: "timeout", action: "direct-candidate-install" }
+        : isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform)
+          ? { reason: "swap-cleanup", action: "direct-candidate-install" }
+          : undefined;
+    if (updateFallback) {
+      result.updateFallback = updateFallback;
+    }
+    const usedWindowsPackagedUpgradeFallback = Boolean(updateFallback);
     if (usedWindowsPackagedUpgradeFallback) {
       await runTimedLanePhase(lane, "update-fallback-install", async () => {
         await installPackageSpec({
@@ -422,6 +400,7 @@ export async function runUpgradeLane(
     );
 
     return {
+      ...result,
       status: "pass",
       baselineVersion: baseline.version,
       installedVersion: installed.version,
@@ -429,7 +408,12 @@ export async function runUpgradeLane(
       dashboardStatus: "pass",
       gatewayPort: lane.gatewayPort,
       agentOutput: trimForSummary(agent.stdout),
-      phaseTimings: lane.phaseTimings,
+    };
+  } catch (error) {
+    return {
+      ...result,
+      status: "fail",
+      error: formatError(error),
     };
   } finally {
     await runCleanup(cleanup);

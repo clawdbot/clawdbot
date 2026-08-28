@@ -21,9 +21,12 @@ import {
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
+const workspaceDebug = vi.hoisted(() => vi.fn());
 const tunnelWarn = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
@@ -32,7 +35,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
       if (subsystem === "gateway/worker-workspace") {
-        return { ...logger, info: workspaceInfo };
+        return { ...logger, debug: workspaceDebug, info: workspaceInfo };
       }
       return subsystem === "gateway/worker-tunnel" ? { ...logger, warn: tunnelWarn } : logger;
     },
@@ -725,6 +728,74 @@ describe("node worker tunnel manager", () => {
         journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
       }),
     ).rejects.toThrow(error);
+  });
+
+  it("reuses the placement hash memo across node reconciliations", async () => {
+    const record = environment();
+    const localPath = tempDirs.make("node-worker-memo-persist-");
+    const remoteWorkspaceDir = tempDirs.make("node-worker-memo-persist-remote-");
+    const stagingRoot = tempDirs.make("node-worker-memo-persist-staging-");
+    await fs.writeFile(path.join(localPath, "artifact.txt"), "cross turn\n");
+    const actual = await readActualWorkspaceManifest({ root: localPath, baseCommit: null });
+    const raw = serializeWorkerWorkspaceManifest(actual.manifest);
+    const manifestRef = actual.manifestRef;
+    const nodeTransport = transport();
+    nodeTransport.invoke = vi.fn(async () => ({
+      ok: true,
+      payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, { stdout: `${manifestRef}\n` }),
+    }));
+    const transfer = {
+      prepareSync: vi.fn(async () => ({
+        snapshot: { manifest: actual.manifest, manifestRef, rawManifest: raw, root: localPath },
+        token: "download-token",
+      })),
+      prepareUpload: vi.fn(() => "upload-token"),
+      takeUpload: vi.fn(() => ({
+        base: actual.manifest,
+        baseManifestRef: manifestRef,
+        baseRaw: raw,
+        current: actual.manifest,
+        currentManifestRef: manifestRef,
+        currentRaw: raw,
+        stagingRoot,
+      })),
+      close: vi.fn(async () => {}),
+      revoke: vi.fn(),
+    } as unknown as NodeWorkspaceTransferService;
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      listEnvironments: () => [record],
+      getTransport: () => nodeTransport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    });
+    const handle = await manager.start(startRequest());
+    await handle.syncWorkspace({ localPath, sessionId: "session-1", generation: 1 });
+    const quiescence = { assertActive: async () => {}, resume: async () => {} };
+    const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
+    workspaceDebug.mockClear();
+
+    for (let turn = 0; turn < 2; turn += 1) {
+      const reconciliation = await handle.reconcileWorkspace({
+        localPath,
+        remoteWorkspaceDir,
+        baseManifestRef: manifestRef,
+        journal,
+      });
+      await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+    }
+
+    const reports = workspaceDebug.mock.calls
+      .filter(([message]) => message === "worker workspace reconcile completed")
+      .map(([, data]) => data as { gateway: { contentHashCount: number; memoHitCount: number } });
+    expect(reports).toHaveLength(2);
+    // Turn one hashes the managed worktree; turn two must reuse the
+    // placement-owned memo instead of re-hashing every file.
+    expect(reports[0]!.gateway.contentHashCount).toBeGreaterThan(0);
+    expect(reports[1]!.gateway.contentHashCount).toBe(0);
+    expect(reports[1]!.gateway.memoHitCount).toBeGreaterThan(0);
   });
 
   it("does not republish an accepted manifest already current on the node", async () => {

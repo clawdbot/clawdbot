@@ -193,10 +193,16 @@ vi.mock("../../commands/agent.js", () => {
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   // Direct handler tests bypass Gateway startup, so provide the lifecycle fact
   // that production publishes before admitting agent RPCs.
+  acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+    release: vi.fn(),
+    snapshot: {},
+  })),
   loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
     agentId,
+    agentDir: "/tmp/agent",
     config: resolveAgentTestConfig(),
     pluginGeneration: { pluginMetadataSnapshot: {} },
+    workspaceDir: "/tmp/workspace",
   }),
 }));
 

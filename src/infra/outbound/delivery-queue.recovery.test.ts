@@ -35,16 +35,17 @@ import {
   claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
 } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   asDeliverFn,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
+  readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
@@ -688,7 +689,7 @@ describe("delivery-queue recovery", () => {
       const { result } = await runRecovery({ deliver: vi.fn(), log });
       expect(result.skippedMaxRetries).toBe(1);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
-      expectMockMessageContaining(log.warn, "owner state could not be marked unknown");
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");
     } finally {
       closeOpenClawAgentDatabasesForTest();
     }

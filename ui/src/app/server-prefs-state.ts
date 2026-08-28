@@ -12,6 +12,7 @@ import {
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
+import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 
 // Derived from the wire contract so a theme the profile store rejects can never
 // be offered here; new Set<ThemeName> makes an unknown protocol name a type error.
@@ -23,12 +24,21 @@ const THEMES: ReadonlySet<ThemeName> = new Set<ThemeName>([
   "custom",
 ]);
 
-export function isAppearancePref(key: string): key is "theme" | "themeMode" | "accent" {
-  return key === "theme" || key === "themeMode" || key === "accent";
+export function isAppearancePref(
+  key: string,
+): key is "theme" | "themeMode" | "accent" | "fontUi" | "fontChat" {
+  return (
+    key === "theme" ||
+    key === "themeMode" ||
+    key === "accent" ||
+    key === "fontUi" ||
+    key === "fontChat"
+  );
 }
 const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
 type SyncedPrefSpec<T> = {
+  configSync?: boolean;
   extract: (value: unknown) => T | undefined;
   local: (settings: UiSettings) => T | undefined;
   write?: (value: T | undefined) => Partial<UiSettings>;
@@ -39,8 +49,18 @@ type SyncedPrefSpec<T> = {
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
+const fontPrefSpec = (key: "fontUi" | "fontChat") =>
+  prefSpec<TypefaceId>({
+    configSync: false,
+    extract: normalizeTypefaceOverride,
+    local: (settings) => normalizeTypefaceOverride(settings[key]),
+    write: (value) => ({ [key]: value }),
+    clearable: true,
+    reset: () => ({ [key]: undefined }),
+  });
+
 /**
- * One descriptor per synced pref: the source of truth for config ui.prefs.
+ * One descriptor per synced pref, including its profile-only storage boundary.
  * Each key owns server validation, local normalization, and applicability.
  */
 export const SYNCED_PREFS = {
@@ -68,6 +88,8 @@ export const SYNCED_PREFS = {
     clearable: true,
     reset: () => ({ accent: undefined }),
   }),
+  fontUi: fontPrefSpec("fontUi"),
+  fontChat: fontPrefSpec("fontChat"),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
@@ -117,6 +139,8 @@ export type ResettableServerUiPrefKey =
   | "theme"
   | "themeMode"
   | "accent"
+  | "fontUi"
+  | "fontChat"
   | "locale"
   | "chatSendShortcut"
   | "chatFollowUpMode";
@@ -162,6 +186,9 @@ export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   }
   const result: ServerUiPrefs = {};
   for (const key of SYNCED_PREF_KEYS) {
+    if (SYNCED_PREFS[key].configSync === false) {
+      continue;
+    }
     const value = SYNCED_PREFS[key].extract(prefs[key]);
     if (value !== undefined) {
       (result as Record<string, unknown>)[key] = value;
@@ -190,14 +217,17 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
     const overridden = !prefValuesEqual(localValue, resetValue);
     return {
       overridden,
-      provenance: overridden ? "device-local" : "default",
+      provenance:
+        overridden || (specification.configSync === false && canSync === false)
+          ? "device-local"
+          : "default",
       resetValue,
       value: localValue,
     };
   };
   const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
   const configValue =
-    prefs && Object.hasOwn(prefs, key)
+    specification.configSync !== false && prefs && Object.hasOwn(prefs, key)
       ? (specification.extract(prefs[key]) as SyncedPrefValue<K> | undefined)
       : undefined;
   const profileValue = profilePrefs?.[key] ?? undefined;

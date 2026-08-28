@@ -37,6 +37,7 @@ import {
   createToolSearchTools as createRunToolSearchTools,
   projectToolSearchTargetTranscriptMessages,
   registerHeadlessToolSearchCatalog,
+  restrictToolSearchCatalog,
   resolveToolSearchConfig,
   resolveToolSearchCatalogTool as resolveRunToolSearchCatalogTool,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -2100,28 +2101,125 @@ describe("Tool Search", () => {
     });
   });
 
-  it("changes the telemetry counter scope when a catalog is replaced", async () => {
-    const config = { tools: { toolSearch: true } } as never;
-    const catalogRef = createToolSearchCatalogRef();
-    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
-    applyToolSearchCatalog({
-      tools: [codeTool, pluginTool("fake_first", "First capability")],
-      config,
-      catalogRef,
-    });
-    const firstScope = expectDefined(catalogRef.current, "first catalog").counterScope;
-    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
-    await runtime.search("fake_first");
-    expect(runtime.telemetry()).toMatchObject({ counterScope: firstScope, searchCount: 1 });
+  it.each([false, true])(
+    "changes the telemetry counter scope on replacement after clear=%s",
+    async (clear) => {
+      const config = { tools: { toolSearch: true } } as never;
+      const catalogRef = createToolSearchCatalogRef();
+      const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+      applyToolSearchCatalog({
+        tools: [codeTool, pluginTool("fake_first", "First capability")],
+        config,
+        catalogRef,
+      });
+      const firstScope = expectDefined(catalogRef.current, "first catalog").counterScope;
+      const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+      await runtime.search("fake_first");
+      expect(runtime.telemetry()).toMatchObject({ counterScope: firstScope, searchCount: 1 });
+      if (clear) {
+        clearToolSearchCatalog({ catalogRef });
+        expect(runtime.telemetry()).toMatchObject({ counterScope: firstScope, searchCount: 1 });
+      }
 
-    applyToolSearchCatalog({
-      tools: [codeTool, pluginTool("fake_second", "Second capability")],
-      config,
-      catalogRef,
+      applyToolSearchCatalog({
+        tools: [codeTool, pluginTool("fake_second", "Second capability")],
+        config,
+        catalogRef,
+      });
+      const replacementScope = expectDefined(catalogRef.current, "second catalog").counterScope;
+      expect(replacementScope).not.toBe(firstScope);
+      expect(runtime.telemetry()).toMatchObject({ counterScope: replacementScope, searchCount: 0 });
+      clearToolSearchCatalog({ catalogRef });
+      expect(runtime.telemetry()).toMatchObject({ counterScope: replacementScope, searchCount: 0 });
+    },
+  );
+
+  it.each([false, true])(
+    "retains final shared catalog diagnostics after an earlier telemetry read=%s",
+    async (readBeforeClear) => {
+      const catalogRef = createToolSearchCatalogRef();
+      const ctx = { catalogRef };
+      const config = { tools: { toolSearch: true } } as never;
+      const target = pluginTool("diagnostic_target", "Diagnostic target");
+      registerHeadlessToolSearchCatalog({
+        catalogRef,
+        tools: [target, mcpPluginTool("remote_target", "Remote target")],
+      });
+      const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(config));
+      const sibling = new ToolSearchRuntime(ctx, resolveToolSearchConfig(config));
+      const counterScope = expectDefined(catalogRef.current, "catalog").counterScope;
+      if (readBeforeClear) {
+        expect(runtime.telemetry()).toEqual({
+          catalogSize: 2,
+          sources: { openclaw: 1, mcp: 1, client: 0 },
+          counterScope,
+          searchCount: 0,
+          describeCount: 0,
+          callCount: 0,
+        });
+      }
+      await sibling.search(target.name);
+      await sibling.describe(target.name);
+      await sibling.call(target.name);
+      addClientToolsToToolSearchCatalog({
+        ...ctx,
+        config,
+        tools: [fakeTool("client_target", "Client target")],
+      });
+      restrictToolSearchCatalog({
+        ...ctx,
+        allowedToolNames: new Set([target.name, "client_target"]),
+      });
+      const expected = {
+        catalogSize: 2,
+        sources: { openclaw: 1, mcp: 0, client: 1 },
+        counterScope,
+        searchCount: 1,
+        describeCount: 1,
+        callCount: 1,
+      };
+      clearToolSearchCatalog(ctx);
+      expect(catalogRef.current).toBeUndefined();
+      expect(runtime.telemetry()).toEqual(expected);
+      expect(sibling.telemetry()).toEqual(expected);
+      const snapshot = runtime.telemetry();
+      snapshot.sources.client = 99;
+      snapshot.callCount = 99;
+      clearToolSearchCatalog(ctx);
+      expect(runtime.telemetry()).toEqual(expected);
+
+      const unavailable = "Tool Search catalog is unavailable for this run.";
+      expect(() => runtime.all()).toThrow(unavailable);
+      expect(() => runtime.namespaceEntries()).toThrow(unavailable);
+      await expect(runtime.search(target.name)).rejects.toThrow(unavailable);
+      await expect(runtime.describe(target.name)).rejects.toThrow(unavailable);
+      await expect(runtime.call(target.name)).rejects.toThrow(unavailable);
+      await expect(runtime.callExactId("openclaw:fake-catalog:diagnostic_target")).rejects.toThrow(
+        unavailable,
+      );
+      await expect(runtime.callValue(target.name)).rejects.toThrow(unavailable);
+      expect(runtime.isReplaySafeExactId("openclaw:fake-catalog:diagnostic_target")).toBe(false);
+      expect(target.execute).toHaveBeenCalledOnce();
+      expect(runtime.telemetry()).toEqual(expected);
+    },
+  );
+
+  it("distinguishes a closed empty catalog from a never-registered catalog", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const ctx = { catalogRef };
+    const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig());
+    clearToolSearchCatalog(ctx);
+    expect(() => runtime.telemetry()).toThrow("Tool Search catalog is unavailable for this run.");
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
+    clearToolSearchCatalog(ctx);
+    expect(runtime.telemetry()).toEqual({
+      catalogSize: 0,
+      sources: { openclaw: 0, mcp: 0, client: 0 },
+      counterScope: expect.any(String),
+      searchCount: 0,
+      describeCount: 0,
+      callCount: 0,
     });
-    const replacementScope = expectDefined(catalogRef.current, "second catalog").counterScope;
-    expect(replacementScope).not.toBe(firstScope);
-    expect(runtime.telemetry()).toMatchObject({ counterScope: replacementScope, searchCount: 0 });
   });
 
   it("scopes catalogs by run id when attempts share a session", async () => {
@@ -3658,59 +3756,85 @@ describe("Tool Search", () => {
     expect(laterRef.current?.counterScope).not.toBe(catalogAfterFirst.counterScope);
   });
 
-  it("restores an unchanged catalog after run cleanup", async () => {
-    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
-    const alpha = pluginTool("fake_xrun_alpha", "Alpha tool");
-    const beta = pluginTool("fake_xrun_beta", "Beta tool");
-    const config = { tools: { toolSearch: true } } as never;
-    const sessionId = "session-cross-run-reuse";
-    const firstRef = createToolSearchCatalogRef();
+  it.each(["fresh", "same"] as const)(
+    "restores an unchanged catalog after run cleanup on a %s ref",
+    async (refMode) => {
+      const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+      const alpha = pluginTool("fake_xrun_alpha", "Alpha tool");
+      const beta = pluginTool("fake_xrun_beta", "Beta tool");
+      const config = { tools: { toolSearch: true } } as never;
+      const sessionId = `session-cross-run-reuse-${refMode}`;
+      const firstRef = createToolSearchCatalogRef();
 
-    const first = applyToolSearchCatalog({
-      tools: [codeTool, alpha, beta],
-      config,
-      sessionId,
-      runId: "run-1",
-      catalogRef: firstRef,
-    });
-    expect(first.catalogReused).toBe(false);
-    const firstCatalog = expectDefined(firstRef.current, "first run catalog");
-    const firstAlphaEntry = firstCatalog.entries.find((entry) => entry.name === alpha.name);
-    expect(firstAlphaEntry).toBeDefined();
-    const firstRuntime = new ToolSearchRuntime(
-      { catalogRef: firstRef },
-      resolveToolSearchConfig(config),
-    );
-    await firstRuntime.search(alpha.name);
-    expect(firstRuntime.telemetry()).toMatchObject({
-      counterScope: firstCatalog.counterScope,
-      searchCount: 1,
-    });
+      const first = applyToolSearchCatalog({
+        tools: [codeTool, alpha, beta],
+        config,
+        sessionId,
+        runId: "run-1",
+        catalogRef: firstRef,
+      });
+      expect(first.catalogReused).toBe(false);
+      const firstCatalog = expectDefined(firstRef.current, "first run catalog");
+      const firstAlphaEntry = firstCatalog.entries.find((entry) => entry.name === alpha.name);
+      expect(firstAlphaEntry).toBeDefined();
+      const firstRuntime = new ToolSearchRuntime(
+        { catalogRef: firstRef },
+        resolveToolSearchConfig(config),
+      );
+      await firstRuntime.search(alpha.name);
+      const firstCounters = {
+        counterScope: firstCatalog.counterScope,
+        searchCount: 1,
+        describeCount: 0,
+        callCount: 0,
+      };
+      expect(firstRuntime.telemetry()).toMatchObject(firstCounters);
 
-    clearToolSearchCatalog({
-      sessionId,
-      runId: "run-1",
-      catalogRef: firstRef,
-    });
-    expect(firstRef.current).toBeUndefined();
+      clearToolSearchCatalog({
+        sessionId,
+        runId: "run-1",
+        catalogRef: firstRef,
+      });
+      expect(firstRef.current).toBeUndefined();
+      expect(firstRuntime.telemetry()).toMatchObject(firstCounters);
 
-    const secondRef = createToolSearchCatalogRef();
-    const second = applyToolSearchCatalog({
-      tools: [codeTool, alpha, beta],
-      config,
-      sessionId,
-      runId: "run-2",
-      catalogRef: secondRef,
-    });
-    expect(second.catalogRegistered).toBe(true);
-    expect(second.catalogReused).toBe(true);
-    const restoredCatalog = expectDefined(secondRef.current, "restored run catalog");
-    expect(restoredCatalog.entries.find((entry) => entry.name === alpha.name)).toBe(
-      firstAlphaEntry,
-    );
-    expect(restoredCatalog.counterScope).not.toBe(firstCatalog.counterScope);
-    expect(restoredCatalog.searchCount).toBe(0);
-  });
+      const restoredRef = refMode === "same" ? firstRef : createToolSearchCatalogRef();
+      const second = applyToolSearchCatalog({
+        tools: [codeTool, alpha, beta],
+        config,
+        sessionId,
+        runId: "run-2",
+        catalogRef: restoredRef,
+      });
+      expect(second.catalogRegistered).toBe(true);
+      expect(second.catalogReused).toBe(true);
+      const restoredCatalog = expectDefined(restoredRef.current, "restored run catalog");
+      expect(restoredCatalog.entries.find((entry) => entry.name === alpha.name)).toBe(
+        firstAlphaEntry,
+      );
+      expect(restoredCatalog.counterScope).not.toBe(firstCatalog.counterScope);
+      expect(restoredCatalog.searchCount).toBe(0);
+      const restoredRuntime = new ToolSearchRuntime(
+        { catalogRef: restoredRef },
+        resolveToolSearchConfig(config),
+      );
+      const restoredCounters = {
+        counterScope: restoredCatalog.counterScope,
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+      };
+      for (const phase of ["active", "closed"] as const) {
+        if (phase === "closed") {
+          clearToolSearchCatalog({ sessionId, catalogRef: restoredRef });
+        }
+        expect(restoredRuntime.telemetry(), phase).toMatchObject(restoredCounters);
+        expect(firstRuntime.telemetry(), phase).toMatchObject(
+          refMode === "same" ? restoredCounters : firstCounters,
+        );
+      }
+    },
+  );
 
   it("does not retain hook-bound catalogs, including prewrapped tools", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");

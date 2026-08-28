@@ -169,13 +169,15 @@ async function buildExpectedGatewayServicePlan(params: {
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
 }) {
+  const managed = resolveManagedGatewayServiceCommand(params.command);
   return buildGatewayInstallPlan({
     env: params.serviceInstallEnv,
     port: params.port,
     runtime: params.runtime,
     runtimePath: params.runtimePath,
-    existingEnvironment: params.command.environment,
-    existingEnvironmentValueSources: params.command.environmentValueSources,
+    existingCommand: params.command,
+    existingEnvironment: managed?.environment,
+    existingEnvironmentValueSources: managed?.environmentValueSources,
     warn: (message, title) => note(message, title),
     config: params.cfg,
   });
@@ -524,7 +526,9 @@ export async function maybeRepairGatewayServiceConfig(
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
-    formatGatewayHeapLimitReport(inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS)),
+    formatGatewayHeapLimitReport(
+      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, {}, command.programArguments),
+    ),
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
@@ -568,7 +572,7 @@ export async function maybeRepairGatewayServiceConfig(
     runtimeChoice === "bun" ? managedDefinition.programArguments[0] : undefined;
   const expectedPlan = await buildExpectedGatewayServicePlan({
     cfg,
-    command: managedDefinition,
+    command,
     serviceInstallEnv,
     port,
     runtime: runtimeChoice,
@@ -617,7 +621,7 @@ export async function maybeRepairGatewayServiceConfig(
     needsNodeRuntime && systemNodePath
       ? await buildExpectedGatewayServicePlan({
           cfg,
-          command: managedDefinition,
+          command,
           serviceInstallEnv,
           port,
           runtime: "node",
@@ -877,7 +881,7 @@ export async function maybeRepairGatewayServiceConfig(
   const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
   const updatedPlan = await buildExpectedGatewayServicePlan({
     cfg: cfgForServiceInstall,
-    command: managedDefinition,
+    command,
     serviceInstallEnv,
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,

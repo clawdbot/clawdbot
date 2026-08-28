@@ -14,7 +14,6 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import type { BrowserTarget } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { folderDisplayName, isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
@@ -52,7 +51,7 @@ export class DraftPlaceBrowser {
   private browserLoadingValue = false;
   private browserErrorValue: string | null = null;
   private browserListingValue: FsListDirResult | null = null;
-  private browserTargetValue: BrowserTarget | null = null;
+  private browserOpenValue = false;
   private browserProjectPathValue: string | null = null;
   private browserRegisteringValue = false;
   private openPopoverValue: DraftPickerKind | null = null;
@@ -198,8 +197,8 @@ export class DraftPlaceBrowser {
     return this.browserListingValue;
   }
 
-  get browserTarget(): BrowserTarget | null {
-    return this.browserTargetValue;
+  get browserOpen(): boolean {
+    return this.browserOpenValue;
   }
 
   get browserProjectPath(): string | null {
@@ -367,8 +366,8 @@ export class DraftPlaceBrowser {
     return isAbsolutePath(draft) ? draft : null;
   }
 
-  selectGatewayBrowser(label: string, path?: string) {
-    this.browserTargetValue = { nodeId: "", label };
+  selectGatewayBrowser(path?: string) {
+    this.browserOpenValue = true;
     this.loadBrowser(path && isAbsolutePath(path) ? path : undefined);
   }
 
@@ -376,8 +375,7 @@ export class DraftPlaceBrowser {
     const snapshot = this.read();
     const gatewaySnapshot = snapshot.context?.gateway.snapshot;
     const client = gatewaySnapshot?.client;
-    const target = this.browserTargetValue;
-    if (gatewaySnapshot?.phase !== "connected" || !client || !target) {
+    if (gatewaySnapshot?.phase !== "connected" || !client || !this.browserOpenValue) {
       return;
     }
     const requestId = ++this.browserRequestToken;
@@ -537,7 +535,7 @@ export class DraftPlaceBrowser {
     this.browserLoadingValue = false;
     this.browserErrorValue = null;
     this.browserListingValue = null;
-    this.browserTargetValue = null;
+    this.browserOpenValue = false;
     this.browserProjectPathValue = null;
     this.browserRegisteringValue = false;
     this.browserPathDraftValue = "";

@@ -14,6 +14,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
@@ -2234,6 +2235,67 @@ process.on("SIGINT", shutdown);`,
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it.each(["managed", "combined"] as const)(
+    "cancels a %s catalog waiter without cancelling the shared producer",
+    async (kind) => {
+      const tempDir = tempDirTracker.make("bundle-mcp-catalog-cancel-");
+      const serverPath = path.join(tempDir, "server.mjs");
+      const logPath = path.join(tempDir, "server.log");
+      const releasePath = path.join(tempDir, "release-list");
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath,
+        listToolsReleasePath: releasePath,
+      });
+      const managed = createSessionMcpRuntime({
+        sessionId: `catalog-cancel-${kind}`,
+        workspaceDir: tempDir,
+        cfg: { mcp: { servers: { shared: { command: process.execPath, args: [serverPath] } } } },
+      });
+      const runtime =
+        kind === "managed"
+          ? managed
+          : createCombinedSessionMcpRuntime({
+              sessionId: "combined-catalog-cancel",
+              workspaceDir: tempDir,
+              parts: [managed, makeRuntime([], "other")],
+            });
+      const controller = new AbortController();
+      let cancelled = false;
+      let failure: unknown;
+      const reason = new Error("cancelled one catalog waiter");
+      const first = runWithSessionMcpRequestSignal(controller.signal, () =>
+        runtime.callTool("shared", "slow_tool", {}),
+      ).catch((error: unknown) => {
+        cancelled = true;
+        failure = error;
+        return error;
+      });
+      let other: Promise<CallToolResult> | undefined;
+      try {
+        await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+        expect(cancelled).toBe(false);
+        other = runtime.callTool("shared", "slow_tool", {});
+        controller.abort(reason);
+        await vi.waitFor(() => expect(cancelled).toBe(true));
+        expect(failure).toMatchObject({ name: "AbortError", cause: reason });
+        expect(await fs.readFile(logPath, "utf8")).not.toContain("recv notifications/cancelled");
+        await fs.writeFile(releasePath, "release");
+        await expect(other).resolves.toMatchObject({ isError: false });
+        await first;
+        const log = await fs.readFile(logPath, "utf8");
+        expect(log.match(/recv tools\/list/g)).toHaveLength(1);
+        expect(log.match(/recv tools\/call/g)).toHaveLength(1);
+        expect(log).not.toContain("recv notifications/cancelled");
+        expect(managed.peekCatalog()?.tools.map((tool) => tool.toolName)).toContain("slow_tool");
+      } finally {
+        await fs.writeFile(releasePath, "release");
+        await Promise.allSettled([first, other]);
+        await runtime.dispose();
+      }
+    },
+  );
 
   it("cancels materialized MCP calls without pausing the healthy server", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-caller-cancel-");

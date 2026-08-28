@@ -46,6 +46,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
 - `plugins.entries.codex.config.appServer.headers.*`
+- `plugins.entries.comfy.config.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
@@ -128,7 +129,7 @@ The lists below are generated from the source target registry and checked agains
 - `channels.googlechat.serviceAccount`
 - `channels.googlechat.accounts.*.serviceAccount`
 
-### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
+### SQLite auth-profile targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
 - `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 - `profiles.*.tokenRef` (`type: "token"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)

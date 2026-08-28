@@ -164,8 +164,8 @@ openclaw-session-owner-chip {
   position: absolute;
   inset: -2px;
   box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -762,6 +762,15 @@ openclaw-session-owner-chip {
 /* A corner toast degenerates at phone widths, where it would span nearly the
  * whole viewport anyway. Use the full-width top idiom instead. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* The unanchored chat toast shares the viewport with shell and pane chrome.
+     Anchored permission toasts already carry a measured pane-header offset. */
+  .shell--chat > openclaw-toast-host .app-toast:not(.app-toast--anchored) {
+    top: calc(
+      var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
+        20px
+    );
+  }
+
   .app-toast {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
@@ -3284,6 +3293,12 @@ td.data-table-key-col {
   color: var(--text);
 }
 
+.exec-approval-scope {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .exec-approval-meta {
   margin-top: 12px;
   display: grid;
@@ -4962,7 +4977,6 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  animation: scale-in 0.15s ease-out;
 }
 
 .cmd-palette__label {
@@ -5621,13 +5635,6 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* The 16px PR glyph inks 1px beyond its 14px track. Inset only that glyph so
-   the other trailing atoms keep their shared axis inside the clipped endcap. */
-.session-row-state [data-session-pr-state] {
-  position: relative;
-  left: 1px;
-}
-
 .sidebar-session-fork-indicator {
   display: inline-flex;
   margin-right: 4px;
@@ -5672,7 +5679,7 @@ td.data-table-key-col {
 }
 
 .session-row-badge--pull-request[data-pull-request-state="merged"] {
-  color: var(--accent);
+  color: var(--pr-merged);
 }
 
 .session-row-badge--cloud[data-placement-state="failed"],
@@ -5797,8 +5804,8 @@ td.data-table-key-col {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
 }
 
@@ -5817,7 +5824,7 @@ td.data-table-key-col {
   .session-run-spinner,
   .session-glyph__ring {
     animation: none;
-    border-color: var(--run);
+    border-color: var(--accent);
   }
 }
 

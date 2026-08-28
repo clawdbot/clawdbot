@@ -69,6 +69,7 @@ let missing = 0;
       join(consumerRoot, "index.ts"),
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { identityEntryAuthenticationClassifier, meetsIdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type {
   ChannelIngressIdentitySubjectInput,
   IdentifierAuthentication,
@@ -83,11 +84,18 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 import { z } from "zod";
 
 const identifierAuthentication: IdentifierAuthentication = "verified";
+const meetsMinimum: boolean = meetsIdentifierAuthentication(identifierAuthentication, "asserted");
+void meetsMinimum;
 const subject: ChannelIngressIdentitySubjectInput = {
   stableId: "provider-user-id",
   authentication: { "provider-user-id": identifierAuthentication },
 };
 void subject;
+const classifyEntryAuthentication = identityEntryAuthenticationClassifier({
+  primary: { authentication: identifierAuthentication },
+});
+const entryAuthentication: IdentifierAuthentication | undefined = classifyEntryAuthentication("provider-user-id");
+void entryAuthentication;
 
 const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
   pluginId: "package-consumer",

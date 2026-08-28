@@ -413,29 +413,85 @@ prepare_update_restart_probe_current_install() {
   local log_file="$2"
   local command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
   local doctor_log="${log_file}.doctor"
+  local authored_config="${log_file}.authored-config"
+  local parking_helper="${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}"
+  local failure_stage=""
+  local probe_status=0
+  local restore_status=0
   local start_epoch
   local ready_epoch
 
   echo "Preparing candidate-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
   seed_update_restart_probe_device_auth
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$doctor_log" 2>&1; then
+  # Service installation persists OPENCLAW_CONFIG_PATH, so isolate the canonical file in place.
+  # Reload stays off through service setup; restoring authored bytes cannot restart this probe.
+  node "$parking_helper" \
+    park-restart-probe "$OPENCLAW_CONFIG_PATH" "$authored_config" "$port" || probe_status=$?
+  if [ "$probe_status" -ne 0 ]; then
+    echo "failed to park authored config for candidate restart probe" >&2
+    if [ -e "$authored_config" ]; then
+      node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config" ||
+        restore_status=$?
+    fi
+    if [ "$restore_status" -ne 0 ]; then
+      return "$restore_status"
+    fi
+    return "$probe_status"
+  fi
+  # This setup pass migrates candidate device identity while deferring plugin convergence.
+  # Parent-write support lets that migration persist before the real update begins.
+  openclaw_e2e_maybe_timeout \
+    "$command_timeout" \
+    env \
+    OPENCLAW_UPDATE_IN_PROGRESS=1 \
+    OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=1 \
+    OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1 \
+    openclaw doctor --fix --non-interactive >"$doctor_log" 2>&1 || {
+      probe_status=$?
+      failure_stage="doctor"
+    }
+  if [ "$probe_status" -ne 0 ]; then
     echo "candidate device identity migration failed" >&2
     cat "$doctor_log" >&2 || true
-    return 1
   fi
-  start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
-  gateway_pid="$!"
-  printf '%s\n' "$gateway_pid" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"
-  ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
-  write_update_restart_service_auth_env
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON" 2>"$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR"; then
+  if [ "$probe_status" -eq 0 ]; then
+    start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
+    env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+    gateway_pid="$!"
+    printf '%s\n' "$gateway_pid" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"
+    openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port" || {
+      probe_status=$?
+      failure_stage="readiness"
+    }
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
+    start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
+    write_update_restart_service_auth_env || {
+      probe_status=$?
+      failure_stage="service-env"
+    }
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON" 2>"$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR" || {
+      probe_status=$?
+      failure_stage="install"
+    }
+  fi
+  if [ "$failure_stage" = "install" ]; then
     echo "gateway service install failed" >&2
     cat "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR" >&2 || true
     cat "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON" >&2 || true
-    return 1
+  elif [ "$failure_stage" = "readiness" ]; then
+    echo "candidate restart probe gateway did not become ready" >&2
+  elif [ "$failure_stage" = "service-env" ]; then
+    echo "failed to write candidate restart service environment" >&2
   fi
+  node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config" || restore_status=$?
+  if [ "$restore_status" -ne 0 ]; then
+    echo "failed to restore authored config after candidate restart probe" >&2
+    return "$restore_status"
+  fi
+  return "$probe_status"
 }

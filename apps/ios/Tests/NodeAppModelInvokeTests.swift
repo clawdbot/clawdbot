@@ -1167,18 +1167,24 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.chatDeliveryAgentId == nil)
     }
 
-    @Test @MainActor func `chat delivery owner requires persisted or gateway ownership`() {
+    @Test @MainActor func `chat delivery owner and refresh identity follow gateway ownership`() {
         let appModel = NodeAppModel()
+        let ownerlessIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == nil)
 
         appModel.gatewayDefaultAgentId = " Agent-A "
+        let defaultIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == "agent-a")
+        #expect(defaultIdentity != ownerlessIdentity)
 
         appModel.setSelectedAgentId(" Agent-B ")
+        let selectedIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == "agent-b")
+        #expect(selectedIdentity != defaultIdentity)
 
         appModel.openChat(sessionKey: "agent:Agent-C:incident")
         #expect(appModel.chatDeliveryAgentId == "agent-c")
+        #expect(appModel.chatViewModelIdentityID != selectedIdentity)
     }
 
     @Test @MainActor func `init preserves saved talk mode preference`() {
