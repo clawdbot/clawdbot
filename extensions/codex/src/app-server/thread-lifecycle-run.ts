@@ -703,7 +703,7 @@ export async function startOrResumeThread(
       }
     }
 
-    if (initialBoundThreadId && !preserveExistingBinding && !replacementPredecessor) {
+    if (initialBoundThreadId && !replacementPredecessor) {
       await releaseRetainedThread(initialBoundThreadId);
     }
     const started = await startFreshCodexThread(params, {
