@@ -385,9 +385,9 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
   const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
     ...replyPipeline.replyOptions,
-    onAgentRunStart: (...args) => {
-      agentRun = [args[0], args[1]];
-      return onAgentRunStart?.(...args);
+    onAgentRunStart: (...runStartArgs) => {
+      agentRun = [runStartArgs[0], runStartArgs[1]];
+      return onAgentRunStart?.(...runStartArgs);
     },
   };
   const hookCtx = delivery.observeMessageSent

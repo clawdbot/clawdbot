@@ -898,7 +898,11 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
+    accepted?: boolean;
+  }>([
     { name: "no observer", onAgentRunStart: undefined },
     { name: "void observer", onAgentRunStart: () => {} },
     { name: "legacy boolean result", onAgentRunStart: () => true },

@@ -27,6 +27,10 @@ import {
   createDurableSendResult,
   createRecordInboundSession,
   createReplyDispatchReceipt,
+  deliveryResult,
+  type DeliveryResult,
+  type DurableSendRequest,
+  type DurableSupportRequest,
   expectDispatched,
   expectNonVisibleFinalReceipt,
 } from "./run-channel-turn.delivery.test-helpers.js";
@@ -124,34 +128,6 @@ function dispatchTestAssembledTurn(
   });
 }
 
-type DurableSendRequest = {
-  accountId?: string;
-  channel?: string;
-  durability?: string;
-  payloads?: ReplyPayload[];
-  replyToMode?: string;
-  session?: {
-    key?: string;
-    agentId?: string;
-    requesterAccountId?: string;
-    requesterSenderId?: string;
-    conversationType?: string;
-  };
-  threadId?: string | number | null;
-  to?: string;
-};
-
-type DurableSupportRequest = {
-  channel?: string;
-  requirements?: Record<string, boolean>;
-};
-
-type DeliveryResult = {
-  messageIds?: string[];
-  receipt?: { platformMessageIds?: string[] };
-  visibleReplySent?: boolean;
-};
-
 function latestDurableSendRequest(): DurableSendRequest {
   const calls = sendDurableMessageBatch.mock.calls;
   const call = calls[calls.length - 1] as unknown as [DurableSendRequest] | undefined;
@@ -170,10 +146,6 @@ function latestDurableSupportRequest(): DurableSupportRequest {
   }
   const [request] = call;
   return request;
-}
-
-function deliveryResult(value: unknown): DeliveryResult {
-  return value as DeliveryResult;
 }
 
 describe("channel turn delivery", () => {
