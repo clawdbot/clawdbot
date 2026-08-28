@@ -771,14 +771,13 @@ textarea.settings-input {
 @media (max-width: 640px) {
   .shell--settings .content,
   .content:has(.plugins-hub-header) {
+    --content-inline-padding: var(--space-3);
     padding: var(--space-3) var(--space-3) var(--space-4);
   }
 
-  .content:has(.settings-workspace .settings-page) .content-header,
-  .settings-page {
-    padding-inline: 0;
-  }
-
+  .shell--settings .content:has(.settings-workspace) .content-header,
+  .content:has(.plugins-hub-header) .content-header,
+  .settings-page,
   .shell--settings .config-content {
     padding-inline: 0;
   }

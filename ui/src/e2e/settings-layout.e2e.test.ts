@@ -158,24 +158,46 @@ suite.define(() => {
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
         const header = page.locator(".content-header").last();
+        const title = header.locator(".page-title");
         const workspace = page.locator(".settings-workspace").last();
-        await Promise.all([header.waitFor(), workspace.waitFor()]);
+        const contentSurface = workspace.locator(
+          route === "appearance" ? ".settings-page" : ".model-setup",
+        );
+        await Promise.all([
+          header.waitFor(),
+          title.waitFor(),
+          workspace.waitFor(),
+          contentSurface.waitFor(),
+        ]);
         await expect
           .poll(async () => {
-            const [headerBox, workspaceBox] = await Promise.all([
+            const [headerBox, titleBox, workspaceBox, contentSurfaceBox] = await Promise.all([
               header.boundingBox(),
+              title.boundingBox(),
               workspace.boundingBox(),
+              contentSurface.boundingBox(),
             ]);
-            return headerBox && workspaceBox
+            return headerBox && titleBox && workspaceBox && contentSurfaceBox
               ? {
                   headerLeft: Math.round(headerBox.x),
                   headerTop: Math.round(headerBox.y),
+                  titleLeft: Math.round(titleBox.x),
                   workspaceLeft: Math.round(workspaceBox.x),
                   workspaceRight: Math.round(workspaceBox.x + workspaceBox.width),
+                  contentLeft: Math.round(contentSurfaceBox.x),
+                  contentRight: Math.round(contentSurfaceBox.x + contentSurfaceBox.width),
                 }
               : null;
           })
-          .toEqual({ headerLeft: 12, headerTop: 70, workspaceLeft: 12, workspaceRight: 378 });
+          .toEqual({
+            contentLeft: 12,
+            contentRight: 378,
+            headerLeft: 12,
+            headerTop: 70,
+            titleLeft: 12,
+            workspaceLeft: 12,
+            workspaceRight: 378,
+          });
       }
 
       await page.setViewportSize({ height: 900, width: 1440 });
