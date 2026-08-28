@@ -41,7 +41,6 @@ import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import { getChatHistoryLoadState, retryChatHistoryLoad } from "./chat-history.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
-import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   type ChatPlacementStartupNoticeProps,
@@ -437,19 +436,7 @@ export function renderChat(props: ChatProps) {
     disabledReasonTone: props.disabledReasonTone,
     disabledBanner: props.disabledBanner,
     runError: props.runError,
-    anchoredNotices: renderChatComposerNotices({
-      runError: props.runError,
-      workspaceConflict: props.workspaceConflict,
-      onDismissWorkspaceConflict: props.onDismissWorkspaceConflict,
-      // History can own the bubble before startup observes its receipt. Keep
-      // the banner action reachable when transcript deduplication hides the row.
-      placementStartup:
-        props.placementStartup?.initialTurn &&
-        chatMessagesContainQueuedSend(props.messages, props.placementStartup.initialTurn, true)
-          ? { ...props.placementStartup, initialTurn: undefined }
-          : props.placementStartup,
-      onRetrySessionPlacementStartup: props.onRetrySessionPlacementStartup,
-    }),
+    anchoredNotices: renderChatComposerNotices(props),
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,
@@ -650,12 +637,7 @@ export function renderChat(props: ChatProps) {
           <div class="chat-split-container">
             <div class="chat-main">
               <div class="chat-main__conversation-column">
-                ${props.header ?? nothing}
-                ${renderChatTopbarNotices({
-                  ...props,
-                  error: props.error,
-                  onDismissError: props.onDismissError,
-                })}
+                ${props.header ?? nothing} ${renderChatTopbarNotices(props)}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation">
                   ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}

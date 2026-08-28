@@ -15,7 +15,7 @@ import {
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { chatSendHoldReason, OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
@@ -145,17 +145,10 @@ export function finishChatDeliveryAdmission(
   if (!current) {
     return "failed";
   }
-  if (options?.routingSessionKey && !routeVisible(current.agentId)) {
-    const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
-    if (!parked) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      return "failed";
-    }
-    return "pending";
-  }
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
-    host.hasPendingInitialTurn?.(route) ||
+    chatSendHoldReason(host, route) ||
+    (options?.routingSessionKey && !routeVisible(current.agentId)) ||
     (!sendsDuringActiveRun &&
       routeVisible(current.agentId) &&
       (isChatBusy(host) || hasDirectSessionRun(host)))

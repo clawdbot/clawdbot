@@ -1,5 +1,6 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -12,6 +13,7 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
@@ -23,6 +25,21 @@ type ChatSendSupportHost = ChatState & {
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+
+// Hello permits RPCs before account recovery has claimed any retained first turn.
+// This holds ordinary admission, not offline queuing or stop/approval controls.
+export function chatSendHoldReason(
+  host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
+  sessionKey: string,
+  initialTurnPending = false,
+): string | null {
+  if (host.connected && host.client && !host.client.recoveryScopeReady) {
+    return t("chat.queue.connectionPending");
+  }
+  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+    ? t("chat.queue.initialTurnPending")
+    : null;
+}
 
 export function formatTerminalChatSendAckError(
   ack: TerminalFailureChatSendAck,
