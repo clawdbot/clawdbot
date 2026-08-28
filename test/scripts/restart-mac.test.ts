@@ -816,3 +816,79 @@ describe("scripts/restart-mac.sh", () => {
     expect(result.stderr).toBe("");
   });
 });
+
+// The signed-vs-ad-hoc decision and the signer must accept the same certificates. When they drift,
+// restart silently ad-hoc-signs a machine scripts/codesign-mac-app.sh would have signed properly,
+// and ad-hoc signatures drop TCC grants on every rebuild. These drive the real predicate through
+// the real auto-detect block with a fake `security` listing, so a locally reintroduced Apple-only
+// rule here fails the suite.
+function runSigningDetection(listing: string) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-signing-detect-"));
+  tempRoots.push(root);
+  const binDir = join(root, "bin");
+  mkdirSync(binDir);
+  const securityPath = join(binDir, "security");
+  writeFileSync(securityPath, `#!/usr/bin/env bash\ncat <<'LISTING'\n${listing}\nLISTING\n`);
+  chmodSync(securityPath, 0o755);
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const predicateBlock = script.slice(
+    script.indexOf("check_signing_keys() {"),
+    script.indexOf("canonicalize_app_bundle()"),
+  );
+  const detectBlock = script.slice(
+    script.indexOf('if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then'),
+    script.indexOf('if [ "$NO_SIGN" -eq 1 ]; then'),
+  );
+  const harnessPath = join(root, "signing-detect-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `source ${shellQuote(realpathSync("scripts/lib/mac-signing-identity.sh"))}`,
+      "NO_SIGN=0",
+      "SIGN=0",
+      "AUTO_DETECT_SIGNING=1",
+      'log() { printf "%s\\n" "$*"; }',
+      predicateBlock,
+      detectBlock,
+      'printf "sign=%s no_sign=%s\\n" "$SIGN" "$NO_SIGN"',
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+  return spawnSync("bash", [harnessPath], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+  });
+}
+
+describe("restart-mac signing eligibility", () => {
+  it("code signs when only a valid non-Apple-class identity is installed", () => {
+    const result = runSigningDetection(
+      [
+        '  1) 1A2B3C4D5E6F70819293A4B5C6D7E8F901234567 "Contoso Internal Signing (Z9Q8W7E6R5)"',
+        "     1 valid identities found",
+      ].join("\n"),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Signing keys detected");
+    expect(result.stdout).toContain("sign=1 no_sign=0");
+  });
+
+  it("falls back to ad-hoc signing only when the listing holds no identity at all", () => {
+    const result = runSigningDetection("     0 valid identities found");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("No signing keys found");
+    expect(result.stdout).toContain("sign=0 no_sign=1");
+  });
+
+  it("delegates eligibility to the shared selection rule instead of a local predicate", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).toContain('source "${ROOT_DIR}/scripts/lib/mac-signing-identity.sh"');
+    expect(script).not.toContain("find-identity");
+  });
+});

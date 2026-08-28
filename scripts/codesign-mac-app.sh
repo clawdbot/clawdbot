@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/lib/mac-signing-identity.sh"
+
 APP_BUNDLE="dist/OpenClaw.app"
 IDENTITY="${SIGN_IDENTITY:-}"
 SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"
@@ -75,49 +78,8 @@ if [ ! -d "$APP_BUNDLE" ]; then
   exit 1
 fi
 
-select_identity() {
-  local preferred available first
-
-  # Prefer a Developer ID Application cert.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
-
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Next, try Apple Distribution.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Then, try Apple Development.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Fallback to the first valid signing identity.
-  available="$(security find-identity -p codesigning -v 2>/dev/null \
-    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
-
-  if [ -n "$available" ]; then
-    first="$(printf '%s\n' "$available" | head -n1)"
-    echo "$first"
-    return
-  fi
-
-  return 1
-}
-
 if [ -z "$IDENTITY" ]; then
-  if ! IDENTITY="$(select_identity)"; then
+  if ! IDENTITY="$(select_mac_signing_identity)"; then
     if [[ "${ALLOW_ADHOC_SIGNING:-}" == "1" ]]; then
       echo "WARN: No signing identity found. Falling back to ad-hoc signing (-)." >&2
       echo "      !!! WARNING: Ad-hoc signed apps do NOT persist TCC permissions (Accessibility, etc) !!!" >&2

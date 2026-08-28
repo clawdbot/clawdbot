@@ -44,12 +44,17 @@ if [ -n "\${CODESIGN_ARGS_LOG:-}" ]; then
 fi
 
 entitlements=""
+identity=""
 target=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --entitlements)
       shift
       entitlements="$1"
+      ;;
+    --sign)
+      shift
+      identity="$1"
       ;;
   esac
   target="$1"
@@ -71,9 +76,9 @@ if [ -n "$entitlements" ]; then
   printf '%s' "$count" >"$count_file"
   copy="$CODESIGN_CAPTURE_DIR/entitlements-$count.plist"
   cp "$entitlements" "$copy"
-  printf 'entitled\\t%s\\t%s\\t%s\\n' "$target" "$entitlements" "$copy" >>"$CODESIGN_LOG"
+  printf 'entitled\\t%s\\t%s\\t%s\\t%s\\n' "$target" "$entitlements" "$copy" "$identity" >>"$CODESIGN_LOG"
 else
-  printf 'plain\\t%s\\n' "$target" >>"$CODESIGN_LOG"
+  printf 'plain\\t%s\\t%s\\n' "$target" "$identity" >>"$CODESIGN_LOG"
 fi
 `,
   );
@@ -135,6 +140,31 @@ exit 0
 `,
   );
   chmodSync(fakeCodesign, 0o755);
+}
+
+function autoSelectEnv(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  // Auto-selection only runs when the operator pinned nothing, and ad-hoc must stay off so a
+  // failed selection surfaces as an error instead of being masked by the "-" fallback.
+  delete env.SIGN_IDENTITY;
+  delete env.ALLOW_ADHOC_SIGNING;
+  delete env.DISABLE_LIBRARY_VALIDATION;
+  return env;
+}
+
+function installFakeSecurity(binDir: string, listing: string) {
+  const fakeSecurity = path.join(binDir, "security");
+  writeFileSync(
+    fakeSecurity,
+    `#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'LISTING'
+${listing}
+LISTING
+`,
+  );
+  chmodSync(fakeSecurity, 0o755);
 }
 
 describe("codesign-mac-app temp file hygiene", () => {
@@ -238,7 +268,11 @@ describe("codesign-mac-app temp file hygiene", () => {
 
     const signLines = readFileSync(logPath, "utf8").trim().split("\n");
     expect(signLines).toHaveLength(3);
-    expect(signLines[0]).toBe(`plain\t${path.join(app, "Contents", "MacOS", "openclaw-mlx-tts")}`);
+    // The signing log carries the selected identity as a trailing column, so assert the
+    // kind/target columns instead of the whole line.
+    const plainColumns = expectDefined(signLines[0], "plain codesign log line").split("\t");
+    expect(plainColumns[0]).toBe("plain");
+    expect(plainColumns[1]).toBe(path.join(app, "Contents", "MacOS", "openclaw-mlx-tts"));
     expect(signLines[1]).toContain(
       `entitled\t${path.join(app, "Contents", "MacOS", "OpenClaw")}\t`,
     );
@@ -556,5 +590,90 @@ printf '%s\\n' \\
     for (const args of readFileSync(argsLog, "utf8").trim().split("\n")) {
       expect(args.split(" ")).toContain(expectedFlag);
     }
+  });
+});
+
+describe("codesign-mac-app identity selection", () => {
+  it("falls back to the first valid identity when no Apple-class cert exists", () => {
+    const tempRoot = tempDirs.make("openclaw-codesign-fallback-");
+    const app = path.join(tempRoot, "Fake.app");
+    const binDir = path.join(tempRoot, "bin");
+    const captureDir = path.join(tempRoot, "capture");
+    const logPath = path.join(captureDir, "codesign.log");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(binDir);
+    mkdirSync(captureDir);
+    writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+    installFakeCodesign(binDir);
+    installFakeSecurity(
+      binDir,
+      [
+        '  1) 1A2B3C4D5E6F70819293A4B5C6D7E8F901234567 "Contoso Internal Signing (Z9Q8W7E6R5)"',
+        "     1 valid identities found",
+      ].join("\n"),
+    );
+
+    const result = spawnSync("bash", [scriptPath, app], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: autoSelectEnv({
+        CODESIGN_CAPTURE_DIR: captureDir,
+        CODESIGN_LOG: logPath,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        SKIP_TEAM_ID_CHECK: "1",
+        TMPDIR: tempRoot,
+      }),
+    });
+
+    expect(result.stderr).not.toContain("No signing identity found");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Using signing identity: Contoso Internal Signing (Z9Q8W7E6R5)",
+    );
+
+    // The selected identity must reach `codesign --sign`, not merely be echoed.
+    const signLines = readFileSync(logPath, "utf8").trim().split("\n");
+    expect(signLines.length).toBeGreaterThan(0);
+    for (const line of signLines) {
+      expect(line.split("\t").at(-1)).toBe("Contoso Internal Signing (Z9Q8W7E6R5)");
+    }
+  });
+
+  it("prefers a Developer ID Application cert over lower-ranked identities", () => {
+    const tempRoot = tempDirs.make("openclaw-codesign-preferred-");
+    const app = path.join(tempRoot, "Fake.app");
+    const binDir = path.join(tempRoot, "bin");
+    const captureDir = path.join(tempRoot, "capture");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(binDir);
+    mkdirSync(captureDir);
+    installFakeCodesign(binDir);
+    // Ranking must win over listing order, so the preferred cert is listed last.
+    installFakeSecurity(
+      binDir,
+      [
+        '  1) 1A2B3C4D5E6F70819293A4B5C6D7E8F901234567 "Contoso Internal Signing (Z9Q8W7E6R5)"',
+        '  2) 2B3C4D5E6F70819293A4B5C6D7E8F9012345678A "Apple Development: Dev Person (T1E2A3M4I5)"',
+        '  3) 3C4D5E6F70819293A4B5C6D7E8F9012345678A2B "Developer ID Application: Contoso (T1E2A3M4I5)"',
+        "     3 valid identities found",
+      ].join("\n"),
+    );
+
+    const result = spawnSync("bash", [scriptPath, app], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: autoSelectEnv({
+        CODESIGN_CAPTURE_DIR: captureDir,
+        CODESIGN_LOG: path.join(captureDir, "codesign.log"),
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        SKIP_TEAM_ID_CHECK: "1",
+        TMPDIR: tempRoot,
+      }),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Using signing identity: Developer ID Application: Contoso (T1E2A3M4I5)",
+    );
   });
 });

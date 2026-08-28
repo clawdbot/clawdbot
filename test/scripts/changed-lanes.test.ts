@@ -2130,6 +2130,7 @@ describe("scripts/changed-lanes", () => {
     for (const changedPath of [
       "scripts/codesign-mac-app.sh",
       "scripts/create-dmg.sh",
+      "scripts/lib/mac-signing-identity.sh",
       "scripts/lib/plistbuddy.sh",
       "scripts/lib/swift-toolchain.sh",
       "scripts/mac-elevation-host.sh",
