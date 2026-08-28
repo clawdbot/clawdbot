@@ -2734,6 +2734,33 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.threadId).toBe("1710000000.9999");
   });
 
+  it("suppresses inherited thread and session routing for an explicit top-level send", async () => {
+    registerMessageThreadAddressingPlugin("slack");
+    mockDeliverySuccess("m-top-level");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:slack:channel:c2",
+      baseSessionKey: "agent:main:slack:channel:c2",
+      peer: { kind: "channel", id: "c2" },
+      chatType: "channel",
+      from: "slack:channel:C2",
+      to: "channel:C2",
+    });
+
+    await runSend({
+      to: "channel:C2",
+      message: "new root",
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+      topLevel: true,
+      idempotencyKey: "idem-top-level",
+    });
+
+    expect(outboundRouteCall()?.currentSessionKey).toBeUndefined();
+    expect(deliveryCall()?.threadId).toBeNull();
+    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c2");
+    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c2");
+  });
+
   it("forwards gateway send delivery options to outbound delivery", async () => {
     mockDeliverySuccess("m-options");
 

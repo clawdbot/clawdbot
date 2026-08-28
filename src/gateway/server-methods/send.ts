@@ -1216,6 +1216,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       agentId?: string;
       replyToId?: string;
       threadId?: string;
+      topLevel?: boolean;
       forceDocument?: boolean;
       silent?: boolean;
       parseMode?: "HTML";
@@ -1242,6 +1243,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const requestedAccountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
+    const topLevel = request.topLevel === true;
     const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(client, context, respond);
     const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
     const commitAgentRuntimeAuthority = agentRuntimeAuthority.commitGuard;
@@ -1370,36 +1372,37 @@ export const sendHandlers: GatewayRequestHandlers = {
             agentId: effectiveAgentId,
             accountId,
             target: deliveryTarget,
-            currentSessionKey: providedSessionKey,
+            currentSessionKey: topLevel ? undefined : providedSessionKey,
             resolvedTarget: idLikeTarget,
             replyToId,
             threadId,
           });
+          const routeSourceSessionKey = topLevel ? undefined : providedSessionKey;
           const providedSessionBaseKey =
-            parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
+            parseThreadSessionSuffix(routeSourceSessionKey).baseSessionKey ?? routeSourceSessionKey;
           const shouldUseDerivedThreadSessionKey =
             resolveChannelThreadAddressing(channel) === "message" &&
-            Boolean(providedSessionKey) &&
+            Boolean(routeSourceSessionKey) &&
             Boolean(normalizeOptionalString(derivedRoute?.threadId)) &&
             normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
               normalizeOptionalLowercaseString(providedSessionBaseKey) &&
-            normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
+            normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== routeSourceSessionKey;
           // Message-scoped threads can refine an existing base session only after target lookup.
           const outboundRoute = derivedRoute
-            ? providedSessionKey
+            ? routeSourceSessionKey
               ? shouldUseDerivedThreadSessionKey
                 ? {
                     ...derivedRoute,
-                    baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey,
+                    baseSessionKey: derivedRoute.baseSessionKey ?? routeSourceSessionKey,
                   }
                 : {
                     ...derivedRoute,
-                    sessionKey: providedSessionKey,
-                    baseSessionKey: providedSessionKey,
+                    sessionKey: routeSourceSessionKey,
+                    baseSessionKey: routeSourceSessionKey,
                   }
               : derivedRoute
             : null;
-          const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+          const outboundSessionKey = outboundRoute?.sessionKey ?? routeSourceSessionKey;
           if (outboundSessionKey) {
             const agentAccessError = authorizeGatewaySessionCreation({
               cfg,
@@ -1464,7 +1467,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             session: outboundSession,
             gifPlayback: request.gifPlayback,
             forceDocument: request.forceDocument,
-            threadId: outboundRoute?.threadId ?? threadId ?? null,
+            threadId: topLevel ? null : (outboundRoute?.threadId ?? threadId ?? null),
             deps: outboundDeps,
             gatewayClientScopes: client?.connect?.scopes ?? [],
             silent: request.silent,

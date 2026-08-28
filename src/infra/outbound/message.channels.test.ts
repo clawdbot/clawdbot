@@ -484,6 +484,7 @@ describe("gateway url override hardening", () => {
       name: "forwards gateway delivery options in send params",
       params: {
         threadId: "topic456",
+        topLevel: true,
         forceDocument: true,
         silent: true,
         parseMode: "HTML" as const,
@@ -491,6 +492,7 @@ describe("gateway url override hardening", () => {
       expected: {
         params: {
           threadId: "topic456",
+          topLevel: true,
           forceDocument: true,
           silent: true,
           parseMode: "HTML",

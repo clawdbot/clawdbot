@@ -148,6 +148,8 @@ export const SendParamsSchema = closedObject({
   replyToId: Type.Optional(Type.String()),
   /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
   threadId: Type.Optional(Type.String()),
+  /** Explicitly suppress inherited thread placement and send to the channel root. */
+  topLevel: Type.Optional(Type.Boolean()),
   /** Force document-style media sends where supported. */
   forceDocument: Type.Optional(Type.Boolean()),
   /** Send silently (no notification) where supported. */
