@@ -82,14 +82,15 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly projectSessionMessages?: boolean;
 };
 
+type AgentEventListener = (evt: AgentEventRuntimePayload) => void;
+type AgentEventListeners = Map<AgentEventListener, number>;
+
 type AgentEventState = {
   seqByRun: Map<string, number>;
-  listeners: Set<(evt: AgentEventRuntimePayload) => void>;
-  // Run-indexed buckets beside the process-global Set. Subscribers that only
-  // want one run register here so a delta walks its own run's closures instead
-  // of every concurrent run's. Empty buckets are dropped on unsubscribe, so the
-  // map size tracks live subscribed runs, not runs ever seen.
-  runListeners: Map<string, Set<(evt: AgentEventRuntimePayload) => void>>;
+  listeners: AgentEventListeners;
+  runListeners: Map<string, AgentEventListeners>;
+  nextListenerId: number;
+  listenerRevision: number;
   auditListeners: Set<(evt: AgentEventPayload) => void>;
   lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
@@ -105,8 +106,10 @@ type AgentEventExecutionContext = {
 function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
     seqByRun: new Map<string, number>(),
-    listeners: new Set<(evt: AgentEventRuntimePayload) => void>(),
-    runListeners: new Map<string, Set<(evt: AgentEventRuntimePayload) => void>>(),
+    listeners: new Map(),
+    runListeners: new Map(),
+    nextListenerId: 0,
+    listenerRevision: 0,
     auditListeners: new Set<(evt: AgentEventPayload) => void>(),
   }));
 }
@@ -335,17 +338,33 @@ function enrichAgentEvent(
   return enriched;
 }
 
-function notifyAgentEventListeners(
+function* iterateAgentEventListeners(
   state: AgentEventState,
   enriched: AgentEventRuntimePayload,
-): void {
-  // Global listeners keep their stock insertion ordering and run first, so
-  // moving a subscriber into a run bucket can never reorder it ahead of a
-  // global listener whose state it reads.
-  notifyListeners(state.listeners, enriched);
-  const runListeners = state.runListeners.get(enriched.runId);
-  if (runListeners) {
-    notifyListeners(runListeners, enriched);
+): Generator<AgentEventListener, void> {
+  let lastId = -1;
+  let revision = -1;
+  let runId: string | undefined;
+  let pending: Array<[AgentEventListener, number]> = [];
+  let index = 0;
+  while (true) {
+    const currentRunId = enriched.runId;
+    // Recheck even after the last yield: the original live Set sees additions,
+    // deletions, and re-additions made by a callback. Each nested emit owns its cursor.
+    if (revision !== state.listenerRevision || runId !== currentRunId) {
+      revision = state.listenerRevision;
+      runId = currentRunId;
+      pending = [...state.listeners, ...(state.runListeners.get(runId) ?? [])]
+        .filter(([, id]) => id > lastId)
+        .sort(([, left], [, right]) => left - right);
+      index = 0;
+    }
+    const next = pending[index++];
+    if (!next) {
+      return;
+    }
+    lastId = next[1];
+    yield next[0];
   }
 }
 
@@ -355,7 +374,7 @@ export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "
   if (!enriched) {
     return false;
   }
-  notifyAgentEventListeners(getAgentEventState(), enriched);
+  notifyListeners(iterateAgentEventListeners(getAgentEventState(), enriched), enriched);
   return true;
 }
 
@@ -370,7 +389,7 @@ export function emitAgentEventForOwner(
 ) {
   const enriched = enrichAgentEvent(event, claimId);
   if (enriched) {
-    notifyAgentEventListeners(getAgentEventState(), enriched);
+    notifyListeners(iterateAgentEventListeners(getAgentEventState(), enriched), enriched);
   }
 }
 
@@ -391,13 +410,12 @@ export function emitAgentAuditEvent(event: Omit<AgentEventPayload, "seq" | "ts">
 
 /** Subscribes to sequenced agent events; returns an unsubscribe callback. */
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
-  const state = getAgentEventState();
-  return registerListener(state.listeners, listener);
+  return registerAgentEventListener(listener);
 }
 
 /** Subscribes Gateway internals that consume non-public ownership and routing metadata. */
 export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) => void) {
-  return registerListener(getAgentEventState().listeners, listener);
+  return registerAgentEventListener(listener);
 }
 
 /**
@@ -406,18 +424,27 @@ export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) =>
  * listeners otherwise run on every concurrent run's events.
  */
 export function onAgentEventForRun(runId: string, listener: (evt: AgentEventPayload) => void) {
+  return registerAgentEventListener(listener, runId);
+}
+
+function registerAgentEventListener(listener: AgentEventListener, runId?: string) {
   const state = getAgentEventState();
-  const existing = state.runListeners.get(runId);
-  const bucket = existing ?? new Set<(evt: AgentEventRuntimePayload) => void>();
-  if (!existing) {
-    state.runListeners.set(runId, bucket);
+  const bucket: AgentEventListeners =
+    runId === undefined ? state.listeners : (state.runListeners.get(runId) ?? new Map());
+  if (!bucket.has(listener)) {
+    bucket.set(listener, state.nextListenerId++);
+    if (runId !== undefined) {
+      state.runListeners.set(runId, bucket);
+    }
+    state.listenerRevision++;
   }
-  const unsubscribe = registerListener(bucket, listener);
   return () => {
-    unsubscribe();
+    if (bucket.delete(listener)) {
+      state.listenerRevision++;
+    }
     // Only reclaim the bucket this handle registered into; a later subscriber
     // for the same run may already have installed a replacement.
-    if (bucket.size === 0 && state.runListeners.get(runId) === bucket) {
+    if (runId !== undefined && bucket.size === 0 && state.runListeners.get(runId) === bucket) {
       state.runListeners.delete(runId);
     }
   };
@@ -435,7 +462,12 @@ export function resetAgentEventsForTest(options?: { preserveListeners?: boolean 
   resetAgentRunRegistryForTest();
   if (!options?.preserveListeners) {
     state.listeners.clear();
+    for (const bucket of state.runListeners.values()) {
+      bucket.clear();
+    }
     state.runListeners.clear();
     state.auditListeners.clear();
+    // Do not reuse IDs: an active dispatch resumes strictly after its last yield.
+    state.listenerRevision++;
   }
 }

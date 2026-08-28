@@ -21,25 +21,53 @@ describe("agent event delivery bridge", () => {
     resetAgentEventsForTest();
   });
 
-  test("delivers only its own run's events while two CLI runs stream concurrently", async () => {
-    registerAgentRunContext("run-a", { sessionKey: "session-a" });
-    registerAgentRunContext("run-b", { sessionKey: "session-b" });
-    const deliveredA: string[] = [];
-    const deliveredB: string[] = [];
-    const bridgeA = textBridge("run-a", deliveredA);
-    const bridgeB = textBridge("run-b", deliveredB);
-
-    emitAgentEvent({ runId: "run-a", stream: "assistant", data: { text: "a1" } });
-    emitAgentEvent({ runId: "run-b", stream: "assistant", data: { text: "b1" } });
-    emitAgentEvent({ runId: "run-a", stream: "assistant", data: { text: "a2" } });
-    await bridgeA.drain();
-    await bridgeB.drain();
-    bridgeA.unsubscribe();
-    bridgeB.unsubscribe();
-
-    expect(deliveredA).toEqual(["a1", "a2"]);
-    expect(deliveredB).toEqual(["b1"]);
-  });
+  test.each([1, 4, 16, 64])(
+    "isolates every delivery bridge while %s CLI runs stream interleaved events",
+    async (runs) => {
+      let predicateReads = 0;
+      const bridges = Array.from({ length: runs }, (_, runIndex) => {
+        const runId = `run-${runIndex}`;
+        registerAgentRunContext(runId, { sessionKey: `session-${runIndex}` });
+        return Array.from({ length: 8 }, (_, bridgeIndex) => {
+          const delivered: string[] = [];
+          const bridge = createAgentEventBridge<string>({
+            get runId() {
+              predicateReads++;
+              return runId;
+            },
+            read: (event) => (typeof event.data.text === "string" ? event.data.text : undefined),
+            deliver: async (text) => {
+              delivered.push(text);
+            },
+          });
+          return { ...bridge, delivered, runIndex, bridgeIndex };
+        });
+      }).flat();
+      try {
+        predicateReads = 0;
+        emitAgentEvent({ runId: "run-0", stream: "assistant", data: { text: "a1" } });
+        // Source-pinned work measurement only: hoisting the filter can change this
+        // count without changing dispatch complexity. Output assertions own the test.
+        console.info("bridge predicate-read diagnostic (not latency)", {
+          runs,
+          bridgesPerRun: 8,
+          predicateReads,
+        });
+        emitAgentEvent({ runId: "run-1", stream: "assistant", data: { text: "b1" } });
+        emitAgentEvent({ runId: "run-0", stream: "assistant", data: { text: "a2" } });
+        await Promise.all(bridges.map((bridge) => bridge.drain()));
+        for (const { delivered, runIndex, bridgeIndex } of bridges) {
+          expect(delivered, `run-${runIndex}/bridge-${bridgeIndex}`).toEqual(
+            runIndex === 0 ? ["a1", "a2"] : runIndex === 1 ? ["b1"] : [],
+          );
+        }
+      } finally {
+        for (const bridge of bridges) {
+          bridge.unsubscribe();
+        }
+      }
+    },
+  );
 
   test("keeps stream delivery order when a later global listener emits another event", async () => {
     registerAgentRunContext("run-nested", { sessionKey: "session-nested" });
@@ -80,27 +108,29 @@ describe("agent event delivery bridge", () => {
     }
   });
 
-  test("subscribes into its run's bucket rather than the global listener set", () => {
-    registerAgentRunContext("run-scope", { sessionKey: "session-scope" });
-    const order: string[] = [];
-    // Registered first, so insertion order alone would run the bridge first.
-    // Run-indexed listeners always follow every global listener, so the bridge
-    // trailing here is what proves it is no longer a global subscriber that
-    // every other run's events would still have to walk.
-    const bridge = createAgentEventBridge<string>({
-      runId: "run-scope",
-      read: () => {
-        order.push("bridge");
-        return undefined;
-      },
-      deliver: async () => {},
+  test("routes a changed event identity only to later matching bridges", async () => {
+    registerAgentRunContext("run-a", { sessionKey: "session-a" });
+    registerAgentRunContext("run-b", { sessionKey: "session-b" });
+    const earlierB: string[] = [];
+    const laterB: string[] = [];
+    const laterA: string[] = [];
+    const first = textBridge("run-b", earlierB);
+    const stopGlobal = onAgentEvent((event) => {
+      event.runId = "run-b";
     });
-    const stopGlobal = onAgentEvent(() => order.push("global"));
-
-    emitAgentEvent({ runId: "run-scope", stream: "assistant", data: { text: "hi" } });
-    stopGlobal();
-    bridge.unsubscribe();
-
-    expect(order).toEqual(["global", "bridge"]);
+    const second = textBridge("run-b", laterB);
+    const third = textBridge("run-a", laterA);
+    try {
+      emitAgentEvent({ runId: "run-a", stream: "assistant", data: { text: "changed" } });
+      await Promise.all([first.drain(), second.drain(), third.drain()]);
+      expect(earlierB).toEqual([]);
+      expect(laterB).toEqual(["changed"]);
+      expect(laterA).toEqual([]);
+    } finally {
+      stopGlobal();
+      first.unsubscribe();
+      second.unsubscribe();
+      third.unsubscribe();
+    }
   });
 });

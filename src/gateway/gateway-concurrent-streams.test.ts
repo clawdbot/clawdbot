@@ -1,16 +1,20 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { stopChild } from "../../scripts/lib/gateway-bench-child.js";
 import { getFreePort } from "../../scripts/lib/gateway-bench-probes.js";
+import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata-paths.mts";
+import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resetLogger } from "../logging/logger.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type StreamFrame = {
@@ -34,15 +38,27 @@ const cases = [
   },
 ] as const;
 
-afterEach(() => {
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetLogger();
-});
-
 describe("Gateway concurrent HTTP streams", () => {
   it("keeps both streams isolated while global observers retain every run", async () => {
-    const state = await createOpenClawTestState({
-      label: "concurrent-streams",
+    const cwd = process.cwd();
+    const checkoutSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+    }).trim();
+    // Require this checkout's complete runtime before the shared helper can
+    // prepare a source fallback. The child must own one coherent built graph.
+    await fs.access(path.join(cwd, "dist/index.js"));
+    for (const stamp of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
+      const metadata = JSON.parse(await fs.readFile(path.join(cwd, "dist", stamp), "utf8"));
+      expect(metadata.head, stamp).toBe(checkoutSha);
+    }
+    const buildInfo = JSON.parse(await fs.readFile(path.join(cwd, "dist/build-info.json"), "utf8"));
+    expect(buildInfo.commit).toBe(checkoutSha);
+    const token = `fanout-${randomUUID()}`;
+    const gateway = await createOpenClawTestInstance({
+      name: "concurrent-streams",
+      cwd,
+      gatewayToken: token,
       env: {
         OPENCLAW_GATEWAY_TOKEN: undefined,
         OPENCLAW_GATEWAY_PASSWORD: undefined,
@@ -59,20 +75,12 @@ describe("Gateway concurrent HTTP streams", () => {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
     });
-    // Startup spans use the subsystem logger; discard Vitest's cached silent
-    // settings after entering the isolated fixture so stalled startup is visible.
-    resetLogger();
-    const mockPort = await getFreePort();
+    const { state, port } = gateway;
     const controlPath = state.path("response-control.json");
     const requestLogPath = state.path("provider-requests.jsonl");
-    const provider = buildMockOpenAiResponsesProvider(
-      `http://127.0.0.1:${mockPort}/v1`,
-      "gpt-5.6-luna",
-    );
-    const token = `fanout-${randomUUID()}`;
     const events: AgentEventPayload[] = [];
     const abort = new AbortController();
-    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let client: ReturnType<typeof createGatewayWsClient> | undefined;
     let mock: ChildProcessWithoutNullStreams | undefined;
     const streams: Array<{
       item: (typeof cases)[number];
@@ -104,6 +112,12 @@ describe("Gateway concurrent HTTP streams", () => {
         : [];
     };
     try {
+      expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
+      const mockPort = await getFreePort();
+      const provider = buildMockOpenAiResponsesProvider(
+        `http://127.0.0.1:${mockPort}/v1`,
+        "gpt-5.6-luna",
+      );
       await writeControl(true);
       mock = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
         cwd: process.cwd(),
@@ -122,11 +136,14 @@ describe("Gateway concurrent HTTP streams", () => {
       });
       const cfg = {
         gateway: {
+          port,
           auth: { mode: "token", token },
+          controlUi: { enabled: false },
           http: {
             endpoints: { chatCompletions: { enabled: true }, responses: { enabled: true } },
           },
         },
+        hooks: { enabled: false },
         agents: {
           defaults: {
             workspace: state.workspaceDir,
@@ -151,20 +168,37 @@ describe("Gateway concurrent HTTP streams", () => {
         plugins: { slots: { memory: "none" } },
         tools: { profile: "minimal" },
       } satisfies OpenClawConfig;
-      gateway = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        token,
-        scopes: ["operator.admin", "operator.read", "operator.write"],
+      await state.writeConfig(cfg);
+      await gateway.startGateway();
+      client = createGatewayWsClient({
+        url: gateway.url,
         onEvent: (event) => {
           if (event.event === "agent") {
             events.push(event.payload as AgentEventPayload);
           }
         },
       });
-      const { port, client } = gateway;
+      await client.waitOpen();
+      const connected = await client.request("connect", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          displayName: "concurrent-stream-proof",
+          version: "dev",
+          platform: process.platform,
+          mode: "backend",
+        },
+        role: "operator",
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        auth: { token },
+      });
+      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
       for (const [index, item] of cases.entries()) {
-        await client.request("sessions.messages.subscribe", { key: item.sessionKey });
+        const subscribed = await client.request("sessions.messages.subscribe", {
+          key: item.sessionKey,
+        });
+        expect(subscribed.ok, JSON.stringify(subscribed.error)).toBe(true);
         const body = {
           model: "openclaw:main",
           stream: true,
@@ -224,11 +258,12 @@ describe("Gateway concurrent HTTP streams", () => {
             frame.type === "response.completed" || frame.choices?.[0]?.finish_reason === "stop",
         );
         expect(terminals).toHaveLength(1);
-        const result = await client.request<{ status: string }>("agent.wait", {
+        const result = await client.request("agent.wait", {
           runId,
           timeoutMs: 10_000,
         });
-        expect(result.status).toBe("ok");
+        expect(result.ok, JSON.stringify(result.error)).toBe(true);
+        expect(result.payload).toMatchObject({ status: "ok" });
         await vi.waitFor(() => {
           const own = events.filter((event) => event.runId === runId);
           const lifecycle = own.filter((event) => event.stream === "lifecycle");
@@ -241,16 +276,14 @@ describe("Gateway concurrent HTTP streams", () => {
           }
         });
       }
+    } catch (error) {
+      console.error(gateway.logs());
+      throw error;
     } finally {
       abort.abort();
       try {
-        if (gateway) {
-          try {
-            await disconnectGatewayClient(gateway.client);
-          } finally {
-            await gateway.server.close({ reason: "concurrent stream proof cleanup" });
-          }
-        }
+        client?.close();
+        await gateway.stopGateway();
       } finally {
         try {
           if (mock) {
@@ -258,7 +291,7 @@ describe("Gateway concurrent HTTP streams", () => {
           }
           await Promise.all(streams.map((stream) => stream.settled));
         } finally {
-          await state.cleanup();
+          await gateway.cleanup();
         }
       }
     }

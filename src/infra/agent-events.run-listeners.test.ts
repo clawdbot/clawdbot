@@ -1,18 +1,19 @@
-// Covers run-indexed agent event delivery: bucket scoping, global-before-bucket
-// ordering, and bucket lifetime. Separate from agent-events.test.ts so neither
-// file needs a max-lines suppression.
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   emitAgentEvent,
   emitAgentEventForOwner,
   onAgentEvent,
   onAgentEventForRun,
+  onAgentRuntimeEvent,
   resetAgentEventsForTest,
 } from "./agent-events.js";
 import { claimAgentRunContext, registerAgentRunContext } from "./agent-run-registry.js";
 
 describe("run-indexed agent event listeners", () => {
   beforeEach(() => {
+    resetAgentEventsForTest();
+  });
+  afterEach(() => {
     resetAgentEventsForTest();
   });
 
@@ -31,7 +32,7 @@ describe("run-indexed agent event listeners", () => {
     expect(mine).toEqual([1, 2]);
   });
 
-  test("notifies global listeners before run-indexed listeners", () => {
+  test("preserves mixed global and run listener registration order", () => {
     registerAgentRunContext("run-order", { sessionKey: "session-order" });
     const order: string[] = [];
     const stopRun = onAgentEventForRun("run-order", () => order.push("run"));
@@ -45,10 +46,154 @@ describe("run-indexed agent event listeners", () => {
     stopRun();
     stopGlobal();
 
-    // The bucket subscribed first, so insertion order alone would have put it
-    // first. Globals must still win: a global listener may write state that a
-    // run-scoped listener reads.
-    expect(order).toEqual(["global", "run"]);
+    expect(order).toEqual(["run", "global"]);
+  });
+
+  test.each(["global", "run"] as const)(
+    "visits a new %s listener added by the last callback, even when that callback throws",
+    (scope) => {
+      const order: string[] = [];
+      const addLate = () => {
+        order.push("first");
+        if (scope === "global") {
+          onAgentEvent(() => order.push("late"));
+        } else {
+          onAgentEventForRun("run-live", () => order.push("late"));
+        }
+        throw new Error("listener failed after registering its successor");
+      };
+      if (scope === "global") {
+        onAgentEventForRun("run-live", addLate);
+      } else {
+        onAgentEvent(addLate);
+      }
+      emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
+      expect(order).toEqual(["first", "late"]);
+    },
+  );
+
+  test.each([
+    ["global", false],
+    ["global", true],
+    ["run", false],
+    ["run", true],
+  ] as const)(
+    "skips a deleted %s callback and appends its replacement (re-add=%s)",
+    (scope, readd) => {
+      const order: string[] = [];
+      const subscribe = (listener: () => void) =>
+        scope === "global" ? onAgentEvent(listener) : onAgentEventForRun("run-live", listener);
+      const replaced = () => order.push("re-added");
+      let stopReplaced: () => void;
+      onAgentEventForRun("run-live", () => {
+        order.push("first");
+        stopReplaced();
+        if (readd) {
+          subscribe(replaced);
+        }
+      });
+      stopReplaced = subscribe(replaced);
+      onAgentEvent(() => order.push("middle"));
+      emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
+      expect(order).toEqual(readd ? ["first", "middle", "re-added"] : ["first", "middle"]);
+    },
+  );
+
+  test.each(["global", "run"] as const)(
+    "deduplicates %s callbacks and preserves same-bucket unsubscribe handles",
+    (scope) => {
+      const subscribe = (listener: () => void) =>
+        scope === "global" ? onAgentEvent(listener) : onAgentEventForRun("run-live", listener);
+      const seen: string[] = [];
+      const listener = () => seen.push("event");
+      subscribe(() => {});
+      const stopFirst = subscribe(listener);
+      const stopDuplicate = subscribe(listener);
+      emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
+      stopFirst();
+      emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
+      subscribe(listener);
+      stopFirst();
+      emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
+      stopDuplicate();
+      expect(seen).toEqual(["event"]);
+    },
+  );
+
+  test("shares global callback identity with runtime subscriptions", () => {
+    const seen: string[] = [];
+    const listener = () => seen.push("event");
+    const stop = onAgentEvent(listener);
+    onAgentRuntimeEvent(listener);
+    emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
+    stop();
+    emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
+    expect(seen).toEqual(["event"]);
+  });
+
+  test.each([false, true])(
+    "keeps reset-during-dispatch live (preserve=%s)",
+    (preserveListeners) => {
+      const order: string[] = [];
+      onAgentEventForRun("run-live", () => {
+        order.push("first");
+        resetAgentEventsForTest({ preserveListeners });
+        onAgentEvent(() => order.push("new-global"));
+        onAgentEventForRun("run-live", () => order.push("new-run"));
+      });
+      onAgentEvent(() => order.push("old-global"));
+      onAgentEventForRun("run-live", () => order.push("old-run"));
+      emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
+      expect(order).toEqual(
+        preserveListeners
+          ? ["first", "old-global", "old-run", "new-global", "new-run"]
+          : ["first", "new-global", "new-run"],
+      );
+    },
+  );
+
+  test.each([false, true])(
+    "reselects a mutated run cohort without revisiting earlier positions (pending=%s)",
+    (hasPendingOriginalRun) => {
+      const order: string[] = [];
+      onAgentEventForRun("run-b", () => order.push("earlier-b"));
+      onAgentEventForRun("run-a", () => order.push("first-a"));
+      onAgentEvent((event) => {
+        order.push("global");
+        event.runId = "run-b";
+      });
+      if (hasPendingOriginalRun) {
+        onAgentEventForRun("run-a", () => order.push("later-a"));
+      }
+      onAgentEventForRun("run-b", () => order.push("later-b"));
+      emitAgentEvent({ runId: "run-a", stream: "assistant", data: {} });
+      expect(order).toEqual(["first-a", "global", "later-b"]);
+    },
+  );
+
+  test("retains independent nested cursors while new callbacks join both emissions", () => {
+    const order: string[] = [];
+    onAgentEventForRun("run-live", (event) => {
+      order.push(`first:${String(event.data.text)}`);
+      if (event.data.text === "outer") {
+        emitAgentEvent({ runId: "run-live", stream: "assistant", data: { text: "inner" } });
+      } else {
+        onAgentEventForRun("run-live", (next) => order.push(`new-run:${String(next.data.text)}`));
+        onAgentEvent((next) => order.push(`new-global:${String(next.data.text)}`));
+      }
+    });
+    onAgentEvent((event) => order.push(`global:${String(event.data.text)}`));
+    emitAgentEvent({ runId: "run-live", stream: "assistant", data: { text: "outer" } });
+    expect(order).toEqual([
+      "first:outer",
+      "first:inner",
+      "global:inner",
+      "new-run:inner",
+      "new-global:inner",
+      "global:outer",
+      "new-run:outer",
+      "new-global:outer",
+    ]);
   });
 
   test("keeps sibling subscribers alive and reclaims the bucket only when empty", () => {

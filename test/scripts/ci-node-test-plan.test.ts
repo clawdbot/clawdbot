@@ -893,7 +893,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(owner?.pretestBuildMode, runtimeTarget).toBe("runtime");
         if (owner && "groups" in owner) {
           expect(
-            owner.groups.find((group) => group.includePatterns?.includes(runtimeTarget))
+            owner.groups?.find((group) => group.includePatterns?.includes(runtimeTarget))
               ?.pretestBuildMode,
             runtimeTarget,
           ).toBe("runtime");
