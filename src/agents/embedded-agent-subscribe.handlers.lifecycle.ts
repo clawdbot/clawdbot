@@ -37,6 +37,7 @@ export {
 
 export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+  const data = { phase: "start", startedAt: Date.now() };
   emitAgentEvent({
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -46,10 +47,7 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
       ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
       : {}),
     stream: "lifecycle",
-    data: {
-      phase: "start",
-      startedAt: Date.now(),
-    },
+    data,
   });
   runBestEffortCallback({
     label: "lifecycle agent event",
@@ -57,7 +55,7 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
     callback: () =>
       ctx.params.onAgentEvent?.({
         stream: "lifecycle",
-        data: { phase: "start" },
+        data,
       }),
   });
 }

@@ -102,6 +102,27 @@ type StablePromptPrefixCacheEntry = {
   value: string;
 };
 
+export type SystemPromptRuntimeInfo = {
+  agentId?: string;
+  agentName?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  sessionUrl?: string;
+  host?: string;
+  os?: string;
+  arch?: string;
+  node?: string;
+  model?: string;
+  defaultModel?: string;
+  shell?: string;
+  channel?: string;
+  chatType?: string;
+  capabilities?: string[];
+  repoRoot?: string;
+  activeProcessSessions?: ActiveProcessSessionReference[];
+  activeNode?: string;
+};
+
 function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): SubagentDelegationMode {
   return mode === "prefer" ? "prefer" : "suggest";
 }
@@ -830,25 +851,7 @@ export function buildAgentSystemPrompt(params: {
   nativeCommandGuidanceLines?: string[];
   /** Whether the continuation feature is enabled for this agent. */
   continuationEnabled?: boolean;
-  runtimeInfo?: {
-    agentId?: string;
-    sessionKey?: string;
-    sessionId?: string;
-    sessionUrl?: string;
-    host?: string;
-    os?: string;
-    arch?: string;
-    node?: string;
-    model?: string;
-    defaultModel?: string;
-    shell?: string;
-    channel?: string;
-    chatType?: string;
-    capabilities?: string[];
-    repoRoot?: string;
-    activeProcessSessions?: ActiveProcessSessionReference[];
-    activeNode?: string;
-  };
+  runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -1775,22 +1778,7 @@ function buildActiveProcessSessionReferenceLines(
 }
 
 function buildRuntimeLine(
-  runtimeInfo?: {
-    agentId?: string;
-    sessionKey?: string;
-    sessionId?: string;
-    sessionUrl?: string;
-    host?: string;
-    os?: string;
-    arch?: string;
-    node?: string;
-    model?: string;
-    defaultModel?: string;
-    shell?: string;
-    repoRoot?: string;
-    activeProcessSessions?: ActiveProcessSessionReference[];
-    activeNode?: string;
-  },
+  runtimeInfo?: SystemPromptRuntimeInfo,
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
@@ -1803,6 +1791,7 @@ function buildRuntimeLine(
   const stableSessionId =
     runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;
   return `Runtime: ${[
+    runtimeInfo?.agentName ? `name=${runtimeInfo.agentName}` : "",
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
     stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",

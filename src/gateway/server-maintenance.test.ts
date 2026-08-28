@@ -93,7 +93,7 @@ function seedStaleRunBuffers(deps: MaintenanceTimerDeps, runId: string): void {
     rawBuffer: "raw buffer",
     bufferUpdatedAt: staleRunTimestamp(),
     deltaSentAt: staleRunTimestamp(),
-    deltaLastBroadcastLen: 6,
+    assistantScope: { itemId: "assistant-1", prefix: "" },
     deltaLastBroadcastText: "buffer",
   });
 }
@@ -104,7 +104,7 @@ function expectStaleRunBuffersPresent(deps: MaintenanceTimerDeps, runId: string)
     rawBuffer: "raw buffer",
     bufferUpdatedAt: expect.any(Number),
     deltaSentAt: expect.any(Number),
-    deltaLastBroadcastLen: 6,
+    assistantScope: { itemId: "assistant-1", prefix: "" },
     deltaLastBroadcastText: "buffer",
   });
 }
@@ -115,7 +115,7 @@ function expectStaleRunBuffersSwept(deps: MaintenanceTimerDeps, runId: string): 
   expect(run?.rawBuffer).toBeUndefined();
   expect(run?.bufferUpdatedAt).toBeUndefined();
   expect(run?.deltaSentAt).toBeUndefined();
-  expect(run?.deltaLastBroadcastLen).toBeUndefined();
+  expect(run?.assistantScope).toBeUndefined();
   expect(run?.deltaLastBroadcastText).toBeUndefined();
 }
 
@@ -793,7 +793,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("clears deltaLastBroadcastLen when aborted runs age out", async () => {
+  it("clears assistant snapshot scope when aborted runs age out", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");

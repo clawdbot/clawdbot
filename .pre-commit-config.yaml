@@ -31,7 +31,7 @@ repos:
 
   # GitHub Actions linting
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.12
+    rev: 011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7 # ShellCheck stdin deadlock fix (#651)
     hooks:
       - id: actionlint
 

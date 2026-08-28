@@ -164,7 +164,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   payloadModel: "",
   payloadThinking: "",
   payloadLightContext: false,
-  deliveryMode: "announce",
+  deliveryMode: "none",
   deliveryChannel: "last",
   deliveryTo: "",
   deliveryAccountId: "",

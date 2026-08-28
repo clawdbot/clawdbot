@@ -34,6 +34,7 @@ import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
+  deactivateClientVoiceConfirmationSession,
   noteClientVoiceConfirmationUtterance,
 } from "../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
@@ -146,9 +147,8 @@ function installVoiceRunBinding(runId: string): void {
   vi.spyOn(clientVoiceSession, "isClientVoiceSessionConfirmable").mockReturnValue(true);
 }
 
-function approveVoiceToolParams(runId: string, toolParams: unknown): void {
+function authorizeVoiceToolParams(runId: string, toolParams: unknown, now = Date.now()) {
   const voiceSessionId = `voice-${runId}`;
-  const now = Date.now();
   const challenge = checkClientVoiceToolConfirmationPolicy({
     agentId: "main",
     voiceSessionId,
@@ -177,6 +177,11 @@ function approveVoiceToolParams(runId: string, toolParams: unknown): void {
     confirmationId,
     now: now + 2,
   });
+  return { confirmationId, grant, voiceSessionId };
+}
+
+function approveVoiceToolParams(runId: string, toolParams: unknown): void {
+  const { grant } = authorizeVoiceToolParams(runId, toolParams);
   bindAuthorizedClientVoiceConfirmation({ grant, runId });
 }
 
@@ -194,6 +199,7 @@ describe("before_tool_call hook integration", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetClientVoiceConfirmationStateForTest();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -2011,6 +2017,100 @@ describe("before_tool_call adapter and client tool integration", () => {
 
       expect(hook.didObserveAbort()).toBe(true);
       expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    (["wrapped", "adapter", "client-hosted"] as const).flatMap((pathKind) =>
+      (["supersession", "refusal", "close", "expiry"] as const).map(
+        (invalidator) => [pathKind, invalidator] as const,
+      ),
+    ),
+  )(
+    "blocks invalidated voice grants through the %s path after %s",
+    async (pathKind, invalidator) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(100);
+      const runId = `run-voice-invalidated-${pathKind}-${invalidator}`;
+      const toolParams = { action: "send", to: "target-a", message: "cancelled body" };
+      installVoiceRunBinding(runId);
+      const { grant, voiceSessionId } = authorizeVoiceToolParams(runId, toolParams, 100);
+      vi.setSystemTime(103);
+
+      if (invalidator === "supersession") {
+        checkClientVoiceToolConfirmationPolicy({
+          agentId: "main",
+          voiceSessionId,
+          runId,
+          toolName: "message",
+          toolParams: { ...toolParams, message: "successor body" },
+          isConfirmable: () => true,
+          now: 103,
+        });
+      } else if (invalidator === "refusal") {
+        noteClientVoiceConfirmationUtterance({
+          agentId: "main",
+          voiceSessionId,
+          text: "no",
+          timestamp: 103,
+        });
+      } else if (invalidator === "close") {
+        deactivateClientVoiceConfirmationSession("main", voiceSessionId);
+      } else {
+        vi.advanceTimersByTime(120_001);
+      }
+
+      expect(bindAuthorizedClientVoiceConfirmation({ grant, runId })).toBe(false);
+
+      const dispatch = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+      const hookContext = { runId, agentId: "main", sessionKey: "agent:main:voice" };
+      const definition =
+        pathKind === "client-hosted"
+          ? expectDefined(
+              toClientToolDefinitions(
+                [
+                  {
+                    type: "function",
+                    function: {
+                      name: "message",
+                      description: "client-hosted message tool",
+                      parameters: { type: "object", properties: {} },
+                    },
+                  },
+                ],
+                dispatch,
+                hookContext,
+              )[0],
+              "client-hosted invalidated voice tool definition",
+            )
+          : expectDefined(
+              toToolDefinitions(
+                [
+                  pathKind === "wrapped"
+                    ? wrapToolWithBeforeToolCallHook(
+                        asAgentTool({ name: "message", execute: dispatch }),
+                        hookContext,
+                      )
+                    : asAgentTool({ name: "message", execute: dispatch }),
+                ],
+                hookContext,
+              )[0],
+              `${pathKind} invalidated voice tool definition`,
+            );
+
+      const result = await definition.execute(
+        `call-voice-invalidated-${pathKind}-${invalidator}`,
+        toolParams,
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      expect(result.details).toMatchObject({
+        status: "blocked",
+        deniedReason: "client-voice-confirmation",
+      });
+      expect(dispatch).not.toHaveBeenCalled();
     },
   );
 

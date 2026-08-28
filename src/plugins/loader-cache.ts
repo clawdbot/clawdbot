@@ -18,6 +18,11 @@ export function getReusableCachedPluginRegistry(cacheKey: string): PluginRegistr
   return pluginLoaderCacheState.get(cacheKey);
 }
 
+/** Registry reuse is off for explicit opt-outs and for raw env-substituted config loads. */
+export function isPluginRegistryCacheEnabled(options: PluginLoadOptions): boolean {
+  return options.cache !== false && options.resolveRawConfigEnvVars !== true;
+}
+
 export function clearPluginRegistryLoadCache(): void {
   clearPluginRuntimeArtifactResolutionMemo();
   pluginLoaderCacheState.clearCachedRegistries();

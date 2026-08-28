@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -219,21 +220,11 @@ class FakeWorkerGateway {
   }
 
   async start(): Promise<void> {
-    this.rootDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-gateway-"));
+    this.rootDir = await mkdtemp(path.join(tmpdir(), "oc-wg-"));
     this.socketPath = path.join(this.rootDir, "gateway.sock");
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
-        this.httpServer.off("listening", onListening);
-        reject(error);
-      };
-      const onListening = () => {
-        this.httpServer.off("error", onError);
-        resolve();
-      };
-      this.httpServer.once("error", onError);
-      this.httpServer.once("listening", onListening);
-      this.httpServer.listen(this.socketPath);
-    });
+    const listening = once(this.webSocketServer, "listening");
+    this.httpServer.listen(this.socketPath);
+    await listening;
   }
 
   async stop(): Promise<void> {
@@ -1470,7 +1461,7 @@ describe("worker runtime", () => {
       .find((event) => event.kind === "assistant");
     expect(finalAssistant).toEqual({
       kind: "assistant",
-      payload: { text: "", delta: "", replace: true },
+      payload: { text: "", delta: "", replace: true, itemId: expect.any(String) },
     });
   });
 

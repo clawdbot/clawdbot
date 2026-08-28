@@ -188,10 +188,8 @@ function releaseTypedOnboardingLane() {
     "release-typed-onboarding",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
     {
-      resources: ["npm", "service"],
-      stateScenario: "empty",
+      ...npmOnboardLaneOptions,
       timeoutMs: 20 * 60 * 1000,
-      weight: 3,
     },
   );
 }

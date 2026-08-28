@@ -58,6 +58,11 @@ on:
         required: false
         default: ""
         type: string
+      release_publish_full_ref:
+        description: Full ref of the approving OpenClaw Release Publish workflow run
+        required: false
+        default: ""
+        type: string
       plugin_npm_run_id:
         description: Successful Plugin NPM Release run id for the exact extended-stable branch and release SHA
         required: false
@@ -1543,6 +1548,8 @@ jobs:
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
           PUBLISH_TARBALL_PATH: ${{ steps.preflight_provenance.outputs.tarball_path }}
           RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
+          RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
+          RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
@@ -1558,6 +1565,8 @@ jobs:
               --workflow-sha "$WORKFLOW_SHA" \
               --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
               --release-publish-run-attempt "$RELEASE_PUBLISH_RUN_ATTEMPT" \
+              --release-publish-ref "$RELEASE_PUBLISH_REF" \
+              --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
               --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY" \
               --allow-prevalidated-ref
           }

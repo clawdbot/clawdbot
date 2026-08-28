@@ -568,13 +568,17 @@ export function resolveBuildAllTsdownPlan(
   profile: string,
   env: NodeJS.ProcessEnv,
   params: Omit<MemoryLimitParams, "env"> = {},
-) {
-  if (profile !== "full" && profile !== "package") {
+): {
+  env: NodeJS.ProcessEnv;
+  heapShortfall: ReturnType<typeof resolveTsdownBuildPlan>["heapShortfall"];
+} {
+  if (profile !== "full" && profile !== "package" && profile !== "ciArtifacts") {
     return { env, heapShortfall: null };
   }
   const plan = resolveTsdownBuildPlan({ ...params, env });
   return {
-    env: { ...env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
+    // Direct Node steps need NODE_OPTIONS; tsdown descendants also need the frozen budget.
+    env: { ...plan.env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
     heapShortfall: plan.heapShortfall,
   };
 }
@@ -1014,7 +1018,11 @@ export function runBuildAllSteps(
     steps?: BuildAllStep[];
   } = {},
 ) {
-  let buildEnv = resolveBuildAllEnvironment(params.env);
+  const { env: buildEnv, heapShortfall } = resolveBuildAllTsdownPlan(
+    profile,
+    resolveBuildAllEnvironment(params.env),
+    params.memoryLimit,
+  );
   const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
@@ -1028,17 +1036,12 @@ export function runBuildAllSteps(
       spawnSync(invocation.command, invocation.args, invocation.options));
   const timings: BuildAllTiming[] = [];
   let exitCode = 0;
-  if (profile === "full" || profile === "package") {
-    const buildPlan = resolveBuildAllTsdownPlan(profile, buildEnv, params.memoryLimit);
-    const heapShortfall = buildPlan.heapShortfall;
-    if (heapShortfall) {
-      if (heapShortfall.fatal) {
-        logger.error(heapShortfall.message);
-        return { exitCode: 1, timings };
-      }
-      logger.warn(heapShortfall.message);
+  if (heapShortfall) {
+    if (heapShortfall.fatal) {
+      logger.error(heapShortfall.message);
+      return { exitCode: 1, timings };
     }
-    buildEnv = buildPlan.env;
+    logger.warn(heapShortfall.message);
   }
   for (const step of steps) {
     const cacheStartedAt = now();
