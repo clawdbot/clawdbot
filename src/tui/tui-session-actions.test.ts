@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   makeChatLog,
@@ -2151,6 +2152,103 @@ describe("tui session actions", () => {
     expect(clearAll).toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("session agent:main:new");
   });
+
+  it.each(["none", "before adoption", "during refresh", "after acknowledgement"])(
+    "keeps the reset acknowledgement with a notification %s",
+    async (notification) => {
+      const state = createBaseState({
+        currentSessionId: "same-session",
+        sessionGeneration: 4,
+        historyLoaded: true,
+        sessionInfo: { updatedAt: 10, totalTokens: 42 },
+      });
+      const entry = { sessionId: "same-session", updatedAt: 20, totalTokens: 0 };
+      const result = { ok: true, key: state.currentSessionKey, entry };
+      const chatLog = makeChatLog();
+      chatLog.addUser("before reset");
+      const tui = makeTui();
+      const btw = createBtwPresenter();
+      const setActivityStatus = (text: string) => {
+        state.activityStatus = text;
+      };
+      const refreshStarted = createDeferred();
+      const refreshResult = createDeferred<TuiSessionList>();
+      const resetResponse = createDeferred<typeof result>();
+      const client = makeTuiBackend({
+        resetSession: vi.fn(() => resetResponse.promise),
+        listSessions: vi.fn(() => {
+          refreshStarted.resolve();
+          return refreshResult.promise;
+        }),
+        loadHistory: vi.fn(async () => ({
+          messages: [],
+          sessionInfo: { key: result.key, ...entry },
+        })),
+      });
+      const actions = createTestSessionActions({ client, chatLog, tui, btw, state });
+      const histories: Array<Promise<TuiHistoryLoadResult>> = [];
+      const events = createEventHandlers({
+        chatLog,
+        tui,
+        btw,
+        state,
+        setActivityStatus,
+        loadHistory: () => {
+          const history = actions.loadHistory();
+          histories.push(history);
+          return history;
+        },
+        refreshSessionInfo: actions.refreshSessionInfo,
+      });
+      const commands = createCommandHandlers({
+        client,
+        chatLog,
+        tui,
+        state,
+        opts: {},
+        deliverDefault: false,
+        openOverlay: (component) => tui.showOverlay(component),
+        closeOverlay: () => tui.hideOverlay(),
+        setActivityStatus,
+        formatSessionKey: (key) => key,
+        requestExit: vi.fn(),
+        ...actions,
+      });
+      const notify = () =>
+        events.handleSessionsChangedEvent({
+          sessionKey: result.key,
+          agentId: "main",
+          reason: "reset",
+          ...entry,
+        });
+      try {
+        const resetting = commands.handleCommand("/reset");
+        resetResponse.resolve(result);
+        if (notification === "before adoption") {
+          notify();
+        } else {
+          await refreshStarted.promise;
+          if (notification === "during refresh") {
+            notify();
+          }
+        }
+        refreshResult.resolve(makeTuiSessionList({ sessions: [{ key: result.key, ...entry }] }));
+        await resetting;
+        if (notification === "after acknowledgement") {
+          notify();
+        }
+        await Promise.all(histories);
+        await vi.waitFor(() => {
+          const rendered = chatLog.render(120).join("\n");
+          expect(rendered).not.toContain("before reset");
+          expect(rendered.match(/session agent:main:main reset/g)).toHaveLength(1);
+        });
+        expect(commands.resolveMessageAdmission("after reset")).toEqual({ status: "allowed" });
+      } finally {
+        events.dispose();
+      }
+    },
+  );
 
   it("fences pre-reset history and session-info reads when reset commits", async () => {
     const history = createDeferred<unknown>();

@@ -1,4 +1,5 @@
 // Owns bounded TUI run state, transcript persistence, and serialized history reloads.
+import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import { getPendingSubmitAcceptedRunId, hasPendingSubmit } from "./tui-submit-state.js";
 import type { ChatEvent, TuiHistoryLoadResult, TuiStateAccess } from "./tui-types.js";
@@ -68,7 +69,9 @@ export class TuiSessionRunCoordinator {
   private readonly confirmedStreamRunIds = new Set<string>();
   private readonly retiredOrphanRunIds = new Map<string, number>();
   private rejectUnconfirmedRuns = false;
-  private historyReloadInFlight = false;
+  private readonly historyReloadRunner = createTuiRefreshCoalescer(() =>
+    this.drainHistoryReloadQueue(),
+  );
   private historyReloadQueued = false;
   private historyReloadGeneration = 0;
 
@@ -233,6 +236,24 @@ export class TuiSessionRunCoordinator {
     this.pruneRunMap(this.persistedTerminalRunIds);
   }
 
+  collectTrackedSessionRunIds() {
+    const runIds = new Set(this.sessionRuns.keys());
+    const state = this.context.state;
+    if (state.activeChatRunId) {
+      runIds.add(state.activeChatRunId);
+    }
+    const pendingRunId = getPendingSubmitAcceptedRunId(state);
+    if (pendingRunId) {
+      runIds.add(pendingRunId);
+    }
+    const finalizedRunIds = new Set(this.finalizedRuns.keys());
+    const displayedRunIds = new Set(this.finalizedRunsWithDisplay.keys());
+    for (const runId of finalizedRunIds) {
+      runIds.add(runId);
+    }
+    return { runIds, finalizedRunIds, displayedRunIds };
+  }
+
   routeSessionMessageRefresh(projected: boolean): boolean {
     if (projected) {
       return true;
@@ -241,7 +262,7 @@ export class TuiSessionRunCoordinator {
       this.pendingHistoryRefresh = true;
       return true;
     }
-    this.queueHistoryReload();
+    void this.queueHistoryReload();
     return false;
   }
 
@@ -284,8 +305,8 @@ export class TuiSessionRunCoordinator {
     return result;
   }
 
-  private drainHistoryReloadQueue(): void {
-    if (this.historyReloadInFlight || !this.historyReloadQueued || !this.context.loadHistory) {
+  private async drainHistoryReloadQueue(): Promise<void> {
+    if (!this.historyReloadQueued || !this.context.loadHistory) {
       return;
     }
 
@@ -300,7 +321,6 @@ export class TuiSessionRunCoordinator {
       }
     }
     this.historyReloadQueued = false;
-    this.historyReloadInFlight = true;
 
     const finishReload = (result: TuiHistoryLoadResult) => {
       if (generation !== this.historyReloadGeneration) {
@@ -330,19 +350,19 @@ export class TuiSessionRunCoordinator {
       }
     };
 
-    void this.loadHistoryPreservingTerminalErrors()
-      .then(finishReload, () => finishReload({ loaded: false }))
-      .finally(() => {
-        this.historyReloadInFlight = false;
-        this.drainHistoryReloadQueue();
-      });
+    await this.loadHistoryPreservingTerminalErrors().then(finishReload, () =>
+      finishReload({ loaded: false }),
+    );
   }
 
+  /** Settle the complete queue and report whether this caller's session owner survived. */
   queueHistoryReload(
     runIds?: Iterable<string>,
     historyOwnedRunIds: Iterable<string> = [],
     displayedRunIds: Iterable<string> = [],
-  ): void {
+  ): Promise<boolean> {
+    const generation = this.historyReloadGeneration;
+    const isCurrent = () => generation === this.historyReloadGeneration;
     const historyOwned = new Set(historyOwnedRunIds);
     const displayed = new Set(displayedRunIds);
     const queuedRunIds = runIds ?? [];
@@ -353,8 +373,7 @@ export class TuiSessionRunCoordinator {
           this.noteFinalizedRun(runId, { displayedFinal: true });
         }
       }
-      void this.context.refreshSessionInfo?.();
-      return;
+      return (this.context.refreshSessionInfo?.() ?? Promise.resolve()).then(isCurrent, isCurrent);
     }
 
     if (runIds === undefined) {
@@ -372,7 +391,11 @@ export class TuiSessionRunCoordinator {
       }
       this.historyReloadRuns.set(runId, reload);
     }
-    this.drainHistoryReloadQueue();
+    // An empty persistence barrier must not defer the first real reload.
+    if (!this.historyReloadQueued && !this.historyReloadRunner.isRunning()) {
+      return Promise.resolve(isCurrent());
+    }
+    return this.historyReloadRunner.run().then(isCurrent);
   }
 
   queueGapHistoryReload(runIds: Iterable<string>, displayedRunIds: Iterable<string> = []): void {
@@ -382,7 +405,7 @@ export class TuiSessionRunCoordinator {
     }
     const trackedRunIds = Array.from(runIds);
     if (trackedRunIds.length === 0) {
-      this.queueHistoryReload();
+      void this.queueHistoryReload();
       return;
     }
     for (const runId of trackedRunIds) {
@@ -390,7 +413,7 @@ export class TuiSessionRunCoordinator {
       reload.flags |= HISTORY_RELOAD_GAP_RECOVERY;
       this.historyReloadRuns.set(runId, reload);
     }
-    this.queueHistoryReload(trackedRunIds, trackedRunIds, displayedRunIds);
+    void this.queueHistoryReload(trackedRunIds, trackedRunIds, displayedRunIds);
   }
 
   clear(): void {

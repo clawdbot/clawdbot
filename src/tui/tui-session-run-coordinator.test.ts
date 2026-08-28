@@ -1,5 +1,6 @@
 // Covers bounded TUI run ownership and transcript persistence coordination.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTuiRunIdTracker, TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import type { ChatEvent, TuiHistoryLoadResult, TuiStateAccess } from "./tui-types.js";
 
@@ -205,9 +206,9 @@ describe("TuiSessionRunCoordinator", () => {
       message: { content: [{ type: "text", text: "persisted reply" }] },
     };
 
-    coordinator.queueHistoryReload(["run-first"], ["run-first"]);
+    void coordinator.queueHistoryReload(["run-first"], ["run-first"]);
     coordinator.deferHistoryRunEvent(deferredEvent);
-    coordinator.queueHistoryReload();
+    void coordinator.queueHistoryReload();
     expect(loadHistory).toHaveBeenCalledTimes(1);
 
     resolveHistory?.(completedHistory);
@@ -220,6 +221,32 @@ describe("TuiSessionRunCoordinator", () => {
     expect(replayHistoryRunEvent).toHaveBeenCalledWith(deferredEvent);
 
     resolveHistory?.(completedHistory);
+  });
+
+  it.each([false, true])("awaits the complete history drain across a reset: %s", async (reset) => {
+    const first = createDeferred<TuiHistoryLoadResult>();
+    const second = createDeferred<TuiHistoryLoadResult>();
+    const reads = vi
+      .fn<() => Promise<TuiHistoryLoadResult>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { coordinator, loadHistory } = createCoordinator({ loadHistory: reads });
+    const settled = vi.fn();
+    const firstDrain = coordinator.queueHistoryReload();
+    void firstDrain.then(settled);
+    if (reset) {
+      coordinator.clear();
+    }
+    const secondDrain = coordinator.queueHistoryReload();
+    void secondDrain.then(settled);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    first.resolve(completedHistory);
+    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
+    expect(settled).not.toHaveBeenCalled();
+    second.resolve(completedHistory);
+    await expect(Promise.all([firstDrain, secondDrain])).resolves.toEqual([!reset, true]);
+    expect(settled).toHaveBeenCalledTimes(2);
   });
 
   it("does not finalize a gap-recovery run when authoritative history fails", async () => {
@@ -295,7 +322,7 @@ describe("TuiSessionRunCoordinator", () => {
         }),
     });
 
-    coordinator.queueHistoryReload(["run-stale"], ["run-stale"]);
+    void coordinator.queueHistoryReload(["run-stale"], ["run-stale"]);
     coordinator.clear();
     resolveHistory?.(completedHistory);
 

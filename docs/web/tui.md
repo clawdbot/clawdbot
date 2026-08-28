@@ -136,6 +136,8 @@ Session lifecycle:
 - `/settings`
 - `/exit` (or `/quit`)
 
+When the current session is reset, the TUI confirms it after refreshing the transcript, including resets initiated by another client.
+
 Local mode only:
 
 - `/auth [provider]` opens the provider auth/login flow inside the TUI.
