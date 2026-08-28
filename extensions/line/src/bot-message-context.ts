@@ -190,7 +190,9 @@ function describeLineSticker(sticker: StickerEventMessage): string {
   // random selection and only describe stickers that carry no sender text.
   const description =
     normalizeOptionalString(sticker.text) ??
-    normalizeStringEntries(sticker.keywords ?? []).slice(0, 3).join(", ");
+    normalizeStringEntries(sticker.keywords ?? [])
+      .slice(0, 3)
+      .join(", ");
   return description ? `[Sent a sticker: ${description}]` : "[Sent a sticker]";
 }
 

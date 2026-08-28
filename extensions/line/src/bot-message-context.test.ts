@@ -247,9 +247,7 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: true,
     });
 
-    expect(context?.ctxPayload.RawBody).toBe(
-      "[Sent a sticker: Let's\nhang out\nthis weekend!]",
-    );
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Let's\nhang out\nthis weekend!]");
   });
 
   it("still reports a sticker that carries neither keywords nor text", async () => {
