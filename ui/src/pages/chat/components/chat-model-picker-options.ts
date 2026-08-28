@@ -154,7 +154,9 @@ export function renderChatModelPickerOption(params: {
           ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
           : nothing}
         ${params.entry.supportsTools === false
-          ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true">i</span>`
+          ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true"
+              >${icons.info}</span
+            >`
           : nothing}
       </span>
     </span>

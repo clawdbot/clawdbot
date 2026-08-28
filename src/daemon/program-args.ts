@@ -8,6 +8,8 @@ import {
   findFirstAccessibleGatewayEntrypoint,
   isGatewayDistEntrypointPath,
 } from "./gateway-entrypoint.js";
+import { resolveGatewayHeapExecArgv } from "./gateway-heap.js";
+import type { GatewayServiceCommandConfig } from "./service-types.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
@@ -223,15 +225,22 @@ export async function resolveGatewayProgramArguments(params: {
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
   wrapperPath?: string;
+  existingCommand?: GatewayServiceCommandConfig | null;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
-  return resolveCliProgramArguments({
+  const result = await resolveCliProgramArguments({
     args: gatewayArgs,
     dev: params.dev,
     runtime: params.runtime,
     runtimePath: params.runtimePath,
     wrapperPath: params.wrapperPath,
   });
+  if (params.runtime === "node" && !params.wrapperPath?.trim()) {
+    // Size only the managed Gateway, before Node loads its entrypoint. Keeping
+    // automatic flags out of NODE_OPTIONS leaves ordinary spawned Node children alone.
+    result.programArguments.splice(1, 0, ...resolveGatewayHeapExecArgv(params.existingCommand));
+  }
+  return result;
 }
 
 export async function resolveNodeProgramArguments(params: {

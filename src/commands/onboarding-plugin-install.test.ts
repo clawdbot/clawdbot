@@ -1,7 +1,6 @@
 // Onboarding plugin install tests cover install sources, trust checks, and install records.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord as PersistedPluginInstallRecord } from "../config/types.plugins.js";
@@ -190,13 +189,6 @@ type ClawHubInstallCall = {
     warn?: (message: string) => void;
   };
   mode?: string;
-  onClawHubRisk?: (request: {
-    acknowledgementKind: "confirm" | "type-package";
-    packageName: string;
-    trust: unknown;
-    version: string;
-    warning: string;
-  }) => boolean | Promise<boolean>;
   spec?: string;
   timeoutMs?: number;
 };
@@ -773,7 +765,6 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(clawHubCall.expectedPluginId).toBe("demo-plugin");
     expect(clawHubCall.mode).toBe("install");
     expect(clawHubCall.timeoutMs).toBe(300_000);
-    expect(typeof clawHubCall.onClawHubRisk).toBe("function");
     expect(update).toHaveBeenCalledWith("Downloading");
     expect(stop).toHaveBeenCalledWith("Installed Demo Provider plugin");
     const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
@@ -796,70 +787,6 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installed?.pluginId).toBe("demo-plugin");
     expect(installed?.source).toBe("clawhub");
     expect(installed?.spec).toBe("clawhub:demo-plugin@2026.5.2");
-  });
-
-  it("renders ClawHub trust warnings with line breaks before prompting during onboarding", async () => {
-    const warning = [
-      "╭─ WARNING - ClawHub found security risks in this release ─╮",
-      "│ • Security scan: suspicious                                           │",
-      "│ Review before installing.                                             │",
-      "╰───────────────────────────────────────────────────────────────────────╯",
-    ].join("\n");
-    installPluginFromClawHub.mockImplementation(async (params: ClawHubInstallCall) => {
-      params.logger?.warn?.(warning);
-      const acknowledged =
-        (await params.onClawHubRisk?.({
-          acknowledgementKind: "type-package",
-          packageName: "demo-plugin",
-          trust: {},
-          version: "2026.5.2",
-          warning,
-        })) ?? false;
-      return {
-        ok: false,
-        code: "clawhub_risk_acknowledgement_required",
-        error: acknowledged ? "unexpected acknowledgement" : "risk was not acknowledged",
-        warning,
-      };
-    });
-    const log = vi.fn();
-    const text = vi.fn(async () => "wrong-package");
-
-    const result = await ensureOnboardingPluginInstalled({
-      cfg: {},
-      entry: {
-        pluginId: "demo-plugin",
-        label: "Demo Provider",
-        install: {
-          clawhubSpec: "clawhub:demo-plugin@2026.5.2",
-          defaultChoice: "clawhub",
-        },
-      },
-      prompter: {
-        select: vi.fn(async () => "clawhub"),
-        note: vi.fn(),
-        text,
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      } as never,
-      runtime: { log } as never,
-    });
-
-    expect(result.status).toBe("failed");
-    expect(text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining('type the package name for "demo-plugin@2026.5.2"'),
-      }),
-    );
-    const renderedWarning = log.mock.calls.map(([message]) => String(message)).join("\n");
-    expect(renderedWarning).toContain("Security scan: suspicious");
-    expect(renderedWarning).toContain("\n│ Review before installing.");
-    expect(renderedWarning).not.toContain("\\n│ Review before installing.");
-    expect(log.mock.invocationCallOrder[0]).toBeLessThan(
-      expectDefined(
-        text.mock.invocationCallOrder[0],
-        "text.mock.invocationCallOrder[0] test invariant",
-      ),
-    );
   });
 
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {

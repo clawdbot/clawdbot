@@ -248,6 +248,8 @@ export type ReplyPayloadMetadata = {
   ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */
   assistantTranscriptMediaUrls?: string[];
+  /** Media normalization rejected at least one source before delivery. */
+  assistantMediaNormalizationFailed?: true;
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
   /** Exact channel/account transform owner that already accepted this payload. */

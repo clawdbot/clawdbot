@@ -292,6 +292,90 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await expect.poll(() => page.locator(".sidebar-issues-button__count").count()).toBe(0);
   });
 
+  it("shows an administrator access request error once", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      operatorScopes: LIMITED_SCOPES,
+      methodResponses: {
+        "device.scopes.requestUpgrade": {
+          __mockError: { code: "INVALID_REQUEST", message: "missing scope: operator.read" },
+        },
+      },
+    });
+    await page.goto(`${server.baseUrl}activity`);
+
+    const item = await openLimitedAccessItem(await openInbox(page));
+    await item.getByRole("button", { name: "Request admin" }).click();
+    const message = "Administrator access request failed: missing scope: operator.read";
+    await item.locator(".sidebar-issues-panel__body").getByText(message, { exact: true }).waitFor();
+
+    expect(await item.getByText(message, { exact: true }).count()).toBe(1);
+    await captureProof(page, "desktop-inbox-upgrade-error.png");
+  });
+
+  it.each(SCOPE_UPGRADE_METHODS)(
+    "keeps role denials non-retryable at %s while transient errors can retry",
+    async (method) => {
+      const context = await createContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        deferredMethods: [method],
+        operatorScopes: LIMITED_SCOPES,
+        methodResponses: {
+          "device.scopes.requestUpgrade": { requestId: "upgrade-1" },
+        },
+      });
+      await page.goto(`${server.baseUrl}activity`);
+      const item = await openLimitedAccessItem(await openInbox(page));
+      await item.getByRole("button", { name: "Request admin" }).click();
+      await gateway.waitForRequest(method);
+      const denial =
+        "Requested scopes exceed your assigned operator role; ask a gateway administrator to change your role.";
+      // Role denials omit retryable on the wire; the request-error contract defaults it to false.
+      await gateway.rejectDeferred(method, { code: "INVALID_REQUEST", message: denial });
+      await item
+        .locator(".sidebar-issues-panel__body")
+        .getByText(denial, { exact: false })
+        .waitFor();
+      await captureProof(page, `${method}-role-denied.png`);
+      expect(await item.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+      expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
+
+      await item.getByRole("button", { name: "Cancel", exact: true }).click();
+      await gateway.deferNext(method);
+      await item.getByRole("button", { name: "Request admin" }).click();
+      await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
+      await gateway.rejectDeferred(method, {
+        code: "UNAVAILABLE",
+        message: "Device scope upgrade is temporarily unavailable.",
+        retryable: true,
+      });
+      await item.getByRole("button", { name: "Retry", exact: true }).waitFor();
+      await gateway.deferNext("device.scopes.waitUpgrade");
+      await item.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("device.scopes.requestUpgrade")).length)
+        .toBe(3);
+      await waitForPendingUpgradeItem(item);
+      await captureProof(page, `${method}-retry-pending.png`);
+      for (const status of ["rejected", "expired"] as const) {
+        const requestCount = (await gateway.getRequests("device.scopes.requestUpgrade")).length;
+        await gateway.resolveDeferred("device.scopes.waitUpgrade", {
+          status,
+          requestId: "upgrade-1",
+        });
+        await item.locator(".sidebar-issues-panel__body").getByText(new RegExp(status)).waitFor();
+        await gateway.deferNext("device.scopes.waitUpgrade");
+        await item.getByRole("button", { name: "Retry", exact: true }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("device.scopes.requestUpgrade")).length)
+          .toBe(requestCount + 1);
+        await waitForPendingUpgradeItem(item);
+      }
+    },
+  );
+
   it.each(SCOPE_UPGRADE_METHODS)(
     "shows manual repair guidance in Inbox when %s is not advertised",
     async (missingMethod) => {

@@ -515,7 +515,6 @@ describe("SessionHistorySseState", () => {
           {
             type: "attachment",
             attachment: {
-              url: "/tmp/tts.mp3",
               kind: "audio",
               label: "tts.mp3",
               mimeType: "audio/mpeg",

@@ -5,6 +5,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
+import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
+import { createApplicationOverlays } from "../app/overlays.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -68,6 +70,7 @@ function cronListResponse(jobs: CronJob[]): CronJobsListResult {
 type SidebarAttentionElement = HTMLElement & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
+  dismissPanel: () => boolean;
   cronJobs: CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
@@ -236,7 +239,9 @@ describe("sidebar attention refresh ownership", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+  async function mountAttention(
+    overrides: Partial<Pick<ApplicationContext, "gateway" | "overlays">> = {},
+  ) {
     const provider = createApplicationContextProvider({
       gateway: {
         snapshot: { phase: "connected", client: null, hello: null },
@@ -253,6 +258,7 @@ describe("sidebar attention refresh ownership", () => {
         subscribe: () => () => undefined,
       },
       scopeUpgrade: hiddenScopeUpgradeCapability,
+      ...overrides,
     } as unknown as ApplicationContext);
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
@@ -261,13 +267,157 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
     );
-    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
+    const trigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
+    return { element, provider, trigger };
+  }
+
+  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+    const { element, trigger } = await mountAttention();
+    trigger.click();
 
     await import("./sidebar-attention-panel.runtime.ts");
     await element.updateComplete;
     const panel = element.querySelector(".sidebar-issues-panel");
     expect(panel).not.toBeNull();
     expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
+    panel!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps a reconnected attention panel closed until a new open", async () => {
+    const { element, provider, trigger } = await mountAttention();
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+
+    element.remove();
+    provider.append(element);
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+  });
+
+  it("does not let an obsolete open render steal focus from a later interaction", async () => {
+    const { element, trigger } = await mountAttention();
+    const rendered = deferred<boolean>();
+    const updateComplete = vi
+      .spyOn(element, "updateComplete", "get")
+      .mockReturnValueOnce(rendered.promise);
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    expect(updateComplete).toHaveBeenCalledOnce();
+    updateComplete.mockRestore();
+
+    element.dismissPanel();
+    await element.updateComplete;
+    trigger.click();
+    await waitForFast(() =>
+      expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list")),
+    );
+    const nextControl = document.body.appendChild(document.createElement("button"));
+    nextControl.focus();
+    rendered.resolve(true);
+    await rendered.promise;
+
+    expect(document.activeElement).toBe(nextControl);
+  });
+
+  it("does not restore an obsolete close's focus after another open and close", async () => {
+    const { element, trigger } = await mountAttention();
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    const rendered = deferred<boolean>();
+    const updateComplete = vi
+      .spyOn(element, "updateComplete", "get")
+      .mockReturnValueOnce(rendered.promise);
+    element
+      .querySelector(".sidebar-issues-panel")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(updateComplete).toHaveBeenCalledOnce();
+    updateComplete.mockRestore();
+    await element.updateComplete;
+    trigger.click();
+    await waitForFast(() =>
+      expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list")),
+    );
+    element.dismissPanel();
+    await element.updateComplete;
+    const nextControl = document.body.appendChild(document.createElement("button"));
+    nextControl.focus();
+    rendered.resolve(true);
+    await rendered.promise;
+
+    expect(document.activeElement).toBe(nextControl);
+  });
+
+  it.each([
+    { name: "same panel", reopen: false },
+    { name: "reopened panel", reopen: true },
+  ])("restores approval focus only within the initiating panel ($name)", async ({ reopen }) => {
+    const resolution = deferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "exec.approval.resolve") {
+        return resolution.promise;
+      }
+      if (method === "cron.list") {
+        return Promise.resolve(cronListResponse([]));
+      }
+      if (
+        method === "exec.approval.list" ||
+        method === "plugin.approval.list" ||
+        method === "openclaw.approval.list"
+      ) {
+        return Promise.resolve([]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    const decideApproval = vi.spyOn(overlays, "decideApproval");
+    try {
+      const { element, trigger } = await mountAttention({ gateway: harness.gateway, overlays });
+      harness.emitApproval("remaining", 1);
+      harness.emitApproval("selected", 2);
+      trigger.click();
+      const decisionSelector =
+        '[data-approval-id="selected"] .sidebar-approval-row__action--allow-once';
+      await waitForFast(() => expect(element.querySelector(decisionSelector)).not.toBeNull());
+      element.querySelector<HTMLButtonElement>(decisionSelector)!.click();
+      expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", "selected");
+      expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+        id: "selected",
+        decision: "allow-once",
+      });
+      if (reopen) {
+        element.dismissPanel();
+        await element.updateComplete;
+        trigger.click();
+        await waitForFast(() =>
+          expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list")),
+        );
+      }
+      const tab = element.querySelector<HTMLElement>("#sidebar-issues-tab-all")!;
+      if (reopen) {
+        tab.focus();
+      }
+      resolution.resolve({ ok: true });
+      await decideApproval.mock.results[0]!.value;
+      await element.updateComplete;
+
+      expect(overlays.snapshot.approvalQueue.map((approval) => approval.id)).toEqual(["remaining"]);
+      expect(document.activeElement).toBe(
+        reopen
+          ? tab
+          : element.querySelector('[data-approval-id="remaining"] [data-issue-row-focus]'),
+      );
+    } finally {
+      resolution.resolve({ ok: true });
+      overlays.dispose();
+    }
   });
 
   it("keeps the latest refresh when an older load on the same client finishes last", async () => {
@@ -735,7 +885,7 @@ describe("scope upgrade dismissal fact", () => {
       state: { phase: "rejected", requestId: "request-1", expired: false },
       dismissible: false,
     },
-    { state: { phase: "error", message: "request failed" }, dismissible: false },
+    { state: { phase: "error", message: "request failed", retryable: false }, dismissible: false },
   ];
 
   it.each(cases)(
@@ -832,26 +982,12 @@ describe("sidebar Inbox projection", () => {
 });
 
 describe("dismissSidebarAttention", () => {
-  function createStorageMock(): Storage {
-    const map = new Map<string, string>();
-    return {
-      get length() {
-        return map.size;
-      },
-      clear: () => map.clear(),
-      getItem: (key: string) => map.get(key) ?? null,
-      key: (index: number) => [...map.keys()][index] ?? null,
-      removeItem: (key: string) => void map.delete(key),
-      setItem: (key: string, value: string) => void map.set(key, value),
-    };
-  }
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("merges with the persisted map so another tab's dismissal survives", () => {
-    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("localStorage", createTestStorageMock());
     const key = dismissalStoreKey("ws://gateway.test");
     // Another tab dismissed a cron chip after this tab last loaded.
     localStorage.setItem(key, JSON.stringify({ cronFailed: ["alpha"] }));
@@ -867,7 +1003,7 @@ describe("dismissSidebarAttention", () => {
   });
 
   it("preserves released single-signature dismissals during upgrade", () => {
-    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("localStorage", createTestStorageMock());
     const gatewayUrl = "ws://gateway.test";
     localStorage.setItem(
       dismissalStoreKey(gatewayUrl),

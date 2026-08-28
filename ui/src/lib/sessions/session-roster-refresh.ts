@@ -1,4 +1,3 @@
-import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
@@ -417,17 +416,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     ) {
       return options;
     }
-    const limit = Math.max(
-      SESSIONS_LIST_OWNER_LIMIT,
-      typeof options.limit === "number" && options.limit > 0
-        ? Math.floor(options.limit)
-        : DEFAULT_SESSION_LIST_QUERY.limit,
-    );
-    return {
-      ...options,
-      ownerFirst: true,
-      limit,
-    };
+    return { ...options, ownerFirst: true };
   };
 
   const drainRefreshQueue = async (options: SessionRefreshOptions, bootstrap: boolean) => {
@@ -625,24 +614,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           publishManagedList(entry, { ...entry.snapshot, result: decorated });
         }
       }
-    },
-    setOwnerFilter(ownerId: string | null) {
-      const options = {
-        ...lastListOptions,
-        ownerId: ownerId?.trim() || undefined,
-        involvingMe: undefined,
-      };
-      delete options.offset;
-      return refresh({ ...options, force: true });
-    },
-    setInvolvingMeFilter(enabled: boolean) {
-      const options = {
-        ...lastListOptions,
-        ownerId: undefined,
-        involvingMe: enabled || undefined,
-      };
-      delete options.offset;
-      return refresh({ ...options, force: true });
     },
     lastOptions: () => lastListOptions,
     // Gateway-owned membership filters require an authoritative list refresh.

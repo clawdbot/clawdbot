@@ -239,7 +239,6 @@ export type SidebarSessionPatch = {
   category?: string | null;
 };
 
-export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
 export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 
@@ -283,7 +282,7 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
 }
 
 export function loadStoredSidebarSessionsShowPreview(): boolean {
-  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY) !== "false";
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY) === "true";
 }
 
 export function loadStoredSidebarSessionsShowSystem(): boolean {

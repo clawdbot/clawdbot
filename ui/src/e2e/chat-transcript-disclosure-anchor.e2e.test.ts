@@ -8,6 +8,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI transcript disclosure anchoring",
@@ -132,7 +133,7 @@ suite.define(() => {
         },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
-            deferredMethods: ["chat.message.get"],
+            heldMethods: ["chat.message.get"],
             historyMessages: Array.from({ length: 60 }, (_, index) => ({
               role: index % 2 === 0 ? "user" : "assistant",
               content:
@@ -143,7 +144,9 @@ suite.define(() => {
               __openclaw: {
                 id: `sizing-message-${index}`,
                 seq: index + 1,
-                ...(index === 1 ? { truncated: true, reason: "display-cap" } : {}),
+                ...(index === 1 || (interruption === "pointer" && index % 2 === 1)
+                  ? { truncated: true, reason: "display-cap" }
+                  : {}),
               },
             })),
           });
@@ -156,20 +159,31 @@ suite.define(() => {
           await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
           await gateway.waitForRequest("chat.message.get");
           await waitForChatScrollIdle(page);
-          const bubble = page.locator('.chat-bubble[data-entry-id="sizing-message-1"]');
-          await bubble.waitFor({ state: "visible" });
-          const initial = await bubble.evaluate((element) => {
-            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
-            return { key: row.dataset.virtualRowKey, height: row.offsetHeight };
-          });
+          await page
+            .locator('.chat-bubble[data-entry-id="sizing-message-1"]')
+            .waitFor({ state: "visible" });
           await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
           await page.locator(".chat-scroll-to-bottom").click();
-          await page.waitForFunction(() => {
+          await page.waitForFunction((pointerInterruption) => {
             const scroller = document.querySelector<HTMLElement>(
               ".chat-pane-cache__pane--active .chat-thread",
             );
-            return scroller && scroller.scrollTop > 0;
-          });
+            return (
+              scroller &&
+              scroller.scrollTop > 0 &&
+              (!pointerInterruption ||
+                Array.from(
+                  scroller.querySelectorAll<HTMLElement>(
+                    '.chat-bubble[data-entry-id^="sizing-message-"]',
+                  ),
+                ).some(
+                  (bubble) =>
+                    Number(bubble.dataset.entryId!.slice("sizing-message-".length)) % 2 === 1 &&
+                    bubble.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <=
+                      scroller.getBoundingClientRect().top,
+                ))
+            );
+          }, interruption === "pointer");
           const during = await thread.evaluate((element) => ({
             top: element.scrollTop,
             max: element.scrollHeight - element.clientHeight,
@@ -198,27 +212,65 @@ suite.define(() => {
             expect(interruptedOffset).toBeGreaterThan(0);
             expect(interruptedOffset).toBeLessThan(during.max);
           }
+          const interruptedAnchor = await captureTopVisibleVirtualRow(thread);
+          // Native smooth scrolling can pass the first message before the pointer
+          // arrives. Recover a still-mounted pending row above the settled reader.
+          const messageId =
+            interruption === "pointer"
+              ? await thread.evaluate((element) => {
+                  const top = element.getBoundingClientRect().top;
+                  const bubbles = Array.from(
+                    element.querySelectorAll<HTMLElement>(
+                      '.chat-bubble[data-entry-id^="sizing-message-"]',
+                    ),
+                  );
+                  const bubble = bubbles.findLast(
+                    (candidate) =>
+                      Number(candidate.dataset.entryId!.slice("sizing-message-".length)) % 2 ===
+                        1 &&
+                      candidate.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <= top,
+                  );
+                  return bubble?.dataset.entryId ?? null;
+                })
+              : "sizing-message-1";
+          expect(messageId).not.toBeNull();
+          const recoveredIndex = Number(messageId!.slice("sizing-message-".length));
+          const nextMessageId = `sizing-message-${recoveredIndex + 1}`;
+          const bubble = page.locator(`.chat-bubble[data-entry-id="${messageId}"]`);
+          const requestMatcher = expect.objectContaining({
+            params: expect.objectContaining({ messageId }),
+          });
+          const pendingRequest = (await gateway.getRequests("chat.message.get")).findLast(
+            (request) => requestMatcher.asymmetricMatch(request),
+          );
+          expect(pendingRequest).toBeDefined();
+          const initial = await bubble.evaluate((element) => {
+            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+            return { key: row.dataset.virtualRowKey, height: row.offsetHeight };
+          });
           const fullText = Array.from(
             { length: 5 },
             (_, index) =>
               `Recovered paragraph ${index + 1}. ${"All wrapped lines must reserve space before the next user message. ".repeat(5)}`,
           ).join("\n\n");
-          await gateway.resolveDeferred("chat.message.get", {
+          await gateway.deliverLatest({
+            type: "res",
+            id: pendingRequest!.id,
             ok: true,
-            message: { role: "assistant", content: fullText },
+            payload: { ok: true, message: { role: "assistant", content: fullText } },
           });
           await bubble.getByText("Recovered paragraph 1.", { exact: false }).waitFor();
           await waitForChatScrollIdle(page);
           // Outlast virtual-core's five-second scroll reconciliation deadline:
           // the assertion protects durable geometry, not a transient resize frame.
-          const final = await bubble.evaluate(async (element) => {
+          const final = await bubble.evaluate(async (element, nextId) => {
             await new Promise<void>((resolve) => {
               setTimeout(resolve, 5_500);
             });
             const row = element.closest<HTMLElement>(".chat-virtual-row")!;
-            const next = row
-              .closest(".chat-thread")!
-              .querySelector('.chat-bubble[data-entry-id="sizing-message-2"]')!
+            const scroller = row.closest<HTMLElement>(".chat-thread")!;
+            const next = scroller
+              .querySelector(`.chat-bubble[data-entry-id="${nextId}"]`)!
               .closest<HTMLElement>(".chat-virtual-row")!;
             const rect = row.getBoundingClientRect();
             return {
@@ -228,16 +280,25 @@ suite.define(() => {
               bottom: rect.bottom,
               nextTop: next.getBoundingClientRect().top,
               gap: next.getBoundingClientRect().top - rect.bottom,
+              returnOffset: scroller.scrollTop + rect.top - scroller.getBoundingClientRect().top,
             };
-          });
+          }, nextMessageId);
+          const finalAnchor = await captureTopVisibleVirtualRow(thread);
           await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
           await fs.writeFile(
             path.join(artifactDir, "interrupted-scroll.json"),
-            JSON.stringify({ initial, during, final }, null, 2),
+            JSON.stringify(
+              { initial, during, interruptedOffset, interruptedAnchor, final, finalAnchor },
+              null,
+              2,
+            ),
           );
           if (interruption === "pointer") {
+            // Growth above the reader legitimately adjusts scrollTop; the visible
+            // row must stay anchored regardless of where the pointer stopped scrolling.
+            expect(finalAnchor.key).toBe(interruptedAnchor.key);
             expect(
-              Math.abs((await thread.evaluate((element) => element.scrollTop)) - interruptedOffset),
+              Math.abs(finalAnchor.viewportTop - interruptedAnchor.viewportTop),
             ).toBeLessThanOrEqual(1);
           }
           expect(final.key).toBe(initial.key);
@@ -248,41 +309,51 @@ suite.define(() => {
           ).toBeLessThanOrEqual(1);
           // Leaving and returning must use the recovered size in the virtual
           // range too, not merely conceal stale cached geometry with DOM flow.
-          await page.locator(".chat-scroll-to-bottom").click();
-          await expect
-            .poll(() =>
-              thread.evaluate((element) =>
-                Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
-              ),
-            )
-            .toBeLessThanOrEqual(2);
+          if (recoveredIndex < 30) {
+            await page.locator(".chat-scroll-to-bottom").click();
+            await expect
+              .poll(() =>
+                thread.evaluate((element) =>
+                  Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
+                ),
+              )
+              .toBeLessThanOrEqual(2);
+            await page
+              .locator('.chat-bubble[data-entry-id="sizing-message-59"]')
+              .waitFor({ state: "visible" });
+          } else {
+            await thread.hover();
+            await page.mouse.wheel(0, -100_000);
+            await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+          }
           await expect.poll(() => bubble.count()).toBe(0);
-          await page
-            .getByText("Transcript message 59.", { exact: false })
-            .waitFor({ state: "visible" });
-          await thread.hover();
-          await page.mouse.wheel(0, -100_000);
+          await thread.evaluate((element, offset) => {
+            element.scrollTop = offset;
+          }, final.returnOffset);
           await bubble
             .getByText("Recovered paragraph 1.", { exact: false })
             .waitFor({ state: "visible" });
           await waitForChatScrollIdle(page);
-          const returned = await bubble.evaluate((element) => {
+          const returned = await bubble.evaluate((element, nextId) => {
             const row = element.closest<HTMLElement>(".chat-virtual-row")!;
             const next = row
               .closest(".chat-thread")!
-              .querySelector('.chat-bubble[data-entry-id="sizing-message-2"]')!
+              .querySelector(`.chat-bubble[data-entry-id="${nextId}"]`)!
               .closest<HTMLElement>(".chat-virtual-row")!;
             return {
               height: row.offsetHeight,
               gap: next.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
             };
-          });
+          }, nextMessageId);
           expect(returned.height).toBe(final.height);
           expect(Math.abs(returned.gap)).toBeLessThanOrEqual(1);
           await page.screenshot({ path: path.join(artifactDir, "03-after-return.png") });
-          await thread.evaluate((element) => {
-            element.scrollTop = 300;
-          });
+          await thread.evaluate(
+            (element, offset) => {
+              element.scrollTop = offset;
+            },
+            final.returnOffset + Math.min(300, final.height / 2),
+          );
           await waitForChatScrollIdle(page);
           await page.screenshot({ path: path.join(artifactDir, "04-visible-adjacency.png") });
         },

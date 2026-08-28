@@ -492,12 +492,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     }
   }
   const lastMessageIndex = group.messages.length - 1;
-  const runFrameActive = ownsRunFrame && Boolean(group.isStreaming || opts.activeContinuation);
-  const footerActionDetails = runFrameActive
-    ? null
-    : ownsRunFrame
-      ? (messageActionDetails[0] ?? null)
-      : (messageActionDetails[lastMessageIndex] ?? null);
+  const footerActionDetails = ownsRunFrame
+    ? (messageActionDetails[0] ?? null)
+    : (messageActionDetails[lastMessageIndex] ?? null);
   const footerActionMessageKey = ownsRunFrame
     ? opts.frameActionOwner?.key
     : group.messages[lastMessageIndex]?.key;
@@ -597,7 +594,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
             : nothing}
       </div>
-      ${normalizedRole === "tool"
+      ${normalizedRole === "tool" || group.isStreaming || opts.activeContinuation
         ? nothing
         : html`<div
             class="chat-group-footer ${persistUserIdentity

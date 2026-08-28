@@ -51,7 +51,6 @@ type PublishedReleaseVersion = { year: number; month: number; patch: number };
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
-  candidatePackageRoot?: string;
   includeOpenWebUI: boolean;
   liveMode: LiveMode;
   liveRetries: number;
@@ -566,69 +565,6 @@ function applyLiveRetries(poolLanes: DockerE2eLane[], retries: number): DockerE2
   return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
 }
 
-const PNPM_NON_SCRIPT_COMMANDS = new Set([
-  "add",
-  "audit",
-  "config",
-  "dlx",
-  "exec",
-  "fetch",
-  "install",
-  "pack",
-  "publish",
-  "rebuild",
-  "remove",
-]);
-
-function candidatePackageScripts(
-  candidatePackageRoot: string | undefined,
-): Set<string> | undefined {
-  if (!candidatePackageRoot) {
-    return undefined;
-  }
-  const packageJson = JSON.parse(
-    readFileSync(resolve(candidatePackageRoot, "package.json"), "utf8"),
-  );
-  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
-    throw new Error("Candidate package manifest must be an object");
-  }
-  if (
-    packageJson.scripts !== undefined &&
-    (!packageJson.scripts ||
-      typeof packageJson.scripts !== "object" ||
-      Array.isArray(packageJson.scripts))
-  ) {
-    throw new Error("Candidate package manifest has an invalid scripts field");
-  }
-  return new Set(
-    Object.entries(packageJson.scripts ?? {})
-      .filter(([, command]) => typeof command === "string")
-      .map(([name]) => name),
-  );
-}
-
-function requiredPackageScripts(poolLane: DockerE2eLane): string[] {
-  return [...poolLane.command.matchAll(/\bpnpm\s+(?:run\s+)?([a-z][a-z0-9:-]*)/giu)]
-    .map(([, script]) => script)
-    .filter((script): script is string => script !== undefined)
-    .filter((script) => !PNPM_NON_SCRIPT_COMMANDS.has(script));
-}
-
-function filterUnavailableCandidateScriptLanes(
-  poolLanes: DockerE2eLane[],
-  candidatePackageRoot: string | undefined,
-): DockerE2eLane[] {
-  const scripts = candidatePackageScripts(candidatePackageRoot);
-  if (!scripts) {
-    return poolLanes;
-  }
-  // The trusted catalog can add lanes before a frozen candidate has their scripts.
-  // Only schedule package-script commands the selected candidate can execute.
-  return poolLanes.filter((poolLane) =>
-    requiredPackageScripts(poolLane).every((script) => scripts.has(script)),
-  );
-}
-
 export function laneWeight(poolLane: DockerE2eLane): number {
   return Math.max(1, poolLane.weight ?? 1);
 }
@@ -946,16 +882,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       : options.liveMode === "only"
         ? []
         : applyLiveMode(retriedTailLanes, options.liveMode);
-  const availableLanes = filterUnavailableCandidateScriptLanes(
-    configuredLanes,
-    options.candidatePackageRoot,
-  );
-  const availableTailLanes = filterUnavailableCandidateScriptLanes(
-    configuredTailLanes,
-    options.candidatePackageRoot,
-  );
-  const orderedLanes = options.orderLanes(availableLanes, options.timingStore);
-  const orderedTailLanes = options.orderLanes(availableTailLanes, options.timingStore);
+  const orderedLanes = options.orderLanes(configuredLanes, options.timingStore);
+  const orderedTailLanes = options.orderLanes(configuredTailLanes, options.timingStore);
   return {
     omittedUnsupportedLaneNames: [...omittedUnsupportedLaneNames],
     orderedLanes,

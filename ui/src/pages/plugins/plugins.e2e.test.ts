@@ -417,8 +417,7 @@ function pluginMethodResponses() {
           match: {
             source: "clawhub",
             packageName: "calendar-plus",
-            version: "1.2.3",
-            acknowledgeClawHubRisk: true,
+            acknowledgeCapabilities: { reviewToken: calendarInspection.reviewToken },
           },
           response: installResult,
         },
@@ -602,41 +601,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       });
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",
-        message: "ClawHub requires acknowledgement before installing this release.",
-        details: {
-          clawhubTrustCode: "clawhub_risk_acknowledgement_required",
-          version: "1.2.3",
-          warning: "REVIEW REQUIRED - ClawHub found behavior that needs operator review.",
-        },
-      });
-
-      const acknowledgeButton = searchRow.getByRole("button", {
-        name: "Acknowledge risk and install",
-      });
-      await acknowledgeButton.waitFor({ state: "visible" });
-      expect(await searchRow.getByRole("alert").textContent()).toContain("REVIEW REQUIRED");
-
-      const listCountBeforeInstall = (await gateway.getRequests("plugins.list")).length;
-      const configCountBeforeInstall = (await gateway.getRequests("config.get")).length;
-      const installCountBeforeRetry = (await gateway.getRequests("plugins.install")).length;
-      await gateway.deferNext("plugins.list");
-      await gateway.deferNext("config.get");
-      await gateway.deferNext("plugins.install");
-      await acknowledgeButton.click();
-
-      const retryInstallRequest = await waitForNextRequest(
-        gateway,
-        "plugins.install",
-        installCountBeforeRetry,
-      );
-      expect(requestParams(retryInstallRequest)).toEqual({
-        source: "clawhub",
-        packageName: "calendar-plus",
-        version: "1.2.3",
-        acknowledgeClawHubRisk: true,
-      });
-      await gateway.rejectDeferred("plugins.install", {
-        code: "INVALID_REQUEST",
         message: "Capability consent required",
         details: buildCapabilityConsentErrorDetails({
           pluginId: "calendar-plus",
@@ -646,6 +610,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const consent = page.locator('[data-plugin-consent="install"]');
       await consent.getByText("calendar_create", { exact: true }).waitFor();
       await captureScreenshot(page, "artifact-consent-desktop.png");
+      const listCountBeforeInstall = (await gateway.getRequests("plugins.list")).length;
+      const configCountBeforeInstall = (await gateway.getRequests("config.get")).length;
+      await gateway.deferNext("plugins.list");
+      await gateway.deferNext("config.get");
       await gateway.setMethodResponse("plugins.install", installResult);
       const installCountBeforeConsent = (await gateway.getRequests("plugins.install")).length;
       const confirm = consent.getByRole("button", { name: "Install Calendar Plus", exact: true });
@@ -658,8 +626,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       ).toEqual({
         source: "clawhub",
         packageName: "calendar-plus",
-        version: "1.2.3",
-        acknowledgeClawHubRisk: true,
         acknowledgeCapabilities: { reviewToken: calendarInspection.reviewToken },
       });
       // The mutation boundary refreshes config before the page refreshes the

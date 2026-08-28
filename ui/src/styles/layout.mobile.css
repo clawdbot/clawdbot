@@ -371,7 +371,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .content {
-    padding: 4px 4px 16px;
+    --content-inline-padding: 4px;
+    padding: 4px var(--content-inline-padding) 16px;
     gap: 12px;
   }
 
@@ -544,7 +545,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .content {
-    padding: 4px 4px 12px;
+    padding: 4px var(--content-inline-padding) 12px;
     gap: 10px;
   }
 

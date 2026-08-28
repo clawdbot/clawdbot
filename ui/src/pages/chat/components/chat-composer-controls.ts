@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -23,7 +24,7 @@ export type ChatRunControlsProps = {
   hasAttachments?: boolean;
   isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
-  steerNowEnabled: boolean;
+  alternateFollowUpMode?: ChatFollowUpMode;
   suggestionComposer?: boolean;
   sending: boolean;
   voiceActive?: boolean;
@@ -443,9 +444,13 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         : interruptsActiveRun
           ? t("chat.runControls.sendMessage")
           : t("chat.runControls.queueMessage");
-  const queueSteerShortcutAvailable = props.steerNowEnabled && props.canSend && hasComposedContent;
-  const activeRunActionTooltip = queueSteerShortcutAvailable
-    ? `${activeRunActionLabel} ⏎ · ${t("chat.queue.steer")} ${t("chat.sendShortcutModifierEnter")}`
+  const alternateActionLabel = t(
+    props.alternateFollowUpMode === "queue" ? "chat.runControls.queue" : "chat.queue.steer",
+  );
+  const alternateShortcutAvailable =
+    props.alternateFollowUpMode && props.canSend && hasComposedContent;
+  const activeRunActionTooltip = alternateShortcutAvailable
+    ? `${activeRunActionLabel} ⏎ · ${alternateActionLabel} ${t("chat.sendShortcutModifierEnter")}`
     : activeRunActionLabel;
   // Preserve the click identity without mistaking it for a follow-up mode.
   const send = (event: Event) => props.onSend(event);

@@ -103,6 +103,7 @@ export async function completeReplyAgentRun(input: {
     const count = await incrementRunCompactionCount({
       agentId: followupRun.run.agentId,
       cfg,
+      expectedSession: accounting.expectedSession,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
       sessionKey,

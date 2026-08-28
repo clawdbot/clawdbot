@@ -7,8 +7,10 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsPage,
+  renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
@@ -524,44 +526,39 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const rows = profiles.length
       ? profiles.map((profile) => this.renderProfile(profile))
       : renderSettingsEmpty(t("cloudWorkersPage.empty"));
-    const body = renderSettingsPage(
-      html`
-        ${!this.hasManageAccess()
-          ? html`<div class="callout warning" role="note">
-              ${t("cloudWorkersPage.adminRequired")}
-            </div>`
-          : nothing}
-        ${this.catalogError
-          ? html`<div class="callout warning" role="status">
-              ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
-            </div>`
-          : nothing}
-        ${this.formError && !this.editor
-          ? html`<div class="callout warning" role="alert">${this.formError}</div>`
-          : nothing}
-        ${this.notice
-          ? html`<div class="callout warning" role="status">${this.notice}</div>`
-          : nothing}
-        ${renderSettingsSection(
-          {
-            title: t("cloudWorkersPage.sectionTitle"),
-            description: t("cloudWorkersPage.sectionDescription"),
-            actions: addAction,
-            count: profiles.length,
-          },
-          rows,
-        )}
-        ${this.renderEditor()}
-      `,
-      {
-        intro: html`${t("cloudWorkersPage.intro")}
-        ${renderDocsLink(CLOUD_WORKERS_DOCS_URL, t("cloudWorkersPage.documentation"))}`,
-      },
-    );
+    const body = renderSettingsPage(html`
+      ${!this.hasManageAccess()
+        ? html`<div class="callout warning" role="note">
+            ${t("cloudWorkersPage.adminRequired")}
+          </div>`
+        : nothing}
+      ${this.catalogError
+        ? html`<div class="callout warning" role="status">
+            ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
+          </div>`
+        : nothing}
+      ${this.formError && !this.editor
+        ? html`<div class="callout warning" role="alert">${this.formError}</div>`
+        : nothing}
+      ${this.notice
+        ? html`<div class="callout warning" role="status">${this.notice}</div>`
+        : nothing}
+      ${renderSettingsSection(
+        {
+          title: t("cloudWorkersPage.sectionTitle"),
+          description: t("cloudWorkersPage.sectionDescription"),
+          actions: addAction,
+          count: profiles.length,
+        },
+        rows,
+      )}
+      ${this.renderEditor()}
+    `);
     return html`
-      <section class="content-header">
-        <div><div class="page-title">${titleForRoute("cloud-workers")}</div></div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("cloud-workers"),
+        subtitle: html`${t("cloudWorkersPage.intro")} ${renderLearnMoreLink(CLOUD_WORKERS_DOCS_URL)}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

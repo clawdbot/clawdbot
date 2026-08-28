@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -250,7 +251,8 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => mockLoadPluginManifestRegistry(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: () => ({
     manifestRegistry: mockLoadPluginManifestRegistry(),
   }),
@@ -291,7 +293,8 @@ function setupPluginSchemaWithRequiredDefault() {
 }
 
 beforeEach(() => {
-  mockLoadPluginManifestRegistry.mockClear();
+  clearPluginMetadataLifecycleCaches();
+  mockLoadPluginManifestRegistry.mockReset().mockReturnValue({ diagnostics: [], plugins: [] });
 });
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {

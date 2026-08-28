@@ -68,7 +68,8 @@ struct ChatGatewayRequestTests {
         let request = OpenClawChatGatewayRequests.sessionsList(
             limit: 12,
             search: "  incident  ",
-            archived: true)
+            archived: true,
+            agentID: " Reviewer ")
 
         #expect(request.method == "sessions.list")
         #expect(request.timeoutMs == 15000)
@@ -77,6 +78,14 @@ struct ChatGatewayRequestTests {
         #expect(request.params["limit"]?.value as? Int == 12)
         #expect(request.params["search"]?.value as? String == "incident")
         #expect(request.params["archived"]?.value as? Bool == true)
+        #expect(request.params["agentId"]?.value as? String == "Reviewer")
+
+        let unscoped = OpenClawChatGatewayRequests.sessionsList(
+            limit: nil,
+            search: nil,
+            archived: false,
+            agentID: "   ")
+        #expect(unscoped.params["agentId"] == nil)
     }
 
     @Test func `child session request encodes focused pagination filters`() {

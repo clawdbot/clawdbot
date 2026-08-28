@@ -711,12 +711,6 @@ openclaw-chat-page {
   content-visibility: auto;
 }
 
-/* Message context can extend above its row. Release paint containment only
-   while it is open so the popover stays visible without giving up idle skips. */
-.chat-virtual-row:has(details.msg-meta[open]) {
-  content-visibility: visible;
-}
-
 .chat-virtual-row--first > :first-child {
   margin-top: 0 !important;
 }
@@ -3143,9 +3137,12 @@ button.chat-pr__diff {
      the surface's own floor is taller than the editor plus these insets. */
   --chat-composer-editor-inset-inline: 14px;
   --chat-composer-editor-inset-block: 6px;
-  /* Draft text and its surrounding labels share one semantic UI size. The
-     coarse-pointer floor in base.css still prevents iOS focus zoom. */
-  --chat-composer-editor-size: var(--control-ui-text-md);
+  /* The editor is a reading and writing surface, not a compact form field, so it
+     owns a 16px base instead of the shared control token, whose 14px base only
+     reaches 16px through an iOS zoom floor — text that size by accident does not
+     follow the operator's text scale until the scale passes 1.15, and it drops
+     the moment that floor moves. The max() keeps 16px as a hard floor. */
+  --chat-composer-editor-size: max(16px, calc(16px * var(--control-ui-text-scale)));
   /* One editor line. The single-line box centres a line of exactly this height,
      and the multiline editor never gets shorter than one of them. Derived, so a
      scaled-up editor keeps its leading instead of crowding its own descenders. */
@@ -6580,18 +6577,17 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-chat-only-info {
-  display: inline-grid;
-  width: 15px;
-  height: 15px;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
   margin-inline-start: 6px;
-  border: 1px solid color-mix(in srgb, var(--warn) 54%, transparent);
-  border-radius: var(--radius-full);
   color: color-mix(in srgb, var(--warn) 80%, var(--text));
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  place-items: center;
+}
+
+.chat-controls__model-chat-only-info svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .chat-controls__reasoning-panel {
@@ -6711,6 +6707,15 @@ button.chat-pr__diff {
   color: var(--text);
   font-size: 12px;
   font-weight: 650;
+}
+
+.chat-controls__effort-value {
+  min-width: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: end;
+  white-space: nowrap;
 }
 
 .chat-controls__effort-scale {

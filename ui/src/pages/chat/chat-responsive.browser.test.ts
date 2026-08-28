@@ -2062,88 +2062,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("paints open message context above its virtual row", async () => {
-    const page = await openBrowserPage(900, 500);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-thread chat-thread--direct" style="width: 720px; height: 400px;">
-            <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 720px;">
-              <div class="chat-virtual-sizer" style="height: 400px;">
-                <div class="chat-virtual-block">
-                  <div
-                    class="chat-virtual-row"
-                    data-previous-row
-                    style="height: 100px;"
-                  >
-                    <div class="chat-group tool">
-                      <div class="chat-group-messages">Previous transcript row</div>
-                    </div>
-                  </div>
-                  <div
-                    class="chat-virtual-row"
-                    data-context-row
-                    style="contain-intrinsic-block-size: auto 28px;"
-                  >
-                    <div class="chat-group assistant chat-group--with-footer">
-                      <div class="chat-group-messages"></div>
-                      <div class="chat-group-footer">
-                        <div class="chat-group-footer__meta">
-                          <span class="chat-sender-name">Assistant</span>
-                          <details class="msg-meta" open>
-                            <summary class="msg-meta__summary">
-                              <time class="chat-group-timestamp">just now</time>
-                            </summary>
-                            <span class="msg-meta__details">
-                              <span class="msg-meta__time">Aug 24, 2026, 1:15 PM UTC</span>
-                              <span class="msg-meta__tokens">↑19.6k</span>
-                              <span class="msg-meta__tokens">↓126</span>
-                              <span class="msg-meta__cache">R2.4k</span>
-                              <span class="msg-meta__model">gpt-5.5</span>
-                            </span>
-                          </details>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </body></html>`,
-      );
-      await waitForLayoutSettled(page, "[data-context-row], .msg-meta__details");
-
-      const layout = await page.evaluate(() => {
-        const row = document.querySelector<HTMLElement>("[data-context-row]")!;
-        const popover = row.querySelector<HTMLElement>(".msg-meta__details")!;
-        const rowRect = row.getBoundingClientRect();
-        const popoverRect = popover.getBoundingClientRect();
-        const sample = {
-          x: popoverRect.left + Math.min(10, popoverRect.width / 2),
-          y: Math.min(rowRect.top - 1, popoverRect.bottom - 1),
-        };
-        const target = document.elementFromPoint(sample.x, sample.y);
-        return {
-          paintedAboveRow:
-            sample.y >= popoverRect.top &&
-            sample.y < rowRect.top &&
-            target !== null &&
-            popover.contains(target),
-          popoverBottom: popoverRect.bottom,
-          popoverTop: popoverRect.top,
-          rowTop: rowRect.top,
-        };
-      });
-
-      expect(layout.popoverTop).toBeLessThan(layout.rowTop);
-      expect(layout.popoverBottom).toBeGreaterThan(layout.rowTop - 1);
-      expect(layout.paintedAboveRow).toBe(true);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
   it("keeps attributed user avatar fallbacks beside the message after identity resolution", async () => {
     const page = await openBrowserPage(860, 900);
     try {
@@ -2436,18 +2354,27 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   );
 
   it(
-    "reveals, pins, and dismisses message context from the timestamp",
+    "reveals, pins, and dismisses shared message context above virtual-row containment",
     FULL_APP_TEST_OPTIONS,
     async () => {
       const page = await getSharedAppPage();
       try {
         await page.setViewportSize({ width: 1366, height: 900 });
         const group = page.locator(".chat-group").filter({ hasText: SHARED_APP_CONTEXT_TEXT });
-        const details = group.locator("details.msg-meta");
-        const context = details.locator(".msg-meta__details");
-        const summary = details.locator(".msg-meta__summary");
+        const tooltip = group.locator("openclaw-tooltip.msg-meta");
+        const context = tooltip.locator(".msg-meta__details");
+        const summary = tooltip.locator(".msg-meta__summary");
         const messageText = group.locator(".chat-text").first();
         await messageText.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+        expect(await context.isVisible()).toBe(false);
+
+        // The shared group also contains an aborted image; finish its fallback
+        // layout before measuring whether opening the tooltip moves the row.
+        await messageText.hover();
+        await page.waitForFunction(
+          () => document.querySelector<HTMLImageElement>(".chat-message-image")?.complete,
+        );
+        await waitForLayoutSettled(page, ".chat-group");
         const initialLayout = await group.evaluate((node) => {
           const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;
           return {
@@ -2455,14 +2382,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             groupHeight: (node as HTMLElement).getBoundingClientRect().height,
           };
         });
-        expect(await context.isVisible()).toBe(false);
-
-        // Travel like a real pointer: the footer overlay is pointer-gated until
-        // the group is hovered, so enter through the message body first.
-        await messageText.hover();
         await summary.hover();
-        // The reveal is state-driven, so the re-render can lag the hover event
-        // under CPU contention; poll instead of a one-shot visibility read.
         await context.waitFor({ state: "visible", timeout: 10_000 });
         const hoverLayout = await group.evaluate((node) => {
           const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;
@@ -2479,30 +2399,86 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
         expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
 
+        // Real top-layer placement replaces the old per-row containment escape.
+        // Hit-test rendered content, not just the popup's open flag.
+        await expect
+          .poll(() =>
+            context.evaluate((node) => {
+              const row = node.closest<HTMLElement>(".chat-virtual-row")!;
+              const tooltipNode = node.closest("openclaw-tooltip")!;
+              const popup = tooltipNode.shadowRoot
+                ?.querySelector("wa-tooltip")
+                ?.shadowRoot?.querySelector("wa-popup")
+                ?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
+              const rect = node.getBoundingClientRect();
+              const target = document.elementFromPoint(rect.left + 8, rect.top + rect.height / 2);
+              return {
+                rowContainment: getComputedStyle(row).contentVisibility,
+                topLayer: popup?.matches(":popover-open") ?? false,
+                painted: target !== null && node.contains(target),
+              };
+            }),
+          )
+          .toEqual({ rowContainment: "auto", topLayer: true, painted: true });
+
         await page.mouse.move(0, 0);
         await context.waitFor({ state: "hidden", timeout: 10_000 });
 
-        await messageText.hover();
-        await summary.hover();
-        // Escape only owns pinned disclosures; it must not corrupt an active
-        // hover preview before the click converts that preview into a pin.
-        await page.keyboard.press("Escape");
-        await summary.click();
-        await page.mouse.move(0, 0);
-        // Click-to-open must survive the pointer leaving the message group.
+        // Keyboard discovery must reveal the timestamp itself, not just its tip.
+        await page.keyboard.press("Tab");
+        await summary.focus();
         await context.waitFor({ state: "visible", timeout: 10_000 });
-        expect(await details.getAttribute("open")).toBe("");
+        await expect
+          .poll(() =>
+            summary.evaluate((node) => {
+              const footer = node.closest<HTMLElement>(".chat-group-footer")!;
+              return {
+                footerOpacity: getComputedStyle(footer).opacity,
+                summaryOpacity: getComputedStyle(node).opacity,
+                pointerEvents: getComputedStyle(node).pointerEvents,
+                focused: document.activeElement === node,
+              };
+            }),
+          )
+          .toEqual({
+            footerOpacity: "1",
+            summaryOpacity: "1",
+            pointerEvents: "auto",
+            focused: true,
+          });
+        await page.keyboard.press("Escape");
+        await context.waitFor({ state: "hidden", timeout: 10_000 });
+        expect(await tooltip.getAttribute("open")).toBeNull();
+
+        await summary.press("Enter");
+        await context.waitFor({ state: "visible", timeout: 10_000 });
+        // Remove focus without focusing an outside control: only the pin should
+        // retain this disclosure, even in browsers that do not focus on click.
+        await summary.evaluate((node) => (node as HTMLElement).blur());
+        await expect
+          .poll(() =>
+            group.evaluate((node) => ({
+              hovered: node.matches(":hover"),
+              focused: node.matches(":focus-within"),
+              footerOpacity: getComputedStyle(
+                node.querySelector<HTMLElement>(".chat-group-footer")!,
+              ).opacity,
+            })),
+          )
+          .toEqual({ hovered: false, focused: false, footerOpacity: "1" });
+        expect(await tooltip.getAttribute("open")).toBe("");
+        expect(await context.isVisible()).toBe(true);
 
         await page.mouse.click(0, 0);
         await context.waitFor({ state: "hidden", timeout: 10_000 });
-        expect(await details.getAttribute("open")).toBeNull();
+        expect(await tooltip.getAttribute("open")).toBeNull();
 
         await messageText.hover();
         await summary.click();
         await context.waitFor({ state: "visible", timeout: 10_000 });
         await page.keyboard.press("Escape");
         await context.waitFor({ state: "hidden", timeout: 10_000 });
-        expect(await details.getAttribute("open")).toBeNull();
+        expect(await tooltip.getAttribute("open")).toBeNull();
       } finally {
         await page.keyboard.press("Escape");
         await page.mouse.move(0, 0);
@@ -2976,6 +2952,56 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("shows the current effort beside its heading in the accent color", async () => {
+    const page = await openBrowserPage(393, 852);
+    try {
+      await page.setContent(`
+        <!doctype html>
+        <html>
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <div class="chat-controls__reasoning-panel">
+              <div class="chat-controls__reasoning-head">
+                <span class="chat-controls__effort-heading">Effort</span>
+                <span class="chat-controls__effort-value">Extra high</span>
+              </div>
+            </div>
+            <span data-accent-probe style="color: var(--accent)"></span>
+          </body>
+        </html>
+      `);
+
+      const layout = await page.evaluate(() => {
+        const heading = document
+          .querySelector<HTMLElement>(".chat-controls__effort-heading")!
+          .getBoundingClientRect();
+        const valueNode = document.querySelector<HTMLElement>(".chat-controls__effort-value")!;
+        const value = valueNode.getBoundingClientRect();
+        return {
+          accentColor: getComputedStyle(document.querySelector<HTMLElement>("[data-accent-probe]")!)
+            .color,
+          heading: { right: heading.right, y: heading.y, height: heading.height },
+          value: {
+            color: getComputedStyle(valueNode).color,
+            x: value.x,
+            y: value.y,
+            height: value.height,
+          },
+        };
+      });
+
+      expect(layout.value.x).toBeGreaterThanOrEqual(layout.heading.right);
+      expect(
+        Math.abs(
+          layout.value.y + layout.value.height / 2 - (layout.heading.y + layout.heading.height / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(layout.value.color).toBe(layout.accentColor);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("aligns the reasoning default action with the reasoning heading", async () => {
     const page = await openBrowserPage(520, 600);
     try {
@@ -3400,8 +3426,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
         expect(composerFontSizes).toEqual({
           labels: [14, 14, 14],
-          placeholder: 14,
-          textarea: 14,
+          placeholder: 16,
+          textarea: 16,
         });
         if (width <= 480) {
           const modelSettings = expectControlRect(
@@ -3439,6 +3465,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           }
           expect(footer.height).toBeLessThanOrEqual(53);
         } else {
+          // The editor reads at input size, while the controls around it stay
+          // chrome-sized — that difference is what marks the text as the
+          // subject of the surface.
           expect(send.width).toBeCloseTo(32, 2);
           expect(send.height).toBeCloseTo(32, 2);
         }
@@ -3882,6 +3911,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             expectedColor,
           );
           const retry = status.locator("button");
+          expect(await retry.evaluate((element) => getComputedStyle(element).borderStyle)).toBe(
+            "none",
+          );
           expect(await retry.evaluate((element) => getComputedStyle(element).color)).toBe(
             expectedColor,
           );

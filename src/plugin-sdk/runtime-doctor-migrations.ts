@@ -300,6 +300,95 @@ export function defineKeyMoveMigration(params: {
   };
 }
 
+/**
+ * Defines the repair for channel config parked under `plugins.entries.<id>.config`.
+ * Channel plugins read `channels.<channelId>` only, but retired rich plugin-entry
+ * schemas let config UIs park values in the unread plugin-entry location.
+ */
+export function defineStrayPluginEntryConfigMigration(params: {
+  pluginId: string;
+  channelId: string;
+  validateMergedChannelConfig: (merged: Record<string, unknown>) => boolean;
+}): {
+  legacyConfigRule: {
+    path: string[];
+    message: string;
+    match: (value: unknown) => boolean;
+  };
+  normalizeConfig: (params: { cfg: OpenClawConfig }) => {
+    config: OpenClawConfig;
+    changes: string[];
+  };
+} {
+  const { pluginId, channelId } = params;
+  const entryConfigPath = `plugins.entries.${pluginId}.config`;
+  const readStrayEntryConfig = (cfg: OpenClawConfig): Record<string, unknown> | null => {
+    const entries = asObjectRecord(asObjectRecord(cfg.plugins)?.entries);
+    const config = asObjectRecord(asObjectRecord(entries?.[pluginId])?.config);
+    return config && Object.keys(config).length > 0 ? config : null;
+  };
+  return {
+    legacyConfigRule: {
+      path: ["plugins", "entries", pluginId, "config"],
+      message: `${entryConfigPath} is not read by the ${channelId} channel; run "openclaw doctor --fix" to move its keys to channels.${channelId}.`,
+      match: (value) => {
+        const record = asObjectRecord(value);
+        return Boolean(record && Object.keys(record).length > 0);
+      },
+    },
+    // Existing channel keys stay authoritative, and the move only commits when
+    // the merged record validates, so a doctor fix can never turn a valid
+    // channels.<id> invalid — unmergeable values stay in place and keep
+    // surfacing through the legacy rule message.
+    normalizeConfig: ({ cfg }) => {
+      const stray = readStrayEntryConfig(cfg);
+      if (!stray) {
+        return { config: cfg, changes: [] };
+      }
+      const next = structuredClone(cfg);
+      const currentChannel = asObjectRecord(asObjectRecord(next.channels)?.[channelId]) ?? {};
+      const staged: string[] = [];
+      const dropped: string[] = [];
+      const merged = { ...currentChannel };
+      for (const [key, value] of Object.entries(stray)) {
+        if (Object.hasOwn(currentChannel, key)) {
+          dropped.push(key);
+        } else {
+          merged[key] = value;
+          staged.push(key);
+        }
+      }
+      if (!params.validateMergedChannelConfig(merged)) {
+        return { config: cfg, changes: [] };
+      }
+      const channels = asObjectRecord(next.channels) ?? {};
+      channels[channelId] = merged;
+      // Doctor migrations operate on the raw parsed config; the merged channel
+      // record was just validated by validateMergedChannelConfig.
+      // SAFETY: widening past ChannelsConfig only reattaches the same runtime shape.
+      (next as Record<string, unknown>).channels = channels;
+      const entry = asObjectRecord(
+        asObjectRecord(asObjectRecord(next.plugins)?.entries)?.[pluginId],
+      );
+      if (entry) {
+        delete entry.config;
+      }
+      return {
+        config: next,
+        changes: [
+          ...staged.map(
+            (key) => `Moved ${entryConfigPath}.${key} to channels.${channelId}.${key}.`,
+          ),
+          ...dropped.map(
+            (key) =>
+              `Removed ${entryConfigPath}.${key}; channels.${channelId}.${key} is authoritative.`,
+          ),
+        ],
+      };
+    },
+  };
+}
+
 /** Defines a single-file legacy JSON import into one keyed plugin-state namespace. */
 export function defineLegacyJsonStateMigration<TSource>(params: {
   id: string;

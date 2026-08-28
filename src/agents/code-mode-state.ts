@@ -52,6 +52,8 @@ type CodeModeRunState = {
   catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   bridgeDispatch: CodeModeBridgeDispatchState;
+  ownerSignal: AbortSignal;
+  releaseOwner: () => void;
 };
 
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
@@ -120,15 +122,19 @@ export function removeExpiredRuns(now = Date.now()): void {
 
 export function disposeCodeModeRun(runId: string): void {
   const state = activeRuns.get(runId);
-  cancelPendingBridgeStates(state?.pending ?? []);
   activeRuns.delete(runId);
+  state?.releaseOwner();
+  cancelPendingBridgeStates(state?.pending ?? []);
   resumingRunIds.delete(runId);
   scheduleActiveRunExpiry();
 }
 
 /** Cancel suspended bridge work before its Gateway-owned runtimes disappear. */
 export function disposeAllCodeModeRuns(): void {
-  activeRuns.forEach((state) => cancelPendingBridgeStates(state.pending));
+  activeRuns.forEach((state) => {
+    state.releaseOwner();
+    cancelPendingBridgeStates(state.pending);
+  });
   activeRuns.clear();
   resumingRunIds.clear();
   scheduleActiveRunExpiry();
@@ -221,8 +227,13 @@ function enforceActiveRunLimit(): void {
 export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
     enforceActiveRunLimit();
-  } else if (!activeRuns.delete(ownedRunId)) {
-    throw new ToolInputError("code mode run is unavailable or expired.");
+  } else {
+    const state = activeRuns.get(ownedRunId);
+    if (!state) {
+      throw new ToolInputError("code mode run is unavailable or expired.");
+    }
+    activeRuns.delete(ownedRunId);
+    state.releaseOwner();
   }
   // Resume transfers an existing slot without exposing a free capacity window
   // to concurrent exec calls or rejecting its own run at the global limit.
@@ -443,7 +454,19 @@ export function storeSnapshotState(params: {
   output: unknown[];
   deliveredOutputCount?: number;
   bridgeDispatch: CodeModeBridgeDispatchState;
+  signal?: AbortSignal;
 }) {
+  const catalogRef = params.ctx.catalogRef;
+  const closed = new AbortController();
+  const ownerSignal = AbortSignal.any(
+    [params.signal, params.ctx.abortSignal, closed.signal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    ),
+  );
+  if (!catalogRef?.current || ownerSignal.aborted) {
+    cancelPendingBridgeStates(params.pending);
+    return codeModeAbortedResult(params);
+  }
   const now = Date.now();
   const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
   if (expiresAt === undefined) {
@@ -458,7 +481,15 @@ export function storeSnapshotState(params: {
         params.config.snapshotTtlSeconds * MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS,
       )
     : undefined;
-  activeRuns.set(params.runId, {
+  const disposers = (catalogRef.onDispose ??= new Set());
+  const onClose = () => {
+    // A transferred snapshot may reuse this cell id; stale observers own only
+    // the exact parked state they subscribed for, never its replacement.
+    if (activeRuns.get(params.runId) === state) {
+      disposeCodeModeRun(params.runId);
+    }
+  };
+  const state: CodeModeRunState = {
     runId: params.runId,
     replayId: params.replayId,
     parentToolCallId: params.parentToolCallId,
@@ -476,7 +507,16 @@ export function storeSnapshotState(params: {
     catalogProjection: params.catalogProjection,
     namespaceRuntime: params.namespaceRuntime,
     bridgeDispatch: params.bridgeDispatch,
-  });
+    ownerSignal,
+    releaseOwner: () => {
+      disposers.delete(onClose);
+      ownerSignal.removeEventListener("abort", onClose);
+      closed.abort();
+    },
+  };
+  activeRuns.set(params.runId, state);
+  disposers.add(onClose);
+  ownerSignal.addEventListener("abort", onClose, { once: true });
   scheduleActiveRunExpiry();
   return {
     status: "waiting" as const,
@@ -485,6 +525,25 @@ export function storeSnapshotState(params: {
     pendingToolCalls: pendingToolCalls(params.pending),
     replaySafe: params.replaySafe,
     output: params.output.slice(params.deliveredOutputCount ?? 0),
+    telemetry: telemetry(params.runtime),
+  };
+}
+
+export function codeModeAbortedResult(params: {
+  bridgeDispatch: CodeModeBridgeDispatchState;
+  output: unknown[];
+  deliveredOutputCount?: number;
+  replaySafe: boolean;
+  runtime: ToolSearchRuntime;
+}) {
+  return {
+    status: "failed" as const,
+    error: "code mode execution aborted",
+    code: "aborted" as const,
+    failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
+    bridgeDispatchStarted: params.bridgeDispatch.started,
+    output: params.output.slice(params.deliveredOutputCount ?? 0),
+    replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
 }

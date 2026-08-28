@@ -13,6 +13,7 @@ import {
 const suite = createChatFlowE2eSuite();
 const selected = "agent:main:card-selected";
 const watched = "agent:main:card-viewing";
+const proofDirectory = path.resolve(".artifacts/control-ui-e2e/people-activity-cards");
 
 function scenario() {
   const now = Date.now();
@@ -78,22 +79,24 @@ async function capturePeopleCard(page: Page, filename: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  const directory = path.resolve(".artifacts/control-ui-e2e/people-activity-cards");
-  await mkdir(directory, { recursive: true });
+  await mkdir(proofDirectory, { recursive: true });
   await page.screenshot({
-    path: path.join(directory, filename),
+    path: path.join(proofDirectory, filename),
     fullPage: true,
     animations: "disabled",
   });
 }
 
 suite.define(() => {
-  it("bridges hover, preserves focus on updates, and keeps navigation separate from details", async () => {
+  it("opens one person row, preserves focus on updates, and keeps activity navigation in the card", async () => {
     await suite.withPage(
       {
         hasTouch: false,
         colorScheme: "light",
         locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: proofDirectory, size: { width: 1280, height: 900 } }
+          : undefined,
         serviceWorkers: "block",
         viewport: { width: 1280, height: 900 },
       },
@@ -103,13 +106,12 @@ suite.define(() => {
         const row = page
           .locator(".sidebar-online__row")
           .filter({ has: page.locator('[data-online-user-id="alice"]') });
-        const name = row.locator("a.sidebar-online__person");
-        const details = row.getByRole("button", { name: "Details for Alice" });
+        const person = row.getByRole("button", { name: "Details for Alice" });
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
-        await name.waitFor({ state: "visible" });
+        await person.waitFor({ state: "visible" });
         expect(await card.count()).toBe(0);
-        expect(await name.getAttribute("href")).toContain("/activity?person=alice");
-        await name.hover();
+        expect(await row.locator("a, button").count()).toBe(1);
+        await person.hover();
         await card.waitFor({ state: "visible" });
         expect(await card.textContent()).toContain("Reported time zone: Europe/Paris");
         await expect
@@ -133,7 +135,7 @@ suite.define(() => {
         await page.mouse.move(bounds.x + bounds.width + 4, bounds.y + bounds.height / 2);
         await page.mouse.move(cardBounds.x + 8, cardBounds.y + 20);
         expect(await card.count()).toBe(1);
-        await details.focus();
+        await person.focus();
         await page.keyboard.press("Tab");
         const session = card.getByRole("link", { name: "Release checklist" });
         await expect
@@ -161,14 +163,14 @@ suite.define(() => {
         expect(await session.evaluate((element) => document.activeElement === element)).toBe(true);
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
-        expect(await details.evaluate((element) => document.activeElement === element)).toBe(true);
-        await details.click();
+        expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
+        await person.click();
         await card.waitFor({ state: "visible" });
         await page.mouse.move(1100, 850);
         expect(await card.count()).toBe(1);
         await page.mouse.click(1100, 850);
         await expect.poll(() => card.count()).toBe(0);
-        await details.click();
+        await person.click();
         await card.waitFor({ state: "visible" });
         await card.getByRole("link", { name: "View activity", exact: true }).click();
         await expect.poll(() => page.url()).toContain("/activity?person=alice");
@@ -195,16 +197,16 @@ suite.define(() => {
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
           .click();
-        const details = page.getByRole("button", { name: "Details for Alice" });
-        await details.tap();
+        const person = page.getByRole("button", { name: "Details for Alice" });
+        await person.tap();
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await card.waitFor({ state: "visible" });
         await page.keyboard.press("Tab");
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
-        expect(await details.isVisible()).toBe(true);
-        expect(await details.evaluate((element) => document.activeElement === element)).toBe(true);
-        await details.tap();
+        expect(await person.isVisible()).toBe(true);
+        expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
+        await person.tap();
         await card.waitFor({ state: "visible" });
         expect(await card.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe(
           "auto",

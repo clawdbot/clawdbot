@@ -23,7 +23,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsNavRow,
@@ -495,8 +495,7 @@ export class ProfilePage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("profile")}
-            ${renderDocsLink(PROFILE_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
           </div>
         </div>
         ${this.selfUser

@@ -209,7 +209,7 @@ describe("install.sh", () => {
   });
 
   it.each(["apt-get", "dnf", "yum"])(
-    "rejects an invalid NodeSource response before %s repository setup",
+    "uses the LTS NodeSource stream and rejects an invalid response before %s setup",
     (packageManager) => {
       const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nodesource-validation-"));
       const marker = join(tmp, "configured");
@@ -234,6 +234,7 @@ describe("install.sh", () => {
               builtin command "$@"
             }
             download_file() {
+              printf 'download:%s\n' "$1"
               printf '<html>unexpected response</html>\n' > "$2"
             }
             ui_info() { printf 'info:%s\n' "$*"; }
@@ -256,6 +257,9 @@ describe("install.sh", () => {
         );
 
         expect(result.status).toBe(1);
+        expect(result.stdout).toContain(
+          `download:https://${packageManager === "apt-get" ? "deb" : "rpm"}.nodesource.com/setup_24.x`,
+        );
         expect(result.stdout).toContain("step:Downloading NodeSource setup script");
         expect(result.stdout).not.toContain("unexpected response");
         expect(existsSync(marker)).toBe(false);

@@ -11,7 +11,7 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -728,8 +728,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("model-setup")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("model-setup")}
-            ${renderDocsLink(MODEL_SETUP_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("model-setup")} ${renderLearnMoreLink(MODEL_SETUP_DOCS_URL)}
           </div>
         </div>
       </section>

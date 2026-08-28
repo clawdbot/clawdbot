@@ -1,7 +1,17 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
+import {
+  controlUiBundledGatewayUrl,
+  installMockGateway,
+  waitForControlUiSettingsTakeover,
+} from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -46,6 +56,10 @@ async function openThemedChat(theme: string, mode: "dark" | "light", basePath = 
   });
   await context.addInitScript(
     ({ gatewayUrl, initialMode, initialTheme }) => {
+      if (sessionStorage.getItem("typography-seeded")) {
+        return;
+      }
+      sessionStorage.setItem("typography-seeded", "1");
       localStorage.setItem(
         `openclaw.control.settings.v1:${gatewayUrl}`,
         JSON.stringify({ gatewayUrl, theme: initialTheme, themeMode: initialMode }),
@@ -95,88 +109,266 @@ async function renderAssistantProse(
   await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("Typography");
 }
 
+async function captureTypography(
+  page: Awaited<ReturnType<typeof openThemedChat>>["page"],
+  name: string,
+) {
+  if (captureUiProof) {
+    await mkdir(proofDirectory, { recursive: true });
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({ path: path.join(proofDirectory, `${name}.png`) });
+  }
+}
+
+async function openPicker(picker: Locator) {
+  await Promise.all([
+    picker.evaluate(
+      (select) =>
+        new Promise<void>((resolve) => {
+          select.addEventListener("wa-after-show", () => resolve(), { once: true });
+        }),
+    ),
+    picker.click(),
+  ]);
+  await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
+}
+
+async function selectPickerOption(picker: Locator, value: string) {
+  await openPicker(picker);
+  await clickPickerOption(picker, value);
+}
+
+async function clickPickerOption(picker: Locator, value: string) {
+  const option = picker.locator(`wa-option[value="${value}"]`);
+  await option.waitFor({ state: "visible" });
+  await Promise.all([
+    picker.evaluate(
+      (select) =>
+        new Promise<void>((resolve) => {
+          select.addEventListener("wa-after-hide", () => resolve(), { once: true });
+        }),
+    ),
+    option.click(),
+  ]);
+  await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
+}
+
 suite.define(() => {
+  it("previews fonts on demand, applies independent overrides, and restores theme typography", async () => {
+    const { page, themeRequests, gateway } = await openThemedChat("dash", "dark");
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    await waitForControlUiSettingsTakeover(page);
+    const ui = page.locator("#settings-font-ui");
+    const chat = page.locator("#settings-font-chat");
+    const preview = page.locator(".settings-typography-preview");
+    const fontRequests = () =>
+      themeRequests.filter(
+        (request) => request.includes(".css") && !request.startsWith("dash.css"),
+      );
+    await preview.waitFor();
+    expect(await ui.locator("..").locator("..").textContent()).toContain(
+      "Stored in this browser only",
+    );
+    await page.evaluate(() => document.fonts.ready);
+    expect(new Set(fontRequests())).toEqual(
+      new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
+    );
+    const families = () =>
+      preview.evaluate((panel) => ({
+        ui: getComputedStyle(panel.querySelector(".settings-typography-preview__caption")!)
+          .fontFamily,
+        chat: getComputedStyle(panel.querySelector(".settings-typography-preview__prose")!)
+          .fontFamily,
+        code: getComputedStyle(panel.querySelector("code")!).fontFamily,
+      }));
+    const chatSmoothing = () =>
+      page.evaluate(() => document.documentElement.style.getPropertyValue("--chat-font-smoothing"));
+    const initial = await families();
+    expect(initial.ui).toContain("DM Sans");
+    expect(initial.chat).toContain("Fraunces");
+    expect(await chatSmoothing()).toBe("auto");
+    if (captureUiProof) {
+      await preview.scrollIntoViewIfNeeded();
+    }
+    await captureTypography(page, "picker-default");
+    await openPicker(ui);
+    await ui.locator('wa-option[value="geist"]').waitFor({ state: "visible" });
+    await expect.poll(() => fontRequests().length).toBe(9);
+    await captureTypography(page, "picker-specimens");
+    await clickPickerOption(ui, "geist");
+    await expect.poll(async () => (await families()).ui).toContain("Geist");
+    expect((await families()).chat).toContain("Fraunces");
+    await selectPickerOption(chat, "geist");
+    await expect.poll(async () => (await families()).chat).toContain("Geist");
+    // A sans chat override on a serif theme drops the serif smoothing opt-in.
+    await expect.poll(chatSmoothing).toBe("");
+    await selectPickerOption(chat, "lora");
+    await expect.poll(async () => (await families()).chat).toContain("Lora");
+    await expect.poll(chatSmoothing).toBe("auto");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          [...document.fonts].filter((face) => face.status === "loaded").map((face) => face.family),
+        ),
+      )
+      .toEqual(expect.arrayContaining(["Geist", "Lora"]));
+    expect((await families()).code).toBe(initial.code);
+    expect(await gateway.getRequests("config.patch")).toEqual([]);
+    await captureTypography(page, "picker-overrides");
+    await page.reload();
+    await waitForControlUiSettingsTakeover(page);
+    await expect.poll(async () => (await families()).ui).toContain("Geist");
+    await expect.poll(async () => (await families()).chat).toContain("Lora");
+    await selectPickerOption(ui, "system");
+    await expect.poll(async () => (await families()).ui).toContain("-apple-system");
+    // Model a popup transition outliving wa-after-show: restoring the theme
+    // must not depend on Chromium advancing the animation timeline.
+    await ui.evaluate((select) => {
+      select.addEventListener(
+        "wa-after-show",
+        () => {
+          const popup = select
+            .shadowRoot!.querySelector("wa-popup")!
+            .shadowRoot!.querySelector<HTMLElement>('[part="popup"]')!;
+          popup.style.transition = "none";
+          popup.style.transform = "translateX(600px)";
+          popup.getBoundingClientRect();
+          popup.style.transition = "transform 60s linear";
+          popup.style.transform = "translateX(0px)";
+        },
+        { once: true },
+      );
+    });
+    await selectPickerOption(ui, "theme");
+    await selectPickerOption(chat, "theme");
+    await expect.poll(families).toEqual(initial);
+    expect(
+      await page.evaluate(() =>
+        ["--font-body", "--font-chat"].map((key) =>
+          document.documentElement.style.getPropertyValue(key),
+        ),
+      ),
+    ).toEqual(["", ""]);
+  });
+
   it.each([
-    {
-      body: "Instrument Sans",
-      chat: "Instrument Sans",
-      families: ["Instrument Sans"],
-      sheet: "/fonts/claw.css",
-      theme: "claw",
+    ["claw", "Instrument Sans", "Instrument Sans", ["instrument-sans"], "antialiased"],
+    ["knot", "Geist", "Geist", ["geist"], "antialiased"],
+    ["dash", "DM Sans", "Fraunces", ["dm-sans", "fraunces"], "auto"],
+    ["absolutely", "Space Grotesk", "Lora", ["space-grotesk", "lora"], "auto"],
+    ["tide", "IBM Plex Sans", "IBM Plex Sans", ["ibm-plex-sans"], "antialiased"],
+    [
+      "beacon",
+      "Atkinson Hyperlegible Next",
+      "Atkinson Hyperlegible Next",
+      ["atkinson-hyperlegible"],
+      "antialiased",
+    ],
+    ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
+  ] as const)(
+    "paints %s chrome and chat prose in its own faces",
+    async (theme, body, chat, faces, chatSmoothing) => {
+      const { themeRequests, gateway, page } = await openThemedChat(theme, "dark");
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await renderAssistantProse(gateway, page);
+
+      const report = await page.evaluate(async () => {
+        await document.fonts.ready;
+        const chats = document.querySelectorAll(".chat-text");
+        const lastChat = chats[chats.length - 1];
+        const primary = (value: string) =>
+          (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
+        return {
+          chatFontFamily: lastChat ? primary(getComputedStyle(lastChat).fontFamily) : null,
+          chatFontSmoothing: lastChat
+            ? getComputedStyle(lastChat).getPropertyValue("-webkit-font-smoothing")
+            : null,
+          bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
+          linkHrefs: [...document.querySelectorAll('link[id^="openclaw-typeface-"]')].map((link) =>
+            link.getAttribute("href"),
+          ),
+          loaded: [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family),
+        };
+      });
+
+      // Every theme also declares the mono face: base.css --mono names
+      // JetBrains Mono for code spans regardless of the active family.
+      const expectedFaces = [...new Set([...faces, "jetbrains-mono"])];
+      expect(report.linkHrefs).toEqual(expectedFaces.map((face) => `/fonts/${face}.css`));
+      expect(report.bodyFontFamily).toBe(body);
+      expect(report.chatFontFamily).toBe(chat);
+      // Serif chat faces opt out of the app-wide `antialiased` thinning
+      // (applyChatFontSmoothing) so their hairlines stay crisp.
+      expect(report.chatFontSmoothing).toBe(chatSmoothing);
+      // Mono glyphs on the page pull the always-declared JetBrains Mono face.
+      expect(new Set(report.loaded)).toEqual(new Set([body, chat, "JetBrains Mono"]));
+      expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
+
+      await captureTypography(page, `${theme}-chat-dark`);
     },
-    {
-      body: "Geist",
-      chat: "Geist",
-      families: ["Geist"],
-      sheet: "/fonts/knot.css",
-      theme: "knot",
-    },
-    {
-      body: "DM Sans",
-      chat: "Fraunces",
-      families: ["DM Sans", "Fraunces"],
-      sheet: "/fonts/dash.css",
-      theme: "dash",
-    },
-    {
-      body: "Space Grotesk",
-      chat: "Lora",
-      families: ["Space Grotesk", "Lora"],
-      sheet: "/fonts/absolutely.css",
-      theme: "absolutely",
-    },
-    {
-      body: "IBM Plex Sans",
-      chat: "IBM Plex Sans",
-      families: ["IBM Plex Sans"],
-      sheet: "/fonts/tide.css",
-      theme: "tide",
-    },
-    {
-      body: "Atkinson Hyperlegible Next",
-      chat: "Atkinson Hyperlegible Next",
-      families: ["Atkinson Hyperlegible Next"],
-      sheet: "/fonts/beacon.css",
-      theme: "beacon",
-    },
-    {
-      body: "JetBrains Mono",
-      chat: "JetBrains Mono",
-      families: ["JetBrains Mono"],
-      sheet: "/fonts/phosphor.css",
-      theme: "phosphor",
-    },
-  ])("paints $theme chrome and chat prose in its own faces", async (spec) => {
+  );
+
+  it("keeps Phosphor menu modifier glyphs on the system UI stack", async () => {
+    const { page } = await openThemedChat("phosphor", "dark");
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const identity = page.locator(".sidebar-identity-card");
+    await identity.focus();
+    await page.keyboard.press("Enter");
+    const menu = page.locator("wa-dropdown.sidebar-identity-menu");
+    await menu.waitFor();
+    const shortcut = menu
+      .locator('wa-dropdown-item[value="command:settings"]')
+      .locator(".session-menu__shortcut");
+
+    const report = await shortcut.evaluate((element) => ({
+      body: getComputedStyle(document.body).fontFamily,
+      shortcut: getComputedStyle(element).fontFamily,
+      text: element.textContent,
+    }));
+    expect(report.body).toMatch(/^"?JetBrains Mono/u);
+    expect(report.shortcut).toMatch(/^system-ui,/u);
+    const applePlatform = await page.evaluate(() =>
+      /Mac|iPhone|iPad|iPod/u.test(navigator.platform),
+    );
+    expect(report.text).toBe(
+      formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, applePlatform),
+    );
+
     if (captureUiProof) {
       await mkdir(proofDirectory, { recursive: true });
+      await page.screenshot({ path: path.join(proofDirectory, "phosphor-settings-shortcut.png") });
     }
-    const { themeRequests, gateway, page } = await openThemedChat(spec.theme, "dark");
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await renderAssistantProse(gateway, page);
 
-    const report = await page.evaluate(async () => {
-      await document.fonts.ready;
-      const chats = document.querySelectorAll(".chat-text");
-      const chat = chats[chats.length - 1];
-      const primary = (value: string) =>
-        (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
-      return {
-        chatFontFamily: chat ? primary(getComputedStyle(chat).fontFamily) : null,
-        bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
-        linkHref: document.getElementById("openclaw-theme-fonts")?.getAttribute("href") ?? null,
-        loaded: [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family),
-      };
+    const modelShortcutFont = await page.evaluate(() => {
+      const action = document.createElement("span");
+      action.className = "chat-controls__model-option-action";
+      const keycap = document.createElement("kbd");
+      action.append(keycap);
+      document.body.append(action);
+      const fontFamily = getComputedStyle(keycap).fontFamily;
+      action.remove();
+      return fontFamily;
     });
+    expect(modelShortcutFont).toBe(
+      await page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
+      ),
+    );
 
-    expect(report.linkHref).toBe(spec.sheet);
-    expect(report.bodyFontFamily).toBe(spec.body);
-    expect(report.chatFontFamily).toBe(spec.chat);
-    expect(new Set(report.loaded)).toEqual(new Set(spec.families));
-    expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
-
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(proofDirectory, `${spec.theme}-chat-dark.png`) });
-    }
+    const genericMenuShortcutFont = await page.evaluate(() => {
+      const genericShortcut = document.createElement("span");
+      genericShortcut.className = "session-menu__shortcut";
+      genericShortcut.textContent = "C";
+      document.body.append(genericShortcut);
+      const fontFamily = getComputedStyle(genericShortcut).fontFamily;
+      genericShortcut.remove();
+      return fontFamily;
+    });
+    expect(genericMenuShortcutFont).toBe(
+      await page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
+      ),
+    );
   });
 
   it.each([
@@ -320,10 +512,11 @@ suite.define(() => {
       .waitFor({ state: "visible", timeout: 30_000 });
 
     const linkHref = await page.evaluate(
-      () => document.getElementById("openclaw-theme-fonts")?.getAttribute("href") ?? null,
+      () =>
+        document.getElementById("openclaw-typeface-space-grotesk")?.getAttribute("href") ?? null,
     );
 
-    expect(linkHref).toBe(`${basePath}/fonts/absolutely.css`);
+    expect(linkHref).toBe(`${basePath}/fonts/space-grotesk.css`);
     // The palette link is built in the first-paint script from the mount prefix
     // the gateway stamps on <html>, so it has to follow the mount too.
     const paletteHref = await page.evaluate(
@@ -338,10 +531,6 @@ suite.define(() => {
       ),
     ).toBe("#1c1c1a");
     // The browser must actually fetch below the mount, not at the root.
-    await expect.poll(() => requested).toContain(`${basePath}/fonts/absolutely.css`);
+    await expect.poll(() => requested).toContain(`${basePath}/fonts/space-grotesk.css`);
   });
-
-  // Every built-in family ships faces now; the faceless path (an imported
-  // custom theme) is unit-covered by app/theme-fonts.test.ts, which asserts
-  // syncThemeFontStylesheet drops the link so no theme pays for another's fonts.
 });

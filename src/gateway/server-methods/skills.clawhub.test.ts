@@ -520,7 +520,6 @@ describe("skills gateway handlers (clawhub)", () => {
       source: "clawhub",
       slug: "calendar",
       version: "1.2.3",
-      acknowledgeClawHubRisk: true,
     });
 
     expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
@@ -528,7 +527,6 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
-      acknowledgeClawHubRisk: true,
       logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
@@ -661,13 +659,11 @@ describe("skills gateway handlers (clawhub)", () => {
     const { ok, error } = await callSkillsHandler("skills.update", {
       source: "clawhub",
       slug: "calendar",
-      acknowledgeClawHubRisk: true,
     });
 
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
-      acknowledgeClawHubRisk: true,
       logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });

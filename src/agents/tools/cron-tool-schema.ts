@@ -235,12 +235,17 @@ function createCronDeliverySchema(): TSchema {
             description: "Thread/topic id",
           }),
         ),
-        bestEffort: Type.Optional(Type.Boolean()),
+        bestEffort: Type.Optional(
+          Type.Boolean({
+            description:
+              "Omitted/false requires requested delivery for successful completion; true lets successful execution complete and delete a one-shot despite failed/unknown delivery. Intentional silence succeeds in either mode.",
+          }),
+        ),
         accountId: deliveryStringSchema("Delivery account"),
         failureDestination: Type.Optional(
           Type.Union([failureDestinationObject, Type.Null()], {
             description:
-              "Failure-alert route override and alternate for immediate required-delivery failure; null clears.",
+              "Failure-alert route override; required-delivery failures bypass after but share the execution-alert cooldown; null clears.",
           }),
         ),
         completionDestination: Type.Optional(
@@ -264,7 +269,10 @@ function createCronFailureAlertSchema(): TSchema {
     Type.Unsafe<Record<string, unknown> | false>({
       type: "object",
       properties: {
-        after: optionalPositiveIntegerSchema({ description: "Failures before alert" }),
+        after: optionalPositiveIntegerSchema({
+          description:
+            "Consecutive execution failures before alert; delivery failures bypass this threshold",
+        }),
         channel: Type.Optional(Type.String({ description: "Alert channel" })),
         to: Type.Optional(Type.String({ description: "Alert target" })),
         cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
@@ -274,7 +282,7 @@ function createCronFailureAlertSchema(): TSchema {
       },
       additionalProperties: true,
       description:
-        "Failure alert policy/route override. Route-backed jobs default to after=2 and cooldownMs=3600000; false disables execution/delivery alerts but not the auto-disable safety notice.",
+        "Failure alert policy/route override. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
     }),
   );
 }
@@ -324,7 +332,12 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           : {}),
         description: Type.Optional(Type.String({ description: "Human description" })),
         enabled: Type.Optional(Type.Boolean()),
-        deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first run" })),
+        deleteAfterRun: Type.Optional(
+          Type.Boolean({
+            description:
+              "Delete one-shot after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.",
+          }),
+        ),
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
         failureAlert: createCronFailureAlertSchema(),
       },

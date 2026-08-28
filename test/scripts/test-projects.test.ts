@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
+import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -21,6 +22,7 @@ import {
   formatNoChangedTestTargetLines,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
+  parseTestProjectsArgs,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
@@ -42,6 +44,51 @@ const normalizeRepoPath = toRepoPath;
 const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 1;
+
+describe("test runtime prerequisites", () => {
+  it.each([
+    ["lifecycle file", ["extensions/qa-lab/src/suite-process-lifecycle.test.ts"], "private-qa"],
+    ["QA directory", ["extensions/qa-lab"], "private-qa"],
+    ["QA config", ["test/vitest/vitest.extension-qa.config.ts"], "private-qa"],
+    ["all plugins", ["extensions"], "private-qa"],
+    ["full local suite", [], "private-qa"],
+    ["root config", ["vitest.config.ts"], "private-qa"],
+    [
+      "runtime reader",
+      ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
+      "runtime",
+    ],
+    ["ordinary QA unit test", ["extensions/qa-lab/src/gateway-child-command.test.ts"], undefined],
+    [
+      "model reader",
+      ["src/agents/embedded-agent-runner/model-resolution-consistency.test.ts"],
+      undefined,
+    ],
+  ] as const)("prepares only the prerequisite selected by %s", (_name, args, expected) => {
+    const plans = args.length ? buildVitestRunPlans([...args]) : buildFullSuiteVitestRunPlans([]);
+    expect(
+      resolveVitestPretestBuildMode(
+        plans.map((plan) => ({
+          configs: [plan.config],
+          includePatterns: plan.includePatterns,
+        })),
+      ),
+    ).toBe(expected);
+  });
+
+  it("combines private QA and runtime readers into one private build", () => {
+    expect(
+      resolveVitestPretestBuildMode([
+        { includePatterns: ["test/e2e/qa-lab/runtime/**/*.test.ts"] },
+        { includePatterns: ["extensions/qa-lab/**/*.test.ts"] },
+      ]),
+    ).toBe("private-qa");
+    expect(resolveVitestPretestBuildMode([])).toBeUndefined();
+    expect(resolveVitestPretestBuildMode([{ configs: ["test/vitest/vitest.config.ts"] }])).toBe(
+      "private-qa",
+    );
+  });
+});
 
 function expectedCodexTestProcessCount() {
   const testFileCount = listExtensionTestFilesForRoots(["extensions/codex"]).length;
@@ -154,6 +201,71 @@ describe("scripts/test-projects changed-target routing", () => {
       "packages/normalization-core/src/string-normalization.test.ts",
       "src/utils/provider-utils.test.ts",
     ]);
+  });
+
+  it("bounds extensionless prefix probes while excluding deleted cached matches", () => {
+    const target = "src/selector/topic";
+    const rejectedFiles = [
+      "src/other/topic.test.ts",
+      "src/selector/topic-other.test.ts",
+      "src/selector/topic.helper.ts",
+      "src/selector/topic.child/nested.test.ts",
+    ];
+    const files = Object.fromEntries(
+      [`${target}.test.ts`, `${target}.extra.spec.mts`, ...rejectedFiles].map((file) => [file, ""]),
+    );
+    withTinyGitRepo(files, (tempDir) => {
+      const cwd = fs.realpathSync(tempDir);
+      const candidatePaths = new Set(Object.keys(files).map((file) => path.join(cwd, file)));
+      const rejectedPaths = new Set(rejectedFiles.map((file) => path.join(cwd, file)));
+      const candidateProbes: string[] = [];
+      const originalExistsSync = fs.existsSync;
+      fs.existsSync = (file) => {
+        if (typeof file === "string" && candidatePaths.has(file)) {
+          candidateProbes.push(file);
+        }
+        return originalExistsSync(file);
+      };
+      try {
+        const parsed = [
+          parseTestProjectsArgs(["--changed", "origin/main"], cwd),
+          parseTestProjectsArgs(["--changed", "origin/main"], cwd),
+        ];
+        for (const result of parsed) {
+          expect(result).toStrictEqual({
+            forwardedArgs: ["--changed", "origin/main"],
+            targetArgs: [],
+            watchMode: false,
+          });
+        }
+        expect(candidateProbes).toHaveLength(0);
+
+        expectSingleVitestRunPlan(buildVitestRunPlans([target], cwd), {
+          config: "test/vitest/vitest.unit.config.ts",
+          forwardedArgs: [`${target}.extra.spec.mts`, `${target}.test.ts`],
+        });
+        expect(findUnmatchedExplicitTestTargets([target], cwd)).toEqual([]);
+
+        fs.unlinkSync(path.join(cwd, `${target}.extra.spec.mts`));
+        expectSingleVitestRunPlan(buildVitestRunPlans([target], cwd), {
+          config: "test/vitest/vitest.unit.config.ts",
+          forwardedArgs: [`${target}.test.ts`],
+        });
+        expect(findUnmatchedExplicitTestTargets([target], cwd)).toEqual([]);
+
+        fs.unlinkSync(path.join(cwd, `${target}.test.ts`));
+        expect(findUnmatchedExplicitTestTargets([target], cwd)).toEqual([
+          {
+            target,
+            reason: "path-does-not-exist",
+            includePattern: `${target}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`,
+          },
+        ]);
+        expect(candidateProbes.filter((file) => rejectedPaths.has(file))).toHaveLength(0);
+      } finally {
+        fs.existsSync = originalExistsSync;
+      }
+    });
   });
 
   it.each([
@@ -470,6 +582,28 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps Crabbox gate trust-boundary scripts on their owner tests", () => {
+    expectChangedTargets(
+      ["scripts/pr-lib/crabbox-gate-contract.mjs"],
+      [
+        "test/scripts/pr-crabbox-gate-publisher.test.ts",
+        "test/scripts/pr-crabbox-merge-bypass.test.ts",
+      ],
+    );
+    expectChangedTargets(
+      ["scripts/pr-lib/crabbox-gate-plan.mts"],
+      [
+        "test/scripts/pr-crabbox-gate-plan.test.ts",
+        "test/scripts/pr-crabbox-gate-publisher.test.ts",
+        "test/scripts/pr-prepare-gates.test.ts",
+      ],
+    );
+    expectChangedTargets(
+      ["scripts/pr-lib/crabbox-merge-bypass.sh"],
+      ["test/scripts/pr-crabbox-merge-bypass.test.ts", "test/scripts/pr-merge.test.ts"],
+    );
+  });
+
   it("keeps build stamp script edits on the build stamp regression test", () => {
     expectChangedTargets(["scripts/build-stamp.mts"], ["src/infra/build-stamp.test.ts"]);
   });
@@ -498,6 +632,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-changed-node-test-plan.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/pr-crabbox-merge-bypass.test.ts",
+        "test/scripts/pr-merge.test.ts",
         "test/scripts/run-additional-boundary-checks.test.ts",
       ],
     );
@@ -1085,6 +1221,98 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("preserves Git membership for large changed and explicit test inventories", () => {
+    withTinyGitRepo(
+      {
+        ".gitignore": "src/runtime.ignored.test.ts\n",
+        "src/runtime.ts": "export const value = 1;\n",
+        "src/runtime.consumer.test.ts": 'import "./runtime.js";\n',
+      },
+      (cwd) => {
+        // Index-only padding reproduces a large checkout without thousands of fixture files.
+        const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], {
+          cwd,
+          encoding: "utf8",
+          input: "",
+        });
+        expect(blob.status).toBe(0);
+        const padding = Array.from(
+          { length: 6_000 },
+          (_, index) =>
+            `100644 ${blob.stdout.trim()}\tsrc/padding/${index}-${"x".repeat(190)}.ts\n`,
+        ).join("");
+        const indexed = spawnSync("git", ["update-index", "--index-info"], {
+          cwd,
+          input: padding,
+        });
+        expect(indexed.status).toBe(0);
+        for (const root of ["extensions", "packages", "ui/src", "ui/config", "test"]) {
+          fs.mkdirSync(path.join(cwd, root), { recursive: true });
+        }
+        fs.writeFileSync(
+          path.join(cwd, "src/runtime.untracked.test.ts"),
+          'import "./runtime.js";\n',
+        );
+        fs.writeFileSync(path.join(cwd, "src/runtime.ignored.test.ts"), 'import "./runtime.js";\n');
+
+        expect(resolveChangedTestTargetPlan(["src/runtime.ts"], { cwd }).targets).toEqual([
+          "src/runtime.consumer.test.ts",
+        ]);
+        const includeFile = path.join(cwd, "include.json");
+        writeVitestIncludeFile(includeFile, ["src/**/*.test.ts"], { cwd });
+        expect(JSON.parse(fs.readFileSync(includeFile, "utf8")).toSorted()).toEqual([
+          "src/runtime.consumer.test.ts",
+          "src/runtime.untracked.test.ts",
+        ]);
+      },
+    );
+  });
+
+  it("follows converging import frontiers without crossing test boundaries", () => {
+    withTinyGitRepo(
+      {
+        "src/value.ts": 'export * from "./left/bridge.js";\n',
+        "src/left/bridge.ts": 'export * from "../value.js";\n',
+        "src/right/bridge.ts": 'export * from "../value.js";\n',
+        "src/other/bridge.ts": "export const unrelated = 1;\n",
+        "src/combined.consumer.test.ts":
+          'import "./left/bridge.js";\nimport("./right/bridge.js");\n',
+        "src/right.consumer.test.ts": 'import "./right/bridge.js";\n',
+        "src/other.consumer.test.ts": 'import "./other/bridge.js";\n',
+        "src/after-test.consumer.test.ts": 'import "./combined.consumer.test.js";\n',
+        "src/value.consumer.live.test.ts": 'import "./value.js";\n',
+      },
+      (cwd) => {
+        expect(resolveChangedTestTargetPlan(["src/value.ts"], { cwd }).targets).toEqual([
+          "src/combined.consumer.test.ts",
+          "src/right.consumer.test.ts",
+        ]);
+      },
+    );
+  });
+
+  it("keeps tooling imports direct while preserving literal file references", () => {
+    withTinyGitRepo(
+      {
+        "scripts/fixture-source.mts": "export const value = 1;\n",
+        "scripts/fixture-bridge.mts": 'export * from "./fixture-source.mjs";\n',
+        "test/scripts/direct.consumer.test.ts": 'import "../../scripts/fixture-source.mjs";\n',
+        "test/scripts/transitive.consumer.test.ts": 'import "../../scripts/fixture-bridge.mjs";\n',
+        "test/scripts/literal.consumer.test.ts": 'const fixture = "scripts/fixture-source.mts";\n',
+        "test/scripts/substring.consumer.test.ts":
+          'const fixture = "scripts/fixture-source.mts.bak";\n',
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(["scripts/fixture-source.mts"], { cwd }).targets,
+        ).toEqual([
+          "test/scripts/direct.consumer.test.ts",
+          "test/scripts/literal.consumer.test.ts",
+        ]);
+      },
+    );
+  });
+
   it("routes many explicit source files through one import-graph-backed owner set", () => {
     let plans: ReturnType<typeof buildVitestRunPlans> = [];
     const files: Record<string, string> = {};
@@ -1581,6 +1809,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
+          "test/scripts/test-projects-build-admission.test.ts",
         ],
         watchMode: false,
       },
@@ -1768,6 +1997,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
+          "test/scripts/test-projects-build-admission.test.ts",
         ],
         watchMode: false,
       },

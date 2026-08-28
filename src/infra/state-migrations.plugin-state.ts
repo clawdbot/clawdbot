@@ -8,10 +8,10 @@ import {
   resolveMaxPluginStateEntriesPerPlugin,
 } from "../plugin-state/plugin-state-store.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
+import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndexSync,
   resolveLegacyInstalledPluginIndexStorePath,
-  writePersistedInstalledPluginIndexSync,
 } from "../plugins/installed-plugin-index-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";

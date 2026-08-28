@@ -2123,14 +2123,17 @@ if (commandArgs[0] === "list") {
 
   it.runIf(process.platform !== "win32")(
     "settles timed host commands when an escaped descendant retains child pipes",
-    () => {
+    async () => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
       let grandchildPid = 0;
       const grandchildScript = [
-        "const { writeFileSync } = require('node:fs');",
-        "writeFileSync(process.env.GRANDCHILD_PID_PATH, String(process.pid));",
-        "setInterval(() => {}, 1000);",
+        "const { renameSync, writeFileSync } = require('node:fs');",
+        // Outlive the assertion bound, but self-clean if PID setup fails.
+        "setTimeout(() => process.exit(0), 3_000);",
+        "const pidPath = process.env.GRANDCHILD_PID_PATH;",
+        "writeFileSync(pidPath + '.tmp', String(process.pid));",
+        "renameSync(pidPath + '.tmp', pidPath);",
       ].join("\n");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
@@ -2155,12 +2158,17 @@ if (commandArgs[0] === "list") {
           timeoutMs: 100,
         });
 
-        expect(result.status).toBe(124);
-        expect(Date.now() - startedAt).toBeLessThan(2_000);
-        grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
+        const durationMs = Date.now() - startedAt;
+        // The renamed path publishes a complete PID even if timeout settles first.
+        await waitFor(() => existsSync(grandchildPidPath));
+        grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
+
         expect(Number.isInteger(grandchildPid)).toBe(true);
+        expect(grandchildPid).toBeGreaterThan(1);
+        expect(result.status).toBe(124);
+        expect(durationMs).toBeLessThan(2_000);
       } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
+        if (Number.isInteger(grandchildPid) && grandchildPid > 1 && isProcessAlive(grandchildPid)) {
           process.kill(-grandchildPid, "SIGKILL");
         }
       }

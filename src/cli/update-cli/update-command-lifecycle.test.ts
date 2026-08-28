@@ -37,12 +37,6 @@ function record(name: string): void {
   mocks.events.push(`${name}:${mocks.leaseActive}`);
 }
 
-vi.mock("../../commands/doctor.js", () => ({
-  doctorCommand: vi.fn(async () => {
-    record("doctor");
-  }),
-}));
-
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   assertConfigWriteAllowedInCurrentMode: vi.fn(),
@@ -207,8 +201,8 @@ describe("update plugin lifecycle lease boundaries", () => {
       yes: true,
     });
 
-    expectLifecycleBoundary("doctor");
-    const doctorIndex = mocks.events.indexOf("doctor:false");
+    expectLifecycleBoundary("fresh-doctor");
+    const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
     expect(mocks.events.slice(0, doctorIndex)).toContain("read-config:true");
     expect(mocks.events).not.toContain("persisted-index:true");
   });

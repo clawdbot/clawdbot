@@ -28,10 +28,7 @@ import {
   isDefaultClawHubBaseUrl,
   resolveClawHubBaseUrl,
 } from "../infra/clawhub-client.js";
-import {
-  ensureClawHubPackageTrustAcknowledged,
-  type ClawHubRiskAcknowledgementRequest,
-} from "../infra/clawhub-install-trust.js";
+import { checkClawHubPackageTrust } from "../infra/clawhub-install-trust.js";
 import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
@@ -63,7 +60,6 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import { satisfiesPluginApiRange } from "./package-compat.js";
 
 export { CLAWHUB_INSTALL_ERROR_CODE };
-export type { ClawHubRiskAcknowledgementRequest };
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -1234,8 +1230,7 @@ export async function installPluginFromClawHub(
     expectedPluginId?: string;
     expectedIntegrity?: string;
     env?: RuntimeVersionEnv;
-    acknowledgeClawHubRisk?: boolean;
-    onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+    confirmInstall?: () => boolean | Promise<boolean>;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<
@@ -1322,19 +1317,20 @@ export async function installPluginFromClawHub(
   });
   const trustResult = officialClawHubPackage
     ? null
-    : await ensureClawHubPackageTrustAcknowledged({
+    : await checkClawHubPackageTrust({
         subject: { kind: "plugin", packageName: canonicalPackageName },
         version: versionState.version,
         baseUrl: params.baseUrl,
         token: params.token,
         timeoutMs: params.timeoutMs,
-        acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
-        onClawHubRisk: params.onClawHubRisk,
         logger: params.logger,
         mode: params.mode,
       });
   if (trustResult && !trustResult.ok) {
     return trustResult;
+  }
+  if (params.mode !== "update" && params.confirmInstall && !(await params.confirmInstall())) {
+    return buildClawHubInstallFailure("Install cancelled.");
   }
   if (!versionState.verification && !expectedClawPackSha256) {
     return buildClawHubInstallFailure(

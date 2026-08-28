@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { finished } from "node:stream/promises";
+import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
@@ -140,10 +140,10 @@ async function handleProxyRequest(
       res.end();
       return;
     }
-    await finished(
-      Readable.fromWeb(guarded.response.body as unknown as NodeReadableStream<Uint8Array>).pipe(
-        res,
-      ),
+    // Own errors and cancellation on both streams so interrupted responses cannot crash the host.
+    await pipeline(
+      Readable.fromWeb(guarded.response.body as unknown as NodeReadableStream<Uint8Array>),
+      res,
     );
   } catch (error) {
     if (res.destroyed || res.writableEnded) {

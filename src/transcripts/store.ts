@@ -325,19 +325,19 @@ export class TranscriptsStore {
       }))
     ) {
       await this.assertExportDestinationOwned(session);
-      const legacySessionDir = path.join(
-        this.exportRootDir,
-        legacyTranscriptSessionSelector(session),
-      );
-      const legacyOwner = await this.readSession(legacyTranscriptSessionSelector(session));
-      const legacyPathIsCanonical =
-        legacyOwner !== undefined &&
-        path.resolve(this.sessionDir(legacyOwner)) === path.resolve(legacySessionDir);
-      if (
-        path.resolve(legacySessionDir) !== path.resolve(this.sessionDir(session)) &&
-        !legacyPathIsCanonical
-      ) {
-        await this.assertExportDestinationOwned(session, legacySessionDir);
+      const legacySelector = legacyTranscriptSessionSelector(session);
+      if (legacySelector !== undefined) {
+        const legacySessionDir = path.join(this.exportRootDir, legacySelector);
+        const legacyOwner = await this.readSession(legacySelector);
+        const legacyPathIsCanonical =
+          legacyOwner !== undefined &&
+          path.resolve(this.sessionDir(legacyOwner)) === path.resolve(legacySessionDir);
+        if (
+          path.resolve(legacySessionDir) !== path.resolve(this.sessionDir(session)) &&
+          !legacyPathIsCanonical
+        ) {
+          await this.assertExportDestinationOwned(session, legacySessionDir);
+        }
       }
     }
     const sessionValues = {
@@ -447,14 +447,6 @@ export class TranscriptsStore {
     )
       .rows.toReversed()
       .map(utteranceFromRow);
-  }
-
-  async updateStopped(sessionSelector: string, stoppedAt: string): Promise<void> {
-    const entry = await this.readSessionEntry(sessionSelector);
-    if (!entry) {
-      return;
-    }
-    await this.writeSession({ ...entry.session, stoppedAt });
   }
 
   async writeSummary(

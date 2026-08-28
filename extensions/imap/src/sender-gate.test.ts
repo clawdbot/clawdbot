@@ -34,17 +34,22 @@ describe("IMAP sender admission", () => {
     ["trusted@evil.example", ["trusted@example.com"], false],
     ["Trusted@example.com", ["trusted@example.com"], false],
   ])("matches sender %s against the actual addr-spec", async (sender, entries, accepted) => {
-    const mail = await message([`From: ${sender}`, "To: reader@example.com"]);
+    const mail = await message([`From: ${sender}`, "To: reader+secret-token@example.com"]);
     const authenticator = vi.fn(async () => createImapAuthResult("pass"));
     const verdict = await evaluateImapSender({
       ...mail,
-      account: account({ allowedSenders: entries }),
+      account: account({
+        allowedSenders: entries,
+        addressTokens: [{ token: "secret-token", senders: [sender] }],
+      }),
       authenticator,
     });
     expect(verdict.accepted).toBe(accepted);
     if (!accepted) {
       expect(verdict.reason).toBe("sender-not-allowed");
     }
+    expect(authenticator).not.toHaveBeenCalled();
+    expect(verdict).not.toHaveProperty("strength");
   });
 
   it("rejects a spoofed display name and ignores Reply-To", async () => {
@@ -68,9 +73,31 @@ describe("IMAP sender admission", () => {
     ["From: attacker@evil.example", "From: trusted@example.com"],
   ])("rejects multi-From messages before authentication", async (...headers) => {
     const mail = await message(headers);
-    await expect(evaluateImapSender({ ...mail, account: account() })).resolves.toMatchObject({
+    const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+    const verdict = await evaluateImapSender({ ...mail, account: account(), authenticator });
+    expect(authenticator).not.toHaveBeenCalled();
+    expect(verdict).toStrictEqual({
       accepted: false,
       reason: "invalid-from",
+      transient: false,
+    });
+  });
+
+  it("rejects stale mail before authentication even at the weakest floor", async () => {
+    const mail = await message(["From: trusted@example.com"]);
+    const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+    const verdict = await evaluateImapSender({
+      ...mail,
+      internalDate: new Date(Date.now() - 72 * 60 * 60 * 1_000),
+      account: account({ senderAuth: { min: "mutable" } }),
+      authenticator,
+    });
+    expect(authenticator).not.toHaveBeenCalled();
+    expect(verdict).toStrictEqual({
+      accepted: false,
+      sender: "trusted@example.com",
+      reason: "message-too-old",
+      transient: false,
     });
   });
 
@@ -189,7 +216,7 @@ describe("IMAP sender admission", () => {
     });
   });
 
-  it("binds plus-address tokens to an already-allowed sender", async () => {
+  it("admits stale mail with a sender-bound token without evaluating authentication", async () => {
     const configured = account({
       addressTokens: [{ token: "secret-token", senders: ["trusted@example.com"] }],
     });
@@ -197,19 +224,38 @@ describe("IMAP sender admission", () => {
       "From: trusted@example.com",
       "To: reader+secret-token@example.com",
     ]);
-    await expect(evaluateImapSender({ ...accepted, account: configured })).resolves.toMatchObject({
+    const authenticator = vi.fn(async () => createImapAuthResult("none"));
+    const verdict = await evaluateImapSender({
+      ...accepted,
+      internalDate: new Date(Date.now() - 72 * 60 * 60 * 1_000),
+      account: configured,
+      authenticator,
+    });
+    expect(authenticator).not.toHaveBeenCalled();
+    expect(verdict).toStrictEqual({
       accepted: true,
-      strength: "mutable",
+      sender: "trusted@example.com",
       reason: "token",
     });
     const rejected = await message([
       "From: attacker@evil.example",
       "To: reader+secret-token@example.com",
     ]);
-    await expect(evaluateImapSender({ ...rejected, account: configured })).resolves.toMatchObject({
+    await expect(
+      evaluateImapSender({
+        ...rejected,
+        account: account({
+          allowedSenders: ["@evil.example"],
+          addressTokens: configured.addressTokens,
+        }),
+        authenticator,
+      }),
+    ).resolves.toMatchObject({
       accepted: false,
-      reason: "sender-not-allowed",
+      strength: "unverified",
+      reason: "dmarc-none",
     });
+    expect(authenticator).toHaveBeenCalledTimes(1);
   });
 
   it("uses only an explicitly trusted Authentication-Results header when DNS verification fails", async () => {

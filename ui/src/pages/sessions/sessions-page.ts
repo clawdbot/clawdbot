@@ -25,7 +25,7 @@ import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
@@ -43,7 +43,7 @@ import {
 } from "../../lib/session-pull-requests.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
-  DEFAULT_SESSION_LIST_QUERY,
+  SESSIONS_PAGE_DEFAULT_LIMIT,
   filterSessionRows,
   scopedAgentParamsForSession,
   type SessionArchivedFilter,
@@ -111,7 +111,7 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private loading = false;
   @state() private error: string | null = null;
   @state() private activeMinutes = "";
-  @state() private limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
+  @state() private limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
   @state() private includeGlobal = true;
   @state() private includeUnknown = false;
   @state() private statusFilter: SessionArchivedFilter = "active";
@@ -400,7 +400,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.statusFilter = data.statusFilter;
     if (data.expandedSessionKey) {
       this.activeMinutes = "";
-      this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
+      this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
       this.includeGlobal = true;
       this.includeUnknown = true;
       this.searchQuery = "";
@@ -408,7 +408,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.selectedKeys = new Set();
     } else {
       this.activeMinutes = "";
-      this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
+      this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
       this.includeGlobal = true;
       this.includeUnknown = false;
     }
@@ -460,7 +460,9 @@ class SessionsPage extends OpenClawLightDomElement {
   private sessionListOptions(context: ApplicationContext) {
     return sessionsPageListQuery(context, {
       activeMinutes: parseStrictPositiveInteger(this.activeMinutes),
-      limit: parseStrictPositiveInteger(this.limit),
+      // The Limit box is an explicit page size, so an unparseable entry falls
+      // back to the page default rather than to the shared roster page size.
+      limit: parseStrictPositiveInteger(this.limit) ?? SESSIONS_PAGE_DEFAULT_LIMIT,
       includeGlobal: this.includeGlobal,
       includeUnknown: this.includeUnknown,
       statusFilter: this.statusFilter,
@@ -1525,8 +1527,7 @@ class SessionsPage extends OpenClawLightDomElement {
       ${renderSessionsHubHeader({
         active: "sessions",
         title: titleForRoute("sessions"),
-        subtitle: html`${subtitleForRoute("sessions")}
-        ${renderDocsLink(SESSIONS_DOCS_URL, t("common.learnMore"))}`,
+        subtitle: html`${subtitleForRoute("sessions")} ${renderLearnMoreLink(SESSIONS_DOCS_URL)}`,
         actions: renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,
@@ -1609,7 +1610,7 @@ class SessionsPage extends OpenClawLightDomElement {
           onFiltersChange: (next) => this.updateFilters(next),
           onClearFilters: () => {
             this.activeMinutes = "";
-            this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
+            this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
             this.includeGlobal = true;
             this.includeUnknown = false;
             this.searchQuery = "";

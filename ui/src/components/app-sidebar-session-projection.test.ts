@@ -132,6 +132,23 @@ describe("SidebarSessionProjection sticky membership", () => {
     },
   );
 
+  it("keeps the flat list headerless beside catalog sections when grouping is none", () => {
+    const projection = new SidebarSessionProjection();
+    const flat = projection.project(
+      projectionInput([sessionRow("a")], { grouping: "none", catalogIds: ["claude"] }),
+    );
+    expect(flat.sections.map((section) => [section.id, section.renderHeader])).toEqual([
+      ["ungrouped", false],
+      ["work", true],
+      ["catalog:claude", true],
+    ]);
+
+    const grouped = projection.project(
+      projectionInput([sessionRow("a")], { catalogIds: ["claude"] }),
+    );
+    expect(grouped.sections.find((section) => section.id === "ungrouped")?.renderHeader).toBe(true);
+  });
+
   it("clears a section's sticky rows when its user collapses and reopens it", () => {
     const projection = new SidebarSessionProjection();
     const categorized = (active: boolean) =>

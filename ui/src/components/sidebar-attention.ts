@@ -96,6 +96,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private panelTrigger: HTMLElement | null = null;
   private panelRenderer: SidebarAttentionPanelRenderer | null = null;
   private panelLoad: Promise<SidebarAttentionPanelRuntime> | null = null;
+  private panelGeneration = 0;
   private nativeUpdateDeclined = false;
 
   private readonly loadTask = new Task(this, {
@@ -229,6 +230,9 @@ class SidebarAttention extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.nativeUpdateDeclined = false;
+    // Dismissal belongs to the connected Inbox, including while its panel imports.
+    document.addEventListener("pointerdown", this.handleOutsideInteraction, true);
+    document.addEventListener("keydown", this.handleOutsideInteraction, true);
     document.addEventListener("visibilitychange", this.refreshIfStale);
     globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
     window.addEventListener(
@@ -240,6 +244,8 @@ class SidebarAttention extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    document.removeEventListener("pointerdown", this.handleOutsideInteraction, true);
+    document.removeEventListener("keydown", this.handleOutsideInteraction, true);
     document.removeEventListener("visibilitychange", this.refreshIfStale);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
     window.removeEventListener(
@@ -247,7 +253,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       this.handleNativeUpdateAvailabilityChanged,
     );
     window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
-    document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
+    this.closePanel(false);
     if (this.idleRefreshTimer !== null) {
       globalThis.clearInterval(this.idleRefreshTimer);
       this.idleRefreshTimer = null;
@@ -455,17 +461,27 @@ class SidebarAttention extends OpenClawLightDomElement {
     );
   }
 
-  private readonly closeOnOutsidePointer = (event: PointerEvent) => {
-    if (!this.panelOpen || event.composedPath().includes(this)) {
-      return;
+  private readonly handleOutsideInteraction = (event: PointerEvent | KeyboardEvent) => {
+    const dismiss =
+      event instanceof KeyboardEvent
+        ? event.key === "Escape" && !this.panelOpen && !event.defaultPrevented
+        : !event.composedPath().includes(this);
+    if (dismiss) {
+      if (event instanceof KeyboardEvent && this.panelTrigger) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      this.closePanel(false);
     }
-    this.closePanel(false);
   };
 
   private async openPanel(trigger: HTMLElement) {
+    const generation = ++this.panelGeneration;
+    // The pending open owns Escape before its lazy panel can handle keyboard events.
+    this.panelTrigger = trigger;
     this.panelLoad ??= import("./sidebar-attention-panel.runtime.ts");
     const panelRuntime = await this.panelLoad;
-    if (!this.isConnected) {
+    if (!this.isConnected || generation !== this.panelGeneration) {
       return;
     }
     this.context?.scopeUpgrade.activate(panelRuntime.ScopeUpgradeController);
@@ -473,7 +489,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;
     const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
-    this.panelTrigger = trigger;
     this.panelRenderer = panelRuntime.renderSidebarAttentionPanel;
     this.panelPosition =
       rect.top < globalThis.innerHeight / 2
@@ -481,24 +496,26 @@ class SidebarAttention extends OpenClawLightDomElement {
         : { left, anchor: "bottom", bottom: Math.max(8, globalThis.innerHeight - rect.top + 8) };
     this.selectedTab = "all";
     this.panelOpen = true;
-    document.addEventListener("pointerdown", this.closeOnOutsidePointer, true);
-    void this.updateComplete.then(() => {
+    await this.updateComplete;
+    if (generation === this.panelGeneration) {
       this.querySelector<HTMLElement>(".sidebar-issues-panel__list")?.focus();
-    });
+    }
   }
 
   private closePanel(restoreFocus: boolean) {
-    if (!this.panelOpen) {
-      return;
-    }
-    const trigger = this.panelTrigger;
+    // Closing also cancels an open that is still waiting for its runtime or render.
+    const generation = ++this.panelGeneration;
+    const trigger = restoreFocus && this.panelOpen ? this.panelTrigger : null;
     this.panelOpen = false;
     this.overflowAbove = false;
     this.overflowBelow = false;
     this.panelTrigger = null;
-    document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
-    if (restoreFocus) {
-      void this.updateComplete.then(() => trigger?.focus());
+    if (trigger) {
+      void this.updateComplete.then(() => {
+        if (generation === this.panelGeneration) {
+          trigger.focus();
+        }
+      });
     }
   }
 
@@ -603,9 +620,10 @@ class SidebarAttention extends OpenClawLightDomElement {
     const row = target.closest<HTMLElement>("[data-approval-id]");
     const rowFocus = row?.querySelector<HTMLElement>("[data-issue-row-focus]") ?? null;
     const rowIndex = rowFocus ? focusOrder.indexOf(rowFocus) : 0;
+    const generation = this.panelGeneration;
     await context.overlays.decideApproval(decision, approvalId);
     await this.updateComplete;
-    if (!this.panelOpen || target.isConnected) {
+    if (generation !== this.panelGeneration || target.isConnected) {
       return;
     }
     const remaining = Array.from(this.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));

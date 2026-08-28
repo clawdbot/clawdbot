@@ -26,9 +26,11 @@ vi.mock("../../media/read-capability.js", () => ({
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
 type NormalizedReply = {
+  attachments?: Array<{ name?: string; trustedLocalMedia?: boolean }>;
   mediaUrl?: string;
   mediaUrls?: string[];
   text?: string;
+  trustedLocalMedia?: boolean;
 };
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -94,6 +96,7 @@ describe("createReplyMediaPathNormalizer", () => {
     ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue(null);
     resolveOutboundAttachmentFromUrl.mockReset().mockImplementation(async (mediaUrl: string) => ({
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl.replace(/^file:\/\//i, ""))),
+      contentType: mediaUrl.endsWith(".mp3") ? "audio/mpeg" : "image/png",
     }));
     resolveAgentScopedOutboundMediaAccess
       .mockReset()
@@ -123,6 +126,18 @@ describe("createReplyMediaPathNormalizer", () => {
     );
     const mediaAccess = requireRecord(options.mediaAccess, "media access");
     expect(mediaAccess.workspaceDir).toBe("/tmp/agent-workspace");
+    expect(result.trustedLocalMedia).toBe(true);
+    expect(result.attachments).toEqual([
+      { name: "photo.png", mimeType: "image/png", trustedLocalMedia: true },
+    ]);
+  });
+
+  it("does not grant local-media trust to remote-only replies", async () => {
+    const normalize = createTestReplyMediaNormalizer();
+
+    const result = await normalize({ mediaUrls: ["https://example.com/voice.mp3"] });
+
+    expect(result.trustedLocalMedia).toBeUndefined();
   });
 
   it("preserves reply metadata when media normalization clones the payload", async () => {
@@ -493,6 +508,7 @@ describe("createReplyMediaPathNormalizer", () => {
       "⚠️ Media failed. Try sending a smaller supported file or a different format.",
     );
     expectNoMedia(result);
+    expect(getReplyPayloadMetadata(result)?.assistantMediaNormalizationFailed).toBe(true);
   });
 
   it("threads requester context into shared outbound media access", async () => {

@@ -6,16 +6,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { recordPluginCandidateInstallOwner } from "../../../plugins/candidate-install-owner.js";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
+import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
-  writePersistedInstalledPluginIndex,
 } from "../../../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
+import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { migratePluginRegistryForInstall } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
@@ -148,6 +149,51 @@ function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}
 }
 
 describe("plugin registry install migration", () => {
+  it("stops migration with the original error when the shared registry read fails", async () => {
+    const stateDir = makeTempDir();
+    const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
+    insertStalePersistedIndexRow(stateDir, JSON.stringify(records));
+    const error = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
+    const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
+    readSpy.mockImplementationOnce(() => {
+      throw error;
+    });
+    const readConfig = vi.fn(() => ({}));
+    await expect
+      .soft(
+        migratePluginRegistryForInstall({
+          stateDir,
+          readConfig,
+          candidates: [],
+          env: hermeticEnv(),
+        }),
+      )
+      .rejects.toBe(error);
+    expect.soft(readConfig).not.toHaveBeenCalled();
+    expect(readSpy).toHaveBeenCalledOnce();
+    readSpy.mockRestore();
+    const row = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
+          )
+          .get(),
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(row).toMatchObject({ updated_at_ms: 123 });
+    const restored = await migratePluginRegistryForInstall({
+      stateDir,
+      readConfig,
+      candidates: [],
+      env: hermeticEnv(),
+    });
+    expect(requireMigratedIndex(restored).installRecords).toEqual(records);
+  });
+
   it("short-circuits when a current registry file already exists", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });

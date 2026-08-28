@@ -26,11 +26,11 @@ Not sandboxed:
 
 Three independent settings control sandbox behavior:
 
-| Setting | Key                               | Values                                            | Default  |
-| ------- | --------------------------------- | ------------------------------------------------- | -------- |
-| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`                          | `off`    |
-| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`                      | `agent`  |
-| Backend | `agents.defaults.sandbox.backend` | `docker`, `podman`, `ssh`, `openshell`, `daytona` | `docker` |
+| Setting | Key                               | Values                                 | Default  |
+| ------- | --------------------------------- | -------------------------------------- | -------- |
+| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`               | `off`    |
+| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`           | `agent`  |
+| Backend | `agents.defaults.sandbox.backend` | `docker`, `podman`, `ssh`, `openshell` | `docker` |
 
 **Mode** controls when sandboxing applies:
 
@@ -62,7 +62,7 @@ Non-shared runtime identity also includes the resolved agent workspace path. Thi
 
 The first use after upgrading from an older release creates non-shared runtimes and sandbox workspaces under the workspace-qualified identity. Existing non-shared runtimes are not adopted; this is an intentional one-time reset. They can age out through configured prune settings or be removed with `openclaw sandbox recreate`; the next use provisions the current identity.
 
-**Backend** controls which runtime executes sandboxed tools. Docker and Podman share `agents.defaults.sandbox.docker`; SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`; Daytona-specific config lives under `plugins.entries.daytona.config`.
+**Backend** controls which runtime executes sandboxed tools. Docker and Podman share `agents.defaults.sandbox.docker`; SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`.
 
 |                     | Docker or Podman backend                  | SSH                            | OpenShell                                           |
 | ------------------- | ----------------------------------------- | ------------------------------ | --------------------------------------------------- |
@@ -213,6 +213,13 @@ A containerized Gateway creates sibling sandboxes through the host's local Podma
 
 Use `backend: "ssh"` to sandbox `exec`, file tools, and media reads on an arbitrary SSH-accessible machine.
 
+The remote environment must provide `/bin/sh`, `python3`, and GNU-compatible
+`stat` (`-c`) and `readlink` (`-f`) for the filesystem bridge. These utilities
+must be available to the non-interactive SSH command, not just an interactive
+login shell. The Gateway host does not need these remote utilities: a macOS or
+Windows Gateway can use an SSH target that supplies them. This is a remote
+utility contract, not a Linux-only Gateway requirement.
+
 ```json5
 {
   agents: {
@@ -282,39 +289,6 @@ Use `backend: "openshell"` to sandbox tools in an OpenShell-managed remote envir
 `openclaw sandbox list`/`recreate`/prune all treat OpenShell runtimes the same as Docker runtimes; prune logic is backend-aware.
 
 For the full prerequisites, configuration reference, workspace-mode comparison, and lifecycle details, see [OpenShell](/gateway/openshell).
-
-## Daytona backend
-
-Use `backend: "daytona"` to sandbox tools in [Daytona](https://www.daytona.io) cloud sandboxes. OpenClaw creates one Daytona sandbox per sandbox scope through the Daytona API and runs exec and file tools over the Daytona toolbox API (HTTPS); no SSH keys or inbound connectivity are required. The workspace model is remote-canonical like the SSH backend: seeded once at creation, re-seeded by `openclaw sandbox recreate`.
-
-```json5
-{
-  agents: {
-    defaults: {
-      sandbox: {
-        mode: "all",
-        backend: "daytona",
-        scope: "session",
-        workspaceAccess: "rw",
-      },
-    },
-  },
-  plugins: {
-    entries: {
-      daytona: {
-        enabled: true,
-        config: {
-          apiKey: { source: "env", provider: "default", id: "DAYTONA_API_KEY" },
-        },
-      },
-    },
-  },
-}
-```
-
-New sandboxes block all network egress by default (matching the Docker no-network default); opt in with `networkBlockAll: false` or the allow-list options. Idle sandboxes auto-stop on the Daytona side (default 15 minutes) and restart on next use. Current limitations: sandbox browser is not supported, and `sandbox.docker.*` settings do not apply to this backend.
-
-For the full prerequisites, configuration reference, cost controls, and lifecycle details, see [Daytona](/gateway/daytona).
 
 ## Workspace access
 
@@ -626,7 +600,6 @@ Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.
 ## Related
 
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
-- [Daytona](/gateway/daytona) -- cloud sandbox backend setup, cost controls, and config reference
 - [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
 - [Sandbox configuration](/gateway/config-agents#agentsdefaultssandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"

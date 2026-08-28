@@ -164,8 +164,8 @@ openclaw-session-owner-chip {
   position: absolute;
   inset: -2px;
   box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -4962,7 +4962,6 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  animation: scale-in 0.15s ease-out;
 }
 
 .cmd-palette__label {
@@ -5621,13 +5620,6 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* The 16px PR glyph inks 1px beyond its 14px track. Inset only that glyph so
-   the other trailing atoms keep their shared axis inside the clipped endcap. */
-.session-row-state [data-session-pr-state] {
-  position: relative;
-  left: 1px;
-}
-
 .sidebar-session-fork-indicator {
   display: inline-flex;
   margin-right: 4px;
@@ -5672,7 +5664,7 @@ td.data-table-key-col {
 }
 
 .session-row-badge--pull-request[data-pull-request-state="merged"] {
-  color: var(--accent);
+  color: var(--pr-merged);
 }
 
 .session-row-badge--cloud[data-placement-state="failed"],
@@ -5797,8 +5789,8 @@ td.data-table-key-col {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
 }
 
@@ -5817,7 +5809,7 @@ td.data-table-key-col {
   .session-run-spinner,
   .session-glyph__ring {
     animation: none;
-    border-color: var(--run);
+    border-color: var(--accent);
   }
 }
 

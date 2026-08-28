@@ -81,8 +81,13 @@ export async function runBackendExec(params: {
   allowFailure?: boolean;
   timeoutMs?: number;
 }): Promise<ExecResult> {
+  const workdir = expectDefined(
+    await params.backend.validateWorkdir?.(params.backend.workdir),
+    "OpenShell validated working directory",
+  );
   const execSpec = await params.backend.buildExecSpec({
     command: params.command,
+    workdir,
     env: params.env ?? {},
     usePty: false,
   });
@@ -116,6 +121,61 @@ export async function runPreparedBackendExec(params: {
   }
 }
 
+export async function verifyRemoteExecOverlap(params: {
+  backend: SandboxBackendHandle;
+  twin: SandboxBackendHandle;
+  bridge: SandboxFsBridge;
+}): Promise<void> {
+  const probeDir = "exec-overlap";
+  await params.bridge.mkdirp({ filePath: probeDir });
+  await runBackendExec({ backend: params.twin, command: "true", timeoutMs: 60_000 });
+  const waitingScript = `import pathlib,time
+root=pathlib.Path("exec-overlap")
+root.joinpath("ready").write_text("ready")
+deadline=time.monotonic()+30
+for name in ("command-release", "file-release"):
+    target=root.joinpath(name)
+    while not target.is_file() or target.read_text() != name:
+        if time.monotonic() >= deadline:
+            raise RuntimeError("remote execution prevented concurrent " + name)
+        time.sleep(0.05)
+print("remote-exec-overlapped-command-and-file")`;
+  const releaseScript = `import pathlib,time
+root=pathlib.Path("exec-overlap")
+deadline=time.monotonic()+30
+while not root.joinpath("ready").exists():
+    if time.monotonic() >= deadline:
+        raise RuntimeError("waiting command did not start")
+    time.sleep(0.05)
+root.joinpath("command-release").write_text("command-release")`;
+  // A process that waits for the next turn's write must not retain the runtime lease.
+  // Observe rejection immediately, but join it in finally even if the writer fails.
+  const waiting = runBackendExec({
+    backend: params.backend,
+    command: `python3 -c '${waitingScript}'`,
+    timeoutMs: 60_000,
+  });
+  const settled = Promise.allSettled([waiting]);
+  try {
+    await runBackendExec({
+      backend: params.twin,
+      command: `python3 -c '${releaseScript}'`,
+      timeoutMs: 60_000,
+    });
+    await params.bridge.writeFile({
+      filePath: `${probeDir}/file-release`,
+      data: "file-release",
+    });
+    await expect(waiting).resolves.toMatchObject({
+      code: 0,
+      stdout: "remote-exec-overlapped-command-and-file\n",
+    });
+  } finally {
+    await settled;
+    await params.bridge.remove({ filePath: probeDir, recursive: true });
+  }
+}
+
 export async function stressBackend(params: {
   backends: Array<Parameters<typeof runBackendExec>[0]["backend"]>;
   bridge: SandboxFsBridge;
@@ -137,9 +197,13 @@ export async function stressBackend(params: {
         if (slot % 2 === 0) {
           expectedIds.push(id);
           const exitCode = slot === 0 ? 23 : 0;
+          const serialMutation =
+            params.mode === "mirror"
+              ? `n=$(cat stress/count 2>/dev/null || echo 0); sleep 0.02; printf '%s\\n' "$((n + 1))" > stress/count; printf '%s\\n' '${id}' >> stress/ledger; `
+              : "";
           const result = await runBackendExec({
             backend,
-            command: `mkdir -p stress; n=$(cat stress/count 2>/dev/null || echo 0); sleep 0.02; printf '%s\\n' "$((n + 1))" > stress/count; printf '%s\\n' '${id}' >> stress/ledger; printf '%s' "$STRESS_VALUE" > 'stress/@exec-${id}'; exit ${exitCode}`,
+            command: `mkdir -p stress; ${serialMutation}printf '%s' "$STRESS_VALUE" > 'stress/@exec-${id}'; exit ${exitCode}`,
             env: { STRESS_VALUE: `value-${id}` },
             allowFailure: true,
             timeoutMs: 60_000,
@@ -201,12 +265,13 @@ export async function stressBackend(params: {
     args: [`${params.backends[0]!.workdir}/stress`],
   });
   const remoteFiles = JSON.parse(inventory.stdout.toString("utf8")) as Record<string, string>;
-  const ledger = expectDefined(remoteFiles.ledger, "OpenShell remote command ledger");
-  expect(ledger.trim().split("\n").toSorted()).toEqual(expectedIds.toSorted());
-  const expectedFiles: Record<string, string> = {
-    ledger,
-    count: `${expectedIds.length}\n`,
-  };
+  const expectedFiles: Record<string, string> = {};
+  if (params.mode === "mirror") {
+    const ledger = expectDefined(remoteFiles.ledger, "OpenShell mirror command ledger");
+    expect(ledger.trim().split("\n").toSorted()).toEqual(expectedIds.toSorted());
+    expectedFiles.ledger = ledger;
+    expectedFiles.count = `${expectedIds.length}\n`;
+  }
   for (let wave = 0; wave < waves; wave++) {
     for (let slot = 0; slot < concurrency; slot++) {
       const id = `${wave}-${slot}`;
@@ -246,7 +311,7 @@ export async function stressBackend(params: {
       elapsedMs: Date.now() - startedAt,
       p50Ms: orderedLatencies[Math.floor(latencies.length / 2)],
       p95Ms: orderedLatencies[Math.floor(latencies.length * 0.95)],
-      verifiedFiles: Object.keys(expectedFiles).length - 2,
+      verifiedFiles: Object.keys(expectedFiles).length,
     }),
   );
 }

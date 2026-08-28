@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
@@ -22,18 +23,10 @@ import { readStore } from "./short-term-promotion-store.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
+type SubagentRunParams = Parameters<PluginRuntime["subagent"]["run"]>[0];
+
 export type SubagentSurface = {
-  run: (params: {
-    idempotencyKey: string;
-    sessionKey: string;
-    message: string;
-    disableTools?: boolean;
-    model?: string;
-    extraSystemPrompt?: string;
-    lane?: string;
-    lightContext?: boolean;
-    deliver?: boolean;
-  }) => Promise<{ runId: string }>;
+  run: (params: SubagentRunParams) => Promise<{ runId: string }>;
   waitForRun: (params: { runId: string; timeoutMs?: number }) => Promise<{
     status: string;
     error?: string;
@@ -261,6 +254,7 @@ async function startNarrativeRunOrFallback(params: {
       disableTools: true,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      promptMode: "minimal",
       lane: `dreaming-narrative:${params.sessionKey}`,
       lightContext: true,
       deliver: false,
@@ -271,11 +265,7 @@ async function startNarrativeRunOrFallback(params: {
       throw runErr;
     }
     await appendFallbackNarrativeEntry({
-      workspaceDir: params.workspaceDir,
-      data: params.data,
-      nowMs: params.nowMs,
-      timezone: params.timezone,
-      logger: params.logger,
+      ...params,
       reason: "subagent runtime is request-scoped",
     });
     return null;
@@ -893,16 +883,12 @@ async function generateAndAppendDreamNarrative(
           }
 
           const runId = await startNarrativeRunOrFallback({
-            subagent: params.subagent,
+            ...params,
             sessionKey: attemptSessionKey,
             runKey: attemptRunKey,
             message,
-            data: params.data,
-            workspaceDir: params.workspaceDir,
             nowMs,
-            timezone: params.timezone,
             model: attemptModel,
-            logger: params.logger,
           });
           if (!runId) {
             return;
@@ -941,11 +927,8 @@ async function generateAndAppendDreamNarrative(
             })} for ${params.data.phase} phase; writing fallback diary entry.`,
           );
           await appendFallbackNarrativeEntry({
-            workspaceDir: params.workspaceDir,
-            data: params.data,
+            ...params,
             nowMs,
-            timezone: params.timezone,
-            logger: params.logger,
             reason: `the narrative run ended with ${formatNarrativeTerminalStatus({
               status: result.status,
               error: result.error,
@@ -986,11 +969,8 @@ async function generateAndAppendDreamNarrative(
           `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,
         );
         await appendFallbackNarrativeEntry({
-          workspaceDir: params.workspaceDir,
-          data: params.data,
+          ...params,
           nowMs,
-          timezone: params.timezone,
-          logger: params.logger,
           reason: "the narrative run produced no text",
         });
         return;
@@ -1023,11 +1003,8 @@ async function generateAndAppendDreamNarrative(
         `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
       );
       await appendFallbackNarrativeEntry({
-        workspaceDir: params.workspaceDir,
-        data: params.data,
+        ...params,
         nowMs,
-        timezone: params.timezone,
-        logger: params.logger,
         reason: `the narrative run failed (${formatErrorMessage(err)})`,
       });
     } finally {

@@ -205,6 +205,10 @@ payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
 
+Perplexity, Tavily, and xAI HTTP errors retain the status code and bounded
+diagnostics, with reflected request credentials redacted. Review diagnostics
+before sharing them; redaction does not remove every kind of sensitive content.
+
 ## Auto-detection
 
 Provider lists in docs and setup flows are alphabetical. Auto-detection uses a

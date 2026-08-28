@@ -56,6 +56,7 @@ import {
 } from "./composer-persistence.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
+import { handleChatScrollTakeover } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
@@ -81,20 +82,6 @@ function writeChatQueueForScope(
 ): void {
   const scope = resolveStoredChatOutboxScope(host, sessionKey, agentId);
   chatOutboxOwner(host).replace(host, scope, queue);
-}
-
-function setTransientQueuedMessageProjection(
-  host: TestChatHost,
-  sessionKey: string,
-  item: ChatQueueItem,
-): boolean {
-  const owner = chatOutboxOwner(host);
-  const scope = resolveStoredChatOutboxScope(host, sessionKey, item.agentId);
-  if (!owner.durable(host, item.id)) {
-    return false;
-  }
-  owner.projectLive(host, scope, item.id, item);
-  return true;
 }
 
 function requireChatMessageCache(host: ChatHost): ChatMessageCache {
@@ -2576,6 +2563,56 @@ describe("handleSendChat", () => {
     expect(host.chatUserNearBottom).toBe(false);
     expect(host.sessionsResult?.sessions[0]?.thinkingLevel).toBe("low");
   });
+
+  it.each([false, true])(
+    "preserves reader ownership across pending delivery with steer=%s",
+    async (steer) => {
+      const settings = createDeferred<boolean>();
+      const ack = createDeferred<{ status: string; runId: string }>();
+      const container = document.createElement("div");
+      Object.defineProperties(container, {
+        scrollHeight: { value: 2000 },
+        clientHeight: { value: 400 },
+      });
+      container.scrollTop = 1600;
+      const scrollToEnd = vi.fn(() => true);
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": () => ack.promise },
+        chatMessage: "send while reading",
+        chatRunId: steer ? "active-run" : null,
+        chatHasAutoScrolled: true,
+        chatScrollElement: () => container,
+        chatScrollToEnd: scrollToEnd,
+        pendingSettingsPatches: { "agent:main": settings.promise },
+        settings: { chatFollowUpMode: "steer" },
+      });
+      const send = handleSendChat(host);
+      await Promise.resolve();
+      expect(scrollToEnd).toHaveBeenCalledWith({ source: "manual", behavior: "auto" });
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      container.scrollTop = 1200;
+      handleChatScrollTakeover(host);
+      expect(host.chatFollowLocked).toBe(true);
+      scrollToEnd.mockClear();
+
+      settings.resolve(true);
+      await waitForFast(() =>
+        expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()),
+      );
+      ack.resolve({ status: "started", runId: "accepted-run" });
+      await send;
+      await Promise.resolve();
+
+      expect(host.chatFollowLocked).toBe(true);
+      expect(host.chatHasAutoScrolled).toBe(true);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(container.scrollTop).toBe(1200);
+    },
+  );
 
   it("preserves draft edits made while waiting for a model picker update", async () => {
     const switchUpdate = createDeferred<boolean>();
@@ -6074,15 +6111,13 @@ describe("handleSendChat", () => {
 
     expect(host.chatQueue[0]?.sendState).toBe("sending");
     expect(host.lastError).toBeNull();
-    await waitForFast(() => expect(listStoredChatOutboxes(host)).toStrictEqual([]), {
-      timeout: 1_000,
-    });
+    await flushChatQueueForEvent(host);
     expect(historyRequests).toBeGreaterThanOrEqual(3);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.lastError).toBeNull();
   });
 
-  it("marks an acknowledged live send unconfirmed after history stays missing", async () => {
+  it("keeps an acknowledged live send pending while its connection stays current", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const host = makeChatHost({
@@ -6107,48 +6142,8 @@ describe("handleSendChat", () => {
     await flushChatQueueForEvent(host);
 
     expect(host.chatQueue[0]).toMatchObject({
-      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
-      sendState: "unconfirmed",
-      text: "history never catches up",
-    });
-    // The parked bubble's inline footer owns the outcome; no pane banner.
-    expect(host.lastError).toBeNull();
-  });
-
-  it("starts a fresh confirmation grace after the prior outbox scope is removed", async () => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": () => idleChatHistory(),
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "live send payload");
-          const runId = String(payload.idempotencyKey);
-          return Promise.resolve({ runId, status: "started" });
-        },
-      },
-    });
-
-    await handleSendChat(host, "reuse this delivery version");
-    host.chatRunId = null;
-    await flushChatQueueForEvent(host);
-
-    const item = expectDefined(host.chatQueue[0], "queued live send");
-    const sessionKey = expectDefined(item.sessionKey, "queued session key");
-    expect(removeQueuedMessage(host, item.id)).toBe("removed");
-
-    now = 5_500;
-    expect(admitQueuedMessageForSession(host, sessionKey, item)).toBe(true);
-    expect(setTransientQueuedMessageProjection(host, sessionKey, item)).toBe(true);
-    await flushChatQueueForEvent(host);
-
-    now = 6_001;
-    await flushChatQueueForEvent(host);
-
-    expect(host.chatQueue[0]).toMatchObject({
-      id: item.id,
       sendState: "sending",
-      text: "reuse this delivery version",
+      text: "history never catches up",
     });
     expect(host.lastError).toBeNull();
   });

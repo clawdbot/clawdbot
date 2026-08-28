@@ -3557,8 +3557,8 @@ function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) 
         if (changedGateTree === baseTree.stdout) {
           writeFileSync(bundleTempPath, "", "utf8");
         } else {
-          // A parentless carrier makes the bundle self-contained while sending
-          // only the final tree. The remote attaches the fetched base as parent.
+          // The receiver fetches a shallow base. Restrict exclusions to its tree,
+          // not older objects reachable only through the producer's full history.
           const transportCommit = gitOutput([
             "-C",
             dir,
@@ -3568,6 +3568,8 @@ function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) 
             "user.email=ci@openclaw.local",
             "commit-tree",
             changedGateTree,
+            "-p",
+            base.stdout,
             "-m",
             "remote-changed-gate-tree",
           ]);
@@ -3578,7 +3580,12 @@ function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) 
           if (updateHead.status !== 0) {
             throw new Error(updateHead.text || "git update-ref HEAD failed");
           }
-          const bundle = gitOutput(["-C", dir, "bundle", "create", bundleTempPath, "HEAD"]);
+          const range = `${base.stdout}..HEAD`;
+          const shallowPath = resolve(bundleTempDir, "shallow");
+          writeFileSync(shallowPath, `${base.stdout}\n`, "utf8");
+          const bundle = gitOutput(["-C", dir, "bundle", "create", bundleTempPath, range], {
+            GIT_SHALLOW_FILE: shallowPath,
+          });
           if (bundle.status !== 0) {
             throw new Error(bundle.text || `git bundle exited with status ${bundle.status}`);
           }

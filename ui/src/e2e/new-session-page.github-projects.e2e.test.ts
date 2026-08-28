@@ -28,7 +28,7 @@ const remoteSearchResult = {
 };
 
 suite.define(() => {
-  it("offers a worktree for a GitHub result and materializes its project before session creation", async () => {
+  it("offers a worktree for a GitHub result before its checkout exists", async () => {
     await prepareProjectUiProof();
     await suite.withPage(
       {
@@ -56,7 +56,6 @@ suite.define(() => {
           methodResponses: {
             "projects.list": { projects: [] },
             "projects.searchRemote": remoteSearchResult,
-            "projects.add": { id: "cloned-worktree-project" },
             "sessions.create": { key: "agent:main:github-worktree-e2e" },
           },
         });
@@ -87,33 +86,32 @@ suite.define(() => {
 
         const create = await gateway.waitForRequest("sessions.create");
         expect(create.params).toMatchObject({
-          projectId: "cloned-worktree-project",
+          projectGitUrl: "https://github.com/openclaw/openclaw.git",
           worktree: true,
           message: "inspect the worktree",
         });
-        expect(create.params).not.toHaveProperty("projectGitUrl");
+        expect(create.params).not.toHaveProperty("projectId");
         expect(create.params).not.toHaveProperty("worktreeBaseRef");
-        const materialization = (await gateway.getRequests()).filter(
-          (request) => request.method === "projects.add" || request.method === "sessions.create",
-        );
-        expect(materialization.map((request) => request.method)).toEqual([
-          "projects.add",
-          "sessions.create",
-        ]);
-        expect(materialization[0]?.params).toEqual({
-          gitUrl: "https://github.com/openclaw/openclaw.git",
-        });
+        expect(await gateway.getRequests("projects.add")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       },
     );
   });
 
   it.each([
-    { name: "shows workspace preparation in the admitted session", failure: null },
+    { name: "shows workspace preparation in the admitted session", failure: null, worktree: false },
     {
       name: "keeps a project preparation failure actionable in the admitted session",
       failure: "Repository clone failed; verify repository access and try again.",
+      worktree: false,
     },
-  ])("keeps GitHub selection inert and $name", async ({ failure }) => {
+    { name: "shows worktree preparation in the admitted session", failure: null, worktree: true },
+    {
+      name: "keeps a worktree setup failure actionable in the admitted session",
+      failure: "Worktree setup failed; fix the setup command and try again.",
+      worktree: true,
+    },
+  ])("keeps GitHub selection inert and $name", async ({ failure, worktree }) => {
     await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -226,6 +224,17 @@ suite.define(() => {
       );
       expect(await trigger.getAttribute("data-project-id")).toBeNull();
 
+      if (worktree) {
+        const detailTrigger = page.locator("#new-session-detail-trigger");
+        await detailTrigger.click();
+        await page
+          .locator("wa-popover.new-session-page__detail-popover")
+          .getByRole("button", { name: "Worktree", exact: true })
+          .click();
+        await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+        await page.keyboard.press("Escape");
+      }
+
       const permission = page.locator('[data-chat-permission-select="true"]');
       await permission.click();
       await page.locator('[data-chat-permission-option="read-only"]').click();
@@ -237,6 +246,7 @@ suite.define(() => {
         message,
         permissionMode: "read-only",
         projectGitUrl: "https://github.com/openclaw/openclaw.git",
+        ...(worktree ? { worktree: true } : {}),
       });
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("projectId");
@@ -262,7 +272,30 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
       expect(await working.locator(".chat-reading-indicator").count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await captureProjectUiProof(page, "project-cloning.png");
+      await captureProjectUiProof(
+        page,
+        worktree ? "worktree-preparing.png" : "project-cloning.png",
+      );
+
+      if (worktree) {
+        let seq = 1;
+        for (const [phase, label] of [
+          ["naming_worktree", "Naming worktree…"],
+          ["creating_worktree", "Creating worktree…"],
+          ["running_setup", "Running setup…"],
+        ] as const) {
+          await gateway.emitGatewayEvent("chat", {
+            runId,
+            sessionKey,
+            seq: ++seq,
+            state: "status",
+            phase,
+          });
+          await pollLocatorText(working).toContain(label);
+          expect(await page.locator(".chat-group.user").count()).toBe(1);
+        }
+        await captureProjectUiProof(page, "worktree-running-setup.png");
+      }
 
       if (!failure) {
         await gateway.emitChatFinal({ runId, sessionKey, text: "Project workspace is ready." });
@@ -278,7 +311,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("chat", {
         runId,
         sessionKey,
-        seq: 2,
+        seq: 5,
         state: "error",
         errorMessage: failure,
       });
@@ -287,7 +320,10 @@ suite.define(() => {
       await expect.poll(() => working.count()).toBe(0);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);
-      await captureProjectUiProof(page, "project-cloning-failed.png");
+      await captureProjectUiProof(
+        page,
+        worktree ? "worktree-setup-failed.png" : "project-cloning-failed.png",
+      );
 
       await composer.fill(message);
       await page.getByRole("button", { name: "Send message" }).click();

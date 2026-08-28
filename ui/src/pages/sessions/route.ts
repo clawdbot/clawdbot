@@ -4,7 +4,7 @@ import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
-  DEFAULT_SESSION_LIST_QUERY,
+  SESSIONS_PAGE_DEFAULT_LIMIT,
   type SessionArchivedFilter,
   type SessionListOptions,
   type SessionListSnapshot,
@@ -54,7 +54,7 @@ export function sessionsPageListQuery(
   const activeMinutes =
     !deepLinkSessionKey && filters.statusFilter === "active" ? filters.activeMinutes : undefined;
   return {
-    limit: deepLinkSessionKey ? DEFAULT_SESSION_LIST_QUERY.limit : filters.limit,
+    limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
     ...(activeMinutes ? { activeMinutes } : {}),
     ...(deepLinkSessionKey ? { search: deepLinkSessionKey } : {}),
     includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
@@ -75,7 +75,7 @@ async function loadSessionsRoute(
   const sessions = context.sessions;
   const options = routeOptions(location);
   const query = sessionsPageListQuery(context, {
-    limit: DEFAULT_SESSION_LIST_QUERY.limit,
+    limit: SESSIONS_PAGE_DEFAULT_LIMIT,
     includeGlobal: true,
     includeUnknown: false,
     statusFilter: options.statusFilter,

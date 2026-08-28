@@ -250,6 +250,44 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it.each([
+    { label: "matching", authProfileId: "openai:default", availability: true },
+    { label: "omitted", authProfileId: "openai:other", availability: false },
+    { label: "unscoped", authProfileId: undefined, availability: false },
+  ])(
+    "uses $label successful harness auth only when explicit order admits its profile",
+    ({ authProfileId, availability }) => {
+      const keyRef = { source: "file" as const, provider: "vault", id: "value" };
+      const store = authStore({
+        "openai:default": { type: "api_key", provider: "openai", keyRef },
+        "openai:other": { type: "api_key", provider: "openai", keyRef },
+      });
+      const materialization = {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://api.openai.com/v1",
+        requestTransportOverrides: "none",
+        authMode: "api-key",
+        runtimeOwnerId: "codex",
+        ...(authProfileId ? { authProfileId } : {}),
+      } as const;
+
+      expect(
+        evaluate({
+          cfg: { auth: { order: { openai: ["openai:default"] } } },
+          store,
+          ref: { modelId: "gpt-5.4" },
+          preparedRuntimeAuthMaterializations: [materialization],
+        }),
+      ).toMatchObject({
+        availability,
+        selectedProfileId: "openai:default",
+        selectedRoute: platformRoute,
+      });
+    },
+  );
+
+  it.each([
     { label: "resolved", key: "runtime-key", availability: true },
     { label: "unresolved", key: undefined, availability: undefined },
   ])("uses an exact $label prepared SecretRef profile", ({ key, availability }) => {

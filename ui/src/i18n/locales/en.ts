@@ -275,7 +275,7 @@ export const en: TranslationMap = {
     refreshingStaleSnapshot:
       "Refreshing channel status in the background; showing the last successful snapshot.",
     hub: {
-      connectedTitle: "Your channels",
+      connectedTitle: "Connected channels",
       addTitle: "Add a channel",
       addSubtitle: "Pick a service and follow the guided setup.",
       updatedAgo: "Updated {ago}",
@@ -347,7 +347,7 @@ export const en: TranslationMap = {
       dialogLabel: "Set up {channel}",
       title: "Set up {channel}",
       genericTitle: "a channel",
-      subtitle: "A short guided setup — you can fine-tune everything later.",
+      subtitle: "Guided channel setup",
       starting: "Starting setup…",
       working: "Working…",
       sessionExpired:
@@ -356,7 +356,7 @@ export const en: TranslationMap = {
       finish: "Finish",
       copyText: "Copy",
       openLink: "Open link",
-      docs: "Docs",
+      viewDocs: "View docs",
       doneTitle: "Channel configured",
       doneBody:
         "Configuration saved. The gateway reloads the channel automatically; check its card for live status.",
@@ -889,7 +889,9 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
-    anyAvailableNode: "Any available node",
+    autoDevice: "Auto",
+    autoDeviceSub: "Least-busy device",
+    autoDeviceSubEligible: "First eligible device",
     noSessionHosts: "No session hosts are paired. Connect a machine with session hosting enabled.",
     neverConnected: "Never connected",
     offlineFor: "Offline for {duration}",
@@ -1524,11 +1526,8 @@ export const en: TranslationMap = {
   configForm: {
     redactedPlaceholder: "[redacted - click reveal to view]",
     sectionHelp: "Help for {section}",
-    readGuide: "Read the guide",
-    showAdvanced: "Show advanced",
-    advancedHidden: "{count} advanced setting hidden",
-    advancedHiddenPlural: "{count} advanced settings hidden",
     advancedDivider: "Advanced",
+    advancedSettings: "Advanced settings",
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
@@ -1895,6 +1894,30 @@ export const en: TranslationMap = {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
       chooseTheme: "Choose a theme family.",
+      typography: "Typography",
+      fonts: {
+        ui: "Interface",
+        chat: "Chat prose",
+        themeDefault: "Theme default",
+        themeFace: "{theme} · {face}",
+        system: "System",
+        previewCaption: "OpenClaw · A little clarity goes a long way",
+        previewProse:
+          "Good typography makes room for the conversation. Choose a face that feels comfortable to read.",
+        previewCode: 'const greeting = "Hello, world!";',
+      },
+      fontNotes: {
+        "instrument-sans": "Contemporary and crisp",
+        geist: "Clean and precise",
+        "dm-sans": "Warm and versatile",
+        "ibm-plex-sans": "Engineered and humanist",
+        "space-grotesk": "Geometric with character",
+        "atkinson-hyperlegible": "Distinct shapes for easy reading",
+        fraunces: "Expressive reading serif",
+        lora: "Calm, literary serif",
+        "jetbrains-mono": "Clear, evenly spaced letters",
+        system: "No webfont",
+      },
       accent: "Accent color",
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
@@ -2292,7 +2315,6 @@ export const en: TranslationMap = {
     clawHubSubtitle: "Search and install skills from the registry",
     searchClawHub: "Search ClawHub skills…",
     searching: "Searching…",
-    acknowledgeRisk: "Acknowledge risk and install",
     disconnected: "Not connected to gateway.",
     empty: "No skills found.",
     noClawHubResults: "No skills found on ClawHub.",
@@ -2609,7 +2631,6 @@ export const en: TranslationMap = {
   },
   cloudWorkersPage: {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
-    documentation: "Cloud worker documentation",
     sectionTitle: "Profiles",
     sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
@@ -3017,7 +3038,6 @@ export const en: TranslationMap = {
   },
   mcpPage: {
     intro: "Connect and manage MCP servers that provide tools to OpenClaw.",
-    connectorsLink: "Discover one-click connectors on the Plugins page.",
     servers: "Servers",
     oauth: "OAuth",
     filtered: "Filtered",
@@ -3414,8 +3434,6 @@ export const en: TranslationMap = {
     install: "Install",
     installing: "Installing…",
     installNamed: "Install {name}",
-    acknowledgeRisk: "Acknowledge risk and install",
-    defaultRiskWarning: "Review the ClawHub warning before installing this plugin.",
     policyReviewTitle: "Security review needed",
     policyReviewBodyKnown: "Policy warnings: {count}. Not installed.",
     policyReviewBodyReason: "{reason} Not installed.",
@@ -4304,6 +4322,8 @@ export const en: TranslationMap = {
     restarting: "Restarting…",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
+    settingsChangesUnavailable:
+      "Changes to settings are disabled while the Gateway is reconnecting.",
     sessionOperationCompletedPreviousConnection:
       "The session operation completed on the previous connection. Check the current session list before continuing.",
     sessionOperationCompletedPreviousConnectionWithRefreshError:
@@ -5232,6 +5252,9 @@ export const en: TranslationMap = {
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
+      namingWorktree: "Naming worktree…",
+      creatingWorktree: "Creating worktree…",
+      runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",
@@ -6189,6 +6212,7 @@ export const en: TranslationMap = {
     },
     selectors: {
       loadMoreSessions: "Show more",
+      loadMoreRosterSessions: "Load more sessions",
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",

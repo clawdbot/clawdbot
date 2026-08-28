@@ -65,7 +65,6 @@ const channelActivityMocks = vi.hoisted(() => ({
 const pluginRuntimeMocks = vi.hoisted(() => {
   type StoreEntry = { key: string; value: unknown; createdAt: number };
   const stores = new Map<string, Map<string, StoreEntry>>();
-  let nextRegisterIfAbsentError: Error | undefined;
   let stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
 
   const openKeyedStore = vi.fn((options: { namespace: string }) => {
@@ -79,11 +78,6 @@ const pluginRuntimeMocks = vi.hoisted(() => {
         store.set(key, { key, value, createdAt: Date.now() });
       },
       registerIfAbsent: async (key: string, value: unknown) => {
-        if (nextRegisterIfAbsentError) {
-          const error = nextRegisterIfAbsentError;
-          nextRegisterIfAbsentError = undefined;
-          throw error;
-        }
         if (store.has(key)) {
           return false;
         }
@@ -107,12 +101,8 @@ const pluginRuntimeMocks = vi.hoisted(() => {
   return {
     openKeyedStore,
     stateDir: () => stateDir,
-    failNextRegisterIfAbsent: (error: Error) => {
-      nextRegisterIfAbsentError = error;
-    },
     reset: () => {
       stores.clear();
-      nextRegisterIfAbsentError = undefined;
       openKeyedStore.mockClear();
       stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
     },
@@ -388,26 +378,21 @@ export function buildNotifyMessageUpsert(params: {
   };
 }
 
-// The mocked pairing upsert always issues PAIRCODE, so the reply text can be
-// asserted directly instead of re-extracting the code from the message.
-function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
+// The pairing reply is sent before the inbound handler completes, so a full
+// drain guarantees the prompt is observable — and makes the callers' negative
+// assertions (onMessage/readMessages never called) non-vacuous.
+export async function waitForPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
+  await waitForInboundWorkDrained();
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   const sendCall = sock.sendMessage.mock.calls.at(0);
   expect(sendCall?.[0]).toBe(jid);
+  // The mocked pairing upsert always issues PAIRCODE.
   const text = (sendCall?.[1] as { text?: string } | undefined)?.text ?? "";
   expect(text).toContain("OpenClaw: access not configured.");
   expect(text).toContain(`Your WhatsApp phone number: ${senderE164}`);
   expect(text).toContain("Pairing code:");
   expect(text).toContain("\n```\nPAIRCODE\n```\n");
   expect(text).toContain("pairing approve whatsapp PAIRCODE");
-}
-
-// The pairing reply is sent before the inbound handler completes, so a full
-// drain guarantees the prompt is observable — and makes the callers' negative
-// assertions (onMessage/readMessages never called) non-vacuous.
-export async function waitForPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
-  await waitForInboundWorkDrained();
-  expectPairingPromptSent(sock, jid, senderE164);
 }
 
 let authDir: string | undefined;
@@ -419,9 +404,7 @@ export function getAuthDir(): string {
   return authDir;
 }
 
-export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }) {
-  const createAuthDir = opts?.authDir ?? true;
-
+export function installWebMonitorInboxUnitTestHooks() {
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
@@ -447,11 +430,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
       resetWebInboundDedupe = inboundModule.resetWebInboundDedupe;
     }
     resetWebInboundDedupe();
-    if (createAuthDir) {
-      authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
-    } else {
-      authDir = undefined;
-    }
+    authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   });
 
   afterEach(() => {

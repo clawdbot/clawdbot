@@ -1744,7 +1744,15 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       key: "thinking",
       value: "superhigh",
     },
-  ])("$name", async ({ key, value, expected }) => {
+    ...["thinking", "thought_level", "reasoning_effort"].map((key) => ({
+      name: `rejects unsupported live Codex ACP ${key}=off`,
+      key,
+      value: "off",
+      expected: undefined,
+      errorCode: "ACP_BACKEND_UNSUPPORTED_CONTROL",
+    })),
+  ])("$name", async (testCase) => {
+    const { key, value, expected } = testCase;
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:codex:acp:test",
@@ -1767,7 +1775,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       value,
     });
     if (!expected) {
-      await expect(update).rejects.toMatchObject({ code: "ACP_INVALID_RUNTIME_OPTION" });
+      await expect(update).rejects.toMatchObject({
+        code: "errorCode" in testCase ? testCase.errorCode : "ACP_INVALID_RUNTIME_OPTION",
+      });
       expect(setConfigOption).not.toHaveBeenCalled();
       return;
     }

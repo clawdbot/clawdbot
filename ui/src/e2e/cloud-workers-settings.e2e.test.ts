@@ -94,6 +94,11 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}settings/cloud-workers`))?.status()).toBe(
         200,
       );
+      const docsLink = page.getByRole("link", { name: "Learn more", exact: true });
+      await docsLink.waitFor();
+      expect(await docsLink.getAttribute("href")).toBe(
+        "https://docs.openclaw.ai/gateway/cloud-workers",
+      );
       await gateway.waitForRequest("environments.list");
       await page.getByText("No cloud worker profiles are configured.", { exact: true }).waitFor();
 

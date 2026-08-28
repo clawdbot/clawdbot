@@ -209,7 +209,7 @@ describe("install-cli.sh", () => {
 
   it("round-trips dynamic installer values through independent NDJSON records", () => {
     const root = tempDirs.make("openclaw-install-cli-json-events-");
-    const dynamicValue = `quote"\\lobster🦞${String.fromCharCode(
+    const dynamicValue = `quote"\\café项目lobster🦞${String.fromCharCode(
       ...Array.from({ length: 31 }, (_, index) => index + 1),
     )}end`;
     const repo = join(root, dynamicValue);

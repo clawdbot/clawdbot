@@ -1,5 +1,6 @@
 import type {
   RealtimeVoiceBridgeEvent,
+  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceResponseOutcome,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi } from "vitest";
@@ -51,6 +52,7 @@ export type TestRealtimeBridgeParams = {
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
+  onClose?: RealtimeVoiceBridgeCreateRequest["onClose"];
   onReady?: () => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (

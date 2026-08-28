@@ -1,6 +1,7 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
@@ -516,6 +517,20 @@ export async function getReplyFromConfig(
     ? { ...optsWithSkillFilter, queueModeOverride: nativeSlashCommandFastReply.queueModeOverride }
     : optsWithSkillFilter;
 
+  const acpWorkspaceProvisioningInput = isImplicitAcpWorkspaceCandidate(cfg, agentId)
+    ? await traceGetReplyPhase("reply.resolve_acp_workspace_provisioning", async () => {
+        // Implicit ACP agents need the live session's ACP meta (per-session cwd
+        // from /acp spawn --cwd or /acp cwd) before workspace scaffolding runs.
+        const state = resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
+        return {
+          cfg,
+          agentId,
+          sessionKey: state.sessionKey,
+          ...(state.sessionEntry ? { sessionEntry: state.sessionEntry } : {}),
+        };
+      })
+    : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
+
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
     useFastTestBootstrap
       ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
@@ -523,6 +538,9 @@ export async function getReplyFromConfig(
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+          provisioning: await (
+            await import("../../agents/acp-workspace-provisioning.js")
+          ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
         }),
   );
   const workspaceDir = workspace.dir;

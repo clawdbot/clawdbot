@@ -48,7 +48,7 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "./model-auth-env-vars.js";
 import { resolveProviderEnvAuthEvidence } from "./model-auth-env.js";
-import { isKnownEnvApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
+import { isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
@@ -556,7 +556,7 @@ export function createModelAuthAvailabilityResolver(
       };
     }
     if (binding.kind === "marker") {
-      if (typeof apiKey === "string" && isKnownEnvApiKeyMarker(apiKey)) {
+      if (binding.evidence === "environment" && typeof apiKey === "string") {
         return {
           availability: modeAllowed(provider, target, configuredBearerMode)
             ? hasSecret(env[apiKey.trim()])
@@ -569,14 +569,14 @@ export function createModelAuthAvailabilityResolver(
         return {
           availability: false,
           selectedAuthMode: configuredBearerMode,
-          evidence: "synthetic",
+          evidence: binding.evidence,
         };
       }
       if (hasUsableCustomProviderApiKey(params.cfg, provider, env)) {
         return {
           availability: true,
           selectedAuthMode: configuredBearerMode,
-          evidence: "synthetic",
+          evidence: binding.evidence,
         };
       }
       const managed = typeof apiKey === "string" && isSecretRefHeaderValueMarker(apiKey);
@@ -586,7 +586,7 @@ export function createModelAuthAvailabilityResolver(
             undefined
           : undefined,
         selectedAuthMode: configuredBearerMode,
-        evidence: managed ? "runtime" : "synthetic",
+        evidence: managed ? "runtime" : binding.evidence,
       };
     }
     if (apiKeyRef) {
@@ -914,23 +914,24 @@ export function createModelAuthAvailabilityResolver(
       !modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile"
         ? basePolicy.binding.profileId
         : undefined;
-    const explicitProfileOrder = profileOrder(
+    const orderResolution = profileOrder(
       provider,
       ref.modelId,
       ref.preferredProfileId,
       ref.lockedProfileId,
-    ).hasExplicitOrder;
+    );
     const materializedModelId = ref.modelId
       ? normalizeModelIdForProvider(provider, ref.modelId)?.toLowerCase()
       : undefined;
     const materialized =
-      !modelLock &&
-      !bindingProfileId &&
-      !basePolicy.required &&
-      !explicitProfileOrder &&
-      materializedModelId
+      !modelLock && !bindingProfileId && !basePolicy.required && materializedModelId
         ? params.preparedRuntimeAuthMaterializations?.find(
             (fact) =>
+              // Explicit order remains authoritative: runtime success only satisfies it
+              // when the producer names a profile still admitted by the current order.
+              (!orderResolution.hasExplicitOrder ||
+                (fact.authProfileId !== undefined &&
+                  orderResolution.profileIds.includes(fact.authProfileId))) &&
               normalizeProvider(fact.provider) === provider &&
               fact.modelId === materializedModelId &&
               routeResolution.routes.some((route) => {
@@ -1015,12 +1016,6 @@ export function createModelAuthAvailabilityResolver(
     const policy = directPolicy(
       provider,
       targetForMode(selectedConfiguredMode ?? basePolicy.direct.mode),
-    );
-    const orderResolution = profileOrder(
-      provider,
-      ref.modelId,
-      ref.preferredProfileId,
-      ref.lockedProfileId,
     );
     let profileIds = orderResolution.profileIds;
     if (profileIds.length === 0 && !modelLock && !bindingProfileId && !policy.required) {

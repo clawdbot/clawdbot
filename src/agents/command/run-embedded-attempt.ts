@@ -15,7 +15,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
-import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import type { prepareAgentCommandExecutionIdentity } from "../agent-command-execution-identity.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -65,7 +65,7 @@ const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
 export async function runEmbeddedAgentAttempt(params: {
-  preparedRunAdmission: PreparedAgentRunAdmission;
+  preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity>;
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
@@ -158,7 +158,10 @@ export async function runEmbeddedAgentAttempt(params: {
     lifecycleFinishing: false,
     lifecycleEnded: false,
   };
-  const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
+  const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(
+    attemptLifecycleState,
+    params.preparedRunAdmission.onRuntimeTurnStarted,
+  );
   const transcriptMedia = params.opts.transcriptMedia ?? [];
   const hasTranscriptMedia = transcriptMedia.length > 0;
   const suppressUserTurnPersistence =

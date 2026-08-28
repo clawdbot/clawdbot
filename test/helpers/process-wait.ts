@@ -44,7 +44,10 @@ export async function waitForDead(pid: number, timeoutMs: number): Promise<void>
     }
     await sleep(5);
   }
-  throw new Error(`process still alive: ${pid}`);
+  // A delayed worker wake can outlive both the deadline and the process.
+  if (isPidAlive(pid)) {
+    throw new Error(`process still alive: ${pid}`);
+  }
 }
 
 export function waitForChildClose(

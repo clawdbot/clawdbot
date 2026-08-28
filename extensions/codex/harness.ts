@@ -9,7 +9,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { runHostPreparedIsolatedCompletion } from "openclaw/plugin-sdk/simple-completion-runtime";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
@@ -60,36 +60,6 @@ type CodexAppServerAgentHarnessOptions = {
   bindingStore: CodexAppServerBindingStore;
   sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
 };
-
-type CodexHostPreparedIsolatedCompletionParams = Parameters<
-  NonNullable<AgentHarnessV2["runIsolatedCompletion"]>
->[0];
-
-async function runCodexHostPreparedIsolatedCompletion(
-  params: CodexHostPreparedIsolatedCompletionParams,
-) {
-  const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
-  const signal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, timeoutSignal])
-    : timeoutSignal;
-  const assistant = await completeWithPreparedSimpleCompletionModel({
-    model: params.model,
-    auth: params.auth,
-    cfg: params.config,
-    context: {
-      systemPrompt: params.systemPrompt,
-      messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }],
-      tools: [],
-    },
-    options: {
-      maxTokens: params.streamParams?.maxTokens,
-      temperature: params.streamParams?.temperature,
-      reasoning: params.thinkLevel,
-      signal,
-    },
-  });
-  return { assistant };
-}
 
 async function disposeSharedCodexAppServerClients(): Promise<void> {
   const dispose = (
@@ -273,15 +243,7 @@ export function createCodexAppServerAgentHarness(
     },
     runIsolatedCompletionV2: async (params) => {
       if (params.authorization.owner === "host") {
-        const { authorization, ...commonParams } = params;
-        return runCodexHostPreparedIsolatedCompletion({
-          ...commonParams,
-          model: authorization.model,
-          auth: authorization.auth,
-          ...(authorization.sourceAuthFingerprint
-            ? { sourceAuthFingerprint: authorization.sourceAuthFingerprint }
-            : {}),
-        });
+        return runHostPreparedIsolatedCompletion(params);
       }
       const { runCodexIsolatedCompletion } =
         await import("./src/app-server/isolated-completion.js");
@@ -292,7 +254,15 @@ export function createCodexAppServerAgentHarness(
     runIsolatedCompletion: async (params) => {
       // Keep the deprecated V1 contract on its exact host-prepared transport.
       // V2 owns native Codex auth and zero-tool attestation above.
-      return runCodexHostPreparedIsolatedCompletion(params);
+      return runHostPreparedIsolatedCompletion({
+        ...params,
+        authorization: {
+          owner: "host",
+          model: params.model,
+          auth: params.auth,
+          sourceAuthFingerprint: params.sourceAuthFingerprint,
+        },
+      });
     },
     finalizeSettledTurn: async (params) => {
       const { runCodexSettledTurnFinalization } =

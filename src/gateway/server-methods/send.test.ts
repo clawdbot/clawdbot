@@ -28,11 +28,13 @@ import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import {
   mintMessageActionTurnCapability,
@@ -2459,6 +2461,59 @@ describe("gateway send mirroring", () => {
 
     expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:resolved");
     expect(deliveryCall()?.mirror?.agentId).toBe("main");
+  });
+
+  it("carries an authenticated creator's required sandbox into an outbound session", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("required-outbound@example.test");
+      const cfg = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" as const },
+                agents: "*" as const,
+                scopes: ["operator.write"],
+                sandbox: "required" as const,
+              },
+            },
+          },
+        },
+      };
+      const context = {
+        ...makeContext(),
+        getRuntimeConfig: () => cfg,
+      } as unknown as GatewayRequestContext;
+      const client = {
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        },
+        connect: { scopes: ["operator.write"] },
+      };
+      mockDeliverySuccess("required-outbound-message");
+
+      const { respond } = await runSendWithClient(
+        {
+          to: "channel:first-contact",
+          message: "hello",
+          channel: "slack",
+          idempotencyKey: "required-outbound-creation",
+        },
+        client,
+        context,
+      );
+
+      expect(firstRespondCall(respond)[0]).toBe(true);
+      expect(ensureSessionEntryCall()?.creation).toEqual({
+        via: "operator",
+        actor: { type: "human", id: profile.id },
+        sandbox: "required",
+      });
+    });
   });
 
   it("uses explicit agentId for delivery when sessionKey is not provided", async () => {

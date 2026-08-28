@@ -747,7 +747,12 @@ jobs:
           const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
           const usesHostedRunnerProfile =
             runnerProfile === "github" || runnerProfile === "hybrid";
-          const uiE2eShardCount = usesHostedRunnerProfile ? 12 : 4;
+          // Control UI E2E is serial Chromium work: 2114s of measured body plus a
+          // ~116s median per-shard floor (checkout, pnpm install, Vitest transform)
+          // that every added row pays again. Sharding is the only lever on the
+          // tallest row -- duration-weighted packing already lands within ~10% of
+          // ideal -- so the count is set from that floor, not from packing slack.
+          const uiE2eShardCount = usesHostedRunnerProfile ? 14 : 4;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -1492,14 +1497,9 @@ jobs:
           bun openclaw.mjs --help
           bun openclaw.mjs status --json --timeout 1
 
-      # Doctor index proof, singleton smoke, and startup-memory check are
-      # independent dist readers; Blacksmith runners have the cores to overlap
-      # them, while hosted 4-core runners keep the serial order so the RSS
-      # measurement stays unperturbed under its higher hosted ceiling.
-      # Built-artifact verifiers and checks share one wave: the verifiers are
-      # independent dist readers, so overlapping them with the selected checks
-      # keeps them off this job's serial critical path. The step is
-      # unconditional because the verifiers always run; each check self-gates.
+      # Startup RSS is measured alone on every runner before independent dist
+      # readers share the artifact-check wave. The step is unconditional because
+      # the verifiers always run; each selected check self-gates.
       - name: Run built artifact checks
         env:
           PARALLEL_GATEWAY_WATCH: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
@@ -1579,9 +1579,8 @@ jobs:
           startup_assets=success
           node --import tsx scripts/ensure-cli-startup-build.mts || startup_assets=failure
 
-          # Hosted runners keep the verifiers serial: a concurrent verifier
-          # perturbs the RSS the startup-memory ceiling measures. Blacksmith
-          # leaves them running so they finish inside the checks wave below.
+          # Hosted runners keep the remaining verifiers serial; Blacksmith
+          # overlaps them with the selected checks below.
           run_verifier() {
             local name="$1"
             shift
@@ -1589,9 +1588,13 @@ jobs:
             [ "$PARALLEL_BUILT_VERIFIERS" = "true" ] || wait_checks
           }
 
+          # Concurrent checks perturb RSS even on Blacksmith. Complete this
+          # measurement before starting other verifiers without relaxing its ceiling.
+          run_verifier "startup-memory" node scripts/check-cli-startup-memory.mjs
+          wait_checks
+
           run_verifier "doctor-plugin-index" run_doctor_plugin_index
           run_verifier "plugin-singleton" pnpm test:build:singleton
-          run_verifier "startup-memory" node scripts/check-cli-startup-memory.mjs
 
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
@@ -1828,7 +1831,7 @@ jobs:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
-      max-parallel: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 12 || 4 }}
+      max-parallel: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 14 || 4 }}
       matrix: ${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -1919,6 +1922,16 @@ jobs:
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
           ui/src/e2e/control-ui-auth-transports.e2e.test.ts
+
+      - name: Test Control UI usage sessions owner attribution with a real Gateway
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
@@ -2590,7 +2603,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && inputs.release_gate) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.release_gate && startsWith(inputs.dispatch_id, 'full-release-validation-') && inputs.target_context_ref != '' && needs.preflight.outputs.frozen_target == 'true' && matrix.task == 'lint') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && inputs.release_gate) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -4458,6 +4471,34 @@ jobs:
           mkdir -p "$sticky_root/gradle-user-home"
           echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
 
+      - name: Restore Robolectric Maven cache
+        id: robolectric-cache
+        if: startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/tmp/openclaw-robolectric-m2
+          key: ${{ github.repository }}-robolectric-m2-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml', 'apps/android/**/src/test*/**') }}
+          restore-keys: |
+            ${{ github.repository }}-robolectric-m2-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-
+
+      - name: Configure Robolectric Maven cache
+        if: startsWith(matrix.task, 'test-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          maven_repo=/var/tmp/openclaw-robolectric-m2
+          init_script="$RUNNER_TEMP/openclaw-robolectric-init.gradle"
+          mkdir -p "$maven_repo"
+          cat >"$init_script" <<'GROOVY'
+          allprojects {
+            tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+              systemProperty "maven.repo.local", System.getenv("OPENCLAW_ROBOLECTRIC_M2")
+            }
+          }
+          GROOVY
+          echo "OPENCLAW_ROBOLECTRIC_M2=$maven_repo" >> "$GITHUB_ENV"
+          echo "OPENCLAW_ROBOLECTRIC_INIT=$init_script" >> "$GITHUB_ENV"
+
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
         env:
@@ -4468,20 +4509,23 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test-play)
-              ./gradlew --no-daemon --build-cache \
+              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
               ;;
             test-play-compat)
               # Frozen targets predate the Wear shared project. Keep their app-owned
               # Play unit tests without importing current Android modules.
-              ./gradlew --no-daemon --build-cache :app:testPlayDebugUnitTest
+              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+                :app:testPlayDebugUnitTest
               ;;
             test-third-party)
-              ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
+              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+                :app:testThirdPartyDebugUnitTest
               ;;
             test-wear)
-              ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
+              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+                :wear:testDebugUnitTest
               ;;
             build-play)
               if [ "$CI_RUNNER_BACKEND" = "github" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -4531,6 +4575,13 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Save Robolectric Maven cache
+        if: success() && startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_write_allowed == 'true' && steps.robolectric-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/tmp/openclaw-robolectric-m2
+          key: ${{ steps.robolectric-cache.outputs.cache-primary-key }}
 
   docker-seed-e2e:
     permissions:

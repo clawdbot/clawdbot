@@ -197,7 +197,9 @@ export async function runChatSendPreAdmission(params: {
     respondChatSessionRoutingChanged(respond);
     return false;
   }
-  const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
+  const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
+    allowPendingWorkspace: true,
+  });
   if (archivedSessionError) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return false;

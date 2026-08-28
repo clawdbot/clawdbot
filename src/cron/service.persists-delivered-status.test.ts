@@ -141,19 +141,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
   error?: string;
   deliveryError?: string;
   sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
-  onFinished?: (evt: {
-    jobId: string;
-    error?: string;
-    delivered?: boolean;
-    deliveryStatus?: string;
-    deliveryError?: string;
-    completionStatus?: string;
-    failureNotificationDelivery?: {
-      delivered?: boolean;
-      status: string;
-      error?: string;
-    };
-  }) => void;
+  onFinished?: (evt: CronEvent) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
@@ -173,15 +161,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
     sendCronWebhook: params.sendCronWebhook,
     onEvent: (evt) => {
       if (evt.action === "finished") {
-        params.onFinished?.({
-          jobId: evt.jobId,
-          error: evt.error,
-          delivered: evt.delivered,
-          deliveryStatus: evt.deliveryStatus,
-          deliveryError: evt.deliveryError,
-          completionStatus: evt.completionStatus,
-          failureNotificationDelivery: evt.failureNotificationDelivery,
-        });
+        params.onFinished?.(evt);
       }
       finished.onEvent(evt);
     },
@@ -251,19 +231,7 @@ async function runIsolatedJobAndReadState(params: {
   error?: string;
   deliveryError?: string;
   sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
-  onFinished?: (evt: {
-    jobId: string;
-    error?: string;
-    delivered?: boolean;
-    deliveryStatus?: string;
-    deliveryError?: string;
-    completionStatus?: string;
-    failureNotificationDelivery?: {
-      delivered?: boolean;
-      status: string;
-      error?: string;
-    };
-  }) => void;
+  onFinished?: (evt: CronEvent) => void;
 }) {
   const store = await makeStorePath();
   const finishedEvents = new Map<string, (evt: unknown) => void>();
@@ -994,7 +962,13 @@ describe("CronService persists delivered status", () => {
       name: "default to required",
       admittedBestEffort: undefined,
       edits: [false],
-      expectedCompletionStatus: "succeeded",
+      expectedCompletionStatus: "failed",
+    },
+    {
+      name: "default to best-effort",
+      admittedBestEffort: undefined,
+      edits: [true],
+      expectedCompletionStatus: "failed",
     },
     {
       name: "best-effort to required",

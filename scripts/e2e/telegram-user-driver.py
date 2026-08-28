@@ -477,8 +477,8 @@ class UserDriver:
         sut = resolve_sut(self.config, self.bot_config)
         expect = args.expect or []
         from_bot = (args.from_bot or sut["username"] or "").lstrip("@")
-        from_bot_id = int(from_bot) if from_bot.isdigit() else sut["id"]
-        from_bot_username = "" if from_bot.isdigit() else from_bot
+        from_bot_id = int(from_bot) if from_bot.isdigit() else (sut["id"] if not from_bot else None)
+        from_bot_username = "" if from_bot_id else from_bot
         deadline = time.time() + args.timeout_ms / 1000
         observed = []
         while time.time() < deadline:
@@ -1418,8 +1418,7 @@ def main():
     probe.add_argument("--from-bot", default="")
     probe.add_argument("--reply-to")
     probe.add_argument("--thread-id", type=int, default=0)
-    probe.add_argument("--require-reply", action="store_true", default=True)
-    probe.add_argument("--any-sut-reply", dest="require_reply", action="store_false")
+    probe.add_argument("--require-reply", action="store_true")
     probe.set_defaults(func=command_probe)
 
     transcript = sub.add_parser("transcript")

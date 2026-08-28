@@ -568,10 +568,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           if (!shouldSyncMemory) {
             this.clearMemoryRetryState();
           }
-          const vectorIndexComplete = this.vector.available === true;
           const syncProvider = this.syncProviderGeneration
             ? this.syncProviderGeneration.provider
             : this.provider;
+          const vectorIndexComplete = syncProvider === null || this.vector.available === true;
           const nextMeta: MemoryIndexMeta = {
             model: syncProvider?.model ?? "fts-only",
             provider: syncProvider?.id ?? "none",

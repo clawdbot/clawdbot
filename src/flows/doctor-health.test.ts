@@ -24,7 +24,7 @@ vi.mock("../state/openclaw-agent-db.js", () => ({
   OPENCLAW_AGENT_SCHEMA_VERSION: 1,
 }));
 
-vi.mock("../state/openclaw-state-db.js", () => ({
+vi.mock("../state/openclaw-state-db-contract.js", () => ({
   OPENCLAW_STATE_SCHEMA_VERSION: 1,
 }));
 

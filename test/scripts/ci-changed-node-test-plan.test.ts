@@ -543,6 +543,17 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
+    const target = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
+    expect(createChangedNodeTestShards([target])).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-qa.config.ts"],
+        pretestBuildMode: "private-qa",
+      }),
+      expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
+    ]);
+  });
+
   it("fails safe when a targeted config needs special shard setup", () => {
     expect(createChangedNodeTestShards(["scripts/docs-i18n/main.go"])).toBeNull();
     expect(createChangedNodeTestShards(["src/tui/tui-pty-harness.e2e.test.ts"])).toBeNull();

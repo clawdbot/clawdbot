@@ -141,6 +141,7 @@ describe("runGatewayConversationTurn", () => {
           agentId: "main",
           senderIsOwner: true,
           turnId: "turn-directory-peer",
+          sourceSessionKey: "agent:main:dashboard:restricted-creator",
           conversationRef: conversation.conversationRef,
           message: "hello molty",
           timeoutMs: 1,
@@ -153,6 +154,9 @@ describe("runGatewayConversationTurn", () => {
       expect.objectContaining({ channel: "reef", target: "reef:molty" }),
     );
     expect(deps.bindOutboundSessionEntry).toHaveBeenCalledOnce();
+    expect(deps.bindOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceSessionKey: "agent:main:dashboard:restricted-creator" }),
+    );
     expect(deps.registerPendingConversationTurn).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: conversation.sessionId }),
     );

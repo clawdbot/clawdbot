@@ -150,6 +150,9 @@ export async function cleanupCodexAttempt(
     );
     await runCleanupStep("codex-turn-watch-clear", () => turnWatches.clearAllTimers());
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
+    await runCleanupStep("codex-transcript-checkpoint", () =>
+      activeTurn.activeProjector.transcriptCheckpoint.flush(true),
+    );
     await runCleanupStep(
       "codex-shared-client-release",
       releaseSharedClientLeaseAndRetireOneShotClient,
