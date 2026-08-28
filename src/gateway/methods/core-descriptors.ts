@@ -117,6 +117,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["exec.approval.request", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.resolve", null, "operator.approvals", "<=2026.7"],
+  ["exec.approval.grants.list", null, "operator.approvals", "2026.8"],
+  ["exec.approval.grants.revoke", null, "operator.approvals", "2026.8"],
   ["question.request", null, "operator.questions", "2026.7"],
   ["question.waitAnswer", null, "operator.questions", "2026.7"],
   ["question.resolve", null, "operator.questions", "2026.7"],

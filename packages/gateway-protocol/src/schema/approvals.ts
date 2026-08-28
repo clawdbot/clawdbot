@@ -99,6 +99,18 @@ export const ExternalPostApprovalScopeSchema = closedObject({
 });
 
 /**
+ * What allow-always mints for an automation approval: a standing grant bound
+ * to this exact command and automation. Absent expiresInDays means the grant
+ * lives until revoked or the automation changes.
+ */
+export const StandingGrantApprovalScopeSchema = closedObject({
+  kind: Type.Literal("standing-grant"),
+  automation: Type.String({ minLength: 1, maxLength: 128 }),
+  command: Type.String({ minLength: 1, maxLength: 256 }),
+  expiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
+});
+
+/**
  * Owner-declared blast-radius facts for a pending approval. Variants are
  * named schemas so native protocol generators emit the discriminated union.
  */
@@ -106,6 +118,7 @@ export const ApprovalScopeSchema = Type.Union([
   MessageSendApprovalScopeSchema,
   PaymentApprovalScopeSchema,
   ExternalPostApprovalScopeSchema,
+  StandingGrantApprovalScopeSchema,
 ]);
 
 const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
@@ -292,6 +305,10 @@ export const ApprovalResolveParamsSchema = closedObject({
   kind: ApprovalKindSchema,
   decision: ApprovalDecisionSchema,
   reviewer: Type.Optional(ApprovalChannelReviewerSchema),
+  // Per-grant expiry override for allow-always on automation (exec) approvals:
+  // days from resolution. Absent defers to tools.exec.grantExpiryDays; unset
+  // config keeps the grant valid until revoked. Ignored for other kinds.
+  grantExpiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
 });
 
 /** First-answer outcome plus the canonical recorded state returned to all contenders. */

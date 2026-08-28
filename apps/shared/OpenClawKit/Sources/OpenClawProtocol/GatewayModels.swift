@@ -18160,17 +18160,28 @@ public struct ApprovalResolveParams: Codable, Sendable {
     public let kind: ApprovalKind
     public let decision: ApprovalDecision
     public let reviewer: [String: AnyCodable]?
+    public let grantexpiresindays: Int?
 
     public init(
         id: String,
         kind: ApprovalKind,
         decision: ApprovalDecision,
-        reviewer: [String: AnyCodable]? = nil)
+        reviewer: [String: AnyCodable]? = nil,
+        grantexpiresindays: Int? = nil)
     {
         self.id = id
         self.kind = kind
         self.decision = decision
         self.reviewer = reviewer
+        self.grantexpiresindays = grantexpiresindays
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case decision
+        case reviewer
+        case grantexpiresindays = "grantExpiresInDays"
     }
 }
 
@@ -18561,15 +18572,25 @@ public struct ExecApprovalResolveParams: Codable, Sendable {
     public let id: String
     public let decision: String
     public let reviewer: [String: AnyCodable]?
+    public let grantexpiresindays: Int?
 
     public init(
         id: String,
         decision: String,
-        reviewer: [String: AnyCodable]? = nil)
+        reviewer: [String: AnyCodable]? = nil,
+        grantexpiresindays: Int? = nil)
     {
         self.id = id
         self.decision = decision
         self.reviewer = reviewer
+        self.grantexpiresindays = grantexpiresindays
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case decision
+        case reviewer
+        case grantexpiresindays = "grantExpiresInDays"
     }
 }
 
@@ -22064,40 +22085,6 @@ public enum ToolsGitHubAuthorizePollResult: Codable, Sendable {
         case .networkError(let value): try value.encode(to: encoder)
         case .failed(let value): try value.encode(to: encoder)
         case .success(let value): try value.encode(to: encoder)
-        }
-    }
-}
-
-public enum ApprovalScope: Codable, Sendable {
-    case messageSend(MessageSendApprovalScope)
-    case payment(PaymentApprovalScope)
-    case externalPost(ExternalPostApprovalScope)
-
-    private enum CodingKeys: String, CodingKey {
-        case discriminator = "kind"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let discriminator = try container.decode(String.self, forKey: .discriminator)
-        switch discriminator {
-        case "message-send": self = try .messageSend(MessageSendApprovalScope(from: decoder))
-        case "payment": self = try .payment(PaymentApprovalScope(from: decoder))
-        case "external-post": self = try .externalPost(ExternalPostApprovalScope(from: decoder))
-        default:
-            throw DecodingError.dataCorruptedError(
-                forKey: .discriminator,
-                in: container,
-                debugDescription: "Unknown ApprovalScope discriminator value"
-            )
-        }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        switch self {
-        case .messageSend(let value): try value.encode(to: encoder)
-        case .payment(let value): try value.encode(to: encoder)
-        case .externalPost(let value): try value.encode(to: encoder)
         }
     }
 }

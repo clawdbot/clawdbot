@@ -1,9 +1,11 @@
 // Application-owned approval parsing and queue state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  scope?: ApprovalScope | null;
   cwd?: string | null;
   host?: string | null;
   security?: string | null;
@@ -104,6 +106,15 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
+function parseApprovalScope(value: unknown): ApprovalScope | null {
+  if (!isRecord(value) || typeof value.kind !== "string") {
+    return null;
+  }
+  // The gateway sanitized the scope at the producer boundary; the UI treats
+  // it as display data and re-narrows only the discriminant.
+  return value as unknown as ApprovalScope;
+}
+
 function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -137,6 +148,7 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
       runId: typeof request.runId === "string" ? request.runId : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+      scope: parseApprovalScope(request.scope),
     },
     createdAtMs,
     expiresAtMs,

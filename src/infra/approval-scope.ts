@@ -24,12 +24,25 @@ export function summarizeApprovalScope(scope: ApprovalScope): string {
       return `Pay ${scope.amount} ${scope.currency} to ${scope.target}`;
     case "external-post":
       return `Post ${scope.visibility === "public" ? "publicly" : "restricted"} to ${scope.target}`;
+    case "standing-grant": {
+      const term =
+        scope.expiresInDays !== undefined ? `for ${scope.expiresInDays} days` : "until revoked";
+      return `Always allow runs this exact command for "${scope.automation}" without asking, ${term} (revocable)`;
+    }
   }
   scope satisfies never;
   throw new Error("Unsupported approval scope");
 }
 
 export function sanitizeApprovalScope(scope: ApprovalScope): ApprovalScope | null {
+  if (scope.kind === "standing-grant") {
+    const automation = sanitizeExecApprovalDisplayText(scope.automation);
+    const command = sanitizeExecApprovalDisplayText(scope.command);
+    return exceedsApprovalScopeStringLimit(automation, 128) ||
+      exceedsApprovalScopeStringLimit(command, 256)
+      ? null
+      : { ...scope, automation, command };
+  }
   const target = sanitizeExecApprovalDisplayText(scope.target);
   if (exceedsApprovalScopeStringLimit(target, 128)) {
     return null;

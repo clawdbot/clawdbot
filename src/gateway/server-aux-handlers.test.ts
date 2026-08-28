@@ -51,6 +51,7 @@ import {
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 import {
   registerGatewaySecretCredentialReloadCases,
   type CredentialReloadHarnessOptions,
@@ -229,6 +230,20 @@ type SecretsReloadHarnessParams = {
   validateAgentRuntimeDelegatedAuthority?: GatewayAuxHandlerParams["validateAgentRuntimeDelegatedAuthority"];
   registerWorkerTurnClaimClosedHandler?: GatewayAuxHandlerParams["registerWorkerTurnClaimClosedHandler"];
 };
+
+describe("aux method handler parity", () => {
+  it("exposes a handler for every advertised aux method", () => {
+    const harness = createSecretsReloadHarness({
+      activateRuntimeSecrets: vi.fn(async () => undefined),
+      buildReloadPlan: vi.fn(),
+    } as unknown as SecretsReloadHarnessParams);
+    for (const method of GATEWAY_AUX_METHODS) {
+      // Advertising a method without a handler yields runtime "unknown method"
+      // errors that only surface live; keep the list and the map in lockstep.
+      expect(harness.extraHandlers[method], method).toBeDefined();
+    }
+  });
+});
 
 function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
   const respond = params.respond ?? vi.fn();

@@ -3284,6 +3284,12 @@ td.data-table-key-col {
   color: var(--text);
 }
 
+.exec-approval-scope {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .exec-approval-meta {
   margin-top: 12px;
   display: grid;

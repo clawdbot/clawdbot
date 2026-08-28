@@ -433,6 +433,8 @@ enum class GatewayMethod(
   ExecApprovalRequest("exec.approval.request"),
   ExecApprovalWaitDecision("exec.approval.waitDecision"),
   ExecApprovalResolve("exec.approval.resolve"),
+  ExecApprovalGrantsList("exec.approval.grants.list"),
+  ExecApprovalGrantsRevoke("exec.approval.grants.revoke"),
   QuestionRequest("question.request"),
   QuestionWaitAnswer("question.waitAnswer"),
   QuestionResolve("question.resolve"),
