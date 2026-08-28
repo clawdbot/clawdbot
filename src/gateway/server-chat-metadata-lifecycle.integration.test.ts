@@ -523,17 +523,21 @@ describe("gateway chat metadata lifecycle composition", () => {
   );
 
   it.each([
-    ["SecretRef-only runtime auth", "secret-ref", true],
-    ["external CLI OAuth bootstrap", "external-oauth", true],
-    ["unresolved SecretRef", "unresolved-secret-ref", false],
-  ] as const)("converges chat metadata and models.list for %s", async (_, kind, available) => {
-    configureAuthFixture(kind);
-    await publishOwner();
-    const lifecycle = await createLifecycle();
-    await lifecycle.attachContext(context, sidecars);
+    ["SecretRef-only runtime auth", "secret-ref", true, false],
+    ["SecretRef auth after profile-scoped catalog rejection", "secret-ref", true, true],
+    ["external CLI OAuth bootstrap", "external-oauth", true, false],
+    ["unresolved SecretRef", "unresolved-secret-ref", false, false],
+  ] as const)(
+    "converges chat metadata and models.list for %s",
+    async (_, kind, available, rejected) => {
+      configureAuthFixture(kind, rejected);
+      await publishOwner();
+      const lifecycle = await createLifecycle();
+      await lifecycle.attachContext(context, sidecars);
 
-    await expectAvailable(lifecycle, available);
-  });
+      await expectAvailable(lifecycle, available);
+    },
+  );
 
   it("catches up when the prepared owner publishes before attachment", async () => {
     await publishOwner();
@@ -648,21 +652,12 @@ describe("gateway chat metadata lifecycle composition", () => {
     const orderedConfig = {
       ...config,
       auth: { order: { openai: ["openai:default"] } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            headers: { "x-test-route": "configured" },
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfig;
     const orderedContext = {
       ...context,
       getRuntimeConfig: () => orderedConfig,
     } as GatewayRequestContext;
-    configureAuthFixture("secret-ref", true);
+    configureAuthFixture("unresolved-secret-ref");
     await publishOwner(orderedConfig);
     const lifecycle = await createLifecycle(() => orderedConfig);
     await lifecycle.attachContext(orderedContext, sidecars);

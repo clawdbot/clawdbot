@@ -17,7 +17,10 @@ import type {
   TraceAttempt,
 } from "../types.js";
 import { hasAttemptTerminalState } from "./attempt-terminal-evidence.js";
-import { reportEmbeddedRunAuthSuccess } from "./auth-profile-success.js";
+import {
+  markEmbeddedRunAuthProfileSuccess,
+  reportEmbeddedRunSuccessfulAuthBinding,
+} from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
@@ -552,18 +555,22 @@ function completeEmbeddedRun(
   log.debug(
     `embedded run done: runId=${input.runParams.runId} sessionId=${input.runParams.sessionId} durationMs=${Date.now() - input.startedAtMs} aborted=${terminalAborted}`,
   );
-  reportEmbeddedRunAuthSuccess({
-    terminalReason: input.terminalState.outcome.reason,
+  markEmbeddedRunAuthProfileSuccess({
     authProfileStateMode: input.runParams.authProfileStateMode,
     profileId: input.authProfileId,
     profileStore: input.profileFailureStore,
-    bindingProfileStore: input.attemptAuthProfileStore,
-    apiKeyInfo: input.apiKeyInfo,
-    attempt: input.attempt,
     provider: input.provider,
     agentDir: input.runParams.agentDir,
     runId: input.runParams.runId,
     sessionId: input.runParams.sessionId,
+  });
+  reportEmbeddedRunSuccessfulAuthBinding({
+    profileId: input.authProfileId,
+    profileStore: input.attemptAuthProfileStore,
+    apiKeyInfo: input.apiKeyInfo,
+    attempt: input.attempt,
+    provider: input.provider,
+    agentDir: input.runParams.agentDir,
     modelId: input.modelTransportId,
     modelApi: input.modelTransportApi,
     ...(input.modelTransportBaseUrl ? { modelBaseUrl: input.modelTransportBaseUrl } : {}),
@@ -573,8 +580,8 @@ function completeEmbeddedRun(
     pluginHarnessOwnsTransport: input.pluginHarnessOwnsTransport,
     pluginHarnessOwnsAuthBootstrap: input.pluginHarnessOwnsAuthBootstrap,
     onSuccessfulAuthBinding: input.runParams.onSuccessfulAuthBinding,
-    onSuccessfulAuthProfile: input.runParams.onSuccessfulAuthProfile,
   });
+  input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
   const replayInvalid = input.resolveReplayInvalid(null);
   const yieldHasContinuation =
     input.attempt.yieldDetected && hasYieldContinuationEvidence(input.attempt);

@@ -21,7 +21,6 @@ import {
 type ProviderModelRouteObservation = {
   modelId?: string;
   observedRoutes?: readonly ProviderModelRouteSource[];
-  executedRequestTransportOverrides?: ProviderRouteOverridePresence;
 };
 
 type ProviderModelRoutesResolver = (
@@ -107,18 +106,27 @@ export function createProviderModelRoutesResolver(params: {
       ([modelId, model]) => [modelId, projectConfiguredModelRoute(model)] as const,
     ),
   );
-  const resolveConfiguredRouteOverridePresence = (modelId?: string) =>
+  const providerRouteOverridePresence =
     params.requestTransportOverrides === "present"
       ? "present"
       : resolveModelProviderRouteOverridePresence({
           provider,
           authoredConfig,
-          ...(modelId ? { modelId, canonicalizeModelId } : {}),
         });
-  const providerRouteOverridePresence = resolveConfiguredRouteOverridePresence();
   const routeOverridePresenceByModel = new Map(
     [...configuredModels.keys()].map(
-      (modelId) => [modelId, resolveConfiguredRouteOverridePresence(modelId)] as const,
+      (modelId) =>
+        [
+          modelId,
+          params.requestTransportOverrides === "present"
+            ? "present"
+            : resolveModelProviderRouteOverridePresence({
+                provider,
+                modelId,
+                authoredConfig,
+                canonicalizeModelId,
+              }),
+        ] as const,
     ),
   );
   const env = params.env ?? process.env;
@@ -129,11 +137,9 @@ export function createProviderModelRoutesResolver(params: {
     }
     const modelId = normalizeModelId(provider, observed?.modelId, surface);
     const configuredModel = modelId ? configuredModels.get(modelId) : undefined;
-    const requestTransportOverrides =
-      observed?.executedRequestTransportOverrides ??
-      (modelId
-        ? (routeOverridePresenceByModel.get(modelId) ?? providerRouteOverridePresence)
-        : providerRouteOverridePresence);
+    const requestTransportOverrides = modelId
+      ? (routeOverridePresenceByModel.get(modelId) ?? providerRouteOverridePresence)
+      : providerRouteOverridePresence;
     const observedRoutes = observed?.observedRoutes?.filter(
       (route) => route.api != null || (route.baseUrl !== undefined && route.baseUrl !== null),
     );
@@ -160,13 +166,11 @@ export function resolveProviderModelRoutes(params: {
   config?: OpenClawConfig;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
-  executedRequestTransportOverrides?: ProviderRouteOverridePresence;
   surface?: BundledProviderPolicySurface | null;
 }): ProviderModelRouteResolution | null {
   const resolveRoutes = createProviderModelRoutesResolver(params);
   return resolveRoutes({
     modelId: params.modelId,
-    executedRequestTransportOverrides: params.executedRequestTransportOverrides,
     observedRoutes:
       params.api != null || (params.baseUrl !== undefined && params.baseUrl !== null)
         ? [{ api: params.api, baseUrl: params.baseUrl }]

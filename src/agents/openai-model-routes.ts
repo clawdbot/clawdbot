@@ -33,11 +33,9 @@ export function createOpenAIModelRoutesResolver(params: {
     api?: string | null;
     baseUrl?: unknown;
     observedRoutes?: readonly ProviderModelRouteSource[];
-    executedRequestTransportOverrides?: ProviderRouteOverridePresence;
   }) =>
     resolveRoutes({
       modelId: observed.modelId ? splitTrailingAuthProfile(observed.modelId).model : undefined,
-      executedRequestTransportOverrides: observed.executedRequestTransportOverrides,
       observedRoutes:
         observed.observedRoutes ??
         (observed.api != null || (observed.baseUrl !== undefined && observed.baseUrl !== null)

@@ -174,25 +174,6 @@ describe("terminal resolution", () => {
     },
   );
 
-  it("does not report successful auth after an external abort", async () => {
-    const onSuccessfulAuthBinding = vi.fn();
-    const onSuccessfulAuthProfile = vi.fn();
-    await resolveTerminalText({
-      attempt: makeEmbeddedRunnerAttempt({
-        terminal: { kind: "aborted", source: "external" },
-        assistantTexts: [],
-        lastAssistant: undefined,
-        currentAttemptAssistant: undefined,
-      }),
-      runParams: {
-        onSuccessfulAuthBinding,
-        onSuccessfulAuthProfile,
-      },
-    });
-    expect(onSuccessfulAuthBinding).not.toHaveBeenCalled();
-    expect(onSuccessfulAuthProfile).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
       reason: "auth" as const,
