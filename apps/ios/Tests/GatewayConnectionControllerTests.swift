@@ -837,18 +837,22 @@ private func waitUntil(
         #expect(first?.password == "source-password")
         #expect(first?.targetStableID == firstStableID)
         #expect(first?.tlsFingerprintSha256 == String(repeating: "ab", count: 32))
+        #expect(first?.isSetupCodeOrigin == true)
         #expect(first?.suppressStoredDeviceAuth == true)
         #expect(second?.token == nil)
         #expect(second?.bootstrapToken == nil)
         #expect(second?.password == nil)
         #expect(second?.targetStableID == secondStableID)
         #expect(second?.tlsFingerprintSha256 == nil)
+        #expect(second?.isSetupCodeOrigin == false)
         #expect(second?.suppressStoredDeviceAuth == true)
         #expect(edited?.token == "replacement-token")
         #expect(edited?.password == nil)
         #expect(ordinary?.suppressStoredDeviceAuth == false)
         #expect(ordinary?.tlsFingerprintSha256 == nil)
+        #expect(ordinary?.isSetupCodeOrigin == false)
         #expect(selectedSameTarget?.tlsFingerprintSha256 == String(repeating: "ab", count: 32))
+        #expect(selectedSameTarget?.isSetupCodeOrigin == true)
         #expect(selectedDifferentTarget == nil)
     }
 
@@ -869,6 +873,7 @@ private func waitUntil(
             GatewayConnectionController.ManualAuthOverride.persisted(
                 instanceId: instanceID,
                 targetStableID: firstStableID))
+        #expect(relaunchedOverride.isSetupCodeOrigin == false)
         let sameTargetRetryOverride = try #require(
             GatewayConnectionController.ManualAuthOverride.persisted(
                 instanceId: instanceID,

@@ -338,7 +338,7 @@ final class GatewayConnectionController {
                 self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
                 return .accepted
             case let .failure(failure):
-                let message = self.tlsProbeFailureMessage(
+                let message = gatewayTLSProbeFailureMessage(
                     failure,
                     host: target.host,
                     port: target.port)
@@ -430,6 +430,8 @@ final class GatewayConnectionController {
         let setupFingerprint = GatewayStableIdentifier.matches(authOverride?.targetStableID, stableID)
             ? authOverride?.tlsFingerprintSha256
             : nil
+        let isSetupCodeOrigin = authOverride?.isSetupCodeOrigin == true &&
+            GatewayStableIdentifier.matches(authOverride?.targetStableID, stableID)
         guard resolvedUseTLS || setupFingerprint == nil else {
             return .failed(String(localized: "A TLS certificate fingerprint requires a secure gateway URL."))
         }
@@ -457,45 +459,20 @@ final class GatewayConnectionController {
                 useTLS: true,
                 contextPath: contextPath)
             else { return .failed(String(localized: "Failed to build the gateway URL.")) }
-            self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
-            guard let probeResult = await self.probeTLSFingerprint(
+            let pendingTrustConnect = GatewayPendingTrustConnect(
+                url: url,
+                stableID: stableID,
+                isManual: true,
+                authOverride: pendingAuthOverride,
+                allowStoredDeviceAuth: !suppressStoredDeviceAuth,
+                suppressionLease: connectAttempt.suppressionLease,
+                gatewayGeneration: connectAttempt.gatewayGeneration)
+            if let trustResult = await self.resolveFirstUseManualTLS(
                 host: host,
                 port: resolvedPort,
-                url: url,
-                queueLabel: "gateway.tls.manual")
-            else { return .superseded }
-            guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else {
-                return .superseded
-            }
-            switch probeResult {
-            case .systemTrusted:
-                break
-            case let .fingerprint(fp):
-                self.pendingTrustConnect = GatewayPendingTrustConnect(
-                    url: url,
-                    stableID: stableID,
-                    isManual: true,
-                    authOverride: pendingAuthOverride,
-                    allowStoredDeviceAuth: !suppressStoredDeviceAuth,
-                    suppressionLease: connectAttempt.suppressionLease,
-                    gatewayGeneration: connectAttempt.gatewayGeneration)
-                self.pendingTrustPrompt = TrustPrompt(
-                    stableID: stableID,
-                    gatewayName: "\(host):\(resolvedPort)",
-                    host: host,
-                    port: resolvedPort,
-                    fingerprintSha256: fp,
-                    isManual: true)
-                self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
-                return .accepted
-            case let .failure(failure):
-                let message = self.tlsProbeFailureMessage(
-                    failure,
-                    host: host,
-                    port: resolvedPort)
-                self.appModel?.gatewayStatusText = message
-                return .failed(message)
-            }
+                pendingConnect: pendingTrustConnect,
+                isSetupCodeOrigin: isSetupCodeOrigin)
+            { return trustResult }
         }
 
         expectedFingerprint = setupFingerprint ?? GatewayTLSStore.loadFingerprint(stableID: stableID)
@@ -1432,6 +1409,44 @@ extension GatewayConnectionController {
         return result
     }
 
+    private func resolveFirstUseManualTLS(
+        host: String,
+        port: Int,
+        pendingConnect: GatewayPendingTrustConnect,
+        isSetupCodeOrigin: Bool) async
+        -> ConnectionAttemptResult?
+    {
+        self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+        guard let probeResult = await self.probeTLSFingerprint(
+            host: host,
+            port: port,
+            url: pendingConnect.url,
+            queueLabel: "gateway.tls.manual")
+        else { return .superseded }
+        guard self.connectAttemptGeneration == pendingConnect.suppressionLease.generation else {
+            return .superseded
+        }
+        switch probeResult {
+        case .systemTrusted where isSetupCodeOrigin:
+            return nil
+        case let .systemTrusted(fp), let .fingerprint(fp):
+            self.pendingTrustConnect = pendingConnect
+            self.pendingTrustPrompt = TrustPrompt(
+                stableID: pendingConnect.stableID,
+                gatewayName: "\(host):\(port)",
+                host: host,
+                port: port,
+                fingerprintSha256: fp,
+                isManual: true)
+            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+            return .accepted
+        case let .failure(failure):
+            let message = gatewayTLSProbeFailureMessage(failure, host: host, port: port)
+            self.appModel?.gatewayStatusText = message
+            return .failed(message)
+        }
+    }
+
     private func beginConnectAttempt()
         -> (suppressionLease: AutoConnectSuppressionLease, gatewayGeneration: UInt64?)
     {
@@ -1494,54 +1509,6 @@ extension GatewayConnectionController {
         }
     }
 
-    private func tlsProbeFailureMessage(
-        _ failure: GatewayTLSFingerprintProbeFailure,
-        host: String,
-        port: Int) -> String
-    {
-        switch failure {
-        case .endpointUnreachable:
-            if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".ts.net") {
-                String(
-                    format: String(localized: """
-                    Can't reach gateway at %1$@:%2$@. \
-                    Verify Tailscale Serve is enabled and publishes this Gateway.
-                    """),
-                    host,
-                    String(port))
-            } else {
-                String(
-                    format: String(
-                        localized: "Can't reach gateway at %1$@:%2$@. Check Tailscale or LAN."),
-                    host,
-                    String(port))
-            }
-        case .tlsHandshakeTimeout:
-            String(
-                format: String(localized: """
-                TLS fingerprint verification timed out for %1$@:%2$@. \
-                Secure endpoint was reached, but TLS did not finish in time.
-                """),
-                host,
-                String(port))
-        case .tlsUnavailable:
-            String(
-                format: String(localized: """
-                No secure gateway endpoint was detected at %1$@:%2$@. \
-                Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address \
-                with Unencrypted selected.
-                """),
-                host,
-                String(port))
-        case .certificateUnavailable:
-            String(
-                format: String(
-                    localized: "Could not read the TLS certificate from %1$@:%2$@."),
-                host,
-                String(port))
-        }
-    }
-
     private func resolveServiceEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: Int)? {
         guard case let .service(name, type, domain, _) = endpoint else { return nil }
         let key = "\(domain)|\(type)|\(name)"
@@ -1590,7 +1557,7 @@ extension GatewayConnectionController {
             }
             return nil
         case let .failure(failure):
-            let message = self.tlsProbeFailureMessage(failure, host: host, port: port)
+            let message = gatewayTLSProbeFailureMessage(failure, host: host, port: port)
             self.appModel?.gatewayStatusText = message
             return .failed(message)
         }

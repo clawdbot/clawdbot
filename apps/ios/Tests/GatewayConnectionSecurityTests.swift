@@ -364,7 +364,7 @@ import Testing
         #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
     }
 
-    @Test @MainActor func `system-trusted manual TLS connects without trust prompt`() async {
+    @Test @MainActor func `system-trusted manual TLS still requires trust prompt`() async {
         let host = "gateway-\(UUID().uuidString).example.com"
         let port = 443
         let stableID = "manual|\(host.lowercased())|\(port)"
@@ -377,16 +377,48 @@ import Testing
             appModel: appModel,
             startDiscovery: false,
             tcpReachabilityProbe: { _, _, _, _ in true },
-            tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: "ignored") })
+            tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: "manual-system-trusted") })
 
         let result = await controller.connectManual(host: host, port: port, useTLS: true)
+
+        #expect(result == .accepted)
+        #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "manual-system-trusted")
+        #expect(appModel.activeGatewayConnectConfig == nil)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == nil)
+    }
+
+    @Test @MainActor func `system-trusted setup TLS connects without trust prompt`() async {
+        let link = GatewayConnectDeepLink(
+            host: "gateway-\(UUID().uuidString).example.com",
+            port: 443,
+            tls: true,
+            bootstrapToken: "bootstrap",
+            token: nil,
+            password: nil)
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        defer { clearTLSFingerprint(stableID: setupAuth.targetStableID) }
+        self.clearTLSFingerprint(stableID: setupAuth.targetStableID)
+
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: "setup-system-trusted") })
+
+        let result = await controller.connectManual(
+            host: link.host,
+            port: link.port,
+            useTLS: true,
+            authOverride: setupAuth.manualAuthOverride)
         await self.waitUntil { appModel.activeGatewayConnectConfig != nil }
 
         #expect(result == .accepted)
         #expect(controller.pendingTrustPrompt == nil)
         #expect(appModel.activeGatewayConnectConfig?.tls?.required == true)
         #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == nil)
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == nil)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: setupAuth.targetStableID) == nil)
     }
 
     @Test @MainActor func `setup TLS fingerprint connects after matching probe without prompt`() async throws {

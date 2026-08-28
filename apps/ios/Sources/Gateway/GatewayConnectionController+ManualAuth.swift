@@ -97,6 +97,7 @@ extension GatewayConnectionController {
                     targetStableID: self.targetStableID,
                     tlsFingerprintSha256: self.tlsFingerprintSha256,
                     expiresAtMs: self.expiresAtMs,
+                    isSetupCodeOrigin: true,
                     suppressStoredDeviceAuth: true)
             }
         }
@@ -107,6 +108,7 @@ extension GatewayConnectionController {
         let targetStableID: String?
         let tlsFingerprintSha256: String?
         let expiresAtMs: Int64?
+        let isSetupCodeOrigin: Bool
         let suppressStoredDeviceAuth: Bool
 
         static func explicit(
@@ -116,6 +118,7 @@ extension GatewayConnectionController {
             targetStableID: String? = nil,
             tlsFingerprintSha256: String? = nil,
             expiresAtMs: Int64? = nil,
+            isSetupCodeOrigin: Bool = false,
             suppressStoredDeviceAuth: Bool) -> ManualAuthOverride
         {
             let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -128,6 +131,7 @@ extension GatewayConnectionController {
                 targetStableID: targetStableID,
                 tlsFingerprintSha256: tlsFingerprintSha256,
                 expiresAtMs: expiresAtMs,
+                isSetupCodeOrigin: isSetupCodeOrigin,
                 suppressStoredDeviceAuth: suppressStoredDeviceAuth)
         }
 
@@ -215,6 +219,7 @@ extension GatewayConnectionController {
                 targetStableID: pendingOverride.targetStableID,
                 tlsFingerprintSha256: pendingOverride.tlsFingerprintSha256,
                 expiresAtMs: pendingOverride.expiresAtMs,
+                isSetupCodeOrigin: pendingOverride.isSetupCodeOrigin,
                 suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
         }
 
