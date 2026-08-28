@@ -104,6 +104,11 @@ installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
 the service metadata and restarts it unless you pass `--no-restart`.
 
+Dev updates build the complete runtime, including plugins and the Control UI,
+without generating TypeScript declarations. Preflight still validates the
+candidate, and the final checkout is rebuilt after checkout or rebase. Ordinary
+`pnpm build` and package builds continue to generate declarations.
+
 For package installs with a managed Gateway service, `openclaw update` targets
 the package root used by that service. If the shell `openclaw` command comes
 from a different install, the updater prints both roots and the managed

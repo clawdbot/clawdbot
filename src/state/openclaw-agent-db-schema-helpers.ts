@@ -30,6 +30,7 @@ import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
+import { SESSION_GOAL_OPERATIONS_TABLE } from "./openclaw-agent-goal-operations-schema.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
@@ -65,6 +66,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
     CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
     MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
+    SESSION_GOAL_OPERATIONS_TABLE,
     SESSION_PARTICIPANTS_TABLE,
     SESSION_PROGRESS_CARDS_TABLE,
     SESSION_TRANSCRIPT_ARCHIVES_TABLE,

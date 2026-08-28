@@ -91,10 +91,13 @@ function resolveGatewaySessionThinkingLevel(params: {
         modelId: params.model,
       })
     : undefined;
-  // Lightweight sessions.changed projections intentionally omit the catalog.
+  // Lightweight projections can omit the catalog or carry identity-only entries.
   // Runtime/model patches normalize persisted state with authoritative metadata;
   // projections must not reinterpret an already-validated level without it.
-  if (!catalogEntry) {
+  if (
+    !catalogEntry ||
+    (params.providerPolicySource === "active" && catalogEntry.reasoning === undefined)
+  ) {
     return params.level;
   }
   return resolveSupportedThinkingLevel({
@@ -296,7 +299,11 @@ export function resolveGatewaySessionThinkingProjectionInternal(
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
-  options?: { agentId?: string; allowPluginNormalization?: boolean },
+  options?: {
+    agentId?: string;
+    allowPluginNormalization?: boolean;
+    providerPolicySource?: ThinkingProviderPolicySource;
+  },
 ): GatewaySessionsDefaults {
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
@@ -348,8 +355,9 @@ export function getSessionDefaults(
     provider: resolved.provider,
     model: resolved.model,
     agentId,
-    modelCatalog,
+    modelCatalog: modelCatalog ?? (options?.providerPolicySource === "active" ? [] : undefined),
     sessionKey,
+    providerPolicySource: options?.providerPolicySource,
   });
   return {
     modelProvider: resolved.provider ?? null,

@@ -16,7 +16,7 @@ function isElementNode(node: Node): node is Element {
   return node.nodeType === Node.ELEMENT_NODE;
 }
 
-export function collectTooltipVisibleText(element: Element): string {
+function collectTooltipText(element: Element, checkOpacity: boolean): string {
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   if (
     element.hasAttribute("hidden") ||
@@ -30,15 +30,21 @@ export function collectTooltipVisibleText(element: Element): string {
     style?.visibility !== "collapse" &&
     (style?.display === "contents" ||
       typeof element.checkVisibility !== "function" ||
-      element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+      element.checkVisibility({ checkOpacity, checkVisibilityCSS: true }));
   return [...element.childNodes]
     .map((node) => {
       if (isElementNode(node)) {
-        return collectTooltipVisibleText(node);
+        return collectTooltipText(node, checkOpacity);
       }
       return node.nodeType === Node.TEXT_NODE && rendersOwnText ? (node.textContent ?? "") : "";
     })
     .join(" ");
+}
+
+export function collectTooltipNameText(element: Element): string {
+  // Transparent entry animations do not hide text from accessibility APIs.
+  // Replacing that name with a title would persist after the animation ends.
+  return collectTooltipText(element, false);
 }
 
 function hasTooltipOverflow(element: Element) {
@@ -51,7 +57,7 @@ function hasTooltipOverflow(element: Element) {
 
 export function isTooltipTextRedundant(content: string, trigger: Element) {
   const tooltipText = normalizeTooltipText(content);
-  const triggerText = normalizeTooltipText(collectTooltipVisibleText(trigger));
+  const triggerText = normalizeTooltipText(collectTooltipText(trigger, true));
   if (!tooltipText || !triggerText.includes(tooltipText)) {
     return false;
   }

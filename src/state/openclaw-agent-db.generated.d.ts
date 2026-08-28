@@ -241,6 +241,15 @@ export interface SessionConversations {
   session_id: string;
 }
 
+export interface SessionGoalOperations {
+  expires_at: number;
+  operation_id: string;
+  request_fingerprint: string;
+  result_json: string;
+  session_id: string;
+  session_key: string;
+}
+
 export interface SessionKeyContract {
   id: Generated<number>;
   main_key: string;
@@ -517,6 +526,7 @@ export interface DB {
   message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
+  session_goal_operations: SessionGoalOperations;
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;

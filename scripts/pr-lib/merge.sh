@@ -87,7 +87,7 @@ record_crabbox_landing_parent_audit() {
     echo "Crabbox landing parent audit matched: landed=$landed_sha parent=$actual_parent_sha"
   else
     echo "Crabbox landing parent audit drift: landed=$landed_sha expected_parent=$expected_parent_sha actual_parent=$actual_parent_sha"
-    echo "The merge already completed after an intervening authorized main advance; this audit reports the residual non-atomic race."
+    echo "The merge already completed after intervening main movement; this audit reports the residual non-atomic race."
   fi
 }
 
@@ -581,7 +581,7 @@ merge_run() {
         exit 1
       fi
       crabbox_final_main_sha=$(jq -er '
-        .workflowSha
+        .mainSha
         | select(type == "string" and test("^[0-9a-f]{40}$"))
       ' .local/merge-crabbox-bypass.json) || {
         echo "Crabbox merge bypass did not preserve the final protected-main SHA." >&2
@@ -663,7 +663,7 @@ merge_run() {
       "$comment_body" \
       "$crabbox_check_url" \
       "$ci_gate_url" \
-      "$(jq -r 'if .status == "match" then "match" else "drift after an intervening authorized main advance; merge already completed" end' .local/merge-crabbox-parent-audit.json)" \
+      "$(jq -r 'if .status == "match" then "match" else "drift after intervening main movement; merge already completed" end' .local/merge-crabbox-parent-audit.json)" \
       "$(jq -r .expectedParentSha .local/merge-crabbox-parent-audit.json)" \
       "$(jq -r .actualParentSha .local/merge-crabbox-parent-audit.json)"
   fi

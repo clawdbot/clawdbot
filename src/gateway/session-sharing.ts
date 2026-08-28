@@ -393,7 +393,13 @@ export function resolveSessionMutationAuthorization(params: {
   requestParams: unknown;
   context: GatewayRequestContext;
 }): { authorization?: SessionMutationAuthorization; error: ErrorShape | null } {
-  const authorizesAgentRun = AGENT_RUN_START_METHODS.has(params.method);
+  const authorizesAgentRun =
+    AGENT_RUN_START_METHODS.has(params.method) ||
+    (params.method === "sessions.goal.update" &&
+      typeof params.requestParams === "object" &&
+      params.requestParams !== null &&
+      "action" in params.requestParams &&
+      params.requestParams.action === "resume");
   if (isGatewayAdmin(params.client) && !authorizesAgentRun) {
     return { error: null };
   }

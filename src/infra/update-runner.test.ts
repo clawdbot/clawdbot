@@ -2040,30 +2040,65 @@ describe("runGatewayUpdate", () => {
     expect(cleanupStep?.stderrTail ?? "").toContain("fallback cleanup removed preflight tree");
   });
 
-  it("shares the build cache while adding heap headroom to dev builds", async () => {
-    await setupGitPackageManagerFixture();
-    const buildNodeOptions: string[] = [];
-    const buildCacheRoots: string[] = [];
-    const { calls, runCommand } = await createDevGitRunner({
-      onCommand: (key, options) => {
-        if (key === "pnpm build") {
-          buildNodeOptions.push(options?.env?.NODE_OPTIONS ?? "");
-          buildCacheRoots.push(options?.env?.BUILD_ALL_CACHE_ROOT ?? "");
-        }
-        return undefined;
-      },
-    });
+  it.each([
+    {
+      nodeOptions: undefined,
+      skipDts: undefined,
+      expectedNodeOptions: "--max-old-space-size=8192",
+    },
+    {
+      nodeOptions: "--max-old-space-size=8192",
+      skipDts: "0",
+      expectedNodeOptions: "--max-old-space-size=8192",
+    },
+    {
+      nodeOptions: "--max-old-space-size=16384",
+      skipDts: "1",
+      expectedNodeOptions: "--max-old-space-size=16384",
+    },
+  ])(
+    "marks direct dev builds while preserving heap/cache/override ($skipDts)",
+    async ({ nodeOptions, skipDts, expectedNodeOptions }) => {
+      await setupGitPackageManagerFixture();
+      const buildEnvs: NodeJS.ProcessEnv[] = [];
+      const { calls, runCommand } = await createDevGitRunner({
+        onCommand: (key, options) => {
+          if (key === "pnpm build") {
+            buildEnvs.push(options?.env ?? {});
+          }
+          return undefined;
+        },
+      });
 
-    const result = await runWithCommand(runCommand, { channel: "dev" });
-
-    expect(result.status).toBe("ok");
-    expect(buildNodeOptions).toEqual(["--max-old-space-size=8192", "--max-old-space-size=8192"]);
-    expect(buildCacheRoots).toEqual([
-      path.join(tempDir, ".artifacts", "build-all-cache"),
-      path.join(tempDir, ".artifacts", "build-all-cache"),
-    ]);
-    expect(calls.filter((call) => call === "pnpm build")).toHaveLength(2);
-  });
+      await withEnvAsync(
+        {
+          NODE_OPTIONS: nodeOptions,
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: undefined,
+          OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts,
+        },
+        async () => {
+          const result = await runWithCommand(runCommand, { channel: "dev" });
+          expect(result.status).toBe("ok");
+          expect(buildEnvs).toHaveLength(2);
+          for (const env of buildEnvs) {
+            expect(env).toMatchObject({
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+              COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+              NODE_OPTIONS: expectedNodeOptions,
+              BUILD_ALL_CACHE_ROOT: path.join(tempDir, ".artifacts", "build-all-cache"),
+              PATH: process.env.PATH,
+            });
+            expect(env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
+          }
+          expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+          expect(process.env.NODE_OPTIONS).toBe(nodeOptions);
+          expect(process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
+        },
+      );
+      expect(calls.filter((call) => call === "pnpm build")).toHaveLength(2);
+    },
+  );
 
   it("pins dev updates to an explicit target ref when requested", async () => {
     await setupGitPackageManagerFixture();
@@ -2973,6 +3008,7 @@ describe("runGatewayUpdate", () => {
       let currentHead = beforeSha;
       let buildCount = 0;
       const calls: string[] = [];
+      const buildEnvs: NodeJS.ProcessEnv[] = [];
       const doctorNodePath = await resolveStableNodePath(process.execPath);
       const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
       const writeRuntime = async (head: string) => {
@@ -3004,7 +3040,7 @@ describe("runGatewayUpdate", () => {
           ),
         ]);
       };
-      const runCommand = async (argv: string[]) => {
+      const runCommand = async (argv: string[], options?: TestCommandOptions) => {
         const key = argv.join(" ");
         calls.push(key);
         if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
@@ -3041,6 +3077,7 @@ describe("runGatewayUpdate", () => {
         }
         if (key === "pnpm build") {
           buildCount += 1;
+          buildEnvs.push(options?.env ?? {});
           await writeRuntime(currentHead);
           return toCommandResult();
         }
@@ -3050,7 +3087,17 @@ describe("runGatewayUpdate", () => {
         return toCommandResult();
       };
 
-      const result = await runWithCommand(runCommand, { channel: "stable" });
+      const result = await withEnvAsync(
+        {
+          OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+          NODE_OPTIONS: "--max-old-space-size=8192",
+        },
+        async () => {
+          const updateResult = await runWithCommand(runCommand, { channel: "stable" });
+          expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+          return updateResult;
+        },
+      );
 
       expect(result).toMatchObject({
         status: "error",
@@ -3060,6 +3107,10 @@ describe("runGatewayUpdate", () => {
           : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
       expect(buildCount).toBe(2);
+      expect(buildEnvs).toEqual([
+        expect.objectContaining({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+        expect.objectContaining({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+      ]);
       expect(currentHead).toBe(beforeSha);
       expect(
         JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),

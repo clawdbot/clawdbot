@@ -43,6 +43,9 @@ independent failures together. In that mode, the parent makes no child
 cancellation calls. Pass `-f fail_fast=true` only when the shorter
 first-failure path is preferable; Release Decision then cancels only the exact
 still-active child that owns the blocking failure.
+Same-parent continuation requires the original root to have been dispatched
+with `fail_fast=false`. The controller verifies that exact logged input before
+any rerun mutation.
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
@@ -51,10 +54,11 @@ required coverage, gate results, reuse identity, the original parent attempt,
 and every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
 Decision, Drain, manifest generation, evidence verification, and the final
 verifier consume the artifact for their current attempt. Collector retries
-restore the immutable cached copy, validate it, and upload the artifact again
-for the retry; they never rebuild the plan or redispatch tests. A missing or
-evicted cache fails closed, so start a new validation instead of retrying that
-stale parent.
+use the exact run-ID cache as an acceleration. If that cache is unavailable,
+they restore the same immutable plan from the parent-run artifact, validate it,
+and upload the artifact again for the retry; they never rebuild the plan or
+redispatch tests. A missing or invalid artifact fails closed, so start a new
+validation instead of retrying that stale parent.
 Release Decision also repeats canonical reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child
@@ -65,14 +69,54 @@ Decision and Diagnostic Drain artifacts independently. Both must bind the same
 immutable plan and exact child tuple; their source attempts remain recorded in
 the artifacts and may differ when only one collector needed a retry.
 
+## Continue failed child jobs
+
+Full Release Validation can adopt monotonically newer attempts of the exact
+child runs recorded in its immutable plan. A newer attempt is accepted only
+when the run ID, workflow path, workflow ref, Tooling SHA, dispatch title, and
+event are unchanged. For each logical job, the newest observed attempt wins,
+including a newer failure; a job absent from a newer attempt carries forward
+from the last attempt that included it. Duplicate job names within one attempt,
+missing attempts, or provenance drift fail closed.
+
+Inspect or continue an existing parent:
+
+```bash
+pnpm frv status --run <parent-run-id>
+pnpm frv continue --failed --run <parent-run-id>
+pnpm frv verify --run <successful-parent-run-id>
+```
+
+`continue --failed` waits for active child attempts instead of starting a
+duplicate. Once every active attempt is terminal, it reruns failed child jobs
+in parallel, leaves green child workflows untouched, and reruns the parent
+once. The parent restores its immutable execution plan, observes the effective
+child attempts, and writes the final all-group manifest. The manifest records
+the planned and effective attempt, accepted attempt for every logical job, and
+a digest of the composite job evidence.
+
+The command stores no continuation ledger or local journal. GitHub run
+attempts, the immutable execution plan, Decision/Drain artifacts, and the final
+manifest are the complete state model. It never tags, publishes, changes a
+registry, or prepares a new candidate.
+
+Parents whose immutable plan predates attempt-aware evidence cannot be
+continued. Start a fresh all-group Full Release Validation instead; the
+controller never reconstructs old state or dispatches a replacement parent.
+
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
-active so blockers can surface while Diagnostic Drain collects failures. A
-not-yet-created artifact remains an unavailable polling result; terminal
-handling and temporary-ref cleanup wait for the parent to complete with a
-conclusion. Failed validations retain both refs for reruns and diagnosis. The
+active so blockers can surface while Diagnostic Drain collects failures. It
+waits 15 minutes between run-discovery attempts and between parent polling
+iterations. One parent iteration may perform status, decision-artifact, and
+progress-job reads together; the delay limits repeated polling cycles rather
+than spacing every GitHub call. Run discovery makes one immediate check and one
+delayed retry before failing. A not-yet-created artifact remains an unavailable
+polling result; terminal handling and temporary-ref cleanup wait for the parent
+to complete with a conclusion. Failed validations retain both refs for reruns
+and diagnosis. The
 Validation SHA equals the Code SHA for product validation or the Release SHA
 for changelog-only validation; it is not a third release identity. The workflow
 rejects malformed or mismatched expected SHAs before child dispatch. Every
@@ -83,6 +127,22 @@ from current `origin/main`. The helper rejects a pinned Tooling SHA that does
 not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
+
+### Post-merge continuation proof
+
+Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only
+after the reviewed SHA lands on protected `main`. The fixture contains one
+fixed no-op job that intentionally fails on attempt one and passes on attempt
+two. The broker validates the exact maintainer, pull request head, protected
+main SHA, fixture workflow, and run tuple before rerunning only that failed job.
+
+Accept the hosted mutation proof only when the exact fixture run advances to
+attempt two and passes. The broker emits a receipt and must create no release
+candidate, release artifact, publication, repository ref, replacement parent,
+or other workflow mutation. This proves the GitHub failed-job rerun boundary;
+the focused controller tests prove plan eligibility, green-attempt
+preservation, same-parent collection, and strict-verifier invocation. Do not
+use a real Full Release Validation run for this proof.
 
 The main-lineage requirement above applies to the initial validation tooling
 selection. Once release publication binds that Tooling SHA to an exact protected
@@ -208,8 +268,9 @@ immutable execution plan owns child identity across collector attempts. The
 decision state is one of `qualifying`, `blocked_diagnostics_running`, `passed`,
 `blocked_complete`, `orchestration_error`, or `cancelled_with_children`.
 Persistent GitHub API failures are orchestration errors. A child whose workflow
-path, display title, ref, Tooling SHA, run ID, or attempt changes is a distinct
-provenance mismatch.
+path, display title, ref, Tooling SHA, or run ID changes is a distinct
+provenance mismatch. A monotonically newer attempt is accepted only through the
+composite-attempt rules above.
 
 `blocked_diagnostics_running` is safe for immediate diagnosis but not for a
 retry until Diagnostic Drain is terminal. `orchestration_error` authorizes

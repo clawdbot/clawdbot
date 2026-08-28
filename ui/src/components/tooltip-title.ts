@@ -1,12 +1,12 @@
 import "./tooltip.ts";
-import { collectTooltipVisibleText, isTooltipTriggerElement } from "./tooltip-content.ts";
+import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 
 function titleNamesElement(element: Element) {
   if (
     element.hasAttribute("aria-label") ||
     element.hasAttribute("aria-labelledby") ||
     element.matches("img[alt], input[alt]") ||
-    collectTooltipVisibleText(element).trim()
+    collectTooltipNameText(element).trim()
   ) {
     return false;
   }

@@ -30,6 +30,11 @@ const runtimeConsumers = [
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
     mode: "runtime",
   },
+  {
+    file: "src/gateway/gateway-concurrent-streams.test.ts",
+    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
+    mode: "runtime",
+  },
 ] as const;
 
 export function resolveVitestPretestBuildMode(

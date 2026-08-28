@@ -60,7 +60,12 @@ import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
-import { hasDirectSessionRun, isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import {
+  adoptStartedChatRun,
+  hasDirectSessionRun,
+  isChatBusy,
+  reconcileChatRunLifecycle,
+} from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
@@ -210,7 +215,7 @@ async function sendQueuedChatMessage(
       text: prepared.localCommandArgs ? `/reset ${prepared.localCommandArgs}` : "/reset",
     };
   }
-  const message = prepared.text.trim();
+  const message = prepared.intent ? prepared.text : prepared.text.trim();
   const attachments = prepared.attachments ?? [];
   if (!message && attachments.length === 0) {
     removeQueuedMessageWithoutReleasing(host, id, prepared.sessionKey ?? host.sessionKey);
@@ -278,15 +283,19 @@ async function sendQueuedChatMessage(
   }
 
   try {
+    const expectedLeafEntryId = prepared.intent
+      ? prepared.expectedLeafEntryId
+      : options?.expectedLeafEntryId;
     const ack = await requestChatSend(host, {
       message,
       attachments: attachments.length ? attachments : undefined,
       runId,
       sessionKey,
       agentId: prepared.agentId,
+      ...(prepared.intent ? { intent: prepared.intent, sessionId: prepared.sessionId } : {}),
       ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
-      ...(prepared.queueMode !== "steer" && options?.expectedLeafEntryId !== undefined
-        ? { expectedLeafEntryId: options.expectedLeafEntryId }
+      ...(prepared.queueMode !== "steer" && expectedLeafEntryId !== undefined
+        ? { expectedLeafEntryId }
         : {}),
       ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
     });
@@ -393,16 +402,7 @@ async function sendQueuedChatMessage(
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
         // A steer ACK identifies its client operation, not the active model run.
         if (prepared.queueMode !== "steer" || !host.chatRunId) {
-          const adopted = host.chatRunId === ack.runId;
-          const adoptedStream = adopted && typeof host.chatStream === "string";
-          host.chatRunId = ack.runId;
-          if (!adopted) {
-            host.chatRunStartup = null;
-          }
-          if (!adoptedStream) {
-            host.chatStream = "";
-            host.chatStreamStartedAt = startedAt;
-          }
+          adoptStartedChatRun(host, ack.runId, startedAt);
         }
       }
     }

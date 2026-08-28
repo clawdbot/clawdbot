@@ -871,7 +871,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("preserves runtime preparation and core-only ownership in full and compact plans", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
-    const runtimeTarget = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+    const runtimeTargets = [
+      "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+      "src/gateway/gateway-active-memory.test.ts",
+      "src/gateway/gateway-concurrent-streams.test.ts",
+    ];
     for (const shards of [
       createNodeTestShards(),
       createNodeTestShardBundles({ compact: true, compactMode: "pull-request" }),
@@ -881,13 +885,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "configs" in shard ? shard.configs : shard.groups.flatMap((group) => group.configs),
         ),
       ).not.toContain(qaConfig);
-      expect(
-        shards.find((shard) =>
+      for (const runtimeTarget of runtimeTargets) {
+        const owner = shards.find((shard) =>
           ("configs" in shard ? [shard] : shard.groups).some((group) =>
             group.includePatterns?.includes(runtimeTarget),
           ),
-        )?.pretestBuildMode,
-      ).toBe("runtime");
+        );
+        expect(owner?.pretestBuildMode, runtimeTarget).toBe("runtime");
+        if (owner && "groups" in owner) {
+          expect(
+            owner.groups?.find((group) => group.includePatterns?.includes(runtimeTarget))
+              ?.pretestBuildMode,
+            runtimeTarget,
+          ).toBe("runtime");
+        }
+      }
     }
   });
 
@@ -1559,8 +1571,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "test/vitest/vitest.gateway-client.config.ts",
         ],
         includePatterns: gatewayCoreShards[stripe - 1]?.includePatterns,
-        ...(gatewayCoreShards[stripe - 1]?.includePatterns?.includes(
-          "src/gateway/gateway-active-memory.test.ts",
+        ...(gatewayCoreShards[stripe - 1]?.includePatterns?.some(
+          (file) =>
+            file === "src/gateway/gateway-active-memory.test.ts" ||
+            file === "src/gateway/gateway-concurrent-streams.test.ts",
         )
           ? { pretestBuildMode: "runtime" }
           : {}),
