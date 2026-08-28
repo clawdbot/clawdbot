@@ -83,6 +83,26 @@ test("acquires, heartbeats, and releases one credential", async () => {
   assert.equal(calls.filter((call) => call.url.endsWith("/release")).length, 1);
 });
 
+test("accepts empty successful heartbeat and release replies", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    if (url.endsWith("/acquire")) {
+      return Response.json({
+        status: "ok",
+        credentialId: "credential-empty-success",
+        leaseToken: "lease-token-empty-success",
+        payload: { schemaVersion: 1 },
+      });
+    }
+    return new Response(null, { status: 204 });
+  };
+  const lease = await acquireQaLease({ kind: "telegram-test-userbot", env, fetchImpl });
+  await lease.release();
+  assert.equal(calls.filter((url) => url.endsWith("/heartbeat")).length, 1);
+  assert.equal(calls.filter((url) => url.endsWith("/release")).length, 1);
+});
+
 test("waits for a pooled credential and preserves the broker retry delay", async () => {
   let attempts = 0;
   const sleeps = [];

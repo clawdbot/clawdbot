@@ -81,7 +81,11 @@ async function callBroker(
     signal: AbortSignal.timeout(httpTimeoutMs),
   });
   const payload = await readBrokerResponse(response, maxResponseBytes);
-  if (!response.ok || payload.status !== "ok") {
+  const acceptsEmptySuccess =
+    response.ok &&
+    Object.keys(payload).length === 0 &&
+    (suffix === "heartbeat" || suffix === "release");
+  if (!response.ok || (payload.status !== "ok" && !acceptsEmptySuccess)) {
     const code = typeof payload.code === "string" ? payload.code : "BROKER_REQUEST_FAILED";
     const message =
       typeof payload.message === "string" ? payload.message : "Broker request failed.";
