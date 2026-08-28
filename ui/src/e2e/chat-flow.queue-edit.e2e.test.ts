@@ -338,7 +338,16 @@ suite.define(() => {
           { capture: true },
         );
       });
-      await row.locator(".chat-queue__remove").dblclick();
+      await row.locator(".chat-queue__remove").click();
+      await row.waitFor({ state: "detached", timeout: 10_000 });
+      // Transcript reflow can move the next row away from the first click's coordinates.
+      // Aim the native second click at its remove control without another first click.
+      await page
+        .locator(queuedBubbleSelector, { hasText: "edited before send" })
+        .locator(".chat-queue__remove")
+        .hover();
+      await page.mouse.down({ clickCount: 2 });
+      await page.mouse.up({ clickCount: 2 });
       expect(
         await page.evaluate(
           () =>
@@ -352,7 +361,6 @@ suite.define(() => {
         { detail: 1, rowText: "remove me" },
         { detail: 2, rowText: "edited before send" },
       ]);
-      await row.waitFor({ state: "detached", timeout: 10_000 });
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       await expect
         .poll(() =>
