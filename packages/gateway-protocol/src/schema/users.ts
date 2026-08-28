@@ -8,6 +8,14 @@ export const USER_PREFS_ENTRY_LIMIT = 32;
 export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
 export const USER_PREFS_VALUE_BYTES = 4 * 1024;
 export const GIT_COAUTHOR_PREFERENCE_KEY = "git.coauthor.enabled";
+
+// Credit ships on for verified GitHub identities: an absent row is the default, not a
+// refusal, so only an explicit `false` opts out and clearing the row on an account
+// change restores the default instead of revoking credit.
+export function isGitCoauthorCreditEnabled(value: unknown): boolean {
+  return value !== false;
+}
+
 export {
   normalizeUiAppearancePreference,
   UI_APPEARANCE_PREFERENCE_KEYS,

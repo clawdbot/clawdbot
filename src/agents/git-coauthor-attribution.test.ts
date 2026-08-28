@@ -31,7 +31,13 @@ describe("Git co-author attribution", () => {
   it("derives exact bounded trailers only from canonical profile-backed humans", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:coauthors";
-      const profile = (email: string, accountId?: number, login?: string, optedIn = true) => {
+      // "default" writes no preference row: credit is on unless the person opts out.
+      const profile = (
+        email: string,
+        accountId?: number,
+        login?: string,
+        credit: "on" | "off" | "default" = "on",
+      ) => {
         const value = ensureProfileForEmail(email, { env: state.env });
         if (accountId && login) {
           syncGitHubIdentity(
@@ -41,11 +47,11 @@ describe("Git co-author attribution", () => {
             },
             { env: state.env },
           );
-          if (optedIn) {
+          if (credit !== "default") {
             expect(
               setUserPreferences(
                 value.id,
-                { [GIT_COAUTHOR_PREFERENCE_KEY]: true },
+                { [GIT_COAUTHOR_PREFERENCE_KEY]: credit === "on" },
                 { env: state.env },
               ),
             ).toMatchObject({ ok: true });
@@ -59,7 +65,8 @@ describe("Git co-author attribution", () => {
       const later = profile("later@example.test", 1, "later");
       const primary = profile("primary@example.test", 30, "primary");
       const current = profile("current@example.test", 15, "current");
-      const optedOut = profile("opted-out@example.test", 25, "opted-out", false);
+      const optedOut = profile("opted-out@example.test", 25, "opted-out", "off");
+      const defaulted = profile("defaulted@example.test", 35, "defaulted", "default");
       const unlinked = profile("unlinked@example.test");
       const legacy = ensureProfileForEmail("legacy@example.test", { env: state.env });
       openOpenClawStateDatabase({ env: state.env })
@@ -76,6 +83,7 @@ describe("Git co-author attribution", () => {
         later,
         primary,
         optedOut,
+        defaulted,
         unlinked,
         legacy,
       ].entries()) {
@@ -149,21 +157,23 @@ describe("Git co-author attribution", () => {
           "Co-authored-by: same-time <5+same-time@users.noreply.github.com>",
           "Co-authored-by: grace <10+grace@users.noreply.github.com>",
           "Co-authored-by: later <1+later@users.noreply.github.com>",
+          "Co-authored-by: defaulted <35+defaulted@users.noreply.github.com>",
           "Co-authored-by: current <15+current@users.noreply.github.com>",
         ].join("\n"),
       );
       expect(modelPrompt).toContain(
-        "Worked on by:\n- @ada\n- @same-time\n- @grace\n- @later\n- @current",
+        "Worked on by:\n- @ada\n- @same-time\n- @grace\n- @later\n- @defaulted\n- @current",
       );
       expect(modelPrompt).not.toContain("Co-authored-by: opted-out");
       expect(modelPrompt).not.toContain("Co-authored-by: legacy");
       expect(structured).toMatchObject({
-        logins: ["ada", "same-time", "grace", "later", "current"],
+        logins: ["ada", "same-time", "grace", "later", "defaulted", "current"],
         trailers: [
           "Co-authored-by: ada <20+ada@users.noreply.github.com>",
           "Co-authored-by: same-time <5+same-time@users.noreply.github.com>",
           "Co-authored-by: grace <10+grace@users.noreply.github.com>",
           "Co-authored-by: later <1+later@users.noreply.github.com>",
+          "Co-authored-by: defaulted <35+defaulted@users.noreply.github.com>",
           "Co-authored-by: current <15+current@users.noreply.github.com>",
         ],
       });
