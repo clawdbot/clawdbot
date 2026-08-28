@@ -867,24 +867,47 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it("explains both recoveries when an ACP run includes a category", async () => {
-    registerAcpBackendForTest();
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+  it.each([
+    {
+      name: "category",
+      category: "handoff investigation",
+      extra: {},
+      visibleOnlyParams: "category",
+    },
+    {
+      name: "an empty category",
+      category: "",
+      extra: {},
+      visibleOnlyParams: "category",
+    },
+    {
+      name: "category and worktree",
+      category: "handoff investigation",
+      extra: { worktree: true },
+      visibleOnlyParams: "category, worktree",
+    },
+  ])(
+    "explains both recoveries when an ACP run includes $name",
+    async ({ category, extra, visibleOnlyParams }) => {
+      registerAcpBackendForTest();
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
 
-    await expect(
-      tool.execute("acp-category", {
-        task: "Investigate the failure",
-        runtime: "acp",
-        mode: "run",
-        streamTo: "parent",
-        category: "handoff investigation",
-      }),
-    ).rejects.toThrow(
-      'category is only available for visible dashboard sessions. Choose one: omit category for a hidden or ACP run; or set visible=true, use runtime="subagent", and omit mode and streamTo.',
-    );
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-  });
+      await expect(
+        tool.execute("acp-category", {
+          task: "Investigate the failure",
+          runtime: "acp",
+          mode: "run",
+          streamTo: "parent",
+          category,
+          ...extra,
+        }),
+      ).rejects.toThrow(
+        `Parameters only available for visible dashboard sessions: ${visibleOnlyParams}. Choose one: omit them for a hidden or ACP run; or set visible=true, use runtime="subagent", and omit mode and streamTo.`,
+      );
+      expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("applies a per-run timeout to visible dashboard sessions", async () => {
     const callGateway = vi.fn(async () => ({
