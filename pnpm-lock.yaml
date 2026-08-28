@@ -1647,8 +1647,8 @@ importers:
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
       '@openclaw/crabline':
-        specifier: 0.1.17
-        version: 0.1.17
+        specifier: 0.1.18
+        version: 0.1.18
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
@@ -4293,8 +4293,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.17':
-    resolution: {integrity: sha512-tMjpIhzJvCulDA6mYL8nOA6XExWXZoBOrD4XgL3gsNdEDAWY4FCaHYyNCXwKPU2QSs78FU0xZ3NIQRr9ErHRpQ==}
+  '@openclaw/crabline@0.1.18':
+    resolution: {integrity: sha512-5RKDRmCU+ScBEmBsiZrspTsuuWW7j9cZ3AAKxPtLQVtvIQ1+LcCFuh16imcCGHV1J443KZWRq5bWVp9gtRrDpg==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -11634,7 +11634,7 @@ snapshots:
   '@openai/codex@0.150.1-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.17':
+  '@openclaw/crabline@0.1.18':
     dependencies:
       '@types/node': 22.20.1
       commander: 15.0.0
@@ -11643,7 +11643,7 @@ snapshots:
       picocolors: 1.1.1
       proper-lockfile: 4.1.2
       re2js: 2.8.6
-      ws: 8.21.1
+      ws: 8.21.3
       yaml: 2.9.0
       zod: 4.4.3
     transitivePeerDependencies:
