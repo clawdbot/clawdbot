@@ -538,13 +538,14 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         await expect
           .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.url === distractingUrl))
           .toBe(true);
+        const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
         for (const navigationMode of ["all", "selected"] as const) {
           const proofUrl = `http://127.0.0.1:${gatewayPort}/browser-owner-proof?mode=${navigationMode}`;
           if (navigationMode === "selected") {
             await extensionPage.evaluate(
               async (urls) => {
-                const tabs = await chrome.tabs.query({});
-                const tabIds = tabs
+                const browserTabs = await chrome.tabs.query({});
+                const tabIds = browserTabs
                   .filter((tab) => urls.includes(tab.url ?? ""))
                   .map((tab) => tab.id);
                 const groupId = await chrome.tabs.group({ tabIds });
@@ -568,7 +569,6 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             throw new Error(`Extension navigation proof tabs missing: ${JSON.stringify(liveTabs)}`);
           }
           expect(selectedTab.targetId).not.toBe(unrelatedTab.targetId);
-          const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
           browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
           const extensionCdpUrl = routeContext.forProfile("e2e").profile.cdpUrl;
           diagnostic.arm(selectedTab.targetId, unrelatedTab.targetId);

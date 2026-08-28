@@ -110,7 +110,9 @@ async function createNavigationHarness(
       chromeApi.tabs.get.mockImplementation(async () => await pending);
       return async () => {
         release(tab);
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
       };
     },
   };

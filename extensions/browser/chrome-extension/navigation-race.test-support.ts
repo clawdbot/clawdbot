@@ -27,7 +27,7 @@ declare const self: { navigationProbe?: NavigationProbe };
 /** Hold Chrome's real access lookup until its real load event, without delaying navigation. */
 export async function holdNavigationAccessCheck(worker: Worker, url: string) {
   await worker.evaluate((destination) => {
-    const originalGet = chrome.tabs.get;
+    const originalGet = chrome.tabs.get.bind(chrome.tabs);
     let tabId: number | undefined;
     let release = () => {};
     const loaded = new Promise<void>((resolve) => {
@@ -61,7 +61,7 @@ export async function holdNavigationAccessCheck(worker: Worker, url: string) {
       if (waitForLoad) {
         probe.heldReads += 1;
       }
-      const tab = await originalGet.call(chrome.tabs, id);
+      const tab = await originalGet(id);
       if (waitForLoad) {
         await loaded;
       }
