@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "../test-helpers.js";
 import { installConnectedControlUiServerSuite } from "../test-with-server.js";
@@ -18,6 +17,7 @@ installConnectedControlUiServerSuite((started) => {
 const DATA_URL = "DATA:image/png;BASE64,cG5n";
 const SESSION_ID = "sess-inline-media-proof";
 const SESSION_KEY = "agent:main:main";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectRedactedInlineMediaBlock(content: unknown): void {
   expect(content).toEqual([
@@ -31,7 +31,7 @@ function expectRedactedInlineMediaBlock(content: unknown): void {
 
 describe("chat history inline media redaction (real WS gateway)", () => {
   test("stored history endpoints redact Responses inline images", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-history-redact-"));
+    const dir = tempDirs.make("openclaw-chat-history-redact-");
     testState.sessionStorePath = path.join(dir, "sessions.json");
     try {
       await writeSessionStore({
@@ -89,7 +89,6 @@ describe("chat history inline media redaction (real WS gateway)", () => {
       );
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });
