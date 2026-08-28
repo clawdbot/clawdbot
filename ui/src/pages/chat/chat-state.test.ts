@@ -756,7 +756,12 @@ describe("canonical session message recovery", () => {
         sessionKey: "global",
         assistantAgentId: "main",
         agentsSelectedId: "main",
-        agentsList: { defaultId: "main", scope: "global" },
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "global",
+          agents: [{ id: "main" }, { id: "work" }],
+        },
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
         chatRunId: runId,
