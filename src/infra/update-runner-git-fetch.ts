@@ -23,10 +23,16 @@ function parseRemoteFetchConfig(stdout: string): RemoteFetchConfig {
 }
 
 function isTagFetchRefspec(refspec: string): boolean {
-  const [source = "", destination = ""] = refspec.replace(/^[+^]/u, "").split(":", 2);
-  return [source, destination].some(
-    (ref) => ref === "refs/*" || ref === "refs/tags" || ref.startsWith("refs/tags/"),
-  );
+  const normalized = refspec.trim();
+  if (normalized.startsWith("^")) {
+    return false;
+  }
+  const withoutForce = normalized.replace(/^\+/u, "");
+  if (/^tag\s+\S+$/u.test(withoutForce)) {
+    return true;
+  }
+  const destination = withoutForce.split(":", 2)[1]?.trim() ?? "";
+  return destination === "refs/tags" || destination.startsWith("refs/tags/");
 }
 
 export type StableGitFetchResult = {

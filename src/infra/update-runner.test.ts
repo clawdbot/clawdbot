@@ -13,7 +13,8 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
-import type { UpdateStepProgress } from "./update-runner-types.js";
+import { prepareStableGitFetch } from "./update-runner-git-fetch.js";
+import type { UpdateStepProgress, UpdateStepResult } from "./update-runner-types.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -667,6 +668,37 @@ describe("runGatewayUpdate", () => {
     await expect(runRealGit(localRoot, "rev-parse", localOnlyTag)).resolves.toBeTruthy();
   });
 
+  it("excludes Git tag shorthand from the preliminary branch refresh", async () => {
+    const calls: string[] = [];
+    const steps: UpdateStepResult[] = [];
+    const runCommand = async (argv: string[]): Promise<CommandResult> => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (argv[3] === "config" && argv.at(-1) === "^remote\\..*\\.fetch$") {
+        return { stdout: "remote.origin.fetch tag v1.0.0\n", stderr: "", code: 0 };
+      }
+      if (argv[3] === "remote") {
+        return { stdout: "origin\n", stderr: "", code: 0 };
+      }
+      if (argv[3] === "config" && argv.at(-1)?.includes("skipfetchall")) {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      throw new Error(`unexpected command: ${key}`);
+    };
+
+    await expect(
+      prepareStableGitFetch({
+        gitRoot: tempDir,
+        timeoutMs: 1000,
+        runCommand,
+        steps,
+        fetchAllArgv: ["git", "-C", tempDir, "fetch", "--all"],
+      }),
+    ).resolves.toEqual({ remotes: ["origin"] });
+    expect(calls).not.toContain(`git -C ${tempDir} fetch --all`);
+    expect(calls).not.toContain(`git -C ${tempDir} fetch origin`);
+  });
+
   it("selects stable releases from the main remote instead of local release-shaped tags", async () => {
     const { localRoot, baseSha, releaseSha, releaseTag } = await createRecreatedReleaseTagFixture();
     const localTag = "v9999.1.0";
@@ -871,6 +903,33 @@ describe("runGatewayUpdate", () => {
 
     expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
     await expect(runRealGit(localRoot, "rev-parse", "protected-cache")).resolves.toBe(releaseSha);
+  });
+
+  it("refreshes remote-tracking refs for a broad configured mapping", async () => {
+    const { localRoot, releaseSha, releaseTag } = await createRecreatedReleaseTagFixture();
+    await runRealGit(
+      localRoot,
+      "config",
+      "--add",
+      "remote.origin.fetch",
+      "refs/*:refs/remotes/origin/*",
+    );
+    const reachedMutation = new Error("reached release mutation");
+
+    await expect(
+      runWithCommand(createRealGitUpdateRunner(), {
+        cwd: localRoot,
+        channel: "stable",
+        beforeGitMutation: async () => {
+          throw reachedMutation;
+        },
+      }),
+    ).rejects.toBe(reachedMutation);
+
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+    await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
+      releaseSha,
+    );
   });
 
   async function runWithCommand(
