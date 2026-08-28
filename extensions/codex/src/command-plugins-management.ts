@@ -222,16 +222,19 @@ function withChatGptPluginNavigation(presentation: MessagePresentation): PluginC
       {
         type: "buttons",
         buttons: [
-          { label: "Browse plugins", action: { type: "url", url: "https://chatgpt.com/plugins" } },
           {
-            label: "Manage plugins",
+            label: "Browse ChatGPT plugins",
+            action: { type: "url", url: "https://chatgpt.com/plugins" },
+          },
+          {
+            label: "Manage ChatGPT plugins",
             action: { type: "url", url: "https://chatgpt.com/#settings/Plugins" },
           },
         ],
       },
       {
         type: "context",
-        text: "Use the same ChatGPT account and workspace as Codex. ChatGPT setup does not install or authorize a plugin in OpenClaw; an owner or operator.admin must use /codex plugins available and /codex plugins install <plugin>@<marketplace>. After setup, return here and use /new or /reset before trying the plugin.",
+        text: "These pages manage ChatGPT plugins, not every local or marketplace Codex plugin. Use the same ChatGPT account and workspace as Codex. Opening a page does not change OpenClaw policy or confirm readiness. For Codex marketplace installation, an owner or operator.admin can use /codex plugins available and /codex plugins install <plugin>@<marketplace>. After browser setup, return here and use /new or /reset before trying the plugin; an already-configured plugin does not need to be reinstalled.",
       },
     ],
   };

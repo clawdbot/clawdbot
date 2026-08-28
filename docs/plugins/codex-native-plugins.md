@@ -49,19 +49,25 @@ for the OpenAI account and admin model.
 
 ## Quickstart
 
-Run `/codex plugins` or `/codex plugins menu` for **Browse plugins** and
-**Manage plugins** links. They open the existing
+Run `/codex plugins` or `/codex plugins menu` for **Browse ChatGPT plugins**
+and **Manage ChatGPT plugins** links. They open the existing
 [ChatGPT plugin directory](https://chatgpt.com/plugins) and
 [ChatGPT Plugins settings](https://chatgpt.com/#settings/Plugins), including
 when no Codex plugins are configured. `/codex plugins help` also includes
 these links; channels without buttons receive the URLs as text.
 
-Sign in to the same ChatGPT account and workspace used by Codex. Managing or
-connecting a plugin in ChatGPT does not install or authorize it in OpenClaw.
-An owner or `operator.admin` must still use `/codex plugins available` and
-`/codex plugins install <plugin>@<marketplace>` for local installation and
-authorization. After hosted setup, return to OpenClaw and use `/new` or
-`/reset` before trying the plugin; opening a page does not verify readiness.
+These pages do not replace the controls for every Codex plugin: native Codex
+bundles can also contain skills, hooks, and MCP servers from local or other
+marketplaces. The OpenClaw `codex` plugin hosts that separate Codex runtime;
+it is not the same thing as the bundles loaded inside it.
+
+Sign in to the same ChatGPT account and workspace used by Codex. Opening a
+page does not change OpenClaw policy or verify readiness. For Codex marketplace
+installation, an owner or `operator.admin` can use `/codex plugins available`
+and `/codex plugins install <plugin>@<marketplace>`. After hosted setup, return
+to OpenClaw and use `/new` or `/reset` before trying the plugin. An
+already-configured plugin does not need to be reinstalled; connected account
+apps can also be admitted through the existing `allow_all_plugins` policy.
 
 Preview migration from the source Codex home:
 

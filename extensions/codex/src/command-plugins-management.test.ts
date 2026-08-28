@@ -137,11 +137,11 @@ describe("Codex /codex plugins subcommand", () => {
         .filter((button) => button.action?.type === "url");
       expect(urls).toEqual([
         {
-          label: "Browse plugins",
+          label: "Browse ChatGPT plugins",
           action: { type: "url", url: "https://chatgpt.com/plugins" },
         },
         {
-          label: "Manage plugins",
+          label: "Manage ChatGPT plugins",
           action: { type: "url", url: "https://chatgpt.com/#settings/Plugins" },
         },
       ]);
@@ -151,7 +151,8 @@ describe("Codex /codex plugins subcommand", () => {
         }
       }
       expect(result.text).toContain("same ChatGPT account and workspace");
-      expect(result.text).toContain("does not install or authorize a plugin in OpenClaw");
+      expect(result.text).toContain("not every local or marketplace Codex plugin");
+      expect(result.text).toContain("does not change OpenClaw policy or confirm readiness");
       expect(result.text).toContain("/new or /reset");
       expect(result.presentationTextMode).toBe("fallback");
       expect(mutate).not.toHaveBeenCalled();
