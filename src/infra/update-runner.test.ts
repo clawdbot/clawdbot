@@ -3219,7 +3219,7 @@ describe("runGatewayUpdate", () => {
   it.each(["stable", "beta"] as const)(
     "does not return a build identity for a %s Git update",
     async (channel) => {
-      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
       await setupUiIndex();
       const stableTag = "v1.0.1-1";
       const buildId = "2026.8.1-channel-build";
