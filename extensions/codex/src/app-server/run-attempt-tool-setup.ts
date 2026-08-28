@@ -219,7 +219,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       void emitCodexAppServerEvent(params, event);
     },
     computerContextEpoch,
-    registerRunCleanup: (cleanup: (reason: string) => Promise<void>) => runCleanups.push(cleanup),
     ...(canResolveAnyScheduledCreatorAuthority
       ? {
           resolveCronCreatorToolAuthority: (options?: { signal?: AbortSignal }) => {
@@ -249,6 +248,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   };
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {

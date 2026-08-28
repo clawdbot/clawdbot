@@ -734,26 +734,6 @@ describe("Codex app-server dynamic tool build", () => {
     expect(receivedEpoch).toBe(computerContextEpoch);
   });
 
-  it("forwards the attempt cleanup owner to dynamic tool assembly", async () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    type RunCleanupRegistrar = NonNullable<
-      Parameters<typeof buildDynamicTools>[0]["registerRunCleanup"]
-    >;
-    const registerRunCleanup: RunCleanupRegistrar = vi.fn();
-    let receivedRegisterRunCleanup: RunCleanupRegistrar | undefined;
-    setOpenClawCodingToolsFactoryForTests((options) => {
-      receivedRegisterRunCleanup = options?.registerRunCleanup;
-      return [createRuntimeDynamicTool("message")];
-    });
-
-    await buildDynamicToolsForTest(params, workspaceDir, { registerRunCleanup });
-
-    expect(receivedRegisterRunCleanup).toBe(registerRunCleanup);
-  });
-
   it("reports hosted search denied when effective tool policy removes web_search", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
