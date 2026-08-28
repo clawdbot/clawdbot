@@ -28,7 +28,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
-import { renderChannels } from "./view.ts";
+import { renderChannels, resolveChannelOrder } from "./view.ts";
 import type { ChannelPairingPrompt } from "./view.types.ts";
 import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
@@ -79,6 +79,7 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private readonly pluginPresentation = new ChannelPluginPresentationController({
     getContext: () => this.context,
+    getChannelIds: () => resolveChannelOrder(this.context.channels.state.channelsSnapshot),
     isConnected: () => this.isConnected,
     requestUpdate: () => this.requestUpdate(),
   });

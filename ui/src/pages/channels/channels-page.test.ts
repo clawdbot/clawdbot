@@ -171,6 +171,16 @@ describe("ChannelsPage lifecycle", () => {
               state: "disabled",
               hasIcon: true,
             },
+            {
+              id: "firecrawl",
+              name: "FireCrawl",
+              description: "Crawl websites.",
+              origin: "global",
+              installed: false,
+              enabled: false,
+              state: "available",
+              hasIcon: true,
+            },
           ],
           diagnostics: [],
           mutationAllowed: true,
@@ -178,16 +188,14 @@ describe("ChannelsPage lifecycle", () => {
       }
       return await baseRequest?.(method, params);
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(new Uint8Array([137, 80, 78, 71]), {
-            status: 200,
-            headers: { "Content-Type": "image/png" },
-          }),
-      ),
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
     );
+    vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slack-plugin-icon");
     const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
     page.context = source.context;
@@ -203,6 +211,11 @@ describe("ChannelsPage lifecycle", () => {
       );
     });
     expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
+    expect(
+      fetchMock.mock.calls
+        .map((call) => String(call[0]))
+        .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
+    ).toEqual(["/__openclaw__/plugin-icon/slack"]);
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });

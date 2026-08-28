@@ -164,7 +164,7 @@ function buildChannelData(props: ChannelsProps): ChannelsChannelData {
   };
 }
 
-function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
+export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
   const statusOrder = snapshot?.channelMeta?.length
     ? snapshot.channelMeta.map((entry) => entry.id)
     : (snapshot?.channelOrder ?? []);

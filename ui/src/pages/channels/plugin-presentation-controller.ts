@@ -13,6 +13,7 @@ type PluginPresentationRequest = {
 
 type PluginPresentationHooks = {
   getContext: () => ApplicationContext;
+  getChannelIds: () => readonly string[];
   isConnected: () => boolean;
   requestUpdate: () => void;
 };
@@ -55,9 +56,10 @@ export class ChannelPluginPresentationController {
           () => controller.abort(new DOMException("plugin icon fetch timed out", "TimeoutError")),
           CHANNEL_PLUGIN_ICON_TIMEOUT_MS,
         );
+        const channelIds = new Set(this.hooks.getChannelIds());
         const iconEntries = await Promise.all(
           result.plugins
-            .filter((plugin) => plugin.hasIcon)
+            .filter((plugin) => plugin.hasIcon && channelIds.has(plugin.id))
             .map(async (plugin) => {
               const context = this.hooks.getContext();
               const url = await fetchPluginIconBlobUrl({
