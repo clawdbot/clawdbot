@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { CODEX_FIXTURE_CLEAR_ENV } from "./codex-fixture-env.mjs";
 import {
   parseRecorderReady,
   readScenarioFile,
@@ -20,10 +19,6 @@ const SKILL_DIR =
   process.env.TELEGRAM_E2E_SKILL_DIR || resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const USER_DRIVER_PATH = resolve(SKILL_DIR, "scripts/user-driver.py");
 const USER_RECORD_PATH = resolve(SKILL_DIR, "scripts/user-record.py");
-const CODEX_REQUEST_USER_INPUT_FIXTURE_PATH = resolve(
-  SKILL_DIR,
-  "scripts/codex-request-user-input-app-server.mjs",
-);
 const TELEGRAM_API_IGNORE_ABORT_PRELOAD_PATH = resolve(
   SKILL_DIR,
   "scripts/telegram-api-ignore-abort-preload.mjs",
@@ -69,9 +64,7 @@ function createControlEnvironment({ baseEnv = process.env, configPath, stateDir 
 }
 
 export function createGatewayEnvironment({
-  backend,
   baseEnv = process.env,
-  codexLogPath,
   configPath,
   stateDir,
   sutToken,
@@ -81,14 +74,6 @@ export function createGatewayEnvironment({
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
     TELEGRAM_BOT_TOKEN: sutToken,
-    ...(backend === "codex-fixture"
-      ? {
-          OPENCLAW_BUILD_PRIVATE_QA: "1",
-          OPENCLAW_QA_FORCE_RUNTIME: "codex",
-          OPENCLAW_QA_PARENT_PID: String(process.pid),
-          OPENCLAW_CODEX_REQUEST_USER_INPUT_LOG: codexLogPath,
-        }
-      : {}),
     OPENAI_API_KEY: "openclaw-e2e-mock-key",
   };
 }
@@ -181,10 +166,8 @@ function parseArgs(argv) {
     else if (arg === "--mock-port") args.mockPort = Number(argv[++i] || args.mockPort);
     else if (arg === "--backend") {
       const value = (argv[++i] || "").trim();
-      if (!["mock", "qa-mock", "codex-fixture", "claude-cli"].includes(value)) {
-        throw new Error(
-          `--backend takes "mock", "qa-mock", "codex-fixture", or "claude-cli", got "${value}".`,
-        );
+      if (!["mock", "qa-mock", "claude-cli"].includes(value)) {
+        throw new Error(`--backend takes "mock", "qa-mock", or "claude-cli", got "${value}".`);
       }
       args.backend = value;
     } else if (arg === "--any-sut-reply") args.anySutReply = true;
@@ -264,7 +247,6 @@ Runtime:
 Backends:
   --backend mock          (default) basic deterministic mock-openai
   --backend qa-mock       OpenClaw QA mock with tool and delayed-response fixtures
-  --backend codex-fixture deterministic Codex app-server request_user_input fixture
   --backend claude-cli    real Claude CLI backend; no mock provider, uses your Claude
                         CLI credentials. Model via E2E_TELEGRAM_CLI_MODEL
                         (default claude-haiku-4-5).
@@ -361,7 +343,7 @@ async function readTester(driverEnv, leaseFailure, repoRoot) {
 // api made those scenarios untestable without forking this runner.
 const PROVIDER_API = process.env.E2E_TELEGRAM_PROVIDER_API || "openai-responses";
 
-export function writeConfig(params) {
+function writeConfig(params) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-user-mock-sut-"));
   const stateDir = path.join(root, "state");
   const workspace = path.join(root, "workspace");
@@ -372,9 +354,7 @@ export function writeConfig(params) {
   // credentials and needs no model provider entry; it also must not point at
   // mock-openai, or the CLI would talk to the mock instead of Anthropic.
   const claudeCliModelRef = `anthropic/${process.env.E2E_TELEGRAM_CLI_MODEL || "claude-haiku-4-5"}`;
-  const codexFixtureModelRef = "openai/gpt-5.6-luna";
   const usesClaudeCli = params.backend === "claude-cli";
-  const usesCodexFixture = params.backend === "codex-fixture";
   const modelsBlock = usesClaudeCli
     ? {
         providers: {
@@ -383,51 +363,24 @@ export function writeConfig(params) {
           },
         },
       }
-    : usesCodexFixture
-      ? undefined
-      : {
-          providers: {
-            openai: {
-              api: PROVIDER_API,
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
-              request: { allowPrivateNetwork: true },
-              models: [
-                { id: "gpt-5.5", name: "gpt-5.5", api: PROVIDER_API, contextWindow: 128000 },
-              ],
-            },
+    : {
+        providers: {
+          openai: {
+            api: PROVIDER_API,
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
+            request: { allowPrivateNetwork: true },
+            models: [{ id: "gpt-5.5", name: "gpt-5.5", api: PROVIDER_API, contextWindow: 128000 }],
           },
-        };
-  const agentModelRef = usesClaudeCli
-    ? claudeCliModelRef
-    : usesCodexFixture
-      ? codexFixtureModelRef
-      : "openai/gpt-5.5";
+        },
+      };
+  const agentModelRef = usesClaudeCli ? claudeCliModelRef : "openai/gpt-5.5";
   const agentModelPolicy = usesClaudeCli
     ? { [claudeCliModelRef]: { agentRuntime: { id: "claude-cli" } } }
-    : usesCodexFixture
-      ? { [codexFixtureModelRef]: { agentRuntime: { id: "codex" } } }
-      : { "openai/gpt-5.5": { params: { transport: "sse", openaiWsWarmup: false } } };
+    : { "openai/gpt-5.5": { params: { transport: "sse", openaiWsWarmup: false } } };
   const pluginEntries = usesClaudeCli
     ? { telegram: { enabled: true }, anthropic: { enabled: true } }
-    : usesCodexFixture
-      ? {
-          telegram: { enabled: true },
-          codex: {
-            enabled: true,
-            config: {
-              appServer: {
-                mode: "yolo",
-                command: "node",
-                args: [CODEX_REQUEST_USER_INPUT_FIXTURE_PATH],
-                clearEnv: CODEX_FIXTURE_CLEAR_ENV,
-                requestTimeoutMs: 60_000,
-                turnCompletionIdleTimeoutMs: 60_000,
-              },
-            },
-          },
-        }
-      : { telegram: { enabled: true }, openai: { enabled: true } };
+    : { telegram: { enabled: true }, openai: { enabled: true } };
   let config = {
     gateway: {
       mode: "local",
@@ -445,24 +398,18 @@ export function writeConfig(params) {
       defaults: {
         model: { primary: agentModelRef },
         models: agentModelPolicy,
-        ...(usesCodexFixture ? { skipBootstrap: true, sandbox: { mode: "off" } } : {}),
       },
       entries: {
         main: {
           name: "Main",
           workspace,
           model: { primary: agentModelRef },
-          ...(usesCodexFixture ? { models: agentModelPolicy } : {}),
         },
       },
     },
     plugins: {
       enabled: true,
-      allow: usesClaudeCli
-        ? ["telegram", "anthropic"]
-        : usesCodexFixture
-          ? ["telegram", "codex"]
-          : ["telegram", "openai"],
+      allow: usesClaudeCli ? ["telegram", "anthropic"] : ["telegram", "openai"],
       entries: pluginEntries,
     },
     channels: {
@@ -1012,10 +959,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     }
 
     const gatewayEnv = createGatewayEnvironment({
-      backend: args.backend,
-      codexLogPath: evidenceDir
-        ? path.join(evidenceDir, "codex-app-server.ndjson")
-        : path.join(temp.root, "codex-app-server.ndjson"),
       configPath: temp.configPath,
       stateDir: temp.stateDir,
       sutToken: creds.sutToken,

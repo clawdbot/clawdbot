@@ -19,12 +19,11 @@ mode captures facts and rejects that flag.
 
 ## Backends
 
-| Backend         | Use                                                                     |
-| --------------- | ----------------------------------------------------------------------- |
-| `mock`          | Default deterministic OpenClaw `mock-openai` turn.                      |
-| `qa-mock`       | QA fixtures for tools, delays, and scenario actions.                    |
-| `codex-fixture` | Deterministic Codex app-server interaction fixtures.                    |
-| `claude-cli`    | Real Claude CLI path for progress behavior the mock lane cannot render. |
+| Backend      | Use                                                                     |
+| ------------ | ----------------------------------------------------------------------- |
+| `mock`       | Default deterministic OpenClaw `mock-openai` turn.                      |
+| `qa-mock`    | QA fixtures for tools, delays, and scenario actions.                    |
+| `claude-cli` | Real Claude CLI path for progress behavior the mock lane cannot render. |
 
 `claude-cli` uses the operator's Claude credentials and costs real usage. Its
 default model is `claude-haiku-4-5`; set `E2E_TELEGRAM_CLI_MODEL` to override it.
