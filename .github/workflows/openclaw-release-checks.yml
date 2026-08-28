@@ -1368,7 +1368,7 @@ jobs:
       telegram_mode: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}
       telegram_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       shared_image_artifact_namespace: release-package
-      candidate_artifact_json: ${{ needs.resolve_target.outputs.candidate_artifact_json }}
+      candidate_artifact_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}
       shared_image_policy: no-push-artifact
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

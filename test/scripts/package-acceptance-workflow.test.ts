@@ -5514,6 +5514,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}",
       suite_profile: "custom",
     });
+    expect(packageAcceptanceJob.with?.candidate_artifact_json).toBe(
+      "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",
+    );
     expect(releaseChecksTargetSummary.env).toMatchObject({
       SKIP_PACKAGE_TELEGRAM_E2E: "${{ steps.inputs.outputs.skip_package_telegram_e2e }}",
     });
