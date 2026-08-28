@@ -2,11 +2,12 @@ import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -18,7 +19,7 @@ const REQUEST_MESSAGE = "Return exactly SESSION-STREAMING-OK.";
 const STREAM_DELTAS = ["SESSION-", "STREAMING-", "OK"] as const;
 const TERMINAL_TEXT = STREAM_DELTAS.join("");
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type AgentResult = {
   runId?: string;
   status?: string;
@@ -285,7 +286,9 @@ describe("agent session streaming", () => {
     async () => {
       const provider = await startStreamingProvider();
       cleanups.push(() => provider.stop());
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
@@ -307,7 +310,6 @@ describe("agent session streaming", () => {
         },
         mutateConfig: ({ plugins: _plugins, ...config }) => config,
       });
-      cleanups.push(() => gateway.stop());
 
       const gatewayEvents: GatewayEvent[] = [];
       const client = await connectOperator(gateway, gatewayEvents);

@@ -8,7 +8,7 @@ import {
   createQaChannelTransport,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import { GatewayClient } from "../../../../src/gateway/client.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -16,6 +16,7 @@ import {
 } from "../../../../src/utils/message-channel.js";
 import { createPlaybackMediaFixture } from "../../../fixtures/media-playback.js";
 import { createSolidPngBuffer, createTinyJpegBuffer } from "../../../helpers/image-fixtures.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const SESSION_KEY = "agent:qa:main";
 const FIXTURES = [
@@ -66,17 +67,22 @@ const MIXED_BATCH = [
   ["bundle.7z", "delivery-failed"],
 ] as const;
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
 let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
 let client: GatewayClient | undefined;
 
 afterEach(async () => {
-  client?.stop();
-  client = undefined;
-  await harness?.stop().catch(() => undefined);
-  harness = undefined;
-  await bus?.stop().catch(() => undefined);
-  bus = undefined;
+  try {
+    await runQaGatewayFixture(
+      async () => client?.stop(),
+      () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
+      () => bus?.stop(),
+    );
+  } finally {
+    client = undefined;
+    gatewayOwner = undefined;
+    bus = undefined;
+  }
 });
 
 async function writeFixtures(workspaceDir: string): Promise<void> {
@@ -256,7 +262,8 @@ describe("WebChat managed media artifact matrix", () => {
       const state = createQaBusState();
       const transport = createQaChannelTransport(state);
       bus = await startQaBusServer({ state });
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      const harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",

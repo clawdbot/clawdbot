@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type GatewayChatMessage = {
   role?: unknown;
@@ -18,18 +19,24 @@ type GatewayChatRun = {
   status?: unknown;
 };
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"];
+type GatewayHandle = Awaited<
+  ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>
+>["gateway"];
 
 const HISTORY_RETRY_TIMEOUT_MS = 10_000;
 const HISTORY_RETRY_DEFAULT_MS = 250;
 const HISTORY_RETRY_MIN_MS = 100;
 const HISTORY_RETRY_MAX_MS = 5_000;
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
+let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
 
 afterEach(async () => {
-  await harness?.stop().catch(() => undefined);
+  if (gatewayOwner) {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
   harness = undefined;
+  gatewayOwner = undefined;
 });
 
 function messageContains(message: GatewayChatMessage, expected: string): boolean {
@@ -174,7 +181,8 @@ describe("Gateway chat RPCs", () => {
     "runs chat.send through agent.wait and persists both sides in chat.history",
     { timeout: 120_000 },
     async () => {
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",

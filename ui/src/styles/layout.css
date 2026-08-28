@@ -2589,7 +2589,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   cursor: not-allowed;
 }
 
-.session-menu__item--destructive {
+.session-menu__item--destructive,
+.session-menu__item--destructive .session-menu__icon {
   color: var(--danger);
 }
 
