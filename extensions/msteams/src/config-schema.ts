@@ -60,19 +60,6 @@ function isAllowedMSTeamsServiceUrl(value: string): boolean {
   }
 }
 
-function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "https:") {
-      return false;
-    }
-    const host = parsed.hostname.toLowerCase();
-    return host === "botframework.azure.cn" || host.endsWith(".botframework.azure.cn");
-  } catch {
-    return false;
-  }
-}
-
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   omit: ["name", "mentionPatterns", "replyToMode"],
   allowFrom: z.array(z.string()).optional(),
