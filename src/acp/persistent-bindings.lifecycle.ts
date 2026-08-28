@@ -79,10 +79,16 @@ export async function ensureConfiguredAcpBindingSession(params: {
     ) {
       // Apply before persisting: rejected controls must not overwrite accepted options.
       // Model precedes effort; omission retains the selection because ACP has no unset.
+      let currentOptions = resolution.meta.runtimeOptions;
       for (const key of ["model", "thinking"] as const) {
         const value = runtimeOptions[key];
-        if (value !== undefined && normalizeText(resolution.meta.runtimeOptions?.[key]) !== value) {
-          await acpManager.setSessionConfigOption({ cfg: params.cfg, sessionKey, key, value });
+        if (value !== undefined && normalizeText(currentOptions?.[key]) !== value) {
+          currentOptions = await acpManager.setSessionConfigOption({
+            cfg: params.cfg,
+            sessionKey,
+            key,
+            value,
+          });
         }
       }
       return {

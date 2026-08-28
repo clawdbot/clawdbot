@@ -15,6 +15,7 @@ import {
   inferRuntimeOptionPatchFromConfigOption,
   mergeRuntimeOptions,
   normalizeRuntimeOptions,
+  reconcileAcceptedRuntimeOptions,
   resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
@@ -120,7 +121,7 @@ export async function runSetManagerSessionConfigOption(
     );
   }
 
-  await withAcpRuntimeErrorBoundary({
+  const result = await withAcpRuntimeErrorBoundary({
     run: async () =>
       await runtime.setConfigOption!({
         handle,
@@ -131,10 +132,10 @@ export async function runSetManagerSessionConfigOption(
     fallbackMessage: "Could not update ACP runtime config option.",
   });
 
-  const nextOptions = mergeRuntimeOptions({
-    current: resolveRuntimeOptionsFromMeta(meta),
-    patch: inferredPatch,
-  });
+  const nextOptions = reconcileAcceptedRuntimeOptions(
+    mergeRuntimeOptions({ current: resolveRuntimeOptionsFromMeta(meta), patch: inferredPatch }),
+    result,
+  );
   await persistManagerRuntimeOptions({
     ...params,
     options: nextOptions,
