@@ -541,6 +541,26 @@ describe("bundled plugin metadata", () => {
     }
   });
 
+  it("packages fixed local PNG icons for every bundled channel plugin", () => {
+    const channelPlugins = listRepoBundledPluginManifests().filter(
+      ({ manifest }) => (manifest.channels?.length ?? 0) > 0,
+    );
+    expect(channelPlugins.length).toBeGreaterThan(0);
+
+    for (const { dirName, manifest } of channelPlugins) {
+      expect(manifest.name?.trim(), `${manifest.id} channel label`).toBeTruthy();
+      expect(manifest.description?.trim(), `${manifest.id} channel description`).toBeTruthy();
+      const iconPath = path.join(repoRoot, "extensions", dirName, "assets", "icon.png");
+      const icon = fs.readFileSync(iconPath);
+      expect(icon.subarray(0, 8), `${manifest.id} PNG signature`).toEqual(
+        Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      );
+      expect(icon.readUInt32BE(16), `${manifest.id} icon width`).toBe(512);
+      expect(icon.readUInt32BE(20), `${manifest.id} icon height`).toBe(512);
+      expect(manifest.icon, `${manifest.id} should not fetch a runtime icon URL`).toBeUndefined();
+    }
+  });
+
   it("declares explicit startup activation on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginManifests()) {
       expect(typeof entry.manifest.activation?.onStartup).toBe("boolean");
