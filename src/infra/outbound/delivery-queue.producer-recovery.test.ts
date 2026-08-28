@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEventForTest } from "../../audit/message-audit-events.test-support.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -335,8 +336,8 @@ describe("exhausted delivery producer recovery", () => {
   it("publishes only one terminal while startup and periodic settlement overlap", async () => {
     const id = "overlapping-settlement";
     await preparePendingFinal(id);
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const update = sessionAccessor.updateSessionEntry;
     vi.spyOn(sessionAccessor, "updateSessionEntry").mockImplementationOnce(async (...args) => {
       entered.resolve();

@@ -133,7 +133,7 @@ export async function settlePendingFinalDelivery(
       });
       const clearsNotice =
         existingNotice?.state !== "acknowledged" &&
-        !updatedDeliveries.some(({ state }) => state === "unknown") &&
+        !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
         settled !== "queued" &&
         settled !== "unknown" &&
         existingNotice?.intentId === pending.intentId;
