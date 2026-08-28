@@ -1,11 +1,11 @@
 // Authenticated same-origin proxy for Gateway-owned Control UI icons.
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
+import { closeSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { fileTypeFromBuffer } from "file-type";
 import pLimit from "p-limit";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
@@ -134,8 +134,9 @@ async function normalizeIconPayload(params: {
 async function loadPackageIcon(params: {
   cacheScope: string;
   iconPath: string;
+  rootPath: string;
 }): Promise<HttpImageRepresentation | null> {
-  const cacheKey = `${params.cacheScope}\0file:${params.iconPath}`;
+  const cacheKey = `${params.cacheScope}\0file:${params.rootPath}\0${params.iconPath}`;
   const now = Date.now();
   const cached = pluginIconCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
@@ -148,23 +149,22 @@ async function loadPackageIcon(params: {
   }
 
   const pending = (async () => {
-    let file;
+    const opened = await openRootFile({
+      absolutePath: params.iconPath,
+      rootPath: params.rootPath,
+      boundaryLabel: "plugin package directory",
+      maxBytes: PLUGIN_ICON_MAX_BYTES,
+      rejectHardlinks: true,
+    });
+    if (!opened.ok || opened.stat.size < 1) {
+      return null;
+    }
     try {
-      // Recheck the package path at use time: a post-snapshot symlink or hardlink
-      // must not turn the authenticated icon route into a local-file oracle.
-      file = await open(params.iconPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-      const stat = await file.stat();
-      if (!stat.isFile() || stat.nlink > 1 || stat.size < 1 || stat.size > PLUGIN_ICON_MAX_BYTES) {
+      // The root-scoped open pins the validated descriptor and uses nonblocking
+      // flags, so post-discovery path swaps cannot escape or stall this read.
+      const body = await readFileDescriptorBounded(opened.fd, PLUGIN_ICON_MAX_BYTES);
+      if (body.byteLength < 1) {
         return null;
-      }
-      const body = Buffer.alloc(stat.size);
-      let offset = 0;
-      while (offset < body.byteLength) {
-        const { bytesRead } = await file.read(body, offset, body.byteLength - offset, offset);
-        if (bytesRead === 0) {
-          return null;
-        }
-        offset += bytesRead;
       }
       return await normalizeIconPayload({
         body,
@@ -174,7 +174,7 @@ async function loadPackageIcon(params: {
     } catch {
       return null;
     } finally {
-      await file?.close().catch(() => {});
+      closeSync(opened.fd);
     }
   })();
   const entry = rememberIcon(pluginIconCache, cacheKey, {
@@ -357,7 +357,11 @@ export async function handlePluginIconHttpRequest(
   const cacheScope = pluginId ? `plugin:${pluginId}` : faviconHostname ? "favicon" : "catalog";
   const icon =
     pluginIcon?.kind === "file"
-      ? await loadPackageIcon({ cacheScope, iconPath: pluginIcon.path })
+      ? await loadPackageIcon({
+          cacheScope,
+          iconPath: pluginIcon.path,
+          rootPath: pluginIcon.rootPath,
+        })
       : await loadCatalogIcon({
           cacheScope,
           iconUrl: remoteIconUrl!,

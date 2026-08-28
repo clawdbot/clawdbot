@@ -1,11 +1,12 @@
 // Gateway plugin icon HTTP tests cover authenticated identity lookup, bounded
 // remote loading, SVG normalization, caching, and failure fallback behavior.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
@@ -55,7 +56,9 @@ const PNG_BYTES = Buffer.from(
   "base64",
 );
 const NORMALIZED_PNG_BYTES = Buffer.from("normalized-png");
-const iconFixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-icon-"));
+const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const iconFixtureDir = fixtureDirs.make("openclaw-plugin-icon-");
 const localIconPath = path.join(iconFixtureDir, "icon.png");
 writeFileSync(localIconPath, PNG_BYTES);
 const ICO_BYTES = Buffer.from([
@@ -113,7 +116,6 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-  rmSync(iconFixtureDir, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -454,7 +456,11 @@ describe("Control UI plugin and catalog icon routes", () => {
   });
 
   it("serves a portable package icon without making a remote request", async () => {
-    mocks.resolveIconSource.mockResolvedValueOnce({ kind: "file", path: localIconPath });
+    mocks.resolveIconSource.mockResolvedValueOnce({
+      kind: "file",
+      path: localIconPath,
+      rootPath: iconFixtureDir,
+    });
 
     const response = await request("/__openclaw__/plugin-icon/local-plugin");
 
@@ -472,6 +478,57 @@ describe("Control UI plugin and catalog icon routes", () => {
       },
     });
   });
+
+  it("rejects a package icon redirected outside its package after discovery", async () => {
+    const fixtureRoot = tempDirs.make("openclaw-plugin-icon-swap-");
+    const packageRoot = path.join(fixtureRoot, "package");
+    const assetsPath = path.join(packageRoot, "assets");
+    const displacedAssetsPath = path.join(packageRoot, "assets-original");
+    const outsidePath = path.join(fixtureRoot, "outside");
+    const iconPath = path.join(assetsPath, "icon.png");
+    mkdirSync(assetsPath, { recursive: true });
+    mkdirSync(outsidePath);
+    writeFileSync(iconPath, PNG_BYTES);
+    writeFileSync(path.join(outsidePath, "icon.png"), PNG_BYTES);
+    renameSync(assetsPath, displacedAssetsPath);
+    symlinkSync(outsidePath, assetsPath, "dir");
+    mocks.resolveIconSource.mockResolvedValueOnce({
+      kind: "file",
+      path: iconPath,
+      rootPath: packageRoot,
+    });
+
+    const response = await request("/__openclaw__/plugin-icon/swapped-package");
+
+    expect(response.status).toBe(404);
+    expect(mocks.encodeImage).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a substituted package icon FIFO without waiting for a writer",
+    async () => {
+      const fixtureRoot = tempDirs.make("openclaw-plugin-icon-fifo-");
+      const iconPath = path.join(fixtureRoot, "icon.png");
+      execFileSync("mkfifo", [iconPath]);
+      mocks.resolveIconSource.mockResolvedValueOnce({
+        kind: "file",
+        path: iconPath,
+        rootPath: fixtureRoot,
+      });
+      const delayedWriter = setTimeout(() => writeFileSync(iconPath, PNG_BYTES), 250);
+      const startedAt = performance.now();
+
+      try {
+        const response = await request("/__openclaw__/plugin-icon/fifo-package");
+
+        expect(response.status).toBe(404);
+        expect(performance.now() - startedAt).toBeLessThan(200);
+        expect(mocks.encodeImage).not.toHaveBeenCalled();
+      } finally {
+        clearTimeout(delayedWriter);
+      }
+    },
+  );
 
   it("resolves encoded catalog URLs through the server-owned allowlist", async () => {
     const iconUrl = CATALOG_ICON_URL;
