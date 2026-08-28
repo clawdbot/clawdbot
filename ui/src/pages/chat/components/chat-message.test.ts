@@ -5099,10 +5099,20 @@ describe("grouped chat rendering", () => {
 
     renderAssistantMessage(
       container,
-      createAssistantMessage([{ type: "input_image", omitted: true, bytes: 26 }]),
+      createAssistantMessage([
+        { type: "input_image", omitted: true, bytes: 26 },
+        {
+          type: "input_image",
+          image_url: { detail: "high", omitted: true, bytes: 27 },
+        },
+        {
+          type: "input_image",
+          source: { media_type: "image/png", omitted: true, bytes: 16 },
+        },
+      ]),
     );
 
-    expect(container.querySelector(".chat-inline-media-omitted")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-inline-media-omitted")).toHaveLength(3);
     expect(container.textContent).toContain("Image unavailable in history");
     expect(container.textContent).toContain(
       "Inline image data was omitted from stored chat history.",
