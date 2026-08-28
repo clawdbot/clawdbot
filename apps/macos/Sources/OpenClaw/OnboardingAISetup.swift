@@ -1006,7 +1006,7 @@ extension OnboardingAISetupModel {
             } catch {
                 guard let supersededAttemptDeadline = context.supersededAttemptDeadline,
                       Date() < supersededAttemptDeadline,
-                      Self.activationAdmissionIsBusy(error)
+                      Self.setupAdmissionIsBusy(error)
                 else { throw error }
                 try await Task.sleep(nanoseconds: retryDelayMs * 1_000_000)
                 retryDelayMs = min(retryDelayMs * 2, 5000)
@@ -1207,6 +1207,17 @@ extension OnboardingAISetupModel {
                     error: result.error,
                     preparedModelRef: result.preparedmodelref)
             } catch {
+                if Self.setupAdmissionIsBusy(error) {
+                    guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                    // No session was admitted; cancelling or reconciling could adopt another operation.
+                    self.applyAuthWizardResult(
+                        done: true,
+                        step: nil,
+                        status: "error",
+                        error: error.localizedDescription,
+                        preparedModelRef: nil)
+                    return
+                }
                 // The Gateway session survives socket loss; cancel by its known
                 // id before reporting failure so it cannot persist config later.
                 let cancellation = await self.gateway.cancelWizardSession(

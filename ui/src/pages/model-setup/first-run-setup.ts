@@ -65,7 +65,7 @@ type FirstRunSetupHost = {
   activate: (
     candidate: Candidate,
     targetId: string,
-  ) => Promise<SetupOutcome<ModelSetupActivationTaskResult>>;
+  ) => Promise<ModelSetupActivationTaskResult | undefined>;
   setVerifyState: (state: ModelSetupVerifyState) => void;
   setActivationState: (state: ModelSetupActivationState) => void;
   setRefreshWarning: (warning: string | null) => void;
@@ -459,7 +459,7 @@ export class FirstRunSetup {
         return;
       }
       // Only a definitive Gateway rejection permits trying another candidate.
-      if (!outcome.value.isCurrent() || outcome.value.result.ok) {
+      if (!outcome.isCurrent() || outcome.value.result.ok) {
         return;
       }
     }

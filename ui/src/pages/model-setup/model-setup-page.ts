@@ -11,6 +11,7 @@ import type {
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { isSetupAdmissionBusyError } from "../../lib/gateway-errors.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
@@ -129,7 +130,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         if (result.status === "done" && result.modelActivation) {
           this.firstRun.recordActivation(activation, { ok: true, ...result.modelActivation });
           return () => this.firstRun.ownsActivation(activation);
-        } else if (result.status === "cancelled") {
+        } else if (result.status === "cancelled" || result.status === "error") {
           this.firstRun.recordActivation(activation, { ok: false });
           this.requestUpdate();
         }
@@ -197,31 +198,38 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private readonly activationTask = new Task<
     readonly [GatewayBrowserClient | null, SystemAgentSetupActivateParams | null],
-    ModelSetupTaskResult<ModelSetupActivationTaskResult>
+    ModelSetupActivationTaskResult
   >(this, {
     autoRun: false,
     args: () => [null, null],
-    task: ([client, params], { signal }) => {
+    task: async ([client, params], { signal }) => {
       if (!client || !params) {
         return initialState;
       }
-      return captureModelSetupResult(client, async () => {
-        let owner: ReturnType<FirstRunSetup["beginActivation"]> = null;
+      // The Lit task owns local errors until an activation is actually dispatched.
+      let isCurrent = () => true;
+      const outcome = await captureModelSetupResult(client, async () => {
         const mutation = await this.context.runtimeConfig.runExternalMutation(
           async (mutationClient) => {
             if (mutationClient !== client) {
               throw new Error("Connection changed before model activation started.");
             }
             signal.throwIfAborted();
-            owner = this.firstRun.beginActivation(params);
-            const result = await mutationClient.request<SystemAgentSetupActivateResult>(
-              "openclaw.setup.activate",
-              params,
-              {
+            const owner = this.firstRun.beginActivation(params);
+            isCurrent = () => this.firstRun.ownsActivation(owner);
+            const result = await mutationClient
+              .request<SystemAgentSetupActivateResult>("openclaw.setup.activate", params, {
                 timeoutMs: activationTimeoutForKind(params.kind),
                 signal,
-              },
-            );
+              })
+              .catch((error: unknown) => {
+                if (isSetupAdmissionBusyError(error)) {
+                  this.firstRun.recordActivation(owner, { ok: false });
+                }
+                // Keep admission contention on the error path: automatic setup
+                // must stop, not fall through to another provider on this Gateway.
+                throw error;
+              });
             this.firstRun.recordActivation(owner, result);
             return result;
           },
@@ -231,14 +239,18 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         }
         return {
           result: mutation.value,
-          isCurrent: () => this.firstRun.ownsActivation(owner),
           refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
         };
       });
+      return { ...outcome, isCurrent };
     },
     onComplete: (outcome) => {
       const current = this.activationState;
       if (current.phase !== "testing" || this.context.gateway.snapshot.client !== outcome.client) {
+        return;
+      }
+      if (!outcome.isCurrent()) {
+        this.activationState = { phase: "idle" };
         return;
       }
       if ("error" in outcome) {
@@ -248,10 +260,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           status: "unknown",
           error: formatModelSetupError(outcome.error),
         };
-        return;
-      }
-      if (!outcome.value.isCurrent()) {
-        this.activationState = { phase: "idle" };
         return;
       }
       const activationState = mapActivationResult({

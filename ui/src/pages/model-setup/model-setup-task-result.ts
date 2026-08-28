@@ -7,9 +7,10 @@ export type ModelSetupTaskResult<T> =
   | { client: GatewayBrowserClient; value: T }
   | { client: GatewayBrowserClient; error: unknown };
 
-export type ModelSetupActivationTaskResult = {
+export type ModelSetupActivationTaskResult = ModelSetupTaskResult<{
   result: SystemAgentSetupActivateResult;
   refreshError: string | null;
+}> & {
   isCurrent: () => boolean;
 };
 

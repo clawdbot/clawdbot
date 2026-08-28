@@ -56,7 +56,7 @@ import {
 import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
-  SETUP_ADMISSION_BUSY_MESSAGE,
+  respondSetupAdmissionBusy,
   SetupAdmissionBusyError,
 } from "./setup-admission.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
@@ -67,7 +67,7 @@ import {
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -230,10 +230,6 @@ function queueDelegatedApproval(params: {
   return record.id;
 }
 
-function respondRetryableSetupUnavailable(respond: RespondFn, message: string): void {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true }));
-}
-
 export const systemAgentHandlers: GatewayRequestHandlers = {
   "openclaw.approval.list": async ({ respond, client, context }) => {
     const manager = context.systemAgentApprovalManager;
@@ -351,7 +347,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         ),
     );
     if (!session) {
-      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
+      respondSetupAdmissionBusy(respond);
       return;
     }
     context.wizardSessions.set(sessionId, session);
@@ -434,7 +430,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         ),
     );
     if (!session) {
-      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
+      respondSetupAdmissionBusy(respond);
       return;
     }
     context.wizardSessions.set(sessionId, session);
@@ -487,7 +483,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       if (!(error instanceof SetupAdmissionBusyError)) {
         throw error;
       }
-      respondRetryableSetupUnavailable(respond, error.message);
+      respondSetupAdmissionBusy(respond);
     }
   },
   "openclaw.chat": async ({ params: rawParams, respond, client, context }) => {

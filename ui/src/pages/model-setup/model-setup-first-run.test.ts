@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -131,31 +132,67 @@ describe("ModelSetupPage first-run inference", () => {
     });
   });
 
-  it("stops first-run activation after an ambiguous transport failure", async () => {
-    const { context, client, request } = createFirstRunContext();
-    request.mockRejectedValue(new Error("Activation connection dropped after dispatch"));
+  it.each(["transport", "unavailable", "busy", "not dispatched"])(
+    "stops automatic candidates after %s and only retries known non-admission explicitly",
+    async (failure) => {
+      const { context, client, request } = createFirstRunContext();
+      const message = "Setup request could not finish";
+      if (failure === "not dispatched") {
+        vi.mocked(context.runtimeConfig.runExternalMutation).mockResolvedValueOnce({
+          ok: false,
+          reason: "unavailable",
+          error: message,
+        });
+      }
+      request.mockRejectedValue(
+        failure === "transport"
+          ? new Error(message)
+          : new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message,
+              retryable: true,
+              ...(failure === "busy" ? { details: { code: "SETUP_ADMISSION_BUSY" } } : {}),
+            }),
+      );
 
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [
-            candidate("openai-api-key", "openai/first", true),
-            candidate("anthropic-api-key", "anthropic/second", true),
-          ],
+      const { page } = await mountPage(context, {
+        state: {
+          phase: "ready",
+          result: {
+            ...detection,
+            candidates: [
+              candidate("openai-api-key", "openai/first", true),
+              candidate("anthropic-api-key", "anthropic/second", true),
+            ],
+          },
         },
-      },
-      client,
-      firstRun: true,
-    });
+        client,
+        firstRun: true,
+      });
 
-    await waitForFast(() => {
-      expect(page.textContent).toContain("Activation connection dropped after dispatch");
-    });
-    expect(request).toHaveBeenCalledOnce();
-    expect(context.navigate).not.toHaveBeenCalled();
-  });
+      await waitForFast(() => {
+        expect(page.textContent).toContain(message);
+      });
+      expect(request).toHaveBeenCalledTimes(failure === "not dispatched" ? 0 : 1);
+      const retryable = failure === "busy" || failure === "not dispatched";
+      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1") === null).toBe(
+        retryable,
+      );
+      expect(page.textContent).not.toContain("Connection verified");
+      expect(context.navigate).not.toHaveBeenCalled();
+      const retry = page.querySelector<HTMLButtonElement>("[data-candidate-kind] button")!;
+      expect(retry.disabled).toBe(!retryable);
+      if (retryable) {
+        retry.click();
+        await waitForFast(() =>
+          expect(request).toHaveBeenCalledTimes(failure === "not dispatched" ? 1 : 2),
+        );
+        for (const [, params] of request.mock.calls) {
+          expect(requestParameters(params)).toMatchObject({ modelRef: "openai/first" });
+        }
+      }
+    },
+  );
 
   it("verifies an existing first-run model before entering chat or offering continuation", async () => {
     const { context, client, request } = createFirstRunContext();

@@ -4,7 +4,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 
 describe("ModelSetupWizardRunner", () => {
-  it.each(["cancelled", "done"])(
+  it.each(["cancelled", "error", "done"])(
     "binds cancellation to the original client and fences late %s after repeated resets",
     async (terminal) => {
       const cancellation = createDeferred<unknown>();
@@ -63,10 +63,10 @@ describe("ModelSetupWizardRunner", () => {
         modelActivation: { modelRef: "provider/original" },
       });
       await expect(next).resolves.toBeNull();
-      if (terminal === "cancelled") {
+      if (terminal !== "done") {
         expect(originalTerminal).toHaveBeenCalledOnce();
         expect(originalTerminal).toHaveBeenCalledWith(
-          expect.objectContaining({ status: "cancelled" }),
+          expect.objectContaining({ status: terminal }),
         );
       } else {
         expect(originalTerminal).not.toHaveBeenCalled();
@@ -301,8 +301,12 @@ describe("ModelSetupWizardRunner", () => {
     ["openclaw.setup.prepare.start", "running"],
     ["openclaw.setup.auth.start", "done"],
     ["openclaw.setup.prepare.start", "done"],
+    ["openclaw.setup.auth.start", "error"],
+    ["openclaw.setup.prepare.start", "error"],
     ["openclaw.setup.auth.start", "cancelled"],
     ["openclaw.setup.prepare.start", "cancelled"],
+    ["openclaw.setup.auth.start", "busy"],
+    ["openclaw.setup.prepare.start", "busy"],
   ] as const)(
     "retains late %s responses after the local deadline (status: %s)",
     async (method, status) => {
@@ -339,6 +343,16 @@ describe("ModelSetupWizardRunner", () => {
                     );
                   }
                   resolveFirstStart = () => {
+                    if (status === "busy") {
+                      reject(
+                        new GatewayRequestError({
+                          code: "UNAVAILABLE",
+                          message: "Setup busy",
+                          details: { code: "SETUP_ADMISSION_BUSY" },
+                        }),
+                      );
+                      return;
+                    }
                     if (!terminal) {
                       runningSession = sessionId;
                     }
@@ -469,21 +483,38 @@ describe("ModelSetupWizardRunner", () => {
     expect(runner.state).toMatchObject({ phase: "step", authChoice: "replacement" });
   });
 
-  it.each(["openclaw.setup.auth.start", "openclaw.setup.prepare.start"] as const)(
-    "does not cancel a terminal %s result after its wizard closes",
-    async (method) => {
+  it.each(
+    (["openclaw.setup.auth.start", "openclaw.setup.prepare.start"] as const).flatMap((method) =>
+      ["done", "busy"].flatMap((status) =>
+        ["open", "closed"].map((lifecycle) => ({ method, status, lifecycle })),
+      ),
+    ),
+  )(
+    "does not cancel a terminal $method $status result ($lifecycle presentation)",
+    async ({ method, status, lifecycle }) => {
       let resolveStart: () => void = () => {
         throw new Error("the setup request did not start");
       };
       const request = vi.fn(async (requestMethod: string) => {
         if (requestMethod === method) {
-          return await new Promise((resolve) => {
-            resolveStart = () =>
-              resolve({
-                done: true,
-                status: "done",
-                modelActivation: { modelRef: "provider/late" },
-              });
+          return await new Promise((resolve, reject) => {
+            resolveStart = () => {
+              if (status === "busy") {
+                reject(
+                  new GatewayRequestError({
+                    code: "UNAVAILABLE",
+                    message: "Setup busy",
+                    details: { code: "SETUP_ADMISSION_BUSY" },
+                  }),
+                );
+              } else {
+                resolve({
+                  done: true,
+                  status: "done",
+                  modelActivation: { modelRef: "provider/late" },
+                });
+              }
+            };
           });
         }
         throw new Error(`unexpected request ${requestMethod}`);
@@ -501,13 +532,26 @@ describe("ModelSetupWizardRunner", () => {
       });
 
       const start = runner.start("original", method);
-      runner.close();
+      if (lifecycle === "closed") {
+        runner.close();
+      }
       resolveStart();
       await start;
+      await runner.cancel();
 
       expect(request.mock.calls.map(([requestMethod]) => requestMethod)).toEqual([method]);
       expect(runner.state).toEqual({ phase: "idle" });
-      expect(terminalResult).not.toHaveBeenCalled();
+      if (status === "busy") {
+        expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ done: true, status: "error", error: "Setup busy" }),
+        );
+      } else if (lifecycle === "open") {
+        expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ done: true, status: "done" }),
+        );
+      } else {
+        expect(terminalResult).not.toHaveBeenCalled();
+      }
     },
   );
 

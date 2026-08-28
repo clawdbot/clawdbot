@@ -2,7 +2,7 @@ import type { WizardStatusResult } from "../../../../packages/gateway-protocol/s
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupAuthStartResult, WizardNextResult } from "../../api/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
+import { isSetupAdmissionBusyError, isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
@@ -70,15 +70,29 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "starting", authChoice });
     try {
       const agentId = this.options.getAgentId();
-      const request = client.request<SystemAgentSetupAuthStartResult>(
-        startMethod,
-        {
-          sessionId: session.sessionId,
-          authChoice,
-          ...(agentId ? { agentId } : {}),
-        },
-        { timeoutMs: null },
-      );
+      const request = client
+        .request<SystemAgentSetupAuthStartResult>(
+          startMethod,
+          {
+            sessionId: session.sessionId,
+            authChoice,
+            ...(agentId ? { agentId } : {}),
+          },
+          { timeoutMs: null },
+        )
+        .catch((error: unknown): SystemAgentSetupAuthStartResult => {
+          if (!isSetupAdmissionBusyError(error)) {
+            throw error;
+          }
+          // Normalize only the retained start's proven non-admission, including
+          // late replies after deadline/disposal, through exact terminal cleanup.
+          return {
+            sessionId: session.sessionId,
+            done: true,
+            status: "error",
+            error: formatUiError(error, this.options.requestFailedMessage()),
+          };
+        });
       const started = await this.awaitWizardStart(session, request);
       if (session !== this.session && !started.done) {
         // Admission can finish after cancellation; release only its original session.
@@ -214,11 +228,13 @@ export class ModelSetupWizardRunner {
         ? this.options.cancelledMessage()
         : this.options.requestFailedMessage(),
     );
+    if (result.done) {
+      this.session = null;
+    }
     this.setState(next);
     if (next.phase !== "done") {
       return null;
     }
-    this.session = null;
     return {
       startMethod: session.startMethod,
       ...(isCurrent ? { isCurrent } : {}),
@@ -250,8 +266,8 @@ export class ModelSetupWizardRunner {
         { sessionId: session.sessionId },
         { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
       );
-      if (result.status === "cancelled") {
-        this.reportTerminalResult(session, { done: true, status: "cancelled" });
+      if (result.status === "cancelled" || result.status === "error") {
+        this.reportTerminalResult(session, { done: true, ...result });
       }
     } catch {
       // The Gateway may already have completed or purged the session.
@@ -262,9 +278,10 @@ export class ModelSetupWizardRunner {
     session: WizardSession,
     result: WizardNextResult,
   ): (() => boolean) | void {
-    // Cancellation owns exact receipt cleanup after presentation retires.
+    // Confirmed failure/cancellation owns exact receipt cleanup after presentation retires.
     // Success and visible state still require this runner's live session.
-    if (result.done && (session === this.session || result.status === "cancelled")) {
+    const failed = result.status === "cancelled" || result.status === "error";
+    if (result.done && (session === this.session || failed)) {
       return session.onTerminalResult?.(result);
     }
   }

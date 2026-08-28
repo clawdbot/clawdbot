@@ -306,6 +306,7 @@ describe("openclaw.setup", () => {
           error: {
             code: "UNAVAILABLE",
             message: "OpenClaw setup is already in progress; try again when it finishes.",
+            details: { code: "SETUP_ADMISSION_BUSY" },
             retryable: true,
           },
         },
@@ -343,6 +344,7 @@ describe("openclaw.setup", () => {
           error: {
             code: "UNAVAILABLE",
             message: "OpenClaw setup is already in progress; try again when it finishes.",
+            details: { code: "SETUP_ADMISSION_BUSY" },
             retryable: true,
           },
         },
@@ -478,57 +480,73 @@ describe("openclaw.chat", () => {
     expect(calls[0]?.ok).toBe(false);
   });
 
-  it("forwards setup activation on the gateway lane until its response is sent", async () => {
-    const started = createDeferred();
-    const release = createDeferred();
-    const activationResult = {
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 250,
-      lines: ["Default model: openai/gpt-5.5"],
-    };
-    setupInferenceMocks.activateSetupInference.mockImplementation(async () => {
-      started.resolve();
-      await release.promise;
-      return activationResult;
-    });
-    const { calls, respond } = makeRespond();
-    const activeAtResponse: number[] = [];
+  it.each(["success", "task error", "response error"])(
+    "keeps admitted setup on the gateway lane without relabeling %s as non-admission",
+    async (outcome) => {
+      const failure = new Error("admitted operation failed");
+      const started = createDeferred();
+      const release = createDeferred();
+      const activationResult = {
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 250,
+        lines: ["Default model: openai/gpt-5.5"],
+      };
+      setupInferenceMocks.activateSetupInference.mockImplementation(async () => {
+        started.resolve();
+        await release.promise;
+        if (outcome === "task error") {
+          throw failure;
+        }
+        return activationResult;
+      });
+      const { calls, respond } = makeRespond();
+      const activeAtResponse: number[] = [];
 
-    const pending = systemAgentHandler("openclaw.setup.activate")({
-      params: {
+      const pending = systemAgentHandler("openclaw.setup.activate")({
+        params: {
+          kind: "api-key",
+          agentId: "research",
+          modelRef: "openai/gpt-5.5",
+          authChoice: "openai-api-key",
+          apiKey: "test-key",
+          workspace: "/tmp/work",
+        },
+        respond: (ok: boolean, payload?: unknown, error?: unknown) => {
+          activeAtResponse.push(systemAgentLane().activeCount);
+          if (outcome === "response error") {
+            throw failure;
+          }
+          respond(ok, payload, error);
+        },
+      } as never);
+
+      await started.promise;
+      expect(systemAgentLane().activeCount).toBe(1);
+      release.resolve();
+      if (outcome === "success") {
+        await pending;
+      } else {
+        await expect(pending).rejects.toBe(failure);
+      }
+
+      expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
         kind: "api-key",
         agentId: "research",
         modelRef: "openai/gpt-5.5",
         authChoice: "openai-api-key",
         apiKey: "test-key",
         workspace: "/tmp/work",
-      },
-      respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-        activeAtResponse.push(systemAgentLane().activeCount);
-        respond(ok, payload, error);
-      },
-    } as never);
-
-    await started.promise;
-    expect(systemAgentLane().activeCount).toBe(1);
-    release.resolve();
-    await pending;
-
-    expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
-      kind: "api-key",
-      agentId: "research",
-      modelRef: "openai/gpt-5.5",
-      authChoice: "openai-api-key",
-      apiKey: "test-key",
-      workspace: "/tmp/work",
-      surface: "gateway",
-      runtime: expect.objectContaining({ exit: expect.any(Function) }),
-    });
-    expect(calls).toEqual([{ ok: true, payload: activationResult, error: undefined }]);
-    expect(activeAtResponse).toEqual([1]);
-    expect(systemAgentLane().activeCount).toBe(0);
-  });
+        surface: "gateway",
+        runtime: expect.objectContaining({ exit: expect.any(Function) }),
+      });
+      expect(calls).toEqual(
+        outcome === "success" ? [{ ok: true, payload: activationResult, error: undefined }] : [],
+      );
+      expect(activeAtResponse).toEqual(outcome === "task error" ? [] : [1]);
+      expect(systemAgentLane().activeCount).toBe(0);
+    },
+  );
 
   it("rejects invalid params", async () => {
     const call = await callChat(makeContext(new Map()), {});
