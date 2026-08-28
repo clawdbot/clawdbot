@@ -509,7 +509,8 @@ install_companion_plugins() {
     return "$restore_status"
   fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-companion-installs "$package_version"
+    assert-companion-installs "$package_version" \
+    "${OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED:?missing candidate capability-consent support}"
 }
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"

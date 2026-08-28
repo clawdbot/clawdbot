@@ -1044,12 +1044,7 @@ function acceptedSurfaceHash(surface) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
-function assertCompanionPluginConsent(record, pluginId) {
-  const integrity = pluginInstallIntegrity(record);
-  assert(
-    typeof integrity === "string" && integrity.length > 0,
-    `${pluginId} plugin integrity missing`,
-  );
+function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
     `${pluginId} plugin accepted surface missing`,
@@ -1075,8 +1070,12 @@ function assertCompanionPluginConsent(record, pluginId) {
   );
 }
 
-function assertCompanionPluginInstalls([expectedVersion]) {
+function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
   assert(expectedVersion, "assert-companion-installs requires <expected-version>");
+  assert(
+    capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
+    "assert-companion-installs requires candidate capability-consent support",
+  );
   const records = readInstalledPluginIndex().installRecords ?? {};
   for (const [pluginId, packageName, source] of [
     ["discord", "@openclaw/discord", "npm"],
@@ -1095,7 +1094,14 @@ function assertCompanionPluginInstalls([expectedVersion]) {
       packageJson.version === expectedVersion,
       `${pluginId} installed package version changed: ${String(packageJson.version)}`,
     );
-    assertCompanionPluginConsent(record, pluginId);
+    const integrity = pluginInstallIntegrity(record);
+    assert(
+      typeof integrity === "string" && integrity.length > 0,
+      `${pluginId} plugin integrity missing`,
+    );
+    if (capabilityConsentSupported === "1") {
+      assertCompanionPluginConsent(record, pluginId, integrity);
+    }
   }
 }
 
