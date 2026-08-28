@@ -114,6 +114,8 @@ Changes delegated by a regular agent, including requests from messaging channels
 require approval in the OpenClaw operator UI. Replying "yes" in that chat cannot
 approve the change. Run `openclaw dashboard` on the Gateway host to review the
 pending approval, or run the change directly with `openclaw setup` there.
+Interactive setup and agent handoffs require a direct operator session;
+delegated chat cannot start a wizard, even when a model proposes it.
 
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
