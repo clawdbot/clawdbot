@@ -36,7 +36,7 @@ describe("Git co-author attribution", () => {
         email: string,
         accountId?: number,
         login?: string,
-        credit: "on" | "off" | "default" = "on",
+        credit: "on" | "off" | "default" | "malformed" = "on",
       ) => {
         const value = ensureProfileForEmail(email, { env: state.env });
         if (accountId && login) {
@@ -51,7 +51,9 @@ describe("Git co-author attribution", () => {
             expect(
               setUserPreferences(
                 value.id,
-                { [GIT_COAUTHOR_PREFERENCE_KEY]: credit === "on" },
+                // The preference API persists arbitrary JSON, so a non-boolean row is a
+                // reachable state that must not read as consent to publish a trailer.
+                { [GIT_COAUTHOR_PREFERENCE_KEY]: credit === "malformed" ? "yes" : credit === "on" },
                 { env: state.env },
               ),
             ).toMatchObject({ ok: true });
@@ -67,6 +69,7 @@ describe("Git co-author attribution", () => {
       const current = profile("current@example.test", 15, "current");
       const optedOut = profile("opted-out@example.test", 25, "opted-out", "off");
       const defaulted = profile("defaulted@example.test", 35, "defaulted", "default");
+      const malformed = profile("malformed@example.test", 45, "malformed", "malformed");
       const unlinked = profile("unlinked@example.test");
       const legacy = ensureProfileForEmail("legacy@example.test", { env: state.env });
       openOpenClawStateDatabase({ env: state.env })
@@ -84,6 +87,7 @@ describe("Git co-author attribution", () => {
         primary,
         optedOut,
         defaulted,
+        malformed,
         unlinked,
         legacy,
       ].entries()) {
@@ -165,6 +169,7 @@ describe("Git co-author attribution", () => {
         "Worked on by:\n- @ada\n- @same-time\n- @grace\n- @later\n- @defaulted\n- @current",
       );
       expect(modelPrompt).not.toContain("Co-authored-by: opted-out");
+      expect(modelPrompt).not.toContain("Co-authored-by: malformed");
       expect(modelPrompt).not.toContain("Co-authored-by: legacy");
       expect(structured).toMatchObject({
         logins: ["ada", "same-time", "grace", "later", "defaulted", "current"],
@@ -178,7 +183,7 @@ describe("Git co-author attribution", () => {
         ],
       });
       expect(modelPrompt).toContain(
-        "3 eligible profile participant(s) have no enabled Git co-author credit and were omitted",
+        "4 eligible profile participant(s) have no enabled Git co-author credit and were omitted",
       );
       expect(modelPrompt).toContain(
         "1 linked profile participant(s) match the configured primary Git author",
