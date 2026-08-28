@@ -110,6 +110,7 @@ Use a SQLite online backup or another WAL-aware snapshot produced while the sour
 | 15      | Board and session-sharing tables                                                                                                                                                                                                                       | Unreleased                                      |
 | 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
 | 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
+| 18      | Durable session-key recipient-authority generations for delayed named returns                                                                                                                                                                          | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
 

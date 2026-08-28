@@ -46,6 +46,7 @@ import {
   ensureSessionEntryValidityProjection,
   hasPendingSessionConversationRouteContextColumn,
   migrateConversationDeliveryTargetColumn,
+  migrateSessionRecipientAuthority,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
 } from "./openclaw-agent-db-session-migrations.js";
@@ -582,7 +583,6 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
   }
-  // Current-version convergence runs atomically in ensureAgentSchema below.
   // Validating here would make same-version repair unreachable after an update.
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
@@ -668,10 +668,9 @@ function ensureAgentSchema(
       ensureSessionAdditiveColumns(db);
       ensureSessionEntryValidityProjection(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      migrateSessionRecipientAuthority(db, previousVersion);
       migrateMemoryChunkMetadataSchema(db);
-      if (previousVersion < targetVersion) {
-        ensureOpenClawAgentBoardSchemaInTransaction(db);
-      }
+      ensureOpenClawAgentBoardSchemaInTransaction(db);
       migrateSessionTranscriptGenerations(db, previousVersion);
       migrateSessionTranscriptActiveProjection(db, previousVersion);
       if (previousVersion < 11) {

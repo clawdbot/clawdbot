@@ -36,6 +36,7 @@ import {
 } from "./session-accessor.sqlite-owner-projection.js";
 import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
+import { advanceSessionRecipientAuthorityInTransaction } from "./session-accessor.sqlite-recipient-authority.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
   cloneSessionEntry,
@@ -471,6 +472,7 @@ export function deleteLifecycleTargetRows(
   for (const sessionKey of uniqueStrings([target.canonicalKey, ...target.storeKeys])) {
     const trimmed = sessionKey.trim();
     if (trimmed) {
+      advanceSessionRecipientAuthorityInTransaction(database, trimmed);
       deleteSessionEntryRows(database, trimmed);
     }
   }
@@ -604,12 +606,6 @@ export function writeSessionEntry(
     options.previousEntry === undefined
       ? canonicalPreviousEntry
       : (options.previousEntry ?? undefined);
-  if (
-    previousEntry?.recipientAuthorityEpoch !== undefined &&
-    normalizedEntry.recipientAuthorityEpoch === undefined
-  ) {
-    normalizedEntry.recipientAuthorityEpoch = previousEntry.recipientAuthorityEpoch;
-  }
   // The lifecycle-selected entry owns visibility copy-forward semantics.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;

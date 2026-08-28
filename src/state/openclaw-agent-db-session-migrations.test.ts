@@ -5,6 +5,7 @@ import {
   backfillSessionConversations,
   ensureSessionAdditiveColumns,
   migrateConversationDeliveryTargetColumn,
+  migrateSessionRecipientAuthority,
 } from "./openclaw-agent-db-session-migrations.js";
 
 describe("agent DB conversation migration", () => {
@@ -21,7 +22,7 @@ describe("agent DB conversation migration", () => {
     const database = new sqlite.DatabaseSync(":memory:");
     databases.push(database);
     database.exec(`
-      PRAGMA user_version = 17;
+      PRAGMA user_version = 18;
       CREATE TABLE session_conversations (
         session_id TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
@@ -66,13 +67,14 @@ describe("agent DB conversation migration", () => {
       route_context_json:
         '{"version":1,"writeId":"current-write","observedAt":1,"context":{"guildId":"guild-a"}}',
     });
+
     database
       .prepare(
         "UPDATE session_conversations SET last_seen_at = ? WHERE session_id = ? AND conversation_id = ?",
       )
       .run(1, "session-a", "conversation-a");
 
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
     expect(
       database
         .prepare(
@@ -80,6 +82,51 @@ describe("agent DB conversation migration", () => {
         )
         .get(),
     ).toEqual({ route_context_json: null, last_seen_at: 1 });
+  });
+
+  it("moves valid and malformed entry-local recipient epochs into the durable owner", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    databases.push(database);
+    database.exec(`
+      CREATE TABLE session_nodes (
+        session_key TEXT PRIMARY KEY,
+        entry_json TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE session_recipient_authority (
+        session_key TEXT PRIMARY KEY,
+        epoch TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO session_nodes (session_key, entry_json) VALUES
+        ('agent:main:valid', '{"recipientAuthorityEpoch":"11111111-1111-4111-8111-111111111111","label":"valid"}'),
+        ('agent:main:malformed', '{"recipientAuthorityEpoch":{"bad":true},"label":"malformed"}'),
+        ('agent:main:missing', '{"label":"missing"}');
+    `);
+
+    migrateSessionRecipientAuthority(database, 17);
+
+    expect(
+      database
+        .prepare("SELECT session_key, epoch FROM session_recipient_authority ORDER BY session_key")
+        .all(),
+    ).toEqual([
+      { session_key: "agent:main:malformed", epoch: '{"bad":true}' },
+      {
+        session_key: "agent:main:valid",
+        epoch: "11111111-1111-4111-8111-111111111111",
+      },
+    ]);
+    expect(
+      database
+        .prepare("SELECT session_key, entry_json FROM session_nodes ORDER BY session_key")
+        .all(),
+    ).toEqual([
+      { session_key: "agent:main:malformed", entry_json: '{"label":"malformed"}' },
+      { session_key: "agent:main:missing", entry_json: '{"label":"missing"}' },
+      { session_key: "agent:main:valid", entry_json: '{"label":"valid"}' },
+    ]);
   });
 
   it("backfills direct addresses and keeps shared-main peers as participants", () => {

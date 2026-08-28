@@ -330,9 +330,12 @@ describe("subagent registry persistence", () => {
         recipients: [
           {
             sessionKey: "agent:main:subagent:silent-test",
-            authority: { state: "absent" },
+            authority: { state: "bound", epoch: "11111111-1111-4111-8111-111111111111" },
           },
-          { sessionKey: "agent:main:main", authority: { state: "absent" } },
+          {
+            sessionKey: "agent:main:main",
+            authority: { state: "bound", epoch: "22222222-2222-4222-8222-222222222222" },
+          },
         ],
       },
       traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
@@ -361,9 +364,12 @@ describe("subagent registry persistence", () => {
         recipients: [
           {
             sessionKey: "agent:main:subagent:silent-test",
-            authority: { state: "absent" },
+            authority: { state: "bound", epoch: "11111111-1111-4111-8111-111111111111" },
           },
-          { sessionKey: "agent:main:main", authority: { state: "absent" } },
+          {
+            sessionKey: "agent:main:main",
+            authority: { state: "bound", epoch: "22222222-2222-4222-8222-222222222222" },
+          },
         ],
       },
       traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
@@ -388,9 +394,18 @@ describe("subagent registry persistence", () => {
             recipients: [
               {
                 sessionKey: "agent:main:subagent:silent-test",
-                authority: { state: "absent" },
+                authority: {
+                  state: "bound",
+                  epoch: "11111111-1111-4111-8111-111111111111",
+                },
               },
-              { sessionKey: "agent:main:main", authority: { state: "absent" } },
+              {
+                sessionKey: "agent:main:main",
+                authority: {
+                  state: "bound",
+                  epoch: "22222222-2222-4222-8222-222222222222",
+                },
+              },
             ],
           },
           traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",

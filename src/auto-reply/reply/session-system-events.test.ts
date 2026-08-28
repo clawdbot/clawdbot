@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemEvent } from "../../infra/system-events.js";
 
 const RECIPIENT_AUTHORITY_EPOCH = "11111111-1111-4111-8111-111111111111";
-const REPLACEMENT_AUTHORITY_EPOCH = "22222222-2222-4222-8222-222222222222";
 
 const mocks = vi.hoisted(() => ({
   emitContinuationQueueDrainSpan: vi.fn(),
@@ -13,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   loadPendingSessionDelivery: vi.fn(),
   loadSessionEntry: vi.fn(),
   loadTranscriptEvents: vi.fn<() => Promise<unknown[]>>(async () => []),
+  isSessionRecipientAuthorityCurrent: vi.fn(() => true),
   markDelegateArtifactDeliveryUnavailable: vi.fn(),
   prepareDelegateArtifactDelivery: vi.fn(),
   recordDelegateArtifactDeliveryBinding: vi.fn(),
@@ -58,6 +58,7 @@ vi.mock("../../agents/internal-events.js", () => ({
   replaceManagedDelegateReturnInPrompt: mocks.replaceManagedDelegateReturnInPrompt,
 }));
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  isSessionRecipientAuthorityCurrent: mocks.isSessionRecipientAuthorityCurrent,
   loadSessionEntry: mocks.loadSessionEntry,
   loadTranscriptEvents: mocks.loadTranscriptEvents,
 }));
@@ -88,6 +89,7 @@ describe("drainFormattedSystemEvents trace context", () => {
     mocks.loadPendingSessionDelivery.mockReset();
     mocks.loadSessionEntry.mockReset().mockReturnValue({ sessionId: "current-session" });
     mocks.loadTranscriptEvents.mockReset().mockResolvedValue([]);
+    mocks.isSessionRecipientAuthorityCurrent.mockReset().mockReturnValue(true);
     mocks.markDelegateArtifactDeliveryUnavailable.mockClear();
     mocks.prepareDelegateArtifactDelivery.mockReset();
     mocks.recordDelegateArtifactDeliveryBinding.mockClear();
@@ -162,10 +164,7 @@ describe("drainFormattedSystemEvents trace context", () => {
     mocks.consumeSelectedSystemEventEntries.mockImplementation(
       (_sessionKey: string, entries: SystemEvent[]) => entries,
     );
-    mocks.loadSessionEntry.mockReturnValue({
-      sessionId: "new-session-incarnation",
-      recipientAuthorityEpoch: RECIPIENT_AUTHORITY_EPOCH,
-    });
+    mocks.loadSessionEntry.mockReturnValue({ sessionId: "new-session-incarnation" });
 
     const prepared = await prepareFormattedSystemEvents({
       cfg: {},
@@ -200,10 +199,8 @@ describe("drainFormattedSystemEvents trace context", () => {
     mocks.consumeSelectedSystemEventEntries.mockImplementation(
       (_sessionKey: string, entries: SystemEvent[]) => entries,
     );
-    mocks.loadSessionEntry.mockReturnValue({
-      sessionId: "replacement-session",
-      recipientAuthorityEpoch: REPLACEMENT_AUTHORITY_EPOCH,
-    });
+    mocks.loadSessionEntry.mockReturnValue({ sessionId: "replacement-session" });
+    mocks.isSessionRecipientAuthorityCurrent.mockReturnValue(false);
 
     const prepared = await prepareFormattedSystemEvents({
       cfg: {},

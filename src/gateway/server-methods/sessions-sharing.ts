@@ -20,10 +20,8 @@ import {
   removeSessionMember,
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import {
-  createSessionRecipientAuthorityEpoch,
-  doesSessionVisibilityRestrictRecipientAuthority,
-} from "../../config/sessions/session-recipient-authority-types.js";
+import { advanceSessionRecipientAuthorityInTransaction } from "../../config/sessions/session-accessor.sqlite-recipient-authority.js";
+import { doesSessionVisibilityRestrictRecipientAuthority } from "../../config/sessions/session-recipient-authority-types.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
@@ -373,18 +371,26 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       // session-id check at the storage boundary so an out-of-band row
       // replacement still cannot inherit this visibility change.
       let sessionChanged = false;
-      await patchSessionEntryCore(scope, (entry) => {
-        if (entry.sessionId !== current.entry.sessionId) {
-          sessionChanged = true;
-          return null;
-        }
-        return {
-          visibility,
-          ...(doesSessionVisibilityRestrictRecipientAuthority(previous, visibility)
-            ? { recipientAuthorityEpoch: createSessionRecipientAuthorityEpoch() }
-            : {}),
-        };
-      });
+      const restrictsAuthority = doesSessionVisibilityRestrictRecipientAuthority(
+        previous,
+        visibility,
+      );
+      await patchSessionEntryCore(
+        scope,
+        (entry) => {
+          if (entry.sessionId !== current.entry.sessionId) {
+            sessionChanged = true;
+            return null;
+          }
+          return { visibility };
+        },
+        {
+          afterPersistInTransaction: restrictsAuthority
+            ? (database) =>
+                advanceSessionRecipientAuthorityInTransaction(database, current.canonicalKey)
+            : undefined,
+        },
+      );
       if (sessionChanged) {
         throw new Error("session changed before sharing mutation");
       }

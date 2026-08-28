@@ -378,7 +378,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * Durable logical-mailbox authority. Runtime consumers must validate this
      * unknown value before comparing it so malformed persisted state fails closed.
      */
-    recipientAuthorityEpoch?: unknown;
     // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
     // threads.archived_at: the boolean is always derived from the timestamp and
     // stamped server-side). Codex serializes camelCase but in epoch SECONDS;

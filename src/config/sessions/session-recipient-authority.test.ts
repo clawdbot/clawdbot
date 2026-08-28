@@ -10,6 +10,7 @@ import {
   deleteSessionEntryLifecycle,
   isSessionRecipientAuthorityCurrent,
   patchSessionEntryCore,
+  resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.js";
@@ -29,6 +30,7 @@ describe("session recipient authority", () => {
         updatedAt: 1,
         lifecycleRevision: "lifecycle-before",
       });
+
       const authority = captureSessionRecipientAuthority(scope);
       expect(authority.state).toBe("bound");
 
@@ -51,15 +53,46 @@ describe("session recipient authority", () => {
     });
   });
 
-  it("rejects a deleted and recreated occupant while preserving absent-target materialization", async () => {
+  it.each(["new", "reset"] as const)(
+    "preserves an absent-target covenant through /%s materialization",
+    async (reason) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const scope = {
+          agentId: "main",
+          env: state.env,
+          sessionKey: `agent:main:${reason}-continuity`,
+        };
+        const authority = captureSessionRecipientAuthority(scope);
+        await upsertSessionEntryCore(scope, { sessionId: "session-before", updatedAt: 1 });
+        await resetSessionEntryLifecycle({
+          agentId: "main",
+          storePath: openOpenClawAgentDatabase({
+            agentId: "main",
+            env: state.env,
+          }).path,
+          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          resetBoundary: { context: "preserve-tail", reason: "reset" },
+          buildNextEntry: () => ({ sessionId: "session-after", updatedAt: 2 }),
+        });
+        expect(isSessionRecipientAuthorityCurrent(scope, authority)).toBe(true);
+      });
+    },
+  );
+
+  it("binds an absent target through first materialization and rejects its replacement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const scope = {
         agentId: "main",
         env: state.env,
         sessionKey: "agent:main:replacement",
       };
+      const absentAuthority = captureSessionRecipientAuthority(scope);
+      expect(absentAuthority).toEqual({
+        state: "bound",
+        epoch: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+      });
       await upsertSessionEntryCore(scope, { sessionId: "session-before", updatedAt: 1 });
-      const deletedAuthority = captureSessionRecipientAuthority(scope);
+      expect(isSessionRecipientAuthorityCurrent(scope, absentAuthority)).toBe(true);
 
       await deleteSessionEntryLifecycle({
         agentId: "main",
@@ -72,15 +105,32 @@ describe("session recipient authority", () => {
       });
       await upsertSessionEntryCore(scope, { sessionId: "session-after", updatedAt: 2 });
 
-      expect(isSessionRecipientAuthorityCurrent(scope, deletedAuthority)).toBe(false);
+      expect(isSessionRecipientAuthorityCurrent(scope, absentAuthority)).toBe(false);
       const replacementAuthority = captureSessionRecipientAuthority(scope);
-      expect(replacementAuthority).not.toEqual(deletedAuthority);
+      expect(replacementAuthority).not.toEqual(absentAuthority);
+    });
+  });
 
-      const absentScope = { ...scope, sessionKey: "agent:main:late-materialization" };
-      const absentAuthority = captureSessionRecipientAuthority(absentScope);
-      expect(absentAuthority).toEqual({ state: "absent" });
-      await upsertSessionEntryCore(absentScope, { sessionId: "session-late", updatedAt: 3 });
-      expect(isSessionRecipientAuthorityCurrent(absentScope, absentAuthority)).toBe(true);
+  it("rejects delete and recreate for a present target", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        env: state.env,
+        sessionKey: "agent:main:present-replacement",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: "session-before", updatedAt: 1 });
+      const authority = captureSessionRecipientAuthority(scope);
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        archiveTranscript: false,
+        storePath: openOpenClawAgentDatabase({
+          agentId: "main",
+          env: state.env,
+        }).path,
+        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+      });
+      await upsertSessionEntryCore(scope, { sessionId: "session-after", updatedAt: 2 });
+      expect(isSessionRecipientAuthorityCurrent(scope, authority)).toBe(false);
     });
   });
 
@@ -92,12 +142,13 @@ describe("session recipient authority", () => {
         sessionKey: "agent:main:revocation",
       };
       const ownerA = { type: "human" as const, id: "owner-a" };
+      const initialAuthority = captureSessionRecipientAuthority(scope);
       await upsertSessionEntryCore(scope, {
         sessionId: "session-revocation",
         updatedAt: 1,
         createdActor: ownerA,
       });
-      const initialAuthority = captureSessionRecipientAuthority(scope);
+      expect(isSessionRecipientAuthorityCurrent(scope, initialAuthority)).toBe(true);
 
       assignSessionOwner(scope, {
         owner: ownerA,
@@ -143,9 +194,9 @@ describe("session recipient authority", () => {
       const initialized = captureSessionRecipientAuthority(scope);
       expect(initialized.state).toBe("bound");
 
-      await patchSessionEntryCore(scope, () => ({
-        recipientAuthorityEpoch: "not-an-epoch",
-      }));
+      openOpenClawAgentDatabase({ agentId: "main", env: state.env })
+        .db.prepare("UPDATE session_recipient_authority SET epoch = ? WHERE session_key = ?")
+        .run("not-an-epoch", scope.sessionKey);
       expect(isSessionRecipientAuthorityCurrent(scope, initialized)).toBe(false);
       expect(() => captureSessionRecipientAuthority(scope)).toThrow(
         /Invalid recipient authority epoch/,

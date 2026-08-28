@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
+  captureSessionRecipientAuthority,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -54,9 +55,6 @@ type CreateManagedOutgoingMediaBlocksMock =
 type AttachManagedOutgoingMediaToMessageMock =
   typeof import("./managed-image-attachments.js").attachManagedOutgoingMediaToMessage;
 
-const RECIPIENT_AUTHORITY_EPOCH = "11111111-1111-4111-8111-111111111111";
-const REPLACEMENT_AUTHORITY_EPOCH = "22222222-2222-4222-8222-222222222222";
-
 const mocks = vi.hoisted(() => {
   const state = {
     queuedSessionDeliveries: new Map<string, Record<string, unknown>>(),
@@ -66,6 +64,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     resolveSessionAgentId: vi.fn(() => "agent-from-key"),
+    isSessionRecipientAuthorityCurrent: vi.fn(() => true),
     markDelegateArtifactDeliveryUnavailable: vi.fn(),
     prepareDelegateArtifactDelivery: vi.fn(),
     recordDelegateArtifactDeliveryBinding: vi.fn(),
@@ -361,6 +360,11 @@ vi.mock("../config/sessions/thread-info.js", () => ({
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: mocks.loadSessionEntry,
+}));
+
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  isSessionRecipientAuthorityCurrent: mocks.isSessionRecipientAuthorityCurrent,
 }));
 
 vi.mock("../utils/delivery-context.shared.js", async (importOriginal) => ({
@@ -721,6 +725,7 @@ describe("scheduleRestartSentinelWake", () => {
       storeKeys: [sessionKey],
       legacyKey: undefined,
     }));
+    mocks.isSessionRecipientAuthorityCurrent.mockReset().mockReturnValue(true);
     mocks.deliveryContextFromSession.mockReset();
     mocks.deliveryContextFromSession.mockReturnValue(undefined);
     mocks.getChannelPlugin.mockReset();
@@ -2722,17 +2727,18 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("replays a bound logical recipient after a session id rollover", async () => {
-    const recipientAuthority = {
-      state: "bound" as const,
-      epoch: RECIPIENT_AUTHORITY_EPOCH,
-    };
+    const recipientAuthority = captureSessionRecipientAuthority({
+      agentId: "main",
+      env: testState.env,
+      sessionKey: "agent:main:main",
+    });
+    mocks.isSessionRecipientAuthorityCurrent.mockReturnValue(true);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       agentId: "main",
       entry: {
         sessionId: "new-session-incarnation",
         updatedAt: 2,
-        recipientAuthorityEpoch: RECIPIENT_AUTHORITY_EPOCH,
       },
       store: {},
       storePath: "/tmp/sessions.json",
@@ -2775,17 +2781,19 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("does not replay a stale bound recipient after authority replacement", async () => {
-    const recipientAuthority = {
-      state: "bound" as const,
-      epoch: RECIPIENT_AUTHORITY_EPOCH,
+    const authorityScope = {
+      agentId: "main",
+      env: testState.env,
+      sessionKey: "agent:main:main",
     };
+    const recipientAuthority = captureSessionRecipientAuthority(authorityScope);
+    mocks.isSessionRecipientAuthorityCurrent.mockReturnValue(false);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       agentId: "main",
       entry: {
         sessionId: "replacement-session",
         updatedAt: 2,
-        recipientAuthorityEpoch: REPLACEMENT_AUTHORITY_EPOCH,
       },
       store: {},
       storePath: "/tmp/sessions.json",

@@ -789,8 +789,14 @@ describe("delegate store — TaskFlow-backed", () => {
         version: 1,
         selection: "selected",
         recipients: [
-          { sessionKey: "agent:main:root", authority: { state: "absent" } },
-          { sessionKey: "agent:main:sibling", authority: { state: "absent" } },
+          {
+            sessionKey: "agent:main:root",
+            authority: expect.objectContaining({ state: "bound", epoch: expect.any(String) }),
+          },
+          {
+            sessionKey: "agent:main:sibling",
+            authority: expect.objectContaining({ state: "bound", epoch: expect.any(String) }),
+          },
         ],
       },
     });

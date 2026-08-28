@@ -13,10 +13,8 @@ import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/repl
 import { recordInboundSession } from "../channels/session.js";
 import { dispatchAssembledChannelTurn } from "../channels/turn/lifecycle.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import {
-  sessionRecipientAuthorityMatches,
-  type SessionRecipientAuthority,
-} from "../config/sessions/session-recipient-authority-types.js";
+import { isSessionRecipientAuthorityCurrent } from "../config/sessions/session-accessor.js";
+import type { SessionRecipientAuthority } from "../config/sessions/session-recipient-authority-types.js";
 import { toErrorObject } from "../infra/errors.js";
 import { requestHeartbeatRaw as requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
@@ -177,9 +175,9 @@ async function deliverResolvedQueuedSessionDelivery(params: {
     const recipientAuthority = params.entry.recipientAuthority;
     const recipientAuthorityCurrent = () =>
       !recipientAuthority ||
-      sessionRecipientAuthorityMatches(
+      isSessionRecipientAuthorityCurrent(
+        { agentId, sessionKey: canonicalKey, storePath },
         recipientAuthority,
-        loadSessionEntry(params.entry.sessionKey).entry,
       );
     if (!recipientAuthorityCurrent()) {
       log.warn("session event delivery skipped: recipient authority changed", {

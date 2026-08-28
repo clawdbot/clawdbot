@@ -303,6 +303,30 @@ export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync
   return Boolean(columns && !columns.has("route_context_json"));
 }
 
+/** Moves the unshipped entry-local return epoch to its logical session-key owner. */
+export function migrateSessionRecipientAuthority(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion >= 18 || !readSqliteTableColumns(db, "session_recipient_authority")) {
+    return;
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO session_recipient_authority (
+       session_key, epoch, created_at, updated_at
+     )
+     SELECT
+       session_key,
+       CAST(json_extract(entry_json, '$.recipientAuthorityEpoch') AS TEXT),
+       ?,
+       ?
+     FROM session_nodes
+     WHERE json_type(entry_json, '$.recipientAuthorityEpoch') IS NOT NULL`,
+  ).run(Date.now(), Date.now());
+  db.exec(
+    `UPDATE session_nodes
+     SET entry_json = json_remove(entry_json, '$.recipientAuthorityEpoch')
+     WHERE json_type(entry_json, '$.recipientAuthorityEpoch') IS NOT NULL`,
+  );
+}
+
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */
 export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void {
   const columns = readSqliteTableColumns(db, "conversations");

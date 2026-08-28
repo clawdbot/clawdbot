@@ -14,8 +14,11 @@ import {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
 } from "../../config/sessions.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
-import { sessionRecipientAuthorityMatches } from "../../config/sessions/session-recipient-authority-types.js";
+import {
+  isSessionRecipientAuthorityCurrent,
+  loadSessionEntry,
+  loadTranscriptEvents,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
@@ -291,7 +294,14 @@ export async function prepareFormattedSystemEvents(params: {
   const staleAuthorityEvents = selected.filter(
     (event) =>
       event.recipientAuthority &&
-      !sessionRecipientAuthorityMatches(event.recipientAuthority, currentSessionEntry),
+      !isSessionRecipientAuthorityCurrent(
+        {
+          agentId,
+          sessionKey: params.sessionKey,
+          storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+        },
+        event.recipientAuthority,
+      ),
   );
   for (const event of staleAuthorityEvents) {
     if (event.sessionDeliveryAckId) {

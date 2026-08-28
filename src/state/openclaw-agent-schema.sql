@@ -92,6 +92,15 @@ CREATE TABLE IF NOT EXISTS session_key_contract (
 
 INSERT OR IGNORE INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
 
+-- Logical return authority survives session materialization and deletion. It has
+-- no session_nodes foreign key because deletion is one of its generation edges.
+CREATE TABLE IF NOT EXISTS session_recipient_authority (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  epoch TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
 AFTER INSERT ON session_nodes
 BEGIN

@@ -445,8 +445,14 @@ describe("subagent announce targeted continuation return integration", () => {
         version: 1,
         selection: "selected",
         recipients: [
-          { sessionKey: firstRecipient, authority: { state: "absent" } },
-          { sessionKey: secondRecipient, authority: { state: "absent" } },
+          {
+            sessionKey: firstRecipient,
+            authority: expect.objectContaining({ state: "bound", epoch: expect.any(String) }),
+          },
+          {
+            sessionKey: secondRecipient,
+            authority: expect.objectContaining({ state: "bound", epoch: expect.any(String) }),
+          },
         ],
       });
       allSessionKeysMock.mockImplementation(() => {

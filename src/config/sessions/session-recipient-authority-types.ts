@@ -1,21 +1,17 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/index.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const SessionRecipientAuthorityEpochSchema = z.string().uuid();
 
-export type SessionRecipientAuthority = { state: "bound"; epoch: string } | { state: "absent" };
+export type SessionRecipientAuthority = { state: "bound"; epoch: string };
 
-export const SessionRecipientAuthoritySchema = z.discriminatedUnion("state", [
-  z
-    .object({
-      state: z.literal("bound"),
-      epoch: SessionRecipientAuthorityEpochSchema,
-    })
-    .strict(),
-  z.object({ state: z.literal("absent") }).strict(),
-]);
+export const SessionRecipientAuthoritySchema = z
+  .object({
+    state: z.literal("bound"),
+    epoch: SessionRecipientAuthorityEpochSchema,
+  })
+  .strict();
 
 const ContinuationRecipientAuthorityRecipientSchema = z
   .object({
@@ -79,10 +75,9 @@ export function createSessionRecipientAuthorityEpoch(): string {
 }
 
 export function readSessionRecipientAuthorityEpoch(
-  entry: Pick<SessionEntry, "recipientAuthorityEpoch">,
+  value: unknown,
 ): SessionRecipientAuthorityEpochState {
-  const value: unknown = entry.recipientAuthorityEpoch;
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return { state: "missing" };
   }
   const parsed = SessionRecipientAuthorityEpochSchema.safeParse(value);
@@ -91,15 +86,8 @@ export function readSessionRecipientAuthorityEpoch(
 
 export function sessionRecipientAuthorityMatches(
   authority: SessionRecipientAuthority,
-  entry: Pick<SessionEntry, "recipientAuthorityEpoch"> | undefined,
+  current: SessionRecipientAuthorityEpochState,
 ): boolean {
-  if (authority.state === "absent") {
-    return true;
-  }
-  if (!entry) {
-    return false;
-  }
-  const current = readSessionRecipientAuthorityEpoch(entry);
   return current.state === "present" && current.epoch === authority.epoch;
 }
 

@@ -94,6 +94,7 @@ import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from ".
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 
 type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
+  afterPersistInTransaction?: (database: OpenClawAgentDatabase) => void;
   skipMaintenance?: boolean;
 };
 
@@ -573,7 +574,6 @@ type SqliteSessionEntrySnapshotPatchParams<TSnapshot> = {
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 };
 
-/** All entry patches prepare asynchronously, then revalidate and publish on one commit edge. */
 async function patchSqliteSessionEntrySnapshot<TSnapshot>(
   params: SqliteSessionEntrySnapshotPatchParams<TSnapshot>,
 ): Promise<SessionEntry | null> {
@@ -639,6 +639,7 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
           const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
             previousEntry: selectedPreviousEntry,
           });
+          options.afterPersistInTransaction?.(writeDatabase);
           if (params.rehomeWindows) {
             rehomeSessionWindows(writeDatabase, sessionKey, legacyKeys);
           }

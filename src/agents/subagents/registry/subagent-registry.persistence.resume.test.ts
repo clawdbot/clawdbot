@@ -235,7 +235,10 @@ describe("subagent registry persistence resume", () => {
         recipients: [
           {
             sessionKey: "agent:main:main",
-            authority: { state: "absent" as const },
+            authority: {
+              state: "bound" as const,
+              epoch: "11111111-1111-4111-8111-111111111111",
+            },
           },
         ],
       };
