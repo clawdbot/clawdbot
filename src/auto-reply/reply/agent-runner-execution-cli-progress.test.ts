@@ -741,8 +741,13 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       },
     ]);
     expect(onReasoningEnd).toHaveBeenCalledOnce();
-    expect(expectDefined(onReasoningStream.mock.invocationCallOrder.at(-1))).toBeLessThan(
-      expectDefined(onReasoningEnd.mock.invocationCallOrder[0]),
+    expect(
+      expectDefined(
+        onReasoningStream.mock.invocationCallOrder.at(-1),
+        "last reasoning stream callback order",
+      ),
+    ).toBeLessThan(
+      expectDefined(onReasoningEnd.mock.invocationCallOrder[0], "reasoning end callback order"),
     );
   });
 

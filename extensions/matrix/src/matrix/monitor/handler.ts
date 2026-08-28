@@ -571,6 +571,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               // Admit typed payloads here, then let the resolved-turn callback select the Matrix lane.
               reasoningPayloadsEnabled: true,
               onReasoningLevelResolved: setReasoningLevel,
+              onReasoningStream: turnDispatcherOptions.onReasoningStream,
+              onReasoningEnd: turnDispatcherOptions.onReasoningEnd,
               // Preserve explicit block streaming with draft previews: drafts update the live
               // block, while block deliveries finalize completed blocks as separate events.
               disableBlockStreaming: !blockStreamingEnabled,

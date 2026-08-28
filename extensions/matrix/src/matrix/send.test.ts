@@ -1175,6 +1175,20 @@ describe("sendMessageMatrix mentions", () => {
     });
   });
 
+  it("suppresses mention metadata in media captions when requested", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "caption @room @alice:example.org", {
+      client,
+      cfg: {} as never,
+      mediaUrl: "file:///tmp/photo.png",
+      disableMentions: true,
+    });
+
+    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    expect(sentContent(sendMessage).formatted_body).not.toContain("matrix.to");
+  });
+
   it("does not emit mentions from fallback filenames when there is no caption", async () => {
     const { client, sendMessage } = makeClient();
     loadWebMediaMock.mockResolvedValue({

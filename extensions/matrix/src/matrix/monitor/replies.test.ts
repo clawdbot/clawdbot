@@ -404,6 +404,29 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(0).disableMentions).toBe(true);
   });
 
+  it("suppresses mentions in reasoning media captions", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "Reasoning:\nCheck @room and @alice:example.org",
+          mediaUrl: "file:///tmp/reasoning.png",
+          isReasoning: true,
+        },
+      ],
+      roomId: "room:reasoning-media",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(sendOptions(0)).toMatchObject({
+      mediaUrl: "file:///tmp/reasoning.png",
+      disableMentions: true,
+    });
+  });
+
   it("delivers literal reasoning tags inside Markdown code", async () => {
     const text = "Use `<mm:think>example</mm:think>` literally.";
 
