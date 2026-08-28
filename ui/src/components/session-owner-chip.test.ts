@@ -19,6 +19,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function waitForChipUpdate(chip: OwnerChipElement) {
+  await chip.updateComplete;
+  // The parent's update does not include the nested avatar's render.
+  await Promise.all(
+    [...chip.querySelectorAll("openclaw-viewer-avatar")].map((avatar) => avatar.updateComplete),
+  );
+}
+
 async function mount(params: { participants?: SessionCreatedActor[]; participantCount?: number }) {
   // SAFETY: the imported module registers this custom element with these reactive properties.
   const chip = document.createElement("openclaw-session-owner-chip") as OwnerChipElement;
@@ -28,10 +36,8 @@ async function mount(params: { participants?: SessionCreatedActor[]; participant
   chip.participants = params.participants ?? [];
   chip.participantCount = params.participantCount ?? chip.participants.length;
   document.body.append(chip);
-  await vi.waitFor(async () => {
-    await chip.updateComplete;
-    expect(chip.querySelector(".session-owner-chip")).not.toBeNull();
-  });
+  await waitForChipUpdate(chip);
+  expect(chip.querySelector(".session-owner-chip")).not.toBeNull();
   return chip;
 }
 
@@ -72,11 +78,10 @@ it.each(["row", "header"] as const)(
       avatarUrl: "/avatar/research",
     };
     chip.size = size;
-    await vi.waitFor(() => {
-      expect(chip.querySelector(".session-owner-chip img")?.getAttribute("src")).toBe(
-        "/avatar/research",
-      );
-    });
+    await waitForChipUpdate(chip);
+    expect(chip.querySelector(".session-owner-chip img")?.getAttribute("src")).toBe(
+      "/avatar/research",
+    );
   },
 );
 
