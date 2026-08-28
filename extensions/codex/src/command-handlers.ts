@@ -76,6 +76,7 @@ export type { CodexCommandDepsOverride } from "./command-handler-deps.js";
 
 const CODEX_HOST_INSPECTION_SUBCOMMANDS = new Set([
   "account",
+  "binding",
   "mcp",
   "sessions",
   "skills",
