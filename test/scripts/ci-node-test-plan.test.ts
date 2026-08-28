@@ -1559,6 +1559,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "test/vitest/vitest.gateway-client.config.ts",
         ],
         includePatterns: gatewayCoreShards[stripe - 1]?.includePatterns,
+        ...(gatewayCoreShards[stripe - 1]?.includePatterns?.includes(
+          "src/gateway/gateway-active-memory.test.ts",
+        )
+          ? { pretestBuildMode: "runtime" }
+          : {}),
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
       })),

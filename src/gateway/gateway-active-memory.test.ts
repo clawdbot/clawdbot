@@ -3,46 +3,27 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFailed } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resetConfigOverrides } from "../config/runtime-overrides.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { describe, expect, it, onTestFailed } from "vitest";
+import { GatewayClient } from "../../packages/gateway-client/src/index.js";
+import {
+  BUILD_STAMP_FILE,
+  resolveGitHead,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata.mts";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../test/helpers/openclaw-test-instance.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
-import { resetLogger, setLoggerOverride } from "../logging.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
+import {
+  publicKeyRawBase64UrlFromEd25519Pem,
+  signEd25519Payload,
+} from "../infra/ed25519-signature.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
-
-const ENV_KEYS = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_STARTUP_TRACE",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
-
-function resetGatewayState(): void {
-  resetLogger();
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-}
-
-afterEach(resetGatewayState);
 
 function completeResponse(response: ServerResponse, item?: Record<string, unknown>): void {
   response.writeHead(200, { "content-type": "text/event-stream" });
@@ -70,11 +51,23 @@ describe("Gateway Active Memory", () => {
     "keeps a grounded but terminally failed recall out of the main prompt",
     { timeout: 90_000 },
     async () => {
-      const env = captureEnv([...ENV_KEYS]);
+      const repoRoot = process.cwd();
+      const head = resolveGitHead({ cwd: repoRoot });
+      expect(head).toMatch(/^[0-9a-f]{40}$/u);
+      // Fail before the process helper can rebuild shared dist or choose source.
+      await fs.access(path.join(repoRoot, "dist/index.js"));
+      for (const [file, field] of [
+        [BUILD_STAMP_FILE, "head"],
+        [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
+        ["build-info.json", "commit"],
+      ] as const) {
+        const metadata = JSON.parse(
+          await fs.readFile(path.join(repoRoot, "dist", file), "utf8"),
+        ) as Record<string, unknown>;
+        expect(metadata[field], file).toBe(head);
+      }
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-gateway-"));
-      const stateDir = path.join(home, ".openclaw");
       const workspace = path.join(home, "workspace");
-      const configPath = path.join(stateDir, "openclaw.json");
       const memoryFact = "The user's usual lunch is ginger ramen.";
       const mainReply = "ACTIVE_MEMORY_RUNTIME_PROOF_OK";
       const mainRequests: string[] = [];
@@ -143,36 +136,11 @@ describe("Gateway Active Memory", () => {
           response.writeHead(500).end("mock provider failed");
         });
       });
-      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      let instance: OpenClawTestInstance | undefined;
+      let client: GatewayClient | undefined;
       try {
-        await Promise.all([
-          fs.mkdir(stateDir, { recursive: true }),
-          fs.mkdir(workspace, { recursive: true }),
-        ]);
+        await fs.mkdir(workspace, { recursive: true });
         await fs.writeFile(path.join(workspace, "MEMORY.md"), `${memoryFact}\n`, "utf8");
-        for (const [key, value] of Object.entries({
-          HOME: home,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-        })) {
-          setTestEnvValue(key, value);
-        }
-        for (const key of [
-          "OPENCLAW_CONFIG_PATH",
-          "OPENCLAW_TEST_MINIMAL_GATEWAY",
-          "OPENCLAW_BUNDLED_PLUGINS_DIR",
-          "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-        ]) {
-          deleteTestEnvValue(key);
-        }
-        resetGatewayState();
-        setLoggerOverride({ level: "silent", consoleLevel: "info" });
         phase = "starting mock provider";
         await new Promise<void>((resolve, reject) => {
           providerServer.once("error", reject);
@@ -199,6 +167,7 @@ describe("Gateway Active Memory", () => {
             },
           },
           gateway: { auth: { mode: "token", token } },
+          hooks: { enabled: false },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
           memory: { search: { rememberAcrossConversations: false } },
           plugins: {
@@ -221,15 +190,44 @@ describe("Gateway Active Memory", () => {
           tools: { profile: "full" },
         } satisfies OpenClawConfig;
         phase = "starting Gateway";
-        gateway = await startGatewayWithClient({
-          cfg,
-          configPath,
-          token,
-          scopes: ["operator.admin", "operator.read", "operator.write"],
+        instance = await createOpenClawTestInstance({
+          name: "active-memory-gateway",
+          cwd: repoRoot,
+          config: cfg,
+          gatewayToken: token,
+          env: {
+            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+          },
         });
+        expect(await instance.entrypoint()).toEqual(["dist/index.js"]);
+        await instance.startGateway();
+        const connected = createDeferred<void>();
+        client = new GatewayClient({
+          url: instance.url,
+          token: instance.gatewayToken,
+          clientName: GATEWAY_CLIENT_NAMES.TEST,
+          clientVersion: "dev",
+          mode: GATEWAY_CLIENT_MODES.TEST,
+          role: "operator",
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+          deviceIdentity: generateStoredDeviceIdentity(),
+          hostDeps: {
+            signDevicePayload: signEd25519Payload,
+            publicKeyRawBase64UrlFromPem: publicKeyRawBase64UrlFromEd25519Pem,
+          },
+          onHelloOk: () => connected.resolve(),
+          onConnectError: connected.reject,
+          onClose: (code, reason) =>
+            connected.reject(new Error(`Gateway closed during connect (${code}): ${reason}`)),
+        });
+        client.start();
+        await withTestTimeout(connected.promise, 10_000, "Gateway connect timeout");
         const sessionKey = "agent:main:main";
         phase = "starting main turn";
-        const accepted = await gateway.client.request<{ runId: string; status: string }>("agent", {
+        const accepted = await client.request<{ runId: string; status: string }>("agent", {
           sessionKey,
           message: "What do I usually have for lunch?",
           deliver: false,
@@ -237,7 +235,7 @@ describe("Gateway Active Memory", () => {
         });
         expect(accepted.status).toBe("accepted");
         phase = "waiting for main reply";
-        const completed = await gateway.client.request<{ status: string }>(
+        const completed = await client.request<{ status: string }>(
           "agent.wait",
           { runId: accepted.runId, timeoutMs: 30_000 },
           { timeoutMs: 35_000 },
@@ -249,10 +247,11 @@ describe("Gateway Active Memory", () => {
           expect.arrayContaining([expect.stringContaining(memoryFact)]),
         );
         expect(recallRequests).toBeGreaterThan(1);
-        const entry = loadSessionEntry({
+        const entry = loadSessionEntryReadOnly({
           agentId: "main",
           sessionKey,
-          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          env: instance.env,
+          storePath: path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
         });
         const statusLines = entry?.pluginDebugEntries?.find(
           (item) => item.pluginId === "active-memory",
@@ -261,28 +260,25 @@ describe("Gateway Active Memory", () => {
         expect(mainRequests).toHaveLength(1);
         expect(mainRequests[0]).not.toContain("<active_memory_plugin>");
         expect(mainRequests[0]).not.toContain("Please try again.");
-        const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
+        const history = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey,
         });
         expect(JSON.stringify(history.messages)).toContain(mainReply);
       } finally {
         try {
-          if (gateway) {
-            try {
-              await disconnectGatewayClient(gateway.client);
-            } finally {
-              await gateway.server.close({ reason: "active memory regression cleanup" });
-            }
-          }
+          await client?.stopAndWait();
         } finally {
           try {
-            providerServer.closeAllConnections();
-            await new Promise<void>((resolve) => {
-              providerServer.close(() => resolve());
-            });
-            await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+            await instance?.cleanup();
           } finally {
-            env.restore();
+            try {
+              providerServer.closeAllConnections();
+              await new Promise<void>((resolve) => {
+                providerServer.close(() => resolve());
+              });
+            } finally {
+              await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+            }
           }
         }
       }
