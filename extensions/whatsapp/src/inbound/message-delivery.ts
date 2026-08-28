@@ -465,6 +465,15 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       return "completed";
     }
 
+    // Cold durable replay (restart recovery) bypasses handleMessagesUpsert,
+    // where every live receipt dispatch lives. Rows the live path admitted
+    // carry a preparation entry, so only rows without one still need the
+    // receive-time retry here; the dispatcher dedupes against any receipt
+    // the live path already sent.
+    if (preparation === undefined) {
+      dispatchReadReceipt(inbound, buildReadReceiptTarget(inbound));
+    }
+
     recordAcceptedInboundActivity(options.accountId);
     await enqueueInboundMessage(msg, inbound, enriched, {
       receiveOrder: context.receiveOrder ?? context.receivedAt,
@@ -608,6 +617,23 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       } else {
         // Pending redelivery leaves the first accepted delivery's preparation in place.
         finishPreparation(undefined);
+        // An active durable duplicate (row still pending or claimed) can carry
+        // a receive-time receipt whose first attempt failed: the admission
+        // verdict has no accepted branch for it, so a replay would otherwise
+        // never re-reach the dispatcher and the blue tick would stay lost.
+        // The dispatcher dedupes across sent/in-flight/pending, so completed
+        // or in-flight acknowledgements stay no-ops, and the agent turn is
+        // never redelivered here (turn dispatch is owned by the ingress drain).
+        if (
+          !skipRecentOutboundEcho &&
+          result.kind === "durable" &&
+          (result.queueResult.kind === "pending" || result.queueResult.kind === "claimed")
+        ) {
+          const inbound = await normalizeInboundMessage(msg);
+          if (inbound) {
+            dispatchReadReceipt(inbound, buildReadReceiptTarget(inbound));
+          }
+        }
       }
     }
   };

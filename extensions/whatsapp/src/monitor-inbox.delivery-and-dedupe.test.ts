@@ -1,5 +1,8 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { createHash } from "node:crypto";
+import type { WAMessage } from "baileys";
 import { describe, expect, it, vi } from "vitest";
+import { serializeWhatsAppDurableInboundMessage } from "./inbound/durable-payload.js";
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
 import type { WebInboundMessage } from "./inbound/types.js";
@@ -603,6 +606,48 @@ describe("web monitor inbox delivery and dedupe", () => {
     await settleInboundWork();
     expect(replayedOnMessage).not.toHaveBeenCalled();
     await replay.listener.close();
+  });
+
+  it("delivery coordinator sends a read receipt for a cold durable replay drained at startup", async () => {
+    // A stop after durable admission can leave a persisted row for the next
+    // coordinator. Seed that row directly, then start a fresh coordinator:
+    // its startup drain must dispatch the receive-time receipt even though no
+    // new socket upsert ever arrives.
+    const messageId = nextMessageId("cold-replay");
+    const remoteJid = "999@s.whatsapp.net";
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid,
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    await queue.enqueue(
+      createHash("sha256").update(`${remoteJid}\n${messageId}`).digest("hex"),
+      {
+        message: serializeWhatsAppDurableInboundMessage(upsert.messages[0] as unknown as WAMessage),
+        upsertType: "notify",
+        receivedAt: Date.now(),
+      },
+      { laneKey: remoteJid },
+    );
+
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue: queue,
+    });
+    await waitForMessageCalls(onMessage, 1);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid,
+        id: messageId,
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+    await listener.close();
   });
 
   it("delivery coordinator lets a later same-key flush steer during an active turn", async () => {
