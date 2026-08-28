@@ -30,7 +30,11 @@ export const execSchema = Type.Object({
         "Working directory; omit for default. An empty string means omitted; whitespace-only is invalid.",
     }),
   ),
-  env: Type.Optional(Type.Record(Type.String(), Type.String())),
+  env: Type.Optional(
+    Type.Record(Type.String(), Type.String(), {
+      description: "Env overrides. Literal values; no expansion. Omit to inherit.",
+    }),
+  ),
   yieldMs: Type.Optional(
     Type.Number({
       description: "Milliseconds before backgrounding; default 10000.",
