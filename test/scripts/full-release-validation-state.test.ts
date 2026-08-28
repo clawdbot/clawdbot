@@ -2385,13 +2385,32 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     );
   });
 
-  it("adopts the immutable attempt-one plan on an attempt-two collector retry", () => {
+  it("restores the phased attempt-one plan unchanged on an attempt-two collector retry", () => {
     const root = mkdtempSync(join(tmpdir(), "frv-plan-restore-"));
     const output = join(root, "full-release-execution-plan.json");
-    const request = buildFullReleaseCandidateRequest(candidateRequestInput());
+    const githubOutput = join(root, "github-output");
+    const candidate = candidateBinding();
+    const phasedChildren = {
+      normalCi: { result: "success", runAttempt: 1, runId: "101" },
+      pluginPrereleaseIndependent: { result: "success", runAttempt: 1, runId: "202" },
+      pluginPrereleaseCandidate: { result: "success", runAttempt: 1, runId: "203" },
+      releaseChecksIndependent: { result: "success", runAttempt: 1, runId: "303" },
+      releaseChecksCandidate: { result: "success", runAttempt: 1, runId: "304" },
+      npmTelegram: { result: "success", runAttempt: 1, runId: "404" },
+      productPerformance: { result: "success", runAttempt: 1, runId: "505" },
+    };
     const sealed = executionPlan(
-      { rerunGroup: "ci" },
-      { attemptEvidenceVersion: 2, candidate: null, candidateRequest: request },
+      {
+        candidateAcquisitionResult: "success",
+        candidateRequired: true,
+        childPhaseVersion: 3,
+        children: phasedChildren,
+      },
+      {
+        attemptEvidenceVersion: 3,
+        candidate,
+        candidateRequest: candidate.request,
+      },
     );
     writeFileSync(output, JSON.stringify(sealed));
     const result = spawnSync(process.execPath, [SCRIPT, "plan"], {
@@ -2399,24 +2418,40 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
         ...process.env,
         ...candidateRequestEnvironment(),
         FULL_RELEASE_EXECUTION_PLAN_PATH: output,
+        FULL_RELEASE_PLAN_INPUTS_JSON: "must-not-be-read-during-restore",
         FULL_RELEASE_RESTORE_PLAN: "true",
+        GITHUB_OUTPUT: githubOutput,
         GITHUB_REF_NAME: "release-ci/tooling",
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_RUN_ATTEMPT: "2",
         GITHUB_RUN_ID: "77",
         GITHUB_SHA: SHA,
         RELEASE_PROFILE: "stable",
-        RERUN_GROUP: "ci",
+        RERUN_GROUP: "all",
         TARGET_SHA,
       },
       encoding: "utf8",
       timeout: 10_000,
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+    const restored = JSON.parse(readFileSync(output, "utf8"));
+    expect(restored).toMatchObject({
+      attemptEvidenceVersion: 3,
       parentRunAttempt: 1,
       sha256: sealed.sha256,
     });
+    expect(restored.candidate).toEqual(candidate);
+    expect(restored.candidate.publisher).toEqual(candidate.publisher);
+    const phasedKeys = new Set([
+      "pluginPrereleaseIndependent",
+      "pluginPrereleaseCandidate",
+      "releaseChecksIndependent",
+      "releaseChecksCandidate",
+    ]);
+    expect(restored.children.filter((child) => phasedKeys.has(child.key))).toEqual(
+      sealed.children.filter((child) => phasedKeys.has(child.key)),
+    );
+    expect(readFileSync(githubOutput, "utf8")).toContain("source_parent_attempt=1\n");
   });
 
   it.each([

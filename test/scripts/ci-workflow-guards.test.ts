@@ -10380,8 +10380,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const releaseWorkflow = readReleaseChecksWorkflow();
     const telegramWorkflow = readWorkflow(".github/workflows/openclaw-release-telegram-qa.yml");
     const telegramProvenanceHelper = readFileSync("scripts/release-telegram-provenance.sh", "utf8");
-    const fullReleaseDispatchStep = fullReleaseWorkflow.jobs.release_checks.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch release checks",
+    const fullReleaseDispatchStep = fullReleaseWorkflow.jobs.release_checks_candidate.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch release checks candidate phase",
     );
     const dispatchStep = releaseWorkflow.jobs.qa_live_telegram_release_checks.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch and await trusted Telegram QA",

@@ -674,10 +674,23 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
+    "scripts/full-release-candidate-reuse.mjs",
     "scripts/lib/full-release-candidate-reuse.mjs",
     "scripts/lib/full-release-candidate-reuse.d.mts",
   ])("routes candidate reuse library changes through the owner test for %s", (changedPath) => {
     expectChangedTargets([changedPath], ["test/scripts/full-release-candidate-reuse.test.ts"]);
+  });
+
+  it("keeps full release candidate workflow edits on candidate contract tests", () => {
+    expectChangedTargets(
+      [".github/workflows/full-release-candidate.yml"],
+      [
+        "test/scripts/full-release-candidate-reuse.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/check-workflows.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    );
   });
 
   it("unions semantic workflow owners with bounded direct references", () => {

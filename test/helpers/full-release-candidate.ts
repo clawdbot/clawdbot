@@ -75,7 +75,8 @@ export function fullReleaseCandidateManifestFixture(
       runId: "77",
       runAttempt: "1",
       jobId: "201",
-      jobName: "Prepare shared release candidate / Prepare shared Docker E2E image",
+      jobName:
+        "Acquire full release candidate / Prepare shared release candidate / Prepare shared Docker E2E image",
     },
     publisher: {
       repository: request.repository,
@@ -84,7 +85,8 @@ export function fullReleaseCandidateManifestFixture(
       runId: "77",
       runAttempt: "1",
       jobId: "202",
-      jobName: "Prepare shared release candidate / Bind full release candidate evidence",
+      jobName:
+        "Acquire full release candidate / Prepare shared release candidate / Bind full release candidate evidence",
     },
     preparation: {
       planSha256: "d".repeat(64),
