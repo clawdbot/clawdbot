@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../../lib/toast.ts";
 import { renderChatSessionSharing } from "./chat-session-sharing.ts";
 
 let container: HTMLDivElement | undefined;
@@ -7,6 +8,7 @@ let container: HTMLDivElement | undefined;
 afterEach(() => {
   container?.remove();
   container = undefined;
+  document.querySelectorAll("openclaw-toast-host").forEach((host) => host.remove());
 });
 
 function mount(template: ReturnType<typeof renderChatSessionSharing>) {
@@ -266,8 +268,11 @@ describe("chat session sharing menu", () => {
     expect(onMemberChange).not.toHaveBeenCalled();
   });
 
-  it("disables opening when sharing reads are unavailable", () => {
+  it("explains why sharing cannot open instead of silently ignoring activation", async () => {
     const onOpen = vi.fn();
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
     const root = mount(
       renderChatSessionSharing({
         session: {
@@ -285,11 +290,19 @@ describe("chat session sharing menu", () => {
       }),
     );
 
-    expect(root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled).toBe(
-      true,
-    );
-    root.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-show"));
+    const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger");
+    expect(trigger?.disabled).toBe(false);
+    expect(trigger?.ariaLabel).toBe("Session sharing: Connect to the Gateway");
+    expect(trigger?.title).toBe("Connect to the Gateway");
+    expect(root.querySelector(".chat-pane__sharing-menu")?.localName).toBe("span");
+    expect(root.querySelector("wa-dropdown")).toBeNull();
+
+    trigger?.click();
+    await toast.updateComplete;
+
+    expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Connect to the Gateway");
     expect(onOpen).not.toHaveBeenCalled();
+    toast.remove();
   });
 
   it("keeps visibility controls usable without member-list support", () => {

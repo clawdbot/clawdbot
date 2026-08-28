@@ -779,6 +779,49 @@ suite.define(() => {
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
+  it("explains why the sharing menu is unavailable instead of ignoring the click", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessions = sessionsList(["profile-ada", "profile-bob"]);
+    const ownerSession = sessions.sessions[0];
+    if (!ownerSession) {
+      throw new Error("expected owner session fixture");
+    }
+    Object.assign(ownerSession, { visibility: "read-only", sharingRole: "owner" });
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "session.visibility.set",
+        "session.members.list",
+      ],
+      operatorScopes: ["operator.approvals"],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": sessions },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    const trigger = currentPage.locator(".chat-pane__sharing-trigger");
+    await expectBrowser(trigger).toHaveAttribute(
+      "aria-label",
+      "Session sharing: This action requires operator.read access.",
+    );
+    await expectBrowser(trigger).toHaveAttribute(
+      "title",
+      "This action requires operator.read access.",
+    );
+    await captureUiProof(currentPage, "05-sharing-unavailable-before.png");
+    await trigger.click();
+
+    const toast = currentPage.locator("openclaw-toast-host .app-toast");
+    await expectBrowser(toast).toContainText("This action requires operator.read access.");
+    await captureUiProof(currentPage, "06-sharing-unavailable-toast.png");
+    expect(await gateway.getRequests("session.members.list")).toHaveLength(0);
+  });
+
   it("scrolls high-volume sharing through one compact menu", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
     const currentPage = await context.newPage();

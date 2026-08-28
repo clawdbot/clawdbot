@@ -8,6 +8,7 @@ import { icons } from "../../../components/icons.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { showToast } from "../../../lib/toast.ts";
 
 export type ChatSessionSharingState = {
   loading: boolean;
@@ -43,6 +44,23 @@ function sharingIcon(visibility: SessionVisibility): TemplateResult {
   return visibility === "shared" ? icons.users : icons.lock;
 }
 
+function renderSharingTrigger(visibility: SessionVisibility, disabledReason?: string) {
+  const label = t("chat.sessionSharing.menu");
+  return html`<button
+    slot=${disabledReason ? nothing : "trigger"}
+    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger"
+    type="button"
+    aria-label=${disabledReason ? `${label}: ${disabledReason}` : label}
+    title=${disabledReason ??
+    t("chat.sessionSharing.current", {
+      visibility: t(VISIBILITY_LABEL_KEYS[visibility]),
+    })}
+    @click=${disabledReason ? () => showToast({ message: disabledReason }) : undefined}
+  >
+    ${sharingIcon(visibility)}
+  </button>`;
+}
+
 export function canManageChatSessionSharing(
   session: Pick<GatewaySessionRow, "sharingRole">,
 ): boolean {
@@ -74,15 +92,15 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
   const visibilityOptions = allowed.filter((option) => !canPublish || option !== "shared");
   const shouldCapMembers =
     membersAvailable && visibilityOptions.length + identities.length + (canPublish ? 1 : 0) > 12;
+  const trigger = renderSharingTrigger(visibility, props.openDisabledReason);
+  if (props.openDisabledReason) {
+    return html`<span class="chat-pane__sharing-menu">${trigger}</span>`;
+  }
   return html`
     <wa-dropdown
       class="chat-pane__sharing-menu ${shouldCapMembers ? "chat-pane__sharing-menu--capped" : ""}"
       placement="bottom-end"
-      @wa-show=${() => {
-        if (!props.openDisabledReason) {
-          props.onOpen();
-        }
-      }}
+      @wa-show=${props.onOpen}
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
         const value = event.detail.item.value;
         if (value?.startsWith("visibility:")) {
@@ -103,19 +121,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
         }
       }}
     >
-      <button
-        slot="trigger"
-        class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger"
-        type="button"
-        aria-label=${t("chat.sessionSharing.menu")}
-        ?disabled=${Boolean(props.openDisabledReason)}
-        title=${props.openDisabledReason ??
-        t("chat.sessionSharing.current", {
-          visibility: t(VISIBILITY_LABEL_KEYS[visibility]),
-        })}
-      >
-        ${sharingIcon(visibility)}
-      </button>
+      ${trigger}
       ${canPublish
         ? html`<wa-dropdown-item
               value="visibility:shared"
