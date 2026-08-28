@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
@@ -9,6 +10,7 @@ import {
 } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import { isMovableChatQueueItem } from "../../../lib/chat/chat-queue-order.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
@@ -33,6 +35,7 @@ import {
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { renderQueuedSendControls, type ChatQueueProps } from "./chat-composer-queue.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
@@ -113,6 +116,7 @@ type RenderMessageGroupOptions = {
   onReply?: (target: MessageReplyTarget) => void;
   onRetryQueuedMessage?: (id: string) => void;
   queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
+  queueControls?: ChatQueueProps;
   resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
   onResolveReply?: (replyToId: string) => void;
   onOpenReply?: (replyToId: string) => void;
@@ -550,6 +554,22 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
+      @dblclick=${(event: MouseEvent) => {
+        const target = event.target;
+        if (
+          !(target instanceof Element) ||
+          !target.closest(".chat-bubble") ||
+          target.closest("a, button, input, select, textarea") ||
+          !isPendingSendMessage(group.messages[0]?.message)
+        ) {
+          return;
+        }
+        const pendingId = asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.id;
+        const queued = opts.queueControls?.queue.find((entry) => entry.id === pendingId);
+        if (queued && isMovableChatQueueItem(queued) && !opts.queueControls?.editingId) {
+          opts.queueControls?.onQueueEdit?.(queued.id);
+        }
+      }}
     >
       ${normalizedRole !== "tool" &&
       showAvatarGutter &&
@@ -583,6 +603,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ${opts.frameContent ??
         group.messages.map((item, index) => {
           const actionDetails = messageActionDetails[index];
+          const queued = isPendingSendMessage(item.message)
+            ? opts.queueControls?.queue.find(
+                (entry) => entry.id === asRecord(asRecord(item.message)?.["__openclaw"])?.id,
+              )
+            : undefined;
           return html`
             ${renderGroupedMessage(
               item.message,
@@ -590,6 +615,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
               opts.onOpenSidebar,
             )}
+            ${queued && opts.queueControls
+              ? renderQueuedSendControls(queued, opts.queueControls)
+              : nothing}
             ${actionDetails && index < lastMessageIndex && !ownsRunFrame
               ? html`
                   <div class="chat-message-actions-row" data-message-actions-for=${item.key}>

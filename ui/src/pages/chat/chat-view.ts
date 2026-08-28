@@ -49,6 +49,7 @@ import {
 } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
+import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import type {
   CapabilityMenuProps,
   ChatComposerDisabledBanner,
@@ -57,6 +58,7 @@ import type {
 } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
+import type { MessageReplyTarget } from "./components/chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
@@ -82,12 +84,6 @@ import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
-type ChatReplyTarget = {
-  messageId: string;
-  text: string;
-  senderLabel?: string | null;
-  sourceMessageId?: string | null;
-};
 export type ChatProps = ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     transcript: ChatTranscriptController;
@@ -271,9 +267,9 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     resourceBasePath?: string;
     composerControls?: TemplateResult | typeof nothing;
     permissionPicker?: ChatPermissionPickerProps;
-    replyTarget?: ChatReplyTarget | null;
+    replyTarget?: MessageReplyTarget | null;
     onClearReply?: () => void;
-    onSetReply?: (target: ChatReplyTarget) => void;
+    onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
     onForkMessage?: (entryId: string) => Promise<void> | void;
@@ -349,6 +345,22 @@ export function renderChat(props: ChatProps) {
       runOutputTokens: props.runOutputTokens,
       runStatus: props.runStatus,
       queue,
+      queueControls: {
+        queue: props.queue,
+        offline: props.offline,
+        canAbort:
+          Boolean(props.canAbort && props.onAbort) && !hasTerminalRunStatus(props.runStatus),
+        onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
+        onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
+        onQueueMove: props.onQueueMove,
+        onQueueEdit: props.queuedEdit?.onEdit,
+        onQueueEditChange: props.queuedEdit?.onEditChange,
+        onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
+        onQueueEditCancel: props.queuedEdit?.onCancel,
+        editingId: props.queuedEdit?.editingId ?? null,
+        editingText: props.queuedEdit?.editingText,
+        onQueueRemove: props.onQueueRemove,
+      },
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
       persistCommentary: props.persistCommentary,
