@@ -11,7 +11,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
 import { buildComfyConfig } from "./test-helpers.js";
 import { isComfyCapabilityConfigured } from "./workflow-runtime.js";
@@ -82,32 +82,32 @@ beforeEach(() => {
   requestCount = 0;
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", () => {
   it("resolves an env-backed SecretRef Authorization header across all three real requests and completes generation", async () => {
     const expectedAuth = `Basic ${Buffer.from(`env:${Math.random().toString(36).slice(2)}`).toString("base64")}`;
-    process.env.COMFY_HEADER_PROOF_ENV = expectedAuth;
-    try {
-      const provider = buildComfyImageGenerationProvider();
-      const result = await provider.generateImage({
-        provider: "comfy",
-        model: "workflow",
-        prompt: "draw a lobster",
-        cfg: buildComfyConfig({
-          mode: "local",
-          baseUrl,
-          ...baseCapabilityConfig(),
-          headers: {
-            Authorization: { source: "env", provider: "default", id: "COMFY_HEADER_PROOF_ENV" },
-          },
-        }),
-      });
+    vi.stubEnv("COMFY_HEADER_PROOF_ENV", expectedAuth);
+    const provider = buildComfyImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        mode: "local",
+        baseUrl,
+        ...baseCapabilityConfig(),
+        headers: {
+          Authorization: { source: "env", provider: "default", id: "COMFY_HEADER_PROOF_ENV" },
+        },
+      }),
+    });
 
-      expect(requestCount).toBe(3);
-      expect(receivedAuthHeaders.every((header) => header === expectedAuth)).toBe(true);
-      expect(result).toBeTruthy();
-    } finally {
-      delete process.env.COMFY_HEADER_PROOF_ENV;
-    }
+    expect(requestCount).toBe(3);
+    expect(receivedAuthHeaders.every((header) => header === expectedAuth)).toBe(true);
+    expect(result).toBeTruthy();
   });
 
   it("resolves a non-env (file-backed) SecretRef Authorization header across all three real requests", async () => {
@@ -148,7 +148,7 @@ describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", ()
   });
 
   it("stops before any real request when the SecretRef is unresolvable (fail-closed)", async () => {
-    delete process.env.COMFY_HEADER_PROOF_MISSING;
+    vi.stubEnv("COMFY_HEADER_PROOF_MISSING", undefined);
     const provider = buildComfyImageGenerationProvider();
 
     await expect(
@@ -188,7 +188,7 @@ describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", ()
       } as never;
       expect(isComfyCapabilityConfigured({ cfg: fileBackedCfg, capability: "image" })).toBe(true);
 
-      delete process.env.COMFY_HEADER_PROOF_VETO_MISSING;
+      vi.stubEnv("COMFY_HEADER_PROOF_VETO_MISSING", undefined);
       const missingEnvCfg = buildComfyConfig({
         ...baseCapabilityConfig(),
         headers: {
