@@ -674,17 +674,39 @@ describe("buildOpenAIProvider", () => {
   });
 
   it.each([
-    ["returns an empty model list", () => Response.json({ data: [] }), false],
+    [
+      "returns an empty model list",
+      () => Response.json({ data: [] }),
+      "sk-openai-unavailable",
+      false,
+    ],
     [
       "returns only unsupported models",
       () => Response.json({ data: [{ id: "not-in-manifest", object: "model" }] }),
+      "sk-openai-unavailable",
       false,
     ],
-    ["rejects the API key", () => new Response("unauthorized", { status: 401 }), true],
-    ["denies account access", () => new Response("forbidden", { status: 403 }), true],
+    [
+      "rejects a SecretRef marker",
+      () => new Response("unauthorized", { status: 401 }),
+      "secretref-managed",
+      true,
+    ],
+    [
+      "rejects a concrete API key",
+      () => new Response("unauthorized", { status: 401 }),
+      "sk-openai-unavailable",
+      false,
+    ],
+    [
+      "denies account access",
+      () => new Response("forbidden", { status: 403 }),
+      "sk-openai-unavailable",
+      false,
+    ],
   ])(
     "does not invent available OpenAI models when discovery %s",
-    async (_label, response, rejected) => {
+    async (_label, response, apiKey, catalogScoped) => {
       const release = vi.fn(async () => undefined);
       const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
         response: response(),
@@ -696,13 +718,13 @@ describe("buildOpenAIProvider", () => {
         fetchGuard,
         auth: {
           mode: "api_key",
-          apiKey: "sk-openai-unavailable",
+          apiKey,
           source: "profile",
         },
       });
 
       expect(result.provider.models).toEqual([]);
-      expect(result.outcomes[0]?.rejectionScope).toBe(rejected ? "catalog" : undefined);
+      expect(result.outcomes[0]?.rejectionScope).toBe(catalogScoped ? "catalog" : undefined);
       expect(release).toHaveBeenCalledOnce();
     },
   );
