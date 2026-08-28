@@ -149,7 +149,6 @@ defineDiscordVoiceTests(
           allowFrom: ["discord:u-owner"],
           voice: { mode },
         });
-        const transcripts = { sessionId: "notes-1", onUtterance: vi.fn() };
         let finishDecoding!: () => void;
         const decoding = new Promise<void>((resolve) => {
           finishDecoding = resolve;
@@ -157,8 +156,17 @@ defineDiscordVoiceTests(
         let receive: Promise<void> | undefined;
         try {
           await manager.join({ guildId: "g1", channelId: "1001" });
-          await manager.join({ guildId: "g1", channelId: "1001" }, { transcripts });
           const entry = getSessionEntry(manager);
+          const onStop = vi.fn();
+          const transcripts = {
+            sessionId: "notes-1",
+            onUtterance: vi.fn(),
+            onStop: () => {
+              onStop(entry.transcripts);
+              entry.stop();
+            },
+          };
+          await manager.join({ guildId: "g1", channelId: "1001" }, { transcripts });
           decodeOpusStreamChunksMock.mockReturnValueOnce(decoding);
           receive = handleSpeakingStart(manager, entry, "u-owner");
           await vi.waitFor(() => expect(decodeOpusStreamChunksMock).toHaveBeenCalledOnce());
@@ -178,7 +186,8 @@ defineDiscordVoiceTests(
 
           expect(manager.status()).toEqual([]);
           expect(entry.realtime).toBeUndefined();
-          expect(entry.transcripts).toBe(transcripts);
+          expect(entry.transcripts).toBeUndefined();
+          expect(onStop).toHaveBeenCalledExactlyOnceWith(undefined);
           expect(captureStream.destroy).toHaveBeenCalledOnce();
           expect(entry.capture.activeCaptureStreams.size).toBe(0);
           expect(entry.capture.captureFinalizeTimers.size).toBe(0);
@@ -198,7 +207,11 @@ defineDiscordVoiceTests(
 
           await manager.join({ guildId: "g1", channelId: "1001" });
           const replacement = getSessionEntry(manager);
-          const replacementTranscripts = { sessionId: "notes-2", onUtterance: vi.fn() };
+          const replacementTranscripts = {
+            sessionId: "notes-2",
+            onUtterance: vi.fn(),
+            onStop: vi.fn(),
+          };
           await manager.join(
             { guildId: "g1", channelId: "1001" },
             { transcripts: replacementTranscripts },
@@ -221,6 +234,8 @@ defineDiscordVoiceTests(
           expect(loggerErrorMock).toHaveBeenCalledOnce();
           expect(realtimeSessionMock.sendAudio).toHaveBeenCalledTimes(inputCalls);
           expect(player.play).toHaveBeenCalledOnce();
+          expect(onStop).toHaveBeenCalledOnce();
+          expect(replacementTranscripts.onStop).not.toHaveBeenCalled();
           expect(transcripts.onUtterance).not.toHaveBeenCalled();
           expect(replacementTranscripts.onUtterance).not.toHaveBeenCalled();
           beginSpeakerTurn(replacement);
