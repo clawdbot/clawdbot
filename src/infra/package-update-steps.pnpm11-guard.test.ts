@@ -266,6 +266,10 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
                 pnpm_config_global_bin_dir: aliases === "empty" ? "" : ownerBinDir,
                 PNPM_CONFIG_GLOBAL_DIR: path.join(base, "other-global"),
                 PNPM_CONFIG_GLOBAL_BIN_DIR: pathBinDir,
+                npm_config_global_dir: aliases === "empty" ? "" : path.join(base, "npm-global"),
+                NPM_CONFIG_GLOBAL_DIR: path.join(base, "other-npm-global"),
+                npm_config_global_bin_dir: aliases === "empty" ? "" : pathBinDir,
+                NPM_CONFIG_GLOBAL_BIN_DIR: pathBinDir,
               }),
         };
         const envBefore = { ...originalEnv };
@@ -297,8 +301,12 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
               expect(env).toMatchObject({
                 pnpm_config_global_dir: globalDir,
                 PNPM_CONFIG_GLOBAL_DIR: globalDir,
+                npm_config_global_dir: globalDir,
+                NPM_CONFIG_GLOBAL_DIR: globalDir,
                 pnpm_config_global_bin_dir: ownerBinDir,
                 PNPM_CONFIG_GLOBAL_BIN_DIR: ownerBinDir,
+                npm_config_global_bin_dir: ownerBinDir,
+                NPM_CONFIG_GLOBAL_BIN_DIR: ownerBinDir,
               });
               expect(argv).toEqual([
                 "pnpm",

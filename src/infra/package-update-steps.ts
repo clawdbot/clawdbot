@@ -917,18 +917,25 @@ export async function runGlobalPackageUpdateSteps(params: {
         : params.env;
     if (params.installTarget.manager === "pnpm" && params.installTarget.globalRoot) {
       const globalDir = resolvePnpmGlobalDirFromGlobalRoot(params.installTarget.globalRoot);
-      // Native pnpm takes owner paths through child env, not CLI flags. Set both
-      // aliases after original-env probes so inherited aliases cannot redirect it.
+      // Bind verified paths through both pnpm configuration dialects, in both
+      // cases, after original-env probes so inherited aliases cannot redirect it.
       // pnpm 11 keeps its already-probed config and cwd.
       effectiveInstallEnv = {
         ...(params.env ?? process.env),
         ...(globalDir
-          ? { pnpm_config_global_dir: globalDir, PNPM_CONFIG_GLOBAL_DIR: globalDir }
+          ? {
+              pnpm_config_global_dir: globalDir,
+              PNPM_CONFIG_GLOBAL_DIR: globalDir,
+              npm_config_global_dir: globalDir,
+              NPM_CONFIG_GLOBAL_DIR: globalDir,
+            }
           : {}),
         ...(pnpmPreflight.globalBinDir
           ? {
               pnpm_config_global_bin_dir: pnpmPreflight.globalBinDir,
               PNPM_CONFIG_GLOBAL_BIN_DIR: pnpmPreflight.globalBinDir,
+              npm_config_global_bin_dir: pnpmPreflight.globalBinDir,
+              NPM_CONFIG_GLOBAL_BIN_DIR: pnpmPreflight.globalBinDir,
             }
           : {}),
       };
