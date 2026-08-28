@@ -745,8 +745,10 @@ async function writeClaudeAcpWrapper(baseDir: string, installedBinPath?: string)
   return wrapperPath;
 }
 
-function buildWrapperCommand(wrapperPath: string, args: string[] = []): string {
-  return [process.execPath, wrapperPath, ...args].map(quoteCommandPart).join(" ");
+function buildWrapperCommand(wrapperPath: string, args: string[] = []): string[] {
+  // Return argv rather than a joined command line: acpx rejects raw command
+  // strings on Windows and needs explicit executable/argument boundaries.
+  return [process.execPath, wrapperPath, ...args];
 }
 
 function isAcpPackageSpec(value: string, packageName: string): boolean {
@@ -764,16 +766,18 @@ function isPackageRunnerCommand(value: string): boolean {
   return /^(?:npx|npm|pnpm|bunx)(?:\.cmd|\.exe)?$/i.test(basename(value));
 }
 
+function toConfiguredCommandParts(command: string | string[] | undefined): string[] {
+  // Configured commands arrive either as argv, which already carries argument
+  // boundaries, or as a legacy shell string that still has to be split.
+  return Array.isArray(command) ? [...command] : splitCommandParts(command?.trim() ?? "");
+}
+
 function extractConfiguredAdapterArgs(params: {
-  configuredCommand?: string;
+  configuredCommand?: string | string[];
   packageName: string;
   binName: string;
 }): string[] | undefined {
-  const trimmedConfiguredCommand = params.configuredCommand?.trim();
-  if (!trimmedConfiguredCommand) {
-    return [];
-  }
-  const parts = splitCommandParts(trimmedConfiguredCommand);
+  const parts = toConfiguredCommandParts(params.configuredCommand);
   if (!parts.length) {
     return [];
   }
@@ -879,7 +883,9 @@ type CodexAdapterLaunch = {
   migratedConfig?: Record<string, unknown>;
 };
 
-function resolveCodexAdapterLaunch(configuredCommand?: string): CodexAdapterLaunch | undefined {
+function resolveCodexAdapterLaunch(
+  configuredCommand?: string | string[],
+): CodexAdapterLaunch | undefined {
   const legacyAdapterArgs = extractConfiguredAdapterArgs({
     configuredCommand,
     packageName: LEGACY_CODEX_ACP_PACKAGE,
@@ -910,14 +916,17 @@ function resolveCodexAdapterLaunch(configuredCommand?: string): CodexAdapterLaun
   return { args: maintainedAdapterArgs };
 }
 
-function buildCodexAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
+function buildCodexAcpWrapperCommand(
+  wrapperPath: string,
+  configuredCommand?: string | string[],
+): string[] {
   const launch = resolveCodexAdapterLaunch(configuredCommand);
   if (launch) {
     return buildWrapperCommand(wrapperPath, launch.args);
   }
   return buildWrapperCommand(wrapperPath, [
     RUN_CONFIGURED_COMMAND_SENTINEL,
-    ...splitCommandParts(configuredCommand?.trim() ?? ""),
+    ...toConfiguredCommandParts(configuredCommand),
   ]);
 }
 
@@ -935,7 +944,10 @@ async function persistMigratedCodexMcpConfig(params: {
   await fs.writeFile(configPath, stringifyToml(merged as TomlTableWithoutBigInt), "utf8");
 }
 
-function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
+function buildClaudeAcpWrapperCommand(
+  wrapperPath: string,
+  configuredCommand?: string | string[],
+): string | string[] {
   const configuredAdapterArgs = extractConfiguredAdapterArgs({
     configuredCommand,
     packageName: CLAUDE_ACP_PACKAGE,
@@ -943,6 +955,11 @@ function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: s
   });
   if (configuredAdapterArgs) {
     return buildWrapperCommand(wrapperPath, configuredAdapterArgs);
+  }
+  // A command that is not a Claude ACP adapter is forwarded untouched, in
+  // whichever form it was configured.
+  if (Array.isArray(configuredCommand)) {
+    return configuredCommand.length > 0 ? [...configuredCommand] : buildWrapperCommand(wrapperPath);
   }
   return configuredCommand?.trim() || buildWrapperCommand(wrapperPath);
 }

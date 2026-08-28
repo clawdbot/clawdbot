@@ -56,7 +56,7 @@ export type ResolvedAcpxPluginConfig = {
   openClawToolsMcpBridge: boolean;
   timeoutSeconds?: number;
   mcpServers: Record<string, McpServerConfig>;
-  agents: Record<string, string>;
+  agents: Record<string, string | string[]>;
 };
 
 const nonEmptyTrimmedString = (message: string) =>

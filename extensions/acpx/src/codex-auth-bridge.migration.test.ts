@@ -28,10 +28,6 @@ beforeEach(async () => {
   });
 });
 
-function quoteArg(value: string): string {
-  return JSON.stringify(value);
-}
-
 function restoreEnv(name: keyof typeof previousEnv): void {
   const value = previousEnv[name];
   if (value === undefined) {
@@ -62,14 +58,36 @@ function generatedClaudePaths(stateDir: string): {
   };
 }
 
-function expectCodexWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(quoteArg(process.execPath));
-  expect(command).toContain(quoteArg(wrapperPath));
+function commandText(command: string | string[] | undefined): string {
+  return Array.isArray(command) ? command.join(" ") : (command ?? "");
 }
 
-function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(quoteArg(process.execPath));
-  expect(command).toContain(quoteArg(wrapperPath));
+function commandArgv(command: string | string[] | undefined): string[] {
+  // Generated wrapper commands are already argv; only legacy string commands
+  // still need splitting.
+  return Array.isArray(command) ? [...command] : splitCommandParts(command ?? "");
+}
+
+function expectWrapperArgv(command: string | string[] | undefined, wrapperPath: string): void {
+  // Wrapper commands must stay argv: acpx rejects raw command strings on Windows
+  // because the executable/argument boundaries are ambiguous there.
+  expect(Array.isArray(command)).toBe(true);
+  expect(command).toContain(process.execPath);
+  expect(command).toContain(wrapperPath);
+}
+
+function expectCodexWrapperCommand(
+  command: string | string[] | undefined,
+  wrapperPath: string,
+): void {
+  expectWrapperArgv(command, wrapperPath);
+}
+
+function expectClaudeWrapperCommand(
+  command: string | string[] | undefined,
+  wrapperPath: string,
+): void {
+  expectWrapperArgv(command, wrapperPath);
 }
 
 afterEach(async () => {
@@ -116,17 +134,18 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     });
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
-    expect(resolved.agents.codex).not.toContain("npx @zed-industries/codex-acp@0.12.0");
-    expect(resolved.agents.codex).not.toContain(quoteArg("-c"));
-    expect(resolved.agents.codex).toContain(quoteArg(OPENCLAW_CODEX_CONFIG_ARG));
+    expect(commandText(resolved.agents.codex)).not.toContain(
+      "npx @zed-industries/codex-acp@0.12.0",
+    );
+    // argv entries are compared as whole arguments, not as quoted substrings.
+    expect(resolved.agents.codex).not.toContain("-c");
+    expect(resolved.agents.codex).toContain(OPENCLAW_CODEX_CONFIG_ARG);
     expect(resolved.agents.codex).toContain(
-      quoteArg(
-        JSON.stringify({
-          model: "gpt-5.4",
-          model_reasoning_effort: "high",
-          mcp_servers: { "foo.bar": { command: "node", args: ["server.js"] } },
-        }),
-      ),
+      JSON.stringify({
+        model: "gpt-5.4",
+        model_reasoning_effort: "high",
+        mcp_servers: { "foo.bar": { command: "node", args: ["server.js"] } },
+      }),
     );
     const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
     expect(isolatedConfig).toContain('[mcp_servers."foo.bar"]');
@@ -138,7 +157,7 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     expect(wrapper).toContain("CODEX_HOME: codexHome");
     expect(wrapper).not.toContain(sourceCodexHome);
 
-    const [nodePath, wrapperPath, ...wrapperArgs] = splitCommandParts(resolved.agents.codex ?? "");
+    const [nodePath, wrapperPath, ...wrapperArgs] = commandArgv(resolved.agents.codex);
     if (!nodePath || !wrapperPath) {
       throw new Error("expected generated Codex ACP wrapper command");
     }
@@ -190,7 +209,7 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     });
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
-    const commandParts = splitCommandParts(resolved.agents.codex ?? "");
+    const commandParts = commandArgv(resolved.agents.codex);
     expect(commandParts.slice(2)).toStrictEqual([
       "cli",
       "-c",
@@ -293,8 +312,8 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     });
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
-    expect(resolved.agents.codex).not.toContain(quoteArg("-c"));
-    expect(resolved.agents.codex).toContain(quoteArg(JSON.stringify({ model: "gpt-5.4" })));
+    expect(resolved.agents.codex).not.toContain("-c");
+    expect(resolved.agents.codex).toContain(JSON.stringify({ model: "gpt-5.4" }));
   });
 
   it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {

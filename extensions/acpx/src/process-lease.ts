@@ -190,10 +190,21 @@ function quoteEnvValue(value: string): string {
 }
 
 function appendAcpxLeaseArgs(params: {
-  command: string;
+  command: string | string[];
   leaseId: string;
   gatewayInstanceId: string;
-}): string {
+}): string | string[] {
+  if (Array.isArray(params.command)) {
+    // Argv elements are passed to the process verbatim, so the lease identity
+    // is appended unquoted: shell quoting would become part of the value.
+    return [
+      ...params.command,
+      OPENCLAW_ACPX_LEASE_ID_ARG,
+      params.leaseId,
+      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+      params.gatewayInstanceId,
+    ];
+  }
   return [
     params.command,
     OPENCLAW_ACPX_LEASE_ID_ARG,
@@ -208,6 +219,21 @@ export function withAcpxLeaseEnvironment(params: {
   command: string;
   leaseId: string;
   gatewayInstanceId: string;
-}): string {
+}): string;
+export function withAcpxLeaseEnvironment(params: {
+  command: string[];
+  leaseId: string;
+  gatewayInstanceId: string;
+}): string[];
+export function withAcpxLeaseEnvironment(params: {
+  command: string | string[];
+  leaseId: string;
+  gatewayInstanceId: string;
+}): string | string[];
+export function withAcpxLeaseEnvironment(params: {
+  command: string | string[];
+  leaseId: string;
+  gatewayInstanceId: string;
+}): string | string[] {
   return appendAcpxLeaseArgs(params);
 }

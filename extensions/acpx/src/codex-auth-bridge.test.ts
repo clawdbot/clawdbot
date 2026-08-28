@@ -29,10 +29,6 @@ beforeEach(async () => {
   });
 });
 
-function quoteArg(value: string): string {
-  return JSON.stringify(value);
-}
-
 function restoreEnv(name: keyof typeof previousEnv): void {
   const value = previousEnv[name];
   if (value === undefined) {
@@ -63,14 +59,26 @@ function generatedClaudePaths(stateDir: string): {
   };
 }
 
-function expectCodexWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(quoteArg(process.execPath));
-  expect(command).toContain(quoteArg(wrapperPath));
+function expectWrapperArgv(command: string | string[] | undefined, wrapperPath: string): void {
+  // Wrapper commands must stay argv: acpx rejects raw command strings on Windows
+  // because the executable/argument boundaries are ambiguous there.
+  expect(Array.isArray(command)).toBe(true);
+  expect(command).toContain(process.execPath);
+  expect(command).toContain(wrapperPath);
 }
 
-function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(quoteArg(process.execPath));
-  expect(command).toContain(quoteArg(wrapperPath));
+function expectCodexWrapperCommand(
+  command: string | string[] | undefined,
+  wrapperPath: string,
+): void {
+  expectWrapperArgv(command, wrapperPath);
+}
+
+function expectClaudeWrapperCommand(
+  command: string | string[] | undefined,
+  wrapperPath: string,
+): void {
+  expectWrapperArgv(command, wrapperPath);
 }
 
 function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[]): void {

@@ -696,14 +696,40 @@ function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-function normalizeAgentCommand(command: string | string[]): string | undefined {
-  const normalized = Array.isArray(command)
-    ? command.map((part) => quoteShellArg(part)).join(" ")
-    : command;
-  return normalized.trim() || undefined;
+function renderCommandLine(command: string | string[]): string {
+  // The boundary between the two representations: argv is what gets spawned,
+  // this rendering is what adapter detection, lease identity and diagnostics
+  // reason about. Quoting is applied only where a bare token would be ambiguous.
+  return Array.isArray(command) ? command.map(quoteShellArg).join(" ") : command;
 }
 
-function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelOverride): string {
+function normalizeAgentCommand(command: string | string[]): string | string[] | undefined {
+  // Preserve argv arrays: collapsing them into a shell string loses the
+  // executable/argument boundaries acpx requires on Windows, and quoting cannot
+  // round-trip deliberately empty arguments. Mirrors acpx' own registry
+  // normalization: a usable argv needs a non-empty executable, and every
+  // remaining element is kept verbatim.
+  if (Array.isArray(command)) {
+    return command.length > 0 && command[0]?.trim() ? [...command] : undefined;
+  }
+  return command.trim() || undefined;
+}
+
+// Overloads keep the command shape: a configured shell string stays a string
+// for the lease and diagnostics bookkeeping, argv stays argv for spawning.
+function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelOverride): string;
+function appendCodexAcpConfigOverrides(
+  command: string[],
+  override: CodexAcpModelOverride,
+): string[];
+function appendCodexAcpConfigOverrides(
+  command: string | string[],
+  override: CodexAcpModelOverride,
+): string | string[];
+function appendCodexAcpConfigOverrides(
+  command: string | string[],
+  override: CodexAcpModelOverride,
+): string | string[] {
   const config = {
     ...(override.model ? { model: override.model } : {}),
     ...(override.reasoningEffort ? { model_reasoning_effort: override.reasoningEffort } : {}),
@@ -711,22 +737,29 @@ function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelO
   if (Object.keys(config).length === 0) {
     return command;
   }
-  return `${command} ${OPENCLAW_CODEX_CONFIG_ARG} ${quoteShellArg(JSON.stringify(config))}`;
+  const serializedConfig = JSON.stringify(config);
+  if (Array.isArray(command)) {
+    return [...command, OPENCLAW_CODEX_CONFIG_ARG, serializedConfig];
+  }
+  return `${command} ${OPENCLAW_CODEX_CONFIG_ARG} ${quoteShellArg(serializedConfig)}`;
 }
 
 function createModelScopedAgentRegistry(params: {
   agentRegistry: AcpAgentRegistry;
   scope: AsyncLocalStorage<CodexAcpModelOverride | undefined>;
-  leaseCommand: (command: string) => string;
+  leaseCommand: (command: string | string[]) => string | string[];
 }): AcpAgentRegistry {
   return {
-    resolve(agentName: string): string {
+    resolve(agentName: string): string | string[] {
       const command = normalizeAgentCommand(params.agentRegistry.resolve(agentName)) ?? "";
       const override = params.scope.getStore();
+      // Adapter detection inspects the command line; argv is rendered only for
+      // that check, while the override itself preserves the original form.
+      const commandLine = renderCommandLine(command);
       if (
         !override ||
         normalizeAgentName(agentName) !== CODEX_ACP_AGENT_ID ||
-        !isCodexAcpCommand(command)
+        !isCodexAcpCommand(commandLine)
       ) {
         return params.leaseCommand(command);
       }
@@ -746,7 +779,11 @@ function resolveAgentCommand(params: {
   if (!normalizedAgentName) {
     return undefined;
   }
-  return normalizeAgentCommand(params.agentRegistry.resolve(normalizedAgentName));
+  // Callers of this helper reason about the command as text: adapter detection,
+  // session records and diagnostics all compare or persist strings. The registry
+  // keeps the original form for spawning.
+  const command = normalizeAgentCommand(params.agentRegistry.resolve(normalizedAgentName));
+  return command === undefined ? undefined : renderCommandLine(command);
 }
 
 function shouldUseBridgeSafeDelegateForCommand(command: string | undefined): boolean {
@@ -953,12 +990,14 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     });
   }
 
-  private commandWithLaunchLease(command: string): string {
+  private commandWithLaunchLease(command: string | string[]): string | string[] {
     const launch = this.launchLeaseScope.getStore();
     if (!launch) {
       return command;
     }
-    if (command === launch.stableCommand) {
+    // Lease identity is tracked as text, so argv is matched through its rendered
+    // form. A reused lease replays the command recorded for it.
+    if (renderCommandLine(command) === launch.stableCommand) {
       return launch.resolvedCommand;
     }
     return withAcpxLeaseEnvironment({

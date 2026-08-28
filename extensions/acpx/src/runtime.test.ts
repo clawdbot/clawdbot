@@ -1325,9 +1325,22 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       `npx @agentclientprotocol/codex-acp@1.6.0 ${OPENCLAW_CODEX_CONFIG_ARG} '{"model":"gpt-5.4","model_reasoning_effort":"medium"}'`,
     );
     expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
-    expect(testing.normalizeAgentCommand(["node", "/tmp/codex acp/index.js", "--label", ""])).toBe(
-      "node '/tmp/codex acp/index.js' --label ''",
-    );
+    // argv survives verbatim, including a deliberately empty argument that
+    // shell quoting could not round-trip on Windows.
+    expect(
+      testing.normalizeAgentCommand(["node", "/tmp/codex acp/index.js", "--label", ""]),
+    ).toEqual(["node", "/tmp/codex acp/index.js", "--label", ""]);
+    expect(
+      testing.appendCodexAcpConfigOverrides(["npx", "@agentclientprotocol/codex-acp@1.6.0"], {
+        model: "gpt-5.4",
+        reasoningEffort: "medium",
+      }),
+    ).toEqual([
+      "npx",
+      "@agentclientprotocol/codex-acp@1.6.0",
+      OPENCLAW_CODEX_CONFIG_ARG,
+      '{"model":"gpt-5.4","model_reasoning_effort":"medium"}',
+    ]);
   });
 
   it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {
