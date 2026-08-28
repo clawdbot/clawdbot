@@ -13,12 +13,15 @@ import {
 import {
   crabboxGatePlanDigest,
   formatCrabboxGateCheckSummary,
+  validateForwardAncestry,
 } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 
 const repository = "openclaw/openclaw";
 const workflowSha = "a".repeat(40);
 const baseSha = "c".repeat(40);
 const headSha = "b".repeat(40);
+const mainSha = "d".repeat(40);
+const laterMainSha = "e".repeat(40);
 const bootstrapSha256 = createHash("sha256")
   .update(readFileSync("scripts/crabbox-untrusted-bootstrap.sh"))
   .digest("hex");
@@ -42,6 +45,7 @@ type PublisherWorkflow = {
   };
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
   permissions: Record<string, unknown>;
+  "run-name": string;
 };
 
 function env(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -178,6 +182,17 @@ function baseAncestry(overrides: Record<string, unknown> = {}) {
     behind_by: 0,
     merge_base_commit: { sha: baseSha },
     status: "ahead",
+    ...overrides,
+  };
+}
+
+function mainAncestry(candidateMainSha = mainSha, overrides: Record<string, unknown> = {}) {
+  return {
+    ahead_by: candidateMainSha === workflowSha ? 0 : 4,
+    base_commit: { sha: workflowSha },
+    behind_by: 0,
+    merge_base_commit: { sha: workflowSha },
+    status: candidateMainSha === workflowSha ? "identical" : "ahead",
     ...overrides,
   };
 }
@@ -386,12 +401,45 @@ describe("Crabbox gate request and broker proof", () => {
   });
 });
 
+describe("protected main ancestry", () => {
+  it.each([
+    [workflowSha, mainAncestry(workflowSha)],
+    [mainSha, mainAncestry(mainSha)],
+  ])("accepts live-shape identical or forward main %s", (candidateMainSha, comparison) => {
+    expect(comparison).not.toHaveProperty("head_commit");
+    expect(
+      validateForwardAncestry(
+        comparison,
+        { baseSha: workflowSha, headSha: candidateMainSha },
+        "protected main",
+      ),
+    ).toEqual({ baseSha: workflowSha, headSha: candidateMainSha });
+  });
+
+  it.each([
+    ["behind", { behind_by: 1, status: "behind" }],
+    ["diverged", { status: "diverged" }],
+    ["wrong base", { base_commit: { sha: baseSha } }],
+    ["wrong merge base", { merge_base_commit: { sha: baseSha } }],
+    ["malformed ahead count", { ahead_by: "4" }],
+    ["malformed behind count", { behind_by: "0" }],
+  ])("rejects %s protected main comparison", (_label, override) => {
+    expect(() =>
+      validateForwardAncestry(
+        mainAncestry(mainSha, override),
+        { baseSha: workflowSha, headSha: mainSha },
+        "protected main",
+      ),
+    ).toThrow(/protected main/u);
+  });
+});
+
 describe("Crabbox gate publisher boundary", () => {
   function harness(
     overrides: {
       ancestry?: Record<string, unknown>;
+      mainShas?: string[];
       membership?: Record<string, unknown>;
-      postMainSha?: string;
       principal?: Record<string, unknown>;
       pull?: Record<string, unknown>;
       run?: Record<string, unknown>;
@@ -406,16 +454,18 @@ describe("Crabbox gate publisher boundary", () => {
           return pullRequest(overrides.pull);
         }
         if (requestPath.endsWith("/git/ref/heads/main")) {
+          const sha = overrides.mainShas?.[mainReads] ?? (mainReads < 2 ? mainSha : laterMainSha);
           mainReads += 1;
           return {
-            object: {
-              sha: mainReads === 2 && overrides.postMainSha ? overrides.postMainSha : workflowSha,
-            },
+            object: { sha },
             ref: "refs/heads/main",
           };
         }
-        if (requestPath.includes("/compare/")) {
+        if (requestPath.endsWith(`/compare/${baseSha}...${workflowSha}`)) {
           return baseAncestry(overrides.ancestry);
+        }
+        if (requestPath.includes(`/compare/${workflowSha}...`)) {
+          return mainAncestry(requestPath.slice(-40));
         }
         if (method === "POST" && requestPath.endsWith("/check-runs")) {
           expect(body).toMatchObject({
@@ -487,12 +537,17 @@ describe("Crabbox gate publisher boundary", () => {
       context: { baseSha, headSha, leaseId, runId, workflowSha },
     });
     expect(values.runCrabbox).toHaveBeenCalledTimes(2);
-    expect(values.orderedCalls.slice(0, 4)).toEqual([
+    expect(values.orderedCalls.slice(0, 6)).toEqual([
       "organization:GET:/orgs/openclaw/memberships/maintainer",
       "github:GET:/repos/openclaw/openclaw/pulls/130481",
-      "github:GET:/repos/openclaw/openclaw/git/ref/heads/main",
       `github:GET:/repos/openclaw/openclaw/compare/${baseSha}...${workflowSha}`,
+      "github:GET:/repos/openclaw/openclaw/git/ref/heads/main",
+      `github:GET:/repos/openclaw/openclaw/compare/${workflowSha}...${mainSha}`,
+      "github:GET:/repos/openclaw/openclaw/git/ref/heads/main",
     ]);
+    expect(values.orderedCalls).toContain(
+      `github:GET:/repos/openclaw/openclaw/compare/${workflowSha}...${laterMainSha}`,
+    );
     expect(values.orderedCalls.at(-1)).toBe("github:POST:/repos/openclaw/openclaw/check-runs");
   });
 
@@ -537,8 +592,10 @@ describe("Crabbox gate publisher boundary", () => {
     }
   });
 
-  it("rejects protected main moving before check publication", async () => {
-    const values = harness({ postMainSha: "d".repeat(40) });
+  it("rejects protected main moving between comparison and final ref reread", async () => {
+    const values = harness({
+      mainShas: [mainSha, mainSha, laterMainSha, "f".repeat(40)],
+    });
     await expect(
       runPublisher({
         ...values,
@@ -547,7 +604,7 @@ describe("Crabbox gate publisher boundary", () => {
         event: event(),
         resolvePlan: () => gatePlan(),
       }),
-    ).rejects.toThrow(/trusted main moved/u);
+    ).rejects.toThrow(/protected main moved/u);
     expect(values.github.request).not.toHaveBeenCalledWith(
       "POST",
       "/repos/openclaw/openclaw/check-runs",
@@ -615,6 +672,9 @@ describe("Crabbox gate workflow", () => {
       readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"),
     ) as PublisherWorkflow;
     const job = workflow.jobs.publish;
+    expect(workflow["run-name"]).toBe(
+      "PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.head_sha }}",
+    );
     expect(Object.keys(workflow.on.workflow_dispatch.inputs).toSorted()).toEqual([
       "base_sha",
       "head_sha",

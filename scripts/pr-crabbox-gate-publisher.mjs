@@ -12,6 +12,7 @@ import {
   CRABBOX_GATE_CHECK_NAME,
   formatCrabboxGateCheckSummary,
   validateCrabboxGatePlan,
+  validateForwardAncestry,
 } from "./pr-lib/crabbox-gate-contract.mjs";
 import { resolveCrabboxGatePlan } from "./pr-lib/crabbox-gate-plan.mts";
 
@@ -143,34 +144,27 @@ function validateActiveAdminMembership(value, actor) {
   }
 }
 
-function validateTrustedMain(value, workflowSha) {
+function parseProtectedMainRef(value) {
   const ref = record(value, "main ref");
-  if (ref.ref !== "refs/heads/main" || record(ref.object, "main ref.object").sha !== workflowSha) {
-    throw new Error("trusted main moved before Crabbox proof publication");
+  const mainSha = requiredString(record(ref.object, "main ref.object").sha, "main ref SHA");
+  if (ref.ref !== "refs/heads/main" || !SHA_PATTERN.test(mainSha)) {
+    throw new Error("protected main ref is malformed");
   }
+  return mainSha;
 }
 
-function validateBaseAncestry(value, context) {
-  const comparison = record(value, "base ancestry comparison");
-  const baseCommit = record(comparison.base_commit, "base ancestry comparison.base_commit");
-  const mergeBase = record(
-    comparison.merge_base_commit,
-    "base ancestry comparison.merge_base_commit",
+async function validateCurrentProtectedMain(github, workflowSha) {
+  const mainPath = `/repos/${REPOSITORY}/git/ref/heads/main`;
+  const mainSha = parseProtectedMainRef(await github.request("GET", mainPath));
+  validateForwardAncestry(
+    await github.request("GET", `/repos/${REPOSITORY}/compare/${workflowSha}...${mainSha}`),
+    { baseSha: workflowSha, headSha: mainSha },
+    "protected main",
   );
-  const identical = comparison.status === "identical";
-  if (
-    baseCommit.sha !== context.baseSha ||
-    mergeBase.sha !== context.baseSha ||
-    comparison.behind_by !== 0 ||
-    (identical
-      ? context.baseSha !== context.workflowSha || comparison.ahead_by !== 0
-      : comparison.status !== "ahead" ||
-        context.baseSha === context.workflowSha ||
-        !Number.isSafeInteger(comparison.ahead_by) ||
-        comparison.ahead_by < 1)
-  ) {
-    throw new Error("pull request base is not an ancestor of the trusted publisher workflow SHA");
+  if (parseProtectedMainRef(await github.request("GET", mainPath)) !== mainSha) {
+    throw new Error("protected main moved during Crabbox authority validation");
   }
+  return { mainSha, workflowSha };
 }
 
 function parseTime(value, label) {
@@ -501,17 +495,15 @@ export async function runPublisher({
     await github.request("GET", `/repos/${REPOSITORY}/pulls/${context.prNumber}`),
     context,
   );
-  validateTrustedMain(
-    await github.request("GET", `/repos/${REPOSITORY}/git/ref/heads/main`),
-    context.workflowSha,
-  );
-  validateBaseAncestry(
+  validateForwardAncestry(
     await github.request(
       "GET",
       `/repos/${REPOSITORY}/compare/${context.baseSha}...${context.workflowSha}`,
     ),
-    context,
+    { baseSha: context.baseSha, headSha: context.workflowSha },
+    "pull request base ancestry",
   );
+  await validateCurrentProtectedMain(github, context.workflowSha);
   context.plan = await Promise.resolve(resolvePlan(context));
   if (context.plan.baseSha !== context.baseSha || context.plan.headSha !== context.headSha) {
     throw new Error("Crabbox gate plan does not bind the requested base and head");
@@ -568,10 +560,7 @@ export async function runPublisher({
     ),
     context.actor,
   );
-  validateTrustedMain(
-    await github.request("GET", `/repos/${REPOSITORY}/git/ref/heads/main`),
-    context.workflowSha,
-  );
+  await validateCurrentProtectedMain(github, context.workflowSha);
   const check = record(
     await github.request("POST", `/repos/${REPOSITORY}/check-runs`, {
       conclusion: "success",

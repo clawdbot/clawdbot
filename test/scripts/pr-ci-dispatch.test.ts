@@ -77,6 +77,7 @@ function runDispatch(
     backend?: "ci" | "crabbox";
     checkOnLaterPage?: boolean;
     mode?: "head-change";
+    runTitle?: string;
     wrongCheck?: boolean;
   } = {},
 ) {
@@ -84,7 +85,7 @@ function runDispatch(
   const runList = {
     workflow_runs: [
       {
-        display_title: crabbox ? `PR Crabbox gate #12345 / ${headSha}` : "CI",
+        display_title: crabbox ? (options.runTitle ?? `PR Crabbox gate #12345 / ${headSha}`) : "CI",
         head_branch: crabbox ? "main" : "contributor/fix-hosted-gates",
         head_sha: crabbox ? workflowSha : headSha,
         html_url: runUrl,
@@ -196,6 +197,17 @@ describePosix("scripts/pr ci-dispatch", () => {
       `gh\tapi --paginate --slurp repos/openclaw/openclaw/commits/${headSha}/check-runs?filter=latest&per_page=100`,
     );
   });
+
+  it.each(["PR Crabbox gate", "PR Crabbox gate #12345"])(
+    "does not accept a generic or truncated Crabbox run title: %s",
+    (runTitle) => {
+      const result = runDispatch(createFakeGh(), { backend: "crabbox", runTitle });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("run_url=pending");
+      expect(result.stdout).not.toContain('"backend":"crabbox"');
+    },
+    40_000,
+  );
 
   it("rejects caller-supplied proof handles", () => {
     const fakeGh = createFakeGh();

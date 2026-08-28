@@ -11,6 +11,7 @@ const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const headSha = "0123456789abcdef0123456789abcdef01234567";
 const baseSha = "1111111111111111111111111111111111111111";
 const workflowSha = "2222222222222222222222222222222222222222";
+const mainSha = "4444444444444444444444444444444444444444";
 const landedSha = "fedcba9876543210fedcba9876543210fedcba98";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
@@ -476,17 +477,20 @@ gh_route() {
           if [ "$OPENCLAW_TEST_MAIN_DRIFT_ON_LATE_READ" = "true" ] && [ "$main_reads" -gt 1 ]; then
             printf '%s\\n' '{"ref":"refs/heads/main","object":{"sha":"3333333333333333333333333333333333333333"}}'
           else
-            printf '%s\\n' '{"ref":"refs/heads/main","object":{"sha":"${workflowSha}"}}'
+            printf '%s\\n' '{"ref":"refs/heads/main","object":{"sha":"${mainSha}"}}'
           fi
+          ;;
+        *"/compare/${workflowSha}...${mainSha}"*)
+          printf '%s\\n' '{"status":"ahead","ahead_by":4,"behind_by":0,"base_commit":{"sha":"${workflowSha}"},"merge_base_commit":{"sha":"${workflowSha}"}}'
           ;;
         *"/commits/${headSha}/check-runs"*)
           printf '[%s]\\n' "$OPENCLAW_TEST_CHECK_RUNS_JSON"
           ;;
         *"/commits/${landedSha}"*)
           if [ "$OPENCLAW_TEST_CRABBOX_PARENT_DRIFT" = "true" ]; then
-            printf '%s\\n' '{"sha":"${landedSha}","parents":[{"sha":"3333333333333333333333333333333333333333"}]}'
-          else
             printf '%s\\n' '{"sha":"${landedSha}","parents":[{"sha":"${workflowSha}"}]}'
+          else
+            printf '%s\\n' '{"sha":"${landedSha}","parents":[{"sha":"${mainSha}"}]}'
           fi
           ;;
         *"/actions/runs/7001/jobs"*)
@@ -831,16 +835,16 @@ describePosix("scripts/pr merge-run", () => {
     expect(mergeMutation).toBeGreaterThan(finalMainRead);
     expect(result.calls.slice(finalMainRead, mergeMutation)).not.toContain("plain api");
     expect(result.stdout).toContain(
-      `Crabbox landing parent audit matched: landed=${landedSha} parent=${workflowSha}`,
+      `Crabbox landing parent audit matched: landed=${landedSha} parent=${mainSha}`,
     );
     expect(result.parentAudit).toEqual({
-      actualParentSha: workflowSha,
-      expectedParentSha: workflowSha,
+      actualParentSha: mainSha,
+      expectedParentSha: mainSha,
       landedSha,
       status: "match",
     });
     expect(result.calls).toContain(
-      `Landing parent audit: match (expected \`${workflowSha}\`, actual \`${workflowSha}\`)`,
+      `Landing parent audit: match (expected \`${mainSha}\`, actual \`${mainSha}\`)`,
     );
   });
 
@@ -858,7 +862,7 @@ describePosix("scripts/pr merge-run", () => {
     );
   });
 
-  it("reports protected main moving after the final read without pretending to prevent the completed merge", () => {
+  it("rejects a workflow-only squash parent after main advanced before merge", () => {
     const result = runMerge({
       crabboxBypass: "valid",
       crabboxParentDrift: true,
@@ -870,19 +874,17 @@ describePosix("scripts/pr merge-run", () => {
       `plain pr merge 123 --admin --squash --match-head-commit ${headSha}`,
     );
     expect(result.stdout).toContain(
-      `Crabbox landing parent audit drift: landed=${landedSha} expected_parent=${workflowSha} actual_parent=${"3".repeat(40)}`,
+      `Crabbox landing parent audit drift: landed=${landedSha} expected_parent=${mainSha} actual_parent=${workflowSha}`,
     );
-    expect(result.stdout).toContain(
-      "The merge already completed after an intervening authorized main advance",
-    );
+    expect(result.stdout).toContain("The merge already completed after intervening main movement");
     expect(result.parentAudit).toEqual({
-      actualParentSha: "3".repeat(40),
-      expectedParentSha: workflowSha,
+      actualParentSha: workflowSha,
+      expectedParentSha: mainSha,
       landedSha,
       status: "drift",
     });
     expect(result.calls).toContain(
-      `Landing parent audit: drift after an intervening authorized main advance; merge already completed (expected \`${workflowSha}\`, actual \`${"3".repeat(40)}\`)`,
+      `Landing parent audit: drift after intervening main movement; merge already completed (expected \`${mainSha}\`, actual \`${workflowSha}\`)`,
     );
   });
 
