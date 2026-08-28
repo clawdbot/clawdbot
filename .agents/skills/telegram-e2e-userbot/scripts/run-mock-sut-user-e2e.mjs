@@ -68,6 +68,29 @@ function createControlEnvironment({ baseEnv = process.env, configPath, stateDir 
   };
 }
 
+export function createGatewayEnvironment({
+  backend,
+  codexLogPath,
+  configPath,
+  stateDir,
+  sutToken,
+}) {
+  return {
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
+    TELEGRAM_BOT_TOKEN: sutToken,
+    ...(backend === "codex-fixture"
+      ? {
+          OPENCLAW_BUILD_PRIVATE_QA: "1",
+          OPENCLAW_QA_FORCE_RUNTIME: "codex",
+          OPENCLAW_QA_PARENT_PID: String(process.pid),
+          OPENCLAW_CODEX_REQUEST_USER_INPUT_LOG: codexLogPath,
+        }
+      : {}),
+    OPENAI_API_KEY: "openclaw-e2e-mock-key",
+  };
+}
+
 function assertRunnerActive() {
   if (shuttingDown) throw new Error("Telegram E2E runner is shutting down.");
 }
@@ -966,25 +989,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       await waitForOutput(mock, /QA mock OpenAI:/u, "QA mock OpenAI", 30_000);
     }
 
-    const gatewayEnv = {
-      OPENCLAW_CONFIG_PATH: temp.configPath,
-      OPENCLAW_STATE_DIR: temp.stateDir,
-      TELEGRAM_BOT_TOKEN: creds.sutToken,
-      ...(args.backend === "codex-fixture"
-        ? {
-            // Deterministic fixture runs intentionally use the private QA
-            // runtime override so stale built artifacts cannot bypass Codex.
-            OPENCLAW_BUILD_PRIVATE_QA: "1",
-            OPENCLAW_QA_FORCE_RUNTIME: "codex",
-            OPENCLAW_CODEX_REQUEST_USER_INPUT_LOG: evidenceDir
-              ? path.join(evidenceDir, "codex-app-server.ndjson")
-              : path.join(temp.root, "codex-app-server.ndjson"),
-          }
-        : {}),
-      // Deliberately not `sk-` prefixed: mock-openai never checks the key, and
-      // an sk-shaped literal trips secret scanners on every diff that moves it.
-      OPENAI_API_KEY: "openclaw-e2e-mock-key",
-    };
+    const gatewayEnv = createGatewayEnvironment({
+      backend: args.backend,
+      codexLogPath: evidenceDir
+        ? path.join(evidenceDir, "codex-app-server.ndjson")
+        : path.join(temp.root, "codex-app-server.ndjson"),
+      configPath: temp.configPath,
+      stateDir: temp.stateDir,
+      sutToken: creds.sutToken,
+    });
     const heldTelegramMethods = [
       ...new Set(
         (args.scenario?.actions ?? [])

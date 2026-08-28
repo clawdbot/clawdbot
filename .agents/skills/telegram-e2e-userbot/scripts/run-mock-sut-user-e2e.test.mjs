@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   cleanupOwnedRuntime,
+  createGatewayEnvironment,
   drainSutUpdates,
   fenceLeaseFailure,
   ownChild,
@@ -73,25 +74,46 @@ test("lease loss cancels and joins active cron and restart work", async () => {
 test("lease loss during blocked readiness stops the gateway before polling", async (context) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-gateway-lease-fence-"));
   const pollMarker = path.join(temp, "poll-started");
+  const gatewayReady = path.join(temp, "gateway-ready");
+  const childScript = path.join(temp, "fixture.cjs");
+  const gatewayScript = path.join(temp, "gateway.cjs");
   context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  fs.writeFileSync(
+    childScript,
+    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.POLL_MARKER,"polled"),200); setInterval(()=>{},1000);',
+  );
+  fs.writeFileSync(
+    gatewayScript,
+    'const fs=require("node:fs"); const {spawn}=require("node:child_process"); spawn(process.execPath,[process.env.CHILD_SCRIPT],{detached:!process.env.OPENCLAW_QA_PARENT_PID,env:process.env,stdio:"ignore"}); fs.writeFileSync(process.env.GATEWAY_READY,"ready"); setInterval(()=>{},1000);',
+  );
+  const gatewayEnv = createGatewayEnvironment({
+    backend: "codex-fixture",
+    codexLogPath: path.join(temp, "codex.ndjson"),
+    configPath: path.join(temp, "openclaw.json"),
+    stateDir: path.join(temp, "state"),
+    sutToken: "sut-token",
+  });
   const gateway = ownChild(
-    spawn(
-      process.execPath,
-      [
-        "-e",
-        'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.POLL_MARKER,"polled"),200); setInterval(()=>{},1000);',
-      ],
-      {
-        detached: true,
-        env: { ...process.env, POLL_MARKER: pollMarker },
-        stdio: "ignore",
+    spawn(process.execPath, [gatewayScript], {
+      detached: true,
+      env: {
+        ...process.env,
+        ...gatewayEnv,
+        CHILD_SCRIPT: childScript,
+        GATEWAY_READY: gatewayReady,
+        POLL_MARKER: pollMarker,
       },
-    ),
+      stdio: "ignore",
+    }),
   );
   const leaseError = new Error("lease heartbeat failed during gateway readiness");
-  const leaseFailure = new Promise((resolve) =>
-    setTimeout(() => resolve({ type: "lease-failure", error: leaseError }), 20),
-  );
+  const leaseFailure = new Promise((resolve) => {
+    const poll = setInterval(() => {
+      if (!fs.existsSync(gatewayReady)) return;
+      clearInterval(poll);
+      resolve({ type: "lease-failure", error: leaseError });
+    }, 5);
+  });
 
   await assert.rejects(
     waitForGatewayLeaseReady({
@@ -102,6 +124,8 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
     (error) => error === leaseError,
   );
   await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(gatewayEnv.OPENCLAW_QA_PARENT_PID, String(process.pid));
+  assert.equal(fs.existsSync(gatewayReady), true);
   assert.equal(fs.existsSync(pollMarker), false);
 });
 
