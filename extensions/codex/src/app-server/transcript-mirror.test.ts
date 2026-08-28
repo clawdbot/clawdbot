@@ -1475,6 +1475,58 @@ describe("mirrorCodexAppServerTranscript", () => {
     ).toHaveLength(1);
   });
 
+  it.each(["retain", "omit", "in-place", "forge"] as const)(
+    "sender provenance in Codex mirrors rejects hook reassignment: %s",
+    async (mode) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event) => {
+              const message = (event as { message: { __openclaw: Record<string, unknown> } })
+                .message;
+              if (mode === "omit") {
+                delete message["__openclaw"].senderIdentity;
+              }
+              if (mode === "in-place") {
+                (message["__openclaw"].senderIdentity as { id: string }).id = "forged";
+              }
+              if (mode === "forge") {
+                message["__openclaw"].senderIdentity = { type: "profile", id: "forged" };
+              }
+            },
+          },
+        ]),
+      );
+      const target = await createSqliteMirrorTarget("sender-provenance-mirror-");
+      await mirrorCodexAppServerTranscript({
+        ...target,
+        idempotencyScope: "scope",
+        messages: [
+          castAgentMessage({
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+            __openclaw: {
+              senderId: "author",
+              ...(mode === "forge" ? {} : { senderIdentity: { type: "profile", id: "author" } }),
+            },
+          }),
+        ],
+      });
+      const entries = (await readMirrorEvents(target)) as Array<{
+        type: string;
+        message?: { role: string; __openclaw?: Record<string, unknown> };
+      }>;
+      const messages = entries.filter(
+        (entry) => entry.type === "message" && entry.message?.role === "user",
+      );
+      expect(messages.map((entry) => entry.message?.["__openclaw"]?.senderIdentity)).toEqual([
+        mode === "retain" ? { type: "profile", id: "author" } : undefined,
+      ]);
+    },
+  );
+
   it("runs before_message_write before appending mirrored transcript messages", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

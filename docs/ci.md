@@ -786,6 +786,17 @@ profile=all|agent-runtime-boundary|config-boundary|core-auth-secrets|channel-run
 
 The narrow profiles are teaching/iteration hooks for running one quality shard in isolation.
 
+On pull requests, the network runtime shard starts with a fast diff scan. Sensitive
+socket imports/calls and proxy-policy tokens, edits to its queries/config/fixtures, and
+changes to the Codex transport select full CodeQL analysis in the same PR job.
+Absent or null patches for monitored non-test sources also select full analysis;
+metadata fetch or parse failures stop shard selection rather than silently skipping it.
+Known ordinary diffs keep the fast path. The full path runs semantic query tests before
+analysis, including coverage of the configured `packages/net-policy/src` directory
+and preservation of exact owner/function allowances and test-path exclusions.
+Full analysis fails the job on any SARIF finding or missing SARIF output; a
+sensitive diff is a routing signal, not a finding.
+
 | Category                                                | Surface                                                                                                                                                           |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/codeql-critical-quality/core-auth-secrets`            | Auth, secrets, sandbox, cron, and gateway security boundary code                                                                                                  |

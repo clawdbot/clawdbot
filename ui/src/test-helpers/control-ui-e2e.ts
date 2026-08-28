@@ -11,6 +11,7 @@ import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
@@ -327,6 +328,7 @@ export type ControlUiMockGatewayScenario = {
   presenceUsers?: Array<{
     self?: boolean;
     id: string;
+    identity?: AuthenticatedUser["identity"];
     name?: string;
     email?: string;
     avatarUrl?: string;
@@ -1395,6 +1397,7 @@ function installControlUiMockGateway(
         ...(user.timeZone ? { timeZone: user.timeZone } : {}),
         user: {
           id: user.id,
+          ...(user.identity ? { identity: user.identity } : {}),
           name: user.name ?? null,
           email: user.email ?? null,
           avatarUrl: user.avatarUrl ?? null,

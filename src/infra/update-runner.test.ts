@@ -1228,8 +1228,88 @@ describe("runGatewayUpdate", () => {
       PNPM_CONFIG_RESOLUTION_MODE: "highest",
       npm_config_resolution_mode: "highest",
       pnpm_config_resolution_mode: "highest",
+      PNPM_CONFIG_PREFER_OFFLINE: "true",
+      pnpm_config_prefer_offline: "true",
     });
   });
+
+  it.each([
+    ["PNPM_CONFIG_PREFER_OFFLINE", "false", undefined],
+    ["pnpm_config_prefer_offline", undefined, "false"],
+    ["conflicting pnpm preference variables", "true", "false"],
+  ] as const)(
+    "preserves explicit %s in update installs",
+    async (_caseName, upperValue, lowerValue) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      await setupUiIndex();
+      const stableTag = "v1.0.1-1";
+      const installEnvs: NodeJS.ProcessEnv[] = [];
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const { runCommand } = createGitInstallRunner({
+        stableTag,
+        installCommand: "pnpm install",
+        buildCommand: "pnpm build",
+        uiBuildCommand: "pnpm ui:build",
+        doctorCommand: `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`,
+        onCommand: (key, options) => {
+          if (key === "pnpm install") {
+            installEnvs.push(options?.env ?? {});
+          }
+          return undefined;
+        },
+      });
+
+      const result = await withEnvAsync(
+        {
+          PNPM_CONFIG_PREFER_OFFLINE: upperValue,
+          pnpm_config_prefer_offline: lowerValue,
+        },
+        () => runWithCommand(runCommand, { channel: "stable" }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(installEnvs).toHaveLength(1);
+      expect(installEnvs[0]?.PNPM_CONFIG_PREFER_OFFLINE).toBe(upperValue);
+      expect(installEnvs[0]?.pnpm_config_prefer_offline).toBe(lowerValue);
+    },
+  );
+
+  it.each([
+    ["an explicit value", { stdout: "false\n" }],
+    ["a failed query", { code: 1 }],
+  ] satisfies Array<[string, CommandResponse]>)(
+    "does not inject a pnpm prefer-offline default after %s",
+    async (_caseName, configResponse) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      await setupUiIndex();
+      const stableTag = "v1.0.1-1";
+      const installEnvs: NodeJS.ProcessEnv[] = [];
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const { runCommand } = createGitInstallRunner({
+        stableTag,
+        installCommand: "pnpm install",
+        buildCommand: "pnpm build",
+        uiBuildCommand: "pnpm ui:build",
+        doctorCommand: `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`,
+        onCommand: (key, options) => {
+          if (key === "pnpm config get prefer-offline") {
+            return configResponse;
+          }
+          if (key === "pnpm install") {
+            installEnvs.push(options?.env ?? {});
+          }
+          return undefined;
+        },
+      });
+
+      const result = await runWithCommand(runCommand, { channel: "stable" });
+
+      expect(result.status).toBe("ok");
+      expect(installEnvs).toHaveLength(1);
+      expect(installEnvs[0]).not.toHaveProperty("PNPM_CONFIG_PREFER_OFFLINE");
+      expect(installEnvs[0]).not.toHaveProperty("pnpm_config_prefer_offline");
+    },
+  );
 
   it("marks git update doctor passes for configured-plugin repair deferral when requested", async () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
@@ -1326,6 +1406,8 @@ describe("runGatewayUpdate", () => {
         PNPM_CONFIG_RESOLUTION_MODE: "highest",
         npm_config_resolution_mode: "highest",
         pnpm_config_resolution_mode: "highest",
+        PNPM_CONFIG_PREFER_OFFLINE: "true",
+        pnpm_config_prefer_offline: "true",
       });
     }
   });

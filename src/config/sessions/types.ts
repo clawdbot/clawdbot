@@ -16,6 +16,8 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
 } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
@@ -457,6 +459,10 @@ type SessionEntryCore = SessionRestartRecoveryState &
       toolsAllowIsDefault?: boolean;
       /** Exact server-stamped authority provenance copied from the owning cron job. */
       scheduledToolPolicy?: CronScheduledToolPolicy;
+      /** Restrict-only exec pin copied from the owning cron job's cap. */
+      toolsAllowExecTarget?: CronToolsAllowExecTarget;
+      /** Expected pin copied with the cap so detached continuation loss fails closed. */
+      toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
       /** Store-private origin paired with an account scheduled-tool policy. */
       scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
       cliSessionBindingFacts?: {

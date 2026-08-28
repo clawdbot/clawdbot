@@ -1947,6 +1947,44 @@ describe("buildCachedChatItems", () => {
     previewExtraction.mockRestore();
   });
 
+  it("sender provenance separates namespaces without splitting profile renames", () => {
+    const groups = messageGroups({
+      messages: [
+        userMessage("first", 1000, {
+          __openclaw: {
+            senderId: "shared",
+            senderName: "Same",
+            senderIdentity: { type: "profile", id: "shared" },
+          },
+        }),
+        userMessage("second", 1001, {
+          __openclaw: {
+            senderId: "shared",
+            senderName: "Renamed",
+            senderProfileAvatarUrl: "/api/users/shared/avatar?v=2",
+            senderIdentity: { type: "profile", id: "shared" },
+          },
+        }),
+        userMessage("third", 1002, {
+          __openclaw: {
+            senderId: "shared",
+            senderName: "Renamed",
+            senderProfileAvatarUrl: "/api/users/shared/avatar?v=2",
+            senderIdentity: {
+              type: "observation",
+              id: "shared",
+              pluginId: "channel",
+              accountId: null,
+              senderKind: "unknown",
+            },
+          },
+        }),
+      ],
+    });
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.messages.length)).toEqual([2, 1]);
+  });
+
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
       messages: [
@@ -4710,6 +4748,72 @@ describe("user message expansion state", () => {
 });
 
 describe("thread item cache", () => {
+  it("sender provenance refreshes reply display without changing the person", () => {
+    resetChatThreadState();
+    const alice = userMessage("first", 1, {
+      __openclaw: {
+        senderId: "alice",
+        senderName: "Alice",
+        senderIdentity: { type: "profile", id: "alice" },
+      },
+    });
+    const bob = userMessage("second", 2, {
+      __openclaw: {
+        senderId: "bob",
+        senderName: "Bob",
+        senderIdentity: { type: "profile", id: "bob" },
+      },
+    });
+    const reply = assistantMessage("answer", 3);
+    const input = createProps({ messages: [alice, bob, reply] });
+    buildCachedChatItems(input);
+    const renamed = userMessage("second", 2, {
+      __openclaw: {
+        senderId: "bob",
+        senderName: "Bobby",
+        senderIdentity: { type: "profile", id: "bob" },
+        senderProfileAvatarUrl: "/api/users/bob/avatar?v=2",
+      },
+    });
+    const updated = buildCachedChatItems({ ...input, messages: [alice, renamed, reply] });
+    expect(
+      updated.find((item) => item.kind === "group" && item.role === "assistant"),
+    ).toMatchObject({
+      replyToSender: { name: "Bobby", profileAvatarUrl: "/api/users/bob/avatar?v=2" },
+    });
+  });
+
+  it("sender provenance keeps identical text from colliding authors", () => {
+    const groups = messageGroups({
+      messages: [
+        userMessage("same", 1, {
+          __openclaw: {
+            seq: 1,
+            senderId: "shared",
+            senderName: "Same",
+            senderIdentity: { type: "profile", id: "shared" },
+          },
+        }),
+        userMessage("same", 2, {
+          __openclaw: {
+            seq: 2,
+            senderId: "shared",
+            senderName: "Same",
+            senderIdentity: {
+              type: "observation",
+              id: "shared",
+              pluginId: "channel",
+              accountId: null,
+              senderKind: "unknown",
+            },
+          },
+        }),
+      ],
+    });
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.messages.length)).toEqual([1, 1]);
+  });
+
   it("preserves stable transcript rows while the live stream changes", () => {
     resetChatThreadState();
     const messages = [{ role: "assistant", content: "ready" }];

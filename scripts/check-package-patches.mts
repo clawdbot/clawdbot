@@ -9,6 +9,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import YAML from "yaml";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
+  ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
 ]);

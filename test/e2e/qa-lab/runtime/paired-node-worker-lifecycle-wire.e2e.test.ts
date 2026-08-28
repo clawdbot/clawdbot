@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -11,6 +12,7 @@ import {
 } from "../../../../src/infra/node-commands.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import type { DB as StateDatabase } from "../../../../src/state/openclaw-state-db.generated.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import { startPairedNodeWorkerLifecycleProvider } from "./paired-node-worker-lifecycle-provider.js";
@@ -187,13 +189,17 @@ describe("paired node worker lifecycle wire", () => {
       const root = tempDirs.make("openclaw-paired-node-worker-lifecycle-");
       const provider = await startPairedNodeWorkerLifecycleProvider([HOLD_A, HOLD_B]);
       const published = await createPublishedWireWorkspace(root);
+      const gatewayOwner = createQaGatewayChild();
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
       let testFailure: { error: unknown } | undefined;
       let cleanupFailures: unknown[];
       try {
-        gateway = await startPairedNodeWorkerGateway({ providerBaseUrl: provider.baseUrl });
+        gateway = await startPairedNodeWorkerGateway({
+          owner: gatewayOwner,
+          providerBaseUrl: provider.baseUrl,
+        });
         operator = await connectWireClient({ gateway, role: "operator", identity: null });
         workerNode = await createPairedNodeWorkerHost({
           gateway,
@@ -454,7 +460,7 @@ describe("paired node worker lifecycle wire", () => {
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
           operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
-          gateway?.stop() ?? Promise.resolve(),
+          stopQaGatewayFixture(gatewayOwner),
           provider.stop(),
           closeWireServer(published.server),
         ]);

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 346461,
-  "reason": "standing-grant scope line + grants ledger (#131602); recorded at the CI e2e-lane build (346461 B) — checks-ui and local builds of the same tree measure ~600 B less, beyond the 64 B variance allowance",
+  "startupJsGzipBytes": 348449,
+  "reason": "Gateway credential re-scoping across login, startup, connection, and final client construction; rebased over the 347255 B main baseline using the exact-head CI-observed 1194 B delta",
   "updatedAt": "2026-08-28"
 }
