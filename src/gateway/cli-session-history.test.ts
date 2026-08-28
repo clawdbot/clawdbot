@@ -664,6 +664,34 @@ describe("cli session history", () => {
     },
   );
 
+  it("consumes each local media-bearing turn only once", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const importedMessages = ["first-image-only-user", "second-image-only-user"].map(
+      (externalId, index) => ({
+        role: "user",
+        content: `@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
+        timestamp: timestamp + index * 60_000,
+        __openclaw: { externalId, cliImageMentionOnly: true },
+      }),
+    );
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        {
+          role: "user",
+          content: "",
+          timestamp,
+          __openclaw: {
+            media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
+          },
+        },
+      ],
+      importedMessages,
+    });
+
+    expect(merged).toEqual([expect.any(Object), importedMessages[1]]);
+  });
+
   it("retains mention-only imported rows when no local media-bearing turn survives", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe06.png";

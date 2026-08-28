@@ -179,6 +179,8 @@ function hasRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
 // media facts represents the same turn. Local history can be reset or lost
 // while the external JSONL persists, so redundancy is proven per-merge by a
 // media-bearing local row inside the dedupe timestamp window, never assumed.
+// Each local candidate is consumed once so partial local history cannot hide
+// multiple distinct imported image turns.
 function isCliImageMentionOnlyImport(message: unknown): boolean {
   const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
   return meta?.cliImageMentionOnly === true;
@@ -216,7 +218,7 @@ export function mergeImportedChatHistoryMessages(params: {
   const exactExternalIdentityIndex = new Set<string>();
   const allMessageRoleTextIndex: RoleTextIndex = new Map();
   const identitylessRoleTextIndex: RoleTextIndex = new Map();
-  let localImageMediaTimestamps: TimestampSummary | undefined;
+  const localImageMediaTimestamps: number[] = [];
   const indexEntry = (entry: ComparableHistoryMessage) => {
     if (entry.externalIdentityKey) {
       exactExternalIdentityIndex.add(entry.externalIdentityKey);
@@ -227,9 +229,8 @@ export function mergeImportedChatHistoryMessages(params: {
   };
   for (const entry of merged) {
     indexEntry(entry);
-    if (hasLocalImageMediaFacts(entry)) {
-      localImageMediaTimestamps ??= { hasMissingTimestamp: false, buckets: new Map() };
-      addTimestampToSummary(localImageMediaTimestamps, entry.timestamp);
+    if (hasLocalImageMediaFacts(entry) && entry.timestamp !== undefined) {
+      localImageMediaTimestamps.push(entry.timestamp);
     }
   }
   let nextOrder = merged.length;
@@ -242,10 +243,15 @@ export function mergeImportedChatHistoryMessages(params: {
     if (duplicate) {
       continue;
     }
-    if (
-      isCliImageMentionOnlyImport(message) &&
-      summaryHasTimestampMatch(localImageMediaTimestamps, imported.timestamp)
-    ) {
+    const importedTimestamp = imported.timestamp;
+    const localImageMediaIndex =
+      isCliImageMentionOnlyImport(message) && importedTimestamp !== undefined
+        ? localImageMediaTimestamps.findIndex(
+            (timestamp) => Math.abs(timestamp - importedTimestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS,
+          )
+        : -1;
+    if (localImageMediaIndex !== -1) {
+      localImageMediaTimestamps.splice(localImageMediaIndex, 1);
       continue;
     }
     merged.push(imported);
