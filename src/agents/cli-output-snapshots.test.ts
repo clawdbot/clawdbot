@@ -131,6 +131,36 @@ describe("Claude CLI assistant snapshots", () => {
     expect(parser.getOutput()?.text).toBe("Inspecting now.\n\nDone.");
   });
 
+  it("keeps nested tool-result text out of the visible snapshot", () => {
+    const deltas: string[] = [];
+    const toolResults: unknown[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
+      onAssistantDelta: ({ delta }) => deltas.push(delta),
+      onToolResult: ({ result }) => toolResults.push(result),
+    });
+    const secret = "private tool result";
+
+    parser.push(
+      JSON.stringify(
+        claudePartialSnapshot("msg-1", [
+          { type: "text", text: "Visible." },
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "tool-1",
+            content: [{ type: "text", text: secret }],
+          },
+        ]),
+      ),
+    );
+    parser.finish();
+
+    expect(deltas).toEqual(["Visible."]);
+    expect(toolResults).toEqual([[{ type: "text", text: secret }]]);
+    expect(deltas.join("")).not.toContain(secret);
+  });
+
   it("routes leading tagged reasoning before visible snapshot text", () => {
     const thinking: string[] = [];
     const visible: string[] = [];

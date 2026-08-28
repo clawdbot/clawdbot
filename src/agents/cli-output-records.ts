@@ -561,7 +561,12 @@ export function parseClaudeCliStreamingDelta(params: {
   ) {
     return null;
   }
-  const snapshot = collectCliText(params.parsed.message);
+  const content = Array.isArray(params.parsed.message.content) ? params.parsed.message.content : [];
+  const snapshot = content
+    .map((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string" ? block.text : "",
+    )
+    .join("");
   // The delivery lane is append-only. Emit only cumulative suffixes and let
   // a divergent revision defer to the terminal result instead of duplicating text.
   return snapshot.startsWith(params.previousText)
