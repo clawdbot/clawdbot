@@ -1132,27 +1132,9 @@ driverBotToken: string, sutBotToken: string, sutApplicationId: string,
 voiceChannelId?: string }`.
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string,
 sutToken: string }` - `groupId` must be a numeric chat-id string.
-- Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken:
-string, testerUserId: string, testerUsername: string, telegramApiId:
-string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string,
-tdlibArchiveBase64: string, tdlibArchiveSha256: string,
-desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }` -
-  Mantis Telegram Desktop proof only. Generic QA Lab lanes must not acquire
-  this kind.
 - WhatsApp (`kind: "whatsapp"`): `{ driverPhoneE164: string, sutPhoneE164:
 string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string,
 groupJid?: string }` - phone numbers must be distinct E.164 strings.
-
-The Mantis Telegram Desktop proof workflow holds one exclusive Convex
-`telegram-user` lease for both the TDLib CLI driver and Telegram Desktop
-witness, then releases it after publishing proof.
-
-When a PR needs a deterministic visual diff, Mantis can use the same mock
-model reply on `main` and on the PR head while the Telegram formatter or
-delivery layer changes. Capture defaults are tuned for PR comments: standard
-Crabbox class, 24fps desktop recording, 24fps motion GIF, and 1920px preview
-width. Before/after comments should publish a clean bundle that contains
-only the intended GIFs.
 
 Slack lanes can also use the pool. Slack payload shape checks currently live
 in the Slack QA runner rather than the broker; use `{ channelId: string,

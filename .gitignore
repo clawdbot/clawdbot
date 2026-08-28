@@ -132,6 +132,10 @@ USER.md
 
 # Keep repository skills visible to Git-aware syncs; local-only skill ignores
 # belong in .git/info/exclude.
+!/.agents/
+!/.agents/skills/
+!/.agents/skills/**
+.agents/goals/
 .agents/skills/**/*.orig
 .agents/skills/**/__pycache__/
 .agents/skills/**/*.py[cod]

@@ -46,7 +46,6 @@ const MANTIS_MANUAL_ONLY_WORKFLOWS = [
   ".github/workflows/mantis-web-ui-chat-proof.yml",
   ".github/workflows/mantis-discord-status-reactions.yml",
   ".github/workflows/mantis-discord-thread-attachment.yml",
-  ".github/workflows/mantis-telegram-live.yml",
 ] as const;
 const TRUFFLEHOG_V3_95_9 = "trufflesecurity/trufflehog@bcfcf73aaf4759d4dadc2783177c245a02792318";
 const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
@@ -4190,17 +4189,12 @@ NODE
         caller.mode === "read-write" ||
         (typeof caller.mode === "string" && caller.mode.includes("'read-write'")),
     );
-    expect(writeAuthorizedCallers).toHaveLength(4);
+    expect(writeAuthorizedCallers).toHaveLength(3);
     expect(writeAuthorizedCallers).toEqual(
       expect.arrayContaining([
         {
           file: ".github/workflows/ci-build-artifacts-testbox.yml",
           mode: expect.stringContaining("'read-write'"),
-          step: expect.objectContaining({ name: "Setup Node environment" }),
-        },
-        {
-          file: ".github/workflows/mantis-telegram-desktop-proof.yml",
-          mode: "read-write",
           step: expect.objectContaining({ name: "Setup Node environment" }),
         },
         {
@@ -4693,7 +4687,6 @@ server.listen(0, "127.0.0.1", () => {
       ".github/workflows/mantis-discord-status-reactions.yml",
       ".github/workflows/mantis-discord-thread-attachment.yml",
       ".github/workflows/mantis-slack-desktop-smoke.yml",
-      ".github/workflows/mantis-telegram-live.yml",
       ".github/workflows/qa-live-transports-convex.yml",
     ];
     for (const workflowPath of privateQaWorkflows) {

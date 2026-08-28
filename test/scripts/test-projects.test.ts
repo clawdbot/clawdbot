@@ -978,14 +978,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
       [
-        ".github/workflows/mantis-telegram-desktop-proof.yml",
-        [
-          "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
-          "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
-        ],
-      ],
-      [
         ".github/workflows/mantis-web-ui-chat-proof.yml",
         [
           "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",

@@ -38,9 +38,6 @@ const MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW =
 const MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW =
   ".github/workflows/mantis-discord-thread-attachment.yml";
 const MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW = ".github/workflows/mantis-slack-desktop-smoke.yml";
-const MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW =
-  ".github/workflows/mantis-telegram-desktop-proof.yml";
-const MANTIS_TELEGRAM_LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
@@ -6223,16 +6220,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         stepName: "Upload Mantis Slack desktop artifacts",
       },
       {
-        workflowPath: MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW,
-        jobName: "run_telegram_visible_proof",
-        stepName: "Upload Mantis Telegram artifacts",
-      },
-      {
-        workflowPath: MANTIS_TELEGRAM_LIVE_WORKFLOW,
-        jobName: "run_telegram_live",
-        stepName: "Upload Mantis Telegram artifacts",
-      },
-      {
         workflowPath: MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW,
         jobName: "run_web_ui_chat",
         stepName: "Upload Mantis web UI chat artifacts",
@@ -6259,7 +6246,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       [MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW, "run_status_reactions"],
       [MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW, "run_thread_attachment"],
       [MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "run_slack_desktop"],
-      [MANTIS_TELEGRAM_LIVE_WORKFLOW, "run_telegram_live"],
     ] as const;
 
     for (const [workflowPath, jobName] of cases) {
@@ -6904,12 +6890,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "600000"],
       [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", "600000"],
       [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane", "1800000"],
-      [
-        ".github/workflows/mantis-telegram-live.yml",
-        "run_telegram_live",
-        "Run Telegram live scenario and capture desktop evidence",
-        "1800000",
-      ],
     ] as const;
 
     for (const [workflowPath, jobName, stepName, acquireTimeoutMs] of telegramJobs) {

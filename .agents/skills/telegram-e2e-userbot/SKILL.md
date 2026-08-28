@@ -68,9 +68,6 @@ The generic `OPENCLAW_E2E_OK` turn proves only the default message path. A
 channel-visible change needs a recipe whose timeline exposes that change. If the
 diff is not channel-visible, state that boundary and use the generic turn.
 
-OpenClaw changes that require desktop visual evidence also require the separate
-[Crabbox visual branch](features/crabbox.md).
-
 For a non-default backend or timed scenario, read the matching section of the
 [runtime reference](features/runtime-reference.md).
 
