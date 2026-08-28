@@ -57,7 +57,7 @@ type CommandPaletteProps = {
   basePath: string;
   open: boolean;
   query: string;
-  activeIndex: number;
+  activeId: string | null;
   sessionItems: readonly PaletteItem[];
   catalogItems: readonly PaletteItem[];
   sessionSearchFailed: boolean;
@@ -65,7 +65,7 @@ type CommandPaletteProps = {
   sessionSearchIncomplete: boolean;
   onToggle: () => void;
   onQueryChange: (query: string) => void;
-  onActiveIndexChange: (index: number) => void;
+  onActiveIdChange: (id: string) => void;
   onNavigate?: ApplicationContext<RouteId>["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
@@ -73,16 +73,6 @@ type CommandPaletteProps = {
   custodianAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
 };
-
-function filteredItems(props: CommandPaletteProps): PaletteItem[] {
-  // Keyboard selection and ARIA focus follow the same category order as the visible rows.
-  return groupItems(
-    filterCommandPaletteItems({
-      ...props,
-      includeSlashCommands: Boolean(props.onSlashCommand),
-    }),
-  ).flatMap(([, items]) => items);
-}
 
 function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
   const map = new Map<string, PaletteItem[]>();
@@ -131,26 +121,30 @@ function scrollActiveIntoView() {
   });
 }
 
-function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
-  const items = filteredItems(props);
+function handleKeydown(
+  e: KeyboardEvent,
+  props: CommandPaletteProps,
+  items: PaletteItem[],
+  activeIndex: number,
+) {
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
   }
   switch (e.key) {
     case "ArrowDown":
       e.preventDefault();
-      props.onActiveIndexChange((props.activeIndex + 1) % items.length);
+      props.onActiveIdChange(items[(activeIndex + 1) % items.length]!.id);
       scrollActiveIntoView();
       break;
     case "ArrowUp":
       e.preventDefault();
-      props.onActiveIndexChange((props.activeIndex - 1 + items.length) % items.length);
+      props.onActiveIdChange(items[(activeIndex - 1 + items.length) % items.length]!.id);
       scrollActiveIntoView();
       break;
     case "Enter":
       e.preventDefault();
       {
-        const item = items[props.activeIndex];
+        const item = items[activeIndex];
         if (item) {
           selectItem(item, props);
         }
@@ -182,10 +176,17 @@ function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
-  const items = filteredItems(props);
-  const grouped = groupItems(items);
-  const activeItem = items[props.activeIndex];
-  const activeOptionId = activeItem ? getOptionId(props.activeIndex) : nothing;
+  const grouped = groupItems(
+    filterCommandPaletteItems({ ...props, includeSlashCommands: Boolean(props.onSlashCommand) }),
+  );
+  const items = grouped.flatMap(([, entries]) => entries);
+  // Preserve explicit selection through transient result changes, but only
+  // highlight and execute current rows; an absent choice selects the first row.
+  const activeIndex = Math.max(
+    0,
+    items.findIndex((item) => item.id === props.activeId),
+  );
+  const activeOptionId = items[activeIndex] ? getOptionId(activeIndex) : nothing;
   const paletteLabel = t("palette.placeholder");
 
   return html`
@@ -198,7 +199,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
       <div
         class="cmd-palette"
         @click=${(e: Event) => e.stopPropagation()}
-        @keydown=${(e: KeyboardEvent) => handleKeydown(e, props)}
+        @keydown=${(e: KeyboardEvent) => handleKeydown(e, props, items, activeIndex)}
       >
         <label id=${paletteDialogLabelId} class="cmd-palette__label" for=${paletteInputId}
           >${paletteLabel}</label
@@ -215,10 +216,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
           aria-expanded="true"
           placeholder=${paletteLabel}
           .value=${props.query}
-          @input=${(e: Event) => {
-            props.onQueryChange((e.target as HTMLInputElement).value);
-            props.onActiveIndexChange(0);
-          }}
+          @input=${(e: Event) => props.onQueryChange((e.target as HTMLInputElement).value)}
         />
         <div id=${paletteListboxId} class="cmd-palette__results" role="listbox">
           ${props.sessionSearchPartial || props.sessionSearchIncomplete
@@ -248,7 +246,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
                   </div>
                   ${groupedItems.map((item) => {
                     const globalIndex = items.indexOf(item);
-                    const isActive = globalIndex === props.activeIndex;
+                    const isActive = globalIndex === activeIndex;
                     return html`
                       <div
                         id=${getOptionId(globalIndex)}
@@ -259,7 +257,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
                           e.stopPropagation();
                           selectItem(item, props);
                         }}
-                        @mouseenter=${() => props.onActiveIndexChange(globalIndex)}
+                        @mouseenter=${() => props.onActiveIdChange(item.id)}
                       >
                         <span class="nav-item__icon">${icons[item.icon]}</span>
                         <span>${item.label}</span>
@@ -294,7 +292,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   private context?: ApplicationContext<RouteId>;
   @state() private open = false;
   @state() private query = "";
-  @state() private activeIndex = 0;
+  @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
   @state() private catalogItems: readonly PaletteItem[] = [];
   @state() private sessionSearchFailed = false;
@@ -334,7 +332,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     document.removeEventListener("keydown", this.handleGlobalKeydown);
     this.open = false;
     this.query = "";
-    this.activeIndex = 0;
+    this.activeId = null;
     this.clearSessionSearch();
     this.clearCatalogSearch();
     this.sessionSearchSource = undefined;
@@ -344,7 +342,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   openPalette() {
     this.open = true;
     this.query = "";
-    this.activeIndex = 0;
+    this.activeId = null;
     this.clearSessionSearch();
   }
 
@@ -444,17 +442,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   }
 
   private scheduleSessionSearch(query: string) {
-    if (this.sessionSearchTimer !== null) {
-      globalThis.clearTimeout(this.sessionSearchTimer);
-      this.sessionSearchTimer = null;
-    }
     // Invalidate the previous query immediately so late responses cannot
     // repopulate selectable stale rows during the debounce window.
-    this.sessionSearchId += 1;
-    this.sessionItems = [];
-    this.sessionSearchFailed = false;
-    this.sessionSearchPartial = false;
-    this.sessionSearchIncomplete = false;
+    this.clearSessionSearch();
     const search = normalizeOptionalString(query);
     if (!this.open || !search || search.length < SESSION_SEARCH_MIN_CHARS) {
       return;
@@ -614,7 +604,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
               ? transcriptSearchSnippet(transcriptHit.snippet)
               : formatRelativeTimestamp(row.updatedAt, { fallback: "" }),
         }));
-      this.activeIndex = 0;
     } catch {
       // Session search is best-effort; navigation commands stay usable. But a
       // failed search must not render as "No results" — that reads as a
@@ -643,7 +632,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.query,
-      activeIndex: this.activeIndex,
+      activeId: this.activeId,
       sessionItems: this.sessionItems,
       catalogItems: [
         ...toCommandPaletteItems(
@@ -661,11 +650,11 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onToggle: this.togglePalette,
       onQueryChange: (query) => {
         this.query = query;
-        this.activeIndex = 0;
+        this.activeId = null;
         this.scheduleSessionSearch(query);
       },
-      onActiveIndexChange: (index) => {
-        this.activeIndex = index;
+      onActiveIdChange: (id) => {
+        this.activeId = id;
       },
       onNavigate: this.onNavigate,
       onSelectSession: this.onSelectSession,

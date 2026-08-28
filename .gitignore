@@ -119,7 +119,6 @@ USER.md
 *.tar.gz
 *.zip
 .idea
-.vscode/
 
 # local tooling
 .antigravitycli/
@@ -236,3 +235,7 @@ extensions/discord/assets/embedded-app-sdk.mjs
 
 # Pinned Swift lint/format tools installed by scripts/install-swift-tools.sh
 .build/
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore

