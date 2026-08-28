@@ -29,13 +29,14 @@ function renderPosixShim(invocation: OpenClawCliInvocation, profile: string | nu
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
   return `#!/bin/sh
 set -eu
+cd -- ${quotePosixArgument(invocation.cwd)}
 exec ${[invocation.command, ...args].map(quotePosixArgument).join(" ")} "$@"
 `;
 }
 
 function renderWindowsShim(invocation: OpenClawCliInvocation, profile: string | null): string {
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
-  return `@echo off\r\n${[invocation.command, ...args].map(quoteCmdScriptArg).join(" ")} %*\r\n`;
+  return `@echo off\r\ncd /d ${quoteCmdScriptArg(invocation.cwd)}\r\n${[invocation.command, ...args].map(quoteCmdScriptArg).join(" ")} %*\r\n`;
 }
 
 /**
