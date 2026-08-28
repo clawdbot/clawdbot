@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toGenericTranscriptItem } from "../session-catalog-transcript-item.js";
@@ -55,7 +55,7 @@ function turn(id: string, texts: string[]): CodexTurn {
   };
 }
 
-async function importHistory(turns: CodexTurn[]) {
+async function importHistory(turns: CodexTurn[], name?: string) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-fork-import-")));
   roots.push(root);
   const target = {
@@ -69,10 +69,11 @@ async function importHistory(turns: CodexTurn[]) {
     entry: {
       sessionFile: `sqlite:${target.agentId}:${target.sessionId}:${target.storePath}`,
       sessionId: target.sessionId,
-      updatedAt: 1,
+      updatedAt: Date.now(),
+      label: name,
     },
   });
-  const thread: CodexThread = { id: "thread-source", projectId: null, turns };
+  const thread: CodexThread = { id: "thread-source", projectId: null, name, turns };
   const imported = await importCodexThreadHistoryToTranscript({
     ...target,
     thread,
@@ -112,10 +113,13 @@ async function importHistory(turns: CodexTurn[]) {
 
 describe("fork boundaries from imported Codex history", () => {
   it.each([false, true])(
-    "forks an inherited original message with the real resolver and importer (materialized: %s)",
+    "forks a named source without inheriting its unique local label (materialized: %s)",
     async (materialized) => {
       const turns = [turn("turn-1", ["one"]), turn("turn-2", ["edit me"])];
-      const history = await importHistory(turns);
+      const name = "Native fork verification";
+      const history = await importHistory(turns, name);
+      const sourceEntry = getSessionEntry(history.target);
+      const sourceEntries = await readVisibleSessionTranscriptMessageEntries(history.target);
       const bindingStore = createCodexTestBindingStore();
       const identity = sessionBindingIdentity(history.target);
       const pending = {
@@ -149,15 +153,18 @@ describe("fork boundaries from imported Codex history", () => {
       }
       const sourceBinding = await bindingStore.read(identity);
       const response = forkResponse();
+      const namedResponse = { ...response, thread: { ...response.thread, name } };
       const nativeThreads = new Map<string, CodexThread>([
         [history.thread.id, history.thread],
         // Injected history is absent from the canonical thread's native projection.
         ["thread-canonical", { id: "thread-canonical", projectId: null, turns: [] }],
-        [response.thread.id, { ...response.thread, turns: turns.slice(0, 1) }],
+        [response.thread.id, { ...namedResponse.thread, turns: turns.slice(0, 1) }],
       ]);
       const sourceBefore = structuredClone(nativeThreads);
-      const forkThread = vi.fn<CodexSessionCatalogControl["forkThread"]>(async () => response);
-      const archiveThread = vi.fn<CodexSessionCatalogControl["archiveThread"]>();
+      const forkThread = vi.fn<CodexSessionCatalogControl["forkThread"]>(async () => namedResponse);
+      const archiveThread = vi.fn<CodexSessionCatalogControl["archiveThread"]>(
+        async () => undefined,
+      );
       const control: CodexSessionCatalogControl = {
         ...history.control,
         connectionFingerprint: "fingerprint",
@@ -171,48 +178,55 @@ describe("fork boundaries from imported Codex history", () => {
       const createSession = vi.mocked(runtime.agent.session.createSessionEntry);
       const targetKey = "agent:main:dashboard:forked";
 
-      await expect(
-        forkCodexUpstreamSession(
-          {
-            targetKey,
-            source: { ...history.target, entryId: history.users.at(-1)!.entryId },
-            upstream: {
-              catalogId: "codex",
-              hostId: "gateway:local",
-              kind: "codex-app-server",
-              threadId: history.thread.id,
-              ref: { connectionFingerprint: "fingerprint" },
-            },
+      const result = await forkCodexUpstreamSession(
+        {
+          targetKey,
+          source: { ...history.target, entryId: history.users.at(-1)!.entryId },
+          upstream: {
+            catalogId: "codex",
+            hostId: "gateway:local",
+            kind: "codex-app-server",
+            threadId: history.thread.id,
+            ref: { connectionFingerprint: "fingerprint" },
           },
-          {
-            bindingStore,
-            controlFactory: {
-              forRequest: () => control,
-              forUpstream: () => control,
-              homesForAgent: () => [],
-            },
-            harnessRuntimeId: "codex",
-            resolveConfig: () => ({ session: { store: history.target.storePath } }),
-            runtime,
+        },
+        {
+          bindingStore,
+          controlFactory: {
+            forRequest: () => control,
+            forUpstream: () => control,
+            homesForAgent: () => [],
           },
-        ),
-      ).resolves.toEqual({ status: "created", key: targetKey, editorText: "edit me" });
+          harnessRuntimeId: "codex",
+          resolveConfig: () => ({ session: { store: history.target.storePath } }),
+          runtime,
+        },
+      );
+      const child = await createSession.mock.results[0]!.value;
+      expect(result).toEqual({ status: "created", key: targetKey, editorText: "edit me" });
 
       expect(forkThread).toHaveBeenCalledExactlyOnceWith({
         threadId: history.thread.id,
         beforeTurnId: "turn-2",
         excludeTurns: true,
       });
-      const child = await createSession.mock.results[0]!.value;
+      expect(child.entry.label).toBeUndefined();
       const childEntries = await readVisibleSessionTranscriptMessageEntries({
         ...history.target,
         sessionId: child.sessionId,
         sessionKey: child.key,
       });
+      expect(childEntries.map((entry) => entry.role)).toEqual(["user", "assistant"]);
       expect(
         childEntries.filter((entry) => entry.role === "user").map((entry) => entry.message),
       ).toEqual([expect.objectContaining({ content: "one" })]);
       expect(await bindingStore.read(identity)).toEqual(sourceBinding);
+      expect(getSessionEntry(history.target)).toEqual(sourceEntry);
+      expect(getSessionEntry(history.target)?.label).toBe(name);
+      expect(await readVisibleSessionTranscriptMessageEntries(history.target)).toEqual(
+        sourceEntries,
+      );
+      expect(namedResponse.thread.name).toBe(name);
       expect(nativeThreads).toEqual(sourceBefore);
       expect(archiveThread).not.toHaveBeenCalled();
     },

@@ -1,5 +1,5 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { vi } from "vitest";
 import type {
   CodexSessionCatalogControl,
@@ -111,6 +111,16 @@ export function createForkTestRuntime(storePath: string) {
   createSession.mockImplementation(async (params) => {
     if (params.recoverMatchingInitialEntry) {
       throw new Error("Message forks must initialize a fresh child, not recover an existing one");
+    }
+    // The generic runtime mock omits the Gateway's per-agent label uniqueness contract.
+    const label = params.label?.trim();
+    if (
+      label &&
+      listSessionEntries({ storePath, agentId: params.agentId }).some(
+        (stored) => stored.sessionKey !== params.key && stored.entry.label === label,
+      )
+    ) {
+      throw new Error(`label already in use: ${label}`);
     }
     return await initialize({
       ...params,
