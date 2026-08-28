@@ -7,6 +7,46 @@ const env = {
   OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
 };
 
+test("rejects remote cleartext broker URLs before fetch", async () => {
+  let fetchCalls = 0;
+  await assert.rejects(
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      env: { ...env, OPENCLAW_QA_CONVEX_SITE_URL: "http://broker.example.test" },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return Response.json({ status: "ok" });
+      },
+    }),
+    /must use https/u,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("allows explicit loopback HTTP for local broker development", async () => {
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/acquire")) {
+      return Response.json({
+        status: "ok",
+        credentialId: "credential-loopback",
+        leaseToken: "lease-token-loopback",
+        payload: { schemaVersion: 1 },
+      });
+    }
+    return Response.json({ status: "ok" });
+  };
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    env: {
+      ...env,
+      OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
+      OPENCLAW_QA_CONVEX_SITE_URL: "http://127.0.0.1:3210/",
+    },
+    fetchImpl,
+  });
+  await lease.release();
+});
+
 test("acquires, heartbeats, and releases one credential", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {

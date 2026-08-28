@@ -29,7 +29,29 @@ function brokerConfig(env = process.env) {
         "Both are in Bitwarden SM as OPENCLAW_RTT_TEST_CONVEX_SITE_URL / _SECRET_CI.",
     );
   }
-  return { siteUrl: siteUrl.replace(/\/+$/u, ""), secret };
+  let parsed;
+  try {
+    parsed = new URL(siteUrl);
+  } catch {
+    throw new Error("OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL.");
+  }
+  const loopback =
+    parsed.hostname === "localhost" ||
+    parsed.hostname === "::1" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(parsed.hostname);
+  const allowLoopbackHttp = /^(?:1|true|yes)$/iu.test(
+    env.OPENCLAW_QA_ALLOW_INSECURE_HTTP?.trim() ?? "",
+  );
+  if (
+    parsed.protocol !== "https:" &&
+    !(parsed.protocol === "http:" && loopback && allowLoopbackHttp)
+  ) {
+    throw new Error(
+      "OPENCLAW_QA_CONVEX_SITE_URL must use https://. " +
+        "Loopback http:// requires OPENCLAW_QA_ALLOW_INSECURE_HTTP=1.",
+    );
+  }
+  return { siteUrl: parsed.toString().replace(/\/+$/u, ""), secret };
 }
 
 async function readBrokerResponse(response, maxBytes) {
