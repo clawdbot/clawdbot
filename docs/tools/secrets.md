@@ -13,8 +13,8 @@ writes it straight into the shared secret store. The value never appears in the
 chat, the session transcript, the tool result, or the model's context — the
 agent receives only entry metadata and its store SecretRef.
 
-The tool is available only in the main session. Subagents and other
-non-primary runs do not receive it.
+The tool is available in primary agent sessions, not just the canonical main
+conversation. Subagent and ACP worker sessions do not receive it.
 
 It is enabled by default and governed by the normal tool policy — there is no
 dedicated config key. To remove it, deny it like any other tool (for example
@@ -119,13 +119,16 @@ A stored entry is a regular shared-store entry (see
   refresh of affected config and auth-profile references.
 - `env` entries are readable values; the operator sets them, not the credential
   request flow.
-- `secret` entries reach Gateway-host subprocess traffic through opaque
-  placeholders only when the egress proxy is enabled
-  (`secrets.egressProxy.enabled`). Substitution requires the destination to match
-  the entry's allowed hosts. With the proxy disabled, protected entries are not
-  injected into subprocess environments; use a supported config SecretRef instead.
-  The provider troubleshooting switch `OPENCLAW_SECRET_SENTINELS=off` does not
-  disable protected-store sealing.
+- `secret` entries reach Gateway-host subprocess traffic through automatically
+  injected opaque environment sentinels only when the egress proxy is enabled
+  (`secrets.egressProxy.enabled`). The variable uses the stored entry name; read
+  it from the command process's inherited environment. Do not supply a secret
+  template, override that variable, or print it. Substitution requires the
+  destination to match the entry's allowed hosts. With the proxy disabled,
+  protected entries are not injected; use a supported config SecretRef instead.
+  Native harness shell, sandbox, and node execution do not receive these protected
+  values. The provider troubleshooting switch `OPENCLAW_SECRET_SENTINELS=off` does
+  not disable protected-store sealing.
 
 Gateway-host exec captures one store snapshot on its first execution in a run.
 A credential stored before that point can be included. Afterward, additions,

@@ -29,6 +29,10 @@ describe("secrets tool guidance", () => {
     expect(description).toContain("enabled proxy + exact allowedHosts required");
     expect(description).toContain("no hosts blocks egress, not config refs");
     expect(description).toContain("No plaintext fallback");
+    expect(description).toContain("auto-injected opaque env sentinel under stored name");
+    expect(description).toContain("No secret templates; never override/print that variable");
+    expect(description).toContain("Native shell/sandbox/node: no protected injection");
+    expect(description).toContain("late saves need next turn");
     expect(description).toContain("no_answer: report blocker or use best judgment");
   });
 });

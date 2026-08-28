@@ -528,6 +528,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("returned store SecretRef on supported config fields");
     expect(prompt).toContain("Gateway egress needs enabled proxy + allowed hosts");
     expect(prompt).toContain("no plaintext fallback");
+    expect(prompt).toContain("auto-injected opaque env sentinel under stored name");
+    expect(prompt).toContain("No secret templates; never override/print that variable");
+    expect(prompt).toContain("Native shell/sandbox/node: no protected injection");
+    expect(prompt).toContain("late saves need next turn");
     expect(prompt).toContain(
       "no_answer: report blocker or continue with best judgment; never ask in chat",
     );

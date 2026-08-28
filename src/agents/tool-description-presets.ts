@@ -1,3 +1,5 @@
+import { SECRET_EGRESS_USAGE_PROMPT } from "./transcript-credential-safety.js";
+
 // Compact built-in summaries shown in tool inventories and model-facing tool
 // descriptions when a longer contextual description is assembled elsewhere.
 export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell now.";
@@ -186,6 +188,7 @@ export function describeSecretsTool(): string {
     "Protected credentials: `list` metadata first; `request` missing task-needed name + reason via human masked entry; `delete` removes an entry.",
     "Request waits for human; value goes straight to shared store, never model/chat. Use the returned store SecretRef for supported config fields.",
     "Gateway egress only: enabled proxy + exact allowedHosts required; no hosts blocks egress, not config refs. No plaintext fallback.",
+    SECRET_EGRESS_USAGE_PROMPT,
     "Operator-set env entries are readable; never request them here. no_answer: report blocker or use best judgment, never ask for credentials in chat.",
   ].join(" ");
 }

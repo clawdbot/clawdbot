@@ -132,6 +132,10 @@ describe("buildDeveloperInstructions credential guidance", () => {
       expect(instructions).toContain("returned store SecretRef on supported config fields");
       expect(instructions).toContain("Gateway egress needs enabled proxy + allowed hosts");
       expect(instructions).toContain("no plaintext fallback");
+      expect(instructions).toContain("auto-injected opaque env sentinel under stored name");
+      expect(instructions).toContain("No secret templates; never override/print that variable");
+      expect(instructions).toContain("Native shell/sandbox/node: no protected injection");
+      expect(instructions).toContain("late saves need next turn");
       expect(instructions).toContain(
         "no_answer: report blocker or continue with best judgment; never ask in chat",
       );
