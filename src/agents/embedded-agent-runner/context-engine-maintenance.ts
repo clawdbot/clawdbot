@@ -7,6 +7,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  hasSameContextEngineInstance,
   isContextEngineAbortRejection,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
@@ -547,7 +548,7 @@ function scheduleDeferredTurnMaintenance(
       await scheduleDeferredTurnMaintenance(rerunParams);
     } else if (
       discardedRerunParams?.disposeContextEngineAfterMaintenance &&
-      (discardedRerunParams.contextEngine !== params.contextEngine ||
+      (!hasSameContextEngineInstance(discardedRerunParams.contextEngine, params.contextEngine) ||
         !params.disposeContextEngineAfterMaintenance)
     ) {
       await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);

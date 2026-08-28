@@ -3,6 +3,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
+import {
+  registerContextEngineForOwner,
+  resolveLogicalTurnContextEngines,
+} from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
@@ -810,11 +815,21 @@ describe("runContextEngineMaintenance", () => {
         }) as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
       const firstEngine = createOwnedEngine("first", firstMaintain);
       const secondEngine = createOwnedEngine("second", secondMaintain);
+      registerLegacyContextEngine();
+      const sharedEngineId = "shutdown-shared-engine";
+      registerContextEngineForOwner(sharedEngineId, () => firstEngine, `test:${sharedEngineId}`, {
+        allowSameOwnerRefresh: true,
+      });
+      const contextEngineConfig = {
+        plugins: { slots: { contextEngine: sharedEngineId } },
+      };
+      const firstResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
+      const repeatedResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
       let deferred: Promise<void> | undefined;
 
       try {
         await runContextEngineMaintenance({
-          contextEngine: firstEngine,
+          contextEngine: firstResolution.configured.engine,
           sessionId: "session-abort-waiting",
           sessionKey,
           sessionFile: "/tmp/session-abort-waiting.jsonl",
@@ -835,7 +850,7 @@ describe("runContextEngineMaintenance", () => {
           disposeDeferredContextEngineAfterMaintenance: true,
         });
         await runContextEngineMaintenance({
-          contextEngine: firstEngine,
+          contextEngine: repeatedResolution.configured.engine,
           sessionId: "session-abort-waiting",
           sessionKey,
           sessionFile: "/tmp/session-abort-waiting.jsonl",
@@ -877,6 +892,10 @@ describe("runContextEngineMaintenance", () => {
       } finally {
         releaseFirstMaintenance?.();
         await Promise.allSettled(deferred ? [deferred] : []);
+        await Promise.allSettled([
+          firstResolution.fallback.engine.dispose?.(),
+          repeatedResolution.fallback.engine.dispose?.(),
+        ]);
         process.off("SIGTERM", keepProcessAlive);
         resetDeferredTurnMaintenanceStateForTest();
       }

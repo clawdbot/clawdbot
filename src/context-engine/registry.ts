@@ -51,6 +51,7 @@ export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
 type ResolvedContextEngineMetadata = {
   owner: string;
   engineId: string;
+  sourceEngine?: ContextEngine;
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
@@ -96,7 +97,10 @@ function wrapContextEngineHostParamProjection(
       },
     },
   );
-  resolvedEngineMetadata.set(wrapped, metadata);
+  resolvedEngineMetadata.set(wrapped, {
+    ...metadata,
+    sourceEngine: resolvedEngineMetadata.get(engine)?.sourceEngine ?? engine,
+  });
   return wrapped;
 }
 
@@ -205,7 +209,10 @@ function wrapResolvedContextEngine(
       },
     },
   );
-  resolvedEngineMetadata.set(wrapped, metadata);
+  resolvedEngineMetadata.set(wrapped, {
+    ...metadata,
+    sourceEngine: resolvedEngineMetadata.get(engine)?.sourceEngine ?? engine,
+  });
   return wrapped;
 }
 
@@ -462,6 +469,10 @@ export function resolveContextEngineOwnerPluginId(
     metadata && !getContextEngineQuarantine(metadata.engineId) ? metadata.owner : undefined;
   return owner ? pluginIdFromContextEngineOwner(owner) : undefined;
 }
+
+export const hasSameContextEngineInstance = (left: ContextEngine, right: ContextEngine): boolean =>
+  (resolvedEngineMetadata.get(left)?.sourceEngine ?? left) ===
+  (resolvedEngineMetadata.get(right)?.sourceEngine ?? right);
 
 function pluginIdFromContextEngineOwner(owner: string): string | undefined {
   if (!owner.startsWith("plugin:")) {
