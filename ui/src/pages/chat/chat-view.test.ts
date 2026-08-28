@@ -1931,9 +1931,11 @@ describe("chat goal status", () => {
     expect(detail?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
       "Waiting for CI",
     );
-    expect(detail?.querySelector(".agent-chat__goal-detail-meta")?.textContent?.trim()).toBe(
-      "12k/50k · 15s",
-    );
+    expect(
+      Array.from(detail?.querySelectorAll(".agent-chat__goal-detail-meta > span") ?? []).map(
+        (element) => element.textContent?.trim(),
+      ),
+    ).toEqual(["12k/50k", "·", "15s"]);
     expect(
       container
         .querySelector('button[aria-label="Hide goal details"]')
