@@ -100,6 +100,22 @@ const settingsRowRoutes = [
 
 const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
 
+const mobileStandaloneSettingsPageRoutes = [
+  "sessions",
+  "worktrees",
+  "usage",
+  "cron",
+  "tasks",
+  "memory-import",
+] as const satisfies readonly RouteId[];
+
+const mobileGeometryCases = [
+  { route: "appearance", contentSelector: ".settings-page" },
+  { route: "model-setup", contentSelector: ".model-setup" },
+  { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
+  { route: "plugins", contentSelector: ".settings-page" },
+] as const satisfies ReadonlyArray<{ route: RouteId; contentSelector: string }>;
+
 const responsiveViewports = [
   { width: 390, height: 844 },
   { width: 768, height: 1024 },
@@ -141,7 +157,7 @@ suite.define(() => {
         const pathname = pathForRoute(route);
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
-        await page.waitForTimeout(200);
+        await page.locator(".settings-workspace").last().waitFor();
         layouts.push({ route, ...(await readShellInsets(route)) });
       }
       for (const layout of layouts) {
@@ -150,7 +166,21 @@ suite.define(() => {
         }
       }
 
-      for (const route of ["appearance", "model-setup"] as const) {
+      for (const route of mobileStandaloneSettingsPageRoutes) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        const settingsPage = page.locator(".settings-page").last();
+        await settingsPage.waitFor();
+        expect(
+          await settingsPage.evaluate((element) =>
+            Math.round(Number.parseFloat(getComputedStyle(element).paddingLeft)),
+          ),
+          `${route} mobile page-owned inset`,
+        ).toBe(12);
+      }
+
+      for (const { route, contentSelector } of mobileGeometryCases) {
         await page.close();
         page = await context.newPage();
         await installMockGateway(page);
@@ -160,9 +190,7 @@ suite.define(() => {
         const header = page.locator(".content-header").last();
         const title = header.locator(".page-title");
         const workspace = page.locator(".settings-workspace").last();
-        const contentSurface = workspace.locator(
-          route === "appearance" ? ".settings-page" : ".model-setup",
-        );
+        const contentSurface = workspace.locator(contentSelector);
         await Promise.all([
           header.waitFor(),
           title.waitFor(),
@@ -199,6 +227,42 @@ suite.define(() => {
             workspaceRight: 378,
           });
       }
+
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await waitForControlUiRoute(page, {
+        pathname: "/settings/appearance",
+        routeId: "appearance",
+      });
+      await page.locator(".topbar-nav-toggle").click();
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .toContain("shell--nav-drawer-open");
+      const settingsSidebar = page.locator(".settings-sidebar");
+      await settingsSidebar.getByRole("link", { name: "Ask OpenClaw" }).click();
+      await waitForControlUiRoute(page, { pathname: "/custodian", routeId: "custodian" });
+      const custodianInsets = await page.evaluate(() => {
+        const content = document.querySelector<HTMLElement>("main.content");
+        const column = document.querySelector<HTMLElement>(".custodian__column");
+        const topbar = document.querySelector<HTMLElement>(".topbar");
+        if (!content || !column || !topbar) {
+          throw new Error("Custodian settings route did not render");
+        }
+        const columnBox = column.getBoundingClientRect();
+        return {
+          columnLeft: Math.round(columnBox.left),
+          columnRight: Math.round(columnBox.right),
+          contentPaddingInline: Math.round(
+            Number.parseFloat(getComputedStyle(content).paddingLeft),
+          ),
+          topbarPaddingInline: Math.round(Number.parseFloat(getComputedStyle(topbar).paddingLeft)),
+        };
+      });
+      expect(custodianInsets).toEqual({
+        columnLeft: 12,
+        columnRight: 378,
+        contentPaddingInline: 0,
+        topbarPaddingInline: 12,
+      });
 
       await page.setViewportSize({ height: 900, width: 1440 });
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
