@@ -157,6 +157,10 @@ async function command() {
   const operation = args.shift();
   if (operation === "init") {
     boundary("init");
+    const config = path.join(root, "fixture-config.json");
+    if (fs.existsSync(config)) {
+      await delay(JSON.parse(fs.readFileSync(config, "utf8")).initDelayMs);
+    }
     fs.mkdirSync(insideWorkspace(args[0]), { recursive: true });
     if (linux && cwd === workspace) {
       if (fs.readdirSync(workspace).length !== 0) {
@@ -172,6 +176,26 @@ async function command() {
     record(process.pid, "parent", attempt);
     launch("child", attempt);
     await until(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), "tree readiness");
+    if (scenario.startsWith("cancel-")) {
+      const owned = records();
+      const alive = owned.filter((entry) => entry.attempt === attempt && isPidAlive(entry.pid));
+      if (
+        !["parent", "child", "grandchild"].every((role) =>
+          alive.some((entry) => entry.role === role),
+        )
+      ) {
+        throw new Error("Cancellation tree is no longer alive");
+      }
+      const owner = owned.find((entry) => entry.role === "shell");
+      // Both shells exec their replacements. Validate the current Python parent,
+      // never an orphan's new parent or the Git group, before sending cancellation.
+      if (!owner || owner.pid <= 1 || process.ppid !== owner.pid) {
+        throw new Error("Cancellation owner is no longer the registered workflow parent");
+      }
+      const signal = scenario.slice("cancel-".length);
+      fs.writeSync(1, `cancellation: ${JSON.stringify({ signal, owner: owner.pid, alive })}\n`);
+      process.kill(owner.pid, signal);
+    }
     if (scenario === "early-leader-exit") {
       process.exit(0);
     }
@@ -402,11 +426,6 @@ async function supervise() {
       record(shell.pid, "shell");
     }
     const exited = once(shell, "exit");
-    if (scenario.startsWith("cancel-")) {
-      await until(() => fs.existsSync(path.join(root, "ready-1.json")), "cancellation readiness");
-      // exec replaces Bash on POSIX: this is the owner, not the Git group.
-      shell.kill(scenario.slice("cancel-".length));
-    }
     const [code] = await exited;
     report.code = code;
     boundary("exit");

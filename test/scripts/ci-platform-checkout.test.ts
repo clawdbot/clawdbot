@@ -16,6 +16,7 @@ type Report = {
   boundaries: Boundary[];
   readyAttempts: number[];
   cleanupRemaining: ProcessRecord[];
+  ownedProcesses: ProcessRecord[];
   commands: { cwd: string; args: string[] }[];
   output: string;
 };
@@ -84,6 +85,10 @@ it.each([
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "ci platform checkout ")));
     const workspace = path.join(root, "workspace");
     mkdirSync(workspace);
+    if (scenario.startsWith("cancel-")) {
+      // Inject slow startup before fetch, beyond the former cancellation readiness deadline.
+      writeFileSync(path.join(root, "fixture-config.json"), JSON.stringify({ initDelayMs: 4_100 }));
+    }
     if (linux) {
       writeFileSync(path.join(workspace, ".previous-checkout"), "stale\n");
     }
@@ -171,6 +176,23 @@ def run_git(`,
       expect(report.output.includes("refusing reuse or retry")).toBe(
         scenario === "cleanup-failure",
       );
+      if (scenario.startsWith("cancel-")) {
+        const alive = report.ownedProcesses.filter((entry) => entry.attempt === 1);
+        expect(alive.map((entry) => entry.role).toSorted()).toEqual([
+          "child",
+          "grandchild",
+          "parent",
+        ]);
+        const owner = expectDefined(
+          report.ownedProcesses.find((entry) => entry.role === "shell"),
+          "workflow owner",
+        );
+        expect(owner.pid).toBeGreaterThan(1);
+        const signal = scenario.slice("cancel-".length);
+        expect(report.output).toContain(
+          `cancellation: ${JSON.stringify({ signal, owner: owner.pid, alive })}\n`,
+        );
+      }
       if (code === 0) {
         const fetches = report.commands.filter(({ args }) => args.includes("fetch"));
         const candidateFetch = expectDefined(fetches[0], "candidate fetch");
