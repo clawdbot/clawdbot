@@ -120,6 +120,7 @@ This is evaluation-only evidence, not a CI or release gate. Results do not chang
 - `--model <provider/model>`: explicit primary model
 - `--code-mode <mode>`: select `direct`, `auto`, or forced `code` tool mode
 - `--local-model-lean`: use the reduced local-model tool surface
+- `--also-allow-tool <name>`: allow one additional tool for this run; repeatable, and extends an existing strict `tools.allow` list when present
 - `--thinking <level>`: one-run thinking level
 - `--fallback <provider/model>`: ordered fallback model; repeatable and requires `--model`
 - `--auth-env-only`: use only environment provider keys; skips stored credentials, external CLI credentials, and config entirely

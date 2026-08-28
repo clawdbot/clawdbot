@@ -19,6 +19,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
+import { resolveAgentExecRequestedToolPolicies } from "./agent-exec-tool-policy.js";
 
 const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;
 const AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS = 600;
@@ -34,6 +35,7 @@ export type AgentExecCliOptions = {
   thinking?: string;
   fallback?: string[];
   codeMode?: "direct" | "auto" | "code";
+  alsoAllowTool?: string[];
   localModelLean?: boolean;
   authEnvOnly?: boolean;
   timeout?: string;
@@ -51,10 +53,7 @@ type AgentExecPayload = {
 
 type AgentExecRawPayload = AgentExecPayload & Record<string, unknown>;
 
-type AgentExecRunResult = {
-  payloads?: AgentExecRawPayload[];
-  meta: EmbeddedAgentRunMeta;
-};
+type AgentExecRunResult = { payloads?: AgentExecRawPayload[]; meta: EmbeddedAgentRunMeta };
 
 type AgentExecStatus = "ok" | "error" | "timeout";
 
@@ -78,10 +77,7 @@ export type AgentExecEnvelope = {
   };
 };
 
-type AgentExecCommandResult = {
-  envelope: AgentExecEnvelope;
-  exitCode: 0 | 1 | 2;
-};
+type AgentExecCommandResult = { envelope: AgentExecEnvelope; exitCode: 0 | 1 | 2 };
 
 type AgentExecCommandDeps = {
   stdin?: AsyncIterable<unknown>;
@@ -270,19 +266,18 @@ function exitCodeForEnvelope(envelope: AgentExecEnvelope): 0 | 1 | 2 {
 function normalizeCodeMode(
   value: AgentExecCliOptions["codeMode"],
 ): false | "auto" | true | undefined {
-  if (value === undefined) {
-    return undefined;
+  switch (value) {
+    case undefined:
+      return undefined;
+    case "direct":
+      return false;
+    case "auto":
+      return "auto";
+    case "code":
+      return true;
+    default:
+      throw new Error("--code-mode must be one of direct, auto, code.");
   }
-  if (value === "direct") {
-    return false;
-  }
-  if (value === "auto") {
-    return "auto";
-  }
-  if (value === "code") {
-    return true;
-  }
-  throw new Error("--code-mode must be one of direct, auto, code.");
 }
 
 /**
@@ -328,9 +323,16 @@ function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
 function buildExecRunOverlay(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+  agentId?: string;
+  opts: Pick<AgentExecCliOptions, "alsoAllowTool" | "codeMode" | "localModelLean">;
 }): OpenClawConfig {
   const codeMode = normalizeCodeMode(params.opts.codeMode);
+  const { requestedToolPolicy, selectedAgentRequestedToolPolicy } =
+    resolveAgentExecRequestedToolPolicies({
+      base: params.base,
+      agentId: params.agentId,
+      requestedToolNames: params.opts.alsoAllowTool,
+    });
   // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
@@ -343,13 +345,32 @@ function buildExecRunOverlay(params: {
         ...(params.opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
       },
       ...(entries.length > 0
-        ? { entries: Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }])) }
+        ? {
+            entries: Object.fromEntries(
+              entries.map((id) => [
+                id,
+                {
+                  workspace: params.cwd,
+                  ...(id === params.agentId && selectedAgentRequestedToolPolicy
+                    ? { tools: selectedAgentRequestedToolPolicy }
+                    : {}),
+                },
+              ]),
+            ),
+          }
         : {}),
     },
     // This process exits after one turn, so live skill invalidation cannot be
     // observed and would leave Chokidar retaining the otherwise-finished CLI.
     skills: { load: { watch: false } },
-    ...(codeMode !== undefined ? { tools: { codeMode } } : {}),
+    ...(codeMode !== undefined || requestedToolPolicy
+      ? {
+          tools: {
+            ...(codeMode !== undefined ? { codeMode } : {}),
+            ...requestedToolPolicy,
+          },
+        }
+      : {}),
   } as OpenClawConfig;
 }
 
@@ -426,14 +447,15 @@ export async function resolveExecBaseConfig(
 export function buildExecRunConfig(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts?: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+  agentId?: string;
+  opts?: Pick<AgentExecCliOptions, "alsoAllowTool" | "codeMode" | "localModelLean">;
 }): OpenClawConfig {
   const opts = params.opts ?? {};
   const base = stripInheritedAgentLocations(params.base);
   const withDefaults = mergeDeep(buildExecConfigDefaults(), base) as OpenClawConfig;
   return mergeDeep(
     withDefaults,
-    buildExecRunOverlay({ base, cwd: params.cwd, opts }),
+    buildExecRunOverlay({ base, cwd: params.cwd, agentId: params.agentId, opts }),
   ) as OpenClawConfig;
 }
 
@@ -624,7 +646,13 @@ export async function agentExecCommand(
         before: envBeforeConfigLoad,
         after: envAfterConfigLoad,
       });
-    const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
+    const { resolveAgentDir, resolveAmbientOwnerAgentId } =
+      await import("../agents/agent-scope-config.js");
+    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, undefined, {
+      surface: "agent exec",
+      hint: "Set agents.defaults.systemAgent.agentId.",
+    });
+    const runConfig = buildExecRunConfig({ base: baseConfig, cwd, agentId: execAgentId, opts });
     // Installed plugins belong to the operator config resolved above, not to
     // the disposable state root used for this run. Capture all roots before
     // OPENCLAW_STATE_DIR moves so discovery and the installed-index DB agree.
@@ -635,8 +663,6 @@ export async function agentExecCommand(
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
     const timeout = normalizeTimeoutSeconds(opts.timeout);
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
-    const { resolveAgentDir, resolveAmbientOwnerAgentId } =
-      await import("../agents/agent-scope-config.js");
     // Resolve from the inherited config, not `{}`: the default agent may declare
     // its own `agentDir`, and that is where its stored auth profiles live. This
     // reads `baseConfig` rather than `runConfig` because the run config
@@ -644,10 +670,6 @@ export async function agentExecCommand(
     // credential ownership must still follow the operator's configuration.
     // Computed before the environment repoints the state dir so the unconfigured
     // case still resolves against the real one.
-    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, undefined, {
-      surface: "agent exec",
-      hint: "Set agents.defaults.systemAgent.agentId.",
-    });
     // Auth, session keys, and SQLite ownership must share one resolved owner.
     // Splitting these paths can select an agent's store but emit a `main` key.
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);

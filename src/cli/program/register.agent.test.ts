@@ -216,6 +216,10 @@ describe("agent command registration", () => {
       "openai/gpt-5.6-sol",
       "--code-mode",
       "code",
+      "--also-allow-tool",
+      "browser",
+      "--also-allow-tool",
+      "read",
       "--local-model-lean",
       "--fallback",
       "anthropic/claude-sonnet-4-6",
@@ -231,6 +235,7 @@ describe("agent command registration", () => {
         cwd: "/tmp/project",
         model: "openai/gpt-5.6-sol",
         codeMode: "code",
+        alsoAllowTool: ["browser", "read"],
         localModelLean: true,
         fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
         // Stored credentials are the default so exec reaches the same logins as
