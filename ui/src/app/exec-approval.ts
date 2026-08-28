@@ -110,9 +110,7 @@ function parseApprovalScope(value: unknown): ApprovalScope | null {
   if (!isRecord(value) || typeof value.kind !== "string") {
     return null;
   }
-  // The gateway sanitized the scope at the producer boundary; the UI treats
-  // it as display data and re-narrows only the discriminant.
-  return value as unknown as ApprovalScope;
+  return value as unknown as ApprovalScope; // SAFETY: gateway-sanitized display data; only the discriminant is re-narrowed here.
 }
 
 function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
