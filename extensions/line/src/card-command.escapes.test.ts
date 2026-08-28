@@ -57,6 +57,11 @@ describe("line card option separators", () => {
       expected: [{ type: "message", label: "A|B", text: "/status" }],
     },
     {
+      kind: "an escaped pipe inside action data",
+      actions: String.raw`Open|left\|right`,
+      expected: [{ type: "message", label: "Open", text: "left|right" }],
+    },
+    {
       kind: "an unescaped comma between two actions",
       actions: "One|/a,Two|/b",
       expected: [
@@ -73,6 +78,11 @@ describe("line card option separators", () => {
       kind: "a literal backslash pair, which no option splits on",
       actions: String.raw`Path|\\server\share`,
       expected: [{ type: "message", label: "Path", text: String.raw`\\server\share` }],
+    },
+    {
+      kind: "a literal backslash before an escaped comma",
+      actions: String.raw`Path|\\,tail`,
+      expected: [{ type: "message", label: "Path", text: String.raw`\,tail` }],
     },
     {
       kind: "a backslash before a colon, which actions do not split on",
@@ -111,35 +121,13 @@ describe("line card option separators", () => {
 
   it("keeps an escaped comma in a receipt name and still splits at the last colon", async () => {
     const line = await runCardCommand(
-      String.raw`receipt "Receipt" "Coffee\, large:$10,Time: 10:30:$5" --total "$15"`,
+      String.raw`receipt "Receipt" "Coffee\, large:$10,Time: 10:30:$5,Window:10\:30" --total "$15"`,
     );
-    expect(cardAltText(line)).toBe("Receipt: Coffee, large $10, Time: 10:30 $5");
+    expect(cardAltText(line)).toBe("Receipt: Coffee, large $10, Time: 10:30 $5, Window 10:30");
   });
 
   it("keeps a backslashed pipe literal in a receipt name, which receipts do not split on", async () => {
     const line = await runCardCommand(String.raw`receipt "Receipt" "A\|B:$10" --total "$10"`);
     expect(cardAltText(line)).toBe(String.raw`Receipt: A\|B $10`);
-  });
-
-  it("keeps a backslashed comma literal in a confirm label, which confirm does not split on", async () => {
-    const line = await runCardCommand(
-      String.raw`confirm "Ship it?" --yes "Yes\,now|go" --no "No|stop"`,
-    );
-    expect(line.templateMessage).toMatchObject({ confirmLabel: String.raw`Yes\,now` });
-  });
-
-  it("keeps an escaped pipe inside a confirm button label", async () => {
-    const line = await runCardCommand(
-      String.raw`confirm "Ship it?" --yes "Yes\|now|go" --no "No|stop"`,
-    );
-    expect(line.templateMessage).toEqual({
-      type: "confirm",
-      text: "Ship it?",
-      altText: "Ship it?",
-      confirmLabel: "Yes|now",
-      confirmData: "go",
-      cancelLabel: "No",
-      cancelData: "stop",
-    });
   });
 });

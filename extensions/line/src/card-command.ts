@@ -25,7 +25,7 @@ Types:
   confirm "Question?" --yes "Yes|data" --no "No|data"
   buttons "Title" "Text" --actions "Btn1|url1,Btn2|data2"
 
-Escape a separator that the option splits on with a backslash, as in \\, or \\|
+Escape a separator that belongs to the data with a backslash: \\, \\|, or \\:
 
 Examples:
   /card info "Welcome" "Thanks for joining!"
@@ -51,40 +51,20 @@ function buildLineFlexReply(
   });
 }
 
-/** Separators of each card option grammar; a backslash protects only these. */
-const CARD_PAIR_LIST_SEPARATORS: ReadonlySet<string> = new Set([",", "|"]);
-const CARD_RECEIPT_SEPARATORS: ReadonlySet<string> = new Set([",", ":"]);
-const CARD_PAIR_SEPARATORS: ReadonlySet<string> = new Set(["|"]);
-
 /**
  * Split a card option value on its unescaped separators.
  *
- * A backslash is meaningful only before a separator this option splits on.
- * Every other backslash, including one before another backslash, is literal
- * data, so `C:\temp`, `C\:\temp` and `\\server\share` all survive
- * unchanged. Escapes stay inside the returned parts so a later split on a
- * different separator still sees them; `unescapeCardValue` removes them at
- * the leaf.
+ * Each pass consumes escapes for its own separator and preserves every other
+ * backslash. This lets nested comma, pipe, and colon passes stay independent.
  */
-function splitCardValue(
-  value: string,
-  separator: string,
-  separators: ReadonlySet<string>,
-): string[] {
+function splitCardValue(value: string, separator: string): string[] {
   const parts: string[] = [];
   let current = "";
-  let pendingEscape = false;
-  for (const char of value) {
-    if (pendingEscape) {
-      pendingEscape = false;
-      if (separators.has(char)) {
-        current += `\\${char}`;
-        continue;
-      }
-      current += "\\";
-    }
-    if (char === "\\") {
-      pendingEscape = true;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "\\" && value[index + 1] === separator) {
+      current += separator;
+      index += 1;
       continue;
     }
     if (char === separator) {
@@ -94,40 +74,13 @@ function splitCardValue(
     }
     current += char;
   }
-  if (pendingEscape) {
-    current += "\\";
-  }
   parts.push(current);
   return parts;
 }
 
-/** Drop the backslashes that protected separators inside a card option value. */
-function unescapeCardValue(value: string, separators: ReadonlySet<string>): string {
-  let result = "";
-  let pendingEscape = false;
-  for (const char of value) {
-    if (pendingEscape) {
-      pendingEscape = false;
-      result += separators.has(char) ? char : `\\${char}`;
-      continue;
-    }
-    if (char === "\\") {
-      pendingEscape = true;
-      continue;
-    }
-    result += char;
-  }
-  return pendingEscape ? `${result}\\` : result;
-}
-
 /** Split a "Label|data" pair, keeping escaped separators inside either side. */
-function splitCardPair(
-  part: string,
-  separators: ReadonlySet<string>,
-): [string, string | undefined] {
-  const [label = "", data] = splitCardValue(part, "|", separators).map((piece) =>
-    unescapeCardValue(piece.trim(), separators),
-  );
+function splitCardPair(part: string): [string, string | undefined] {
+  const [label = "", data] = splitCardValue(part, "|").map((piece) => piece.trim());
   return [label, data];
 }
 
@@ -142,8 +95,8 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
 
   const results: CardAction[] = [];
 
-  for (const part of splitCardValue(actionsStr, ",", CARD_PAIR_LIST_SEPARATORS)) {
-    const [label, data] = splitCardPair(part, CARD_PAIR_LIST_SEPARATORS);
+  for (const part of splitCardValue(actionsStr, ",")) {
+    const [label, data] = splitCardPair(part);
     if (!label) {
       continue;
     }
@@ -166,9 +119,9 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
  * Parse list items format: "Item1|Subtitle1,Item2|Subtitle2"
  */
 function parseListItems(itemsStr: string): ListItem[] {
-  return splitCardValue(itemsStr, ",", CARD_PAIR_LIST_SEPARATORS)
+  return splitCardValue(itemsStr, ",")
     .map((part) => {
-      const [title, subtitle] = splitCardPair(part, CARD_PAIR_LIST_SEPARATORS);
+      const [title, subtitle] = splitCardPair(part);
       return { title, subtitle };
     })
     .filter((item) => item.title);
@@ -178,15 +131,15 @@ function parseListItems(itemsStr: string): ListItem[] {
  * Parse receipt items format: "Item1:$10,Item2:$20"
  */
 function parseReceiptItems(itemsStr: string): Array<{ name: string; value: string }> {
-  return splitCardValue(itemsStr, ",", CARD_RECEIPT_SEPARATORS)
+  return splitCardValue(itemsStr, ",")
     .map((part) => {
       // The last unescaped colon separates the entry value, so a name may still
       // contain colons of its own.
-      const segments = splitCardValue(part, ":", CARD_RECEIPT_SEPARATORS);
+      const segments = splitCardValue(part, ":");
       const value = segments.length > 1 ? segments.pop() : undefined;
       return {
-        name: unescapeCardValue(segments.join(":").trim(), CARD_RECEIPT_SEPARATORS),
-        value: value === undefined ? "" : unescapeCardValue(value.trim(), CARD_RECEIPT_SEPARATORS),
+        name: segments.join(":").trim(),
+        value: value?.trim() ?? "",
       };
     })
     .filter((item) => item.name);
@@ -326,8 +279,8 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const yesStr = flags.yes || "Yes|yes";
             const noStr = flags.no || "No|no";
 
-            const [yesLabel, yesData] = splitCardPair(yesStr, CARD_PAIR_SEPARATORS);
-            const [noLabel, noData] = splitCardPair(noStr, CARD_PAIR_SEPARATORS);
+            const [yesLabel, yesData] = yesStr.split("|").map((s) => s.trim());
+            const [noLabel, noData] = noStr.split("|").map((s) => s.trim());
 
             return buildLineReply({
               templateMessage: {
