@@ -7,10 +7,8 @@ import {
   asFiniteNumber,
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
@@ -313,73 +311,6 @@ export function resolveClaudeCliPromptTextCandidates(
   );
 }
 
-// The CLI runner cannot pass structured image blocks to the Claude CLI, so it
-// appends "@<cache path>" mention lines to the prompt it hands the CLI (see
-// appendImagePathsToPrompt in agents/cli-runner/helpers.ts). Claude Code records
-// that mutated prompt as its user message, so without stripping, the imported
-// row fails text dedupe against the local transcript row — which carries the
-// original text plus the media facts that render the image preview — and the
-// raw path surfaces in chat history as a duplicate user row.
-function isCliImageMentionLine(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.startsWith("@") && isOpenClawCliImageCachePath(trimmed.slice(1));
-}
-
-function stripTrailingCliImageMentions(text: string): string {
-  const lines = text.split("\n");
-  let end = lines.length;
-  while (end > 0 && isCliImageMentionLine(lines[end - 1] ?? "")) {
-    end -= 1;
-  }
-  if (end === lines.length) {
-    return text;
-  }
-  return lines.slice(0, end).join("\n").trimEnd();
-}
-
-type CliImageMentionStripResult =
-  | { kind: "unchanged" }
-  | { kind: "stripped"; content: string | unknown[] }
-  | { kind: "mention-only" };
-
-// Rows reduced to nothing but image mentions keep their original content and
-// are only tagged; the history merge decides whether a local media-bearing row
-// makes them redundant, because the parser cannot know that a local
-// counterpart survives (the local transcript may be reset or lost while the
-// external JSONL persists).
-function stripCliImageMentionsFromUserContent(
-  content: string | unknown[],
-): CliImageMentionStripResult {
-  if (typeof content === "string") {
-    const stripped = stripTrailingCliImageMentions(content);
-    if (stripped === content) {
-      return { kind: "unchanged" };
-    }
-    return stripped ? { kind: "stripped", content: stripped } : { kind: "mention-only" };
-  }
-  let changed = false;
-  const next: unknown[] = [];
-  for (const block of content) {
-    const record = asOptionalRecord(block);
-    const text = record?.type === "text" && typeof record.text === "string" ? record.text : null;
-    if (record && text !== null) {
-      const stripped = stripTrailingCliImageMentions(text);
-      if (stripped !== text) {
-        changed = true;
-        if (stripped) {
-          next.push({ ...record, text: stripped });
-        }
-        continue;
-      }
-    }
-    next.push(block);
-  }
-  if (!changed) {
-    return { kind: "unchanged" };
-  }
-  return next.length > 0 ? { kind: "stripped", content: next } : { kind: "mention-only" };
-}
-
 export function parseClaudeCliHistoryEntry(
   entry: ClaudeCliProjectEntry,
   cliSessionId: string,
@@ -477,10 +408,6 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
-    const stripResult = stripCliImageMentionsFromUserContent(content);
-    if (stripResult.kind === "stripped") {
-      content = stripResult.content;
-    }
     // Record provenance here, where the native flags are known, so downstream
     // display never has to infer operator authorship from message text.
     const harnessInjected = isClaudeCliVisibleHarnessContext(entry);
@@ -493,7 +420,7 @@ export function parseClaudeCliHistoryEntry(
           : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
-      stripResult.kind === "mention-only" ? { ...baseMeta, cliImageMentionOnly: true } : baseMeta,
+      baseMeta,
     ) as TranscriptLikeMessage;
   }
 

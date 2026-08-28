@@ -487,7 +487,7 @@ describe("cli session history", () => {
     });
   });
 
-  it("strips CLI-injected image mention suffixes from imported user rows", async () => {
+  it("preserves CLI-injected image mentions until merge-time correlation", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const workspaceMention = "@/Users/demo/workspace/.openclaw-cli-images/cafe01.png";
       const tmpMention = "@/tmp/openclaw/openclaw-cli-images/cafe02.jpg";
@@ -524,15 +524,16 @@ describe("cli session history", () => {
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
       expect(messages).toHaveLength(3);
-      expectFields(messages[0], { role: "user", content: "look at this" });
+      expectFields(messages[0], {
+        role: "user",
+        content: `look at this\n\n${workspaceMention}\n${tmpMention}`,
+      });
       expectFields(messages[1], { role: "user", content: workspaceMention });
-      expectFields(readRecord(messages[1])["__openclaw"], { cliImageMentionOnly: true });
-      expect(readRecord(messages[0])["__openclaw"]).not.toHaveProperty("cliImageMentionOnly");
       expectFields(messages[2], { role: "user", content: "check\n@/Users/demo/photos/pic.png" });
     });
   });
 
-  it("strips image mentions inside text blocks while preserving sibling blocks", async () => {
+  it("preserves image mentions inside text blocks before history merge", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe03.png";
       await fs.writeFile(
@@ -570,13 +571,13 @@ describe("cli session history", () => {
 
       expect(messages).toHaveLength(2);
       const blocks = readRecord(messages[0]).content as Array<Record<string, unknown>>;
-      expect(blocks).toHaveLength(2);
-      expectFields(blocks[0], { type: "text", text: "caption" });
-      expectFields(blocks[1], { type: "image" });
+      expect(blocks).toHaveLength(3);
+      expectFields(blocks[0], { type: "text", text: `caption\n\n${mention}` });
+      expectFields(blocks[1], { type: "text", text: mention });
+      expectFields(blocks[2], { type: "image" });
       const mentionOnlyBlocks = readRecord(messages[1]).content as Array<Record<string, unknown>>;
       expect(mentionOnlyBlocks).toHaveLength(1);
       expectFields(mentionOnlyBlocks[0], { type: "text", text: mention });
-      expectFields(readRecord(messages[1])["__openclaw"], { cliImageMentionOnly: true });
     });
   });
 
@@ -600,6 +601,9 @@ describe("cli session history", () => {
           role: "user",
           content: "look at this",
           timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
+          __openclaw: {
+            media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe04.png" }],
+          },
         },
       ];
 
@@ -656,9 +660,9 @@ describe("cli session history", () => {
 
         expect(merged).toHaveLength(expectedLength);
         if (expectedLength === 1) {
-          expect(readRecord(merged[0])["__openclaw"]).not.toHaveProperty("cliImageMentionOnly");
+          expect(readRecord(readRecord(merged[0])["__openclaw"]).media).toHaveLength(1);
         } else {
-          expectFields(readRecord(merged[1])["__openclaw"], { cliImageMentionOnly: true });
+          expectFields(merged[1], { role: "user", content: mention });
         }
       });
     },
@@ -671,7 +675,11 @@ describe("cli session history", () => {
         role: "user",
         content: `@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
         timestamp: timestamp + index * 60_000,
-        __openclaw: { externalId, cliImageMentionOnly: true },
+        __openclaw: {
+          importedFrom: "claude-cli",
+          cliSessionId: "session-1",
+          externalId,
+        },
       }),
     );
 
@@ -725,8 +733,59 @@ describe("cli session history", () => {
 
       expect(merged).toHaveLength(2);
       expectFields(merged[0], { role: "user", content: mention });
-      expectFields(readRecord(merged[0])["__openclaw"], { cliImageMentionOnly: true });
       expectFields(merged[1], { role: "assistant", content: "nice photo" });
+    });
+  });
+
+  it("retains captioned image mentions when no local media-bearing turn survives", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const content = "look at this\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe07.png";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "captioned-image-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            timestamp: "2026-03-26T16:29:55.800Z",
+            message: { role: "assistant", content: "nice photo" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const merged = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages: [],
+      });
+
+      expect(merged).toHaveLength(2);
+      expectFields(merged[0], { role: "user", content });
+      expectFields(merged[1], { role: "assistant", content: "nice photo" });
+
+      const captionOnlyLocal = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages: [
+          {
+            role: "user",
+            content: "look at this",
+            timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
+          },
+        ],
+      });
+      expect(captionOnlyLocal).toHaveLength(3);
+      expect(captionOnlyLocal).toContainEqual(expect.objectContaining({ content }));
     });
   });
 
