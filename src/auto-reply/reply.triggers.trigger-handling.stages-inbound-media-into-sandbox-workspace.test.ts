@@ -31,6 +31,7 @@ const fsSafeMocks = vi.hoisted(() => {
 
   return {
     FsSafeError: MockFsSafeError,
+    openLocalFileSafely: vi.fn(),
     rootCopyFrom: vi.fn(),
     root: vi.fn(),
     readLocalFileSafely: vi.fn(),

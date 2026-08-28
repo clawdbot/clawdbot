@@ -278,6 +278,36 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("normalizes managed document content blocks as renderable attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "document",
+            artifactId: "artifact_managed_media_report",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/report/full",
+            fileName: "report.csv",
+            mimeType: "text/csv",
+            sizeBytes: 28,
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            artifactId: "artifact_managed_media_report",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/report/full",
+            kind: "document",
+            label: "report.csv",
+            mimeType: "text/csv",
+            sizeBytes: 28,
+          },
+        },
+      ]);
+    });
+
     it("does not normalize non-assistant structured audio blocks as attachments", () => {
       const result = normalizeMessage({
         role: "user",

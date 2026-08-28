@@ -6,7 +6,7 @@ import {
 } from "../infra/net/runtime-fetch.js";
 import type { LookupFn, resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { saveRemoteMedia, type FetchLike } from "./fetch.js";
-import type { SavedMedia } from "./store.js";
+import type { MediaMaxBytesForMime, SavedMedia } from "./store.js";
 
 const REMOTE_MEDIA_TIMEOUT_MS = 30_000;
 
@@ -31,6 +31,9 @@ export async function saveRemoteMediaForStore(params: {
   headers?: Record<string, string>;
   subdir: string;
   maxBytes: number;
+  maxBytesForMime?: MediaMaxBytesForMime;
+  contentTypeHint?: string;
+  fileNameHint?: string;
   resolvePinnedHostnameForTest?: typeof resolvePinnedHostname;
 }): Promise<SavedMedia> {
   const resolvePinned = params.resolvePinnedHostnameForTest;
@@ -52,6 +55,9 @@ export async function saveRemoteMediaForStore(params: {
     // preserving the URL-suffix fallback without embedding the remote basename.
     originalFilename: `_${getFileExtension(params.source) ?? ""}`,
     maxBytes: params.maxBytes,
+    maxBytesForMime: params.maxBytesForMime,
+    ...(params.contentTypeHint ? { detectionContentTypeHint: params.contentTypeHint } : {}),
+    ...(params.fileNameHint ? { detectionFilePathHint: params.fileNameHint } : {}),
     maxRedirects: 5,
     responseHeaderTimeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
     readIdleTimeoutMs: REMOTE_MEDIA_TIMEOUT_MS,

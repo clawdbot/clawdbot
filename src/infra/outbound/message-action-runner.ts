@@ -220,18 +220,24 @@ async function handleInternalSourceReplySendAction(
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
       : undefined);
+  const mediaPolicy = resolveAttachmentMediaPolicy({
+    sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+    mediaAccess: input.mediaAccess,
+    mediaLocalRoots: getAgentScopedMediaLocalRoots(input.cfg, agentId),
+  });
+  await normalizeSandboxMediaParams({
+    args: params,
+    mediaPolicy,
+    structuredAttachments: "all",
+  });
   await hydrateAttachmentParamsForAction({
     cfg: input.cfg,
     channel: INTERNAL_MESSAGE_CHANNEL,
     args: params,
     action: "send",
     dryRun,
-    mediaPolicy: resolveAttachmentMediaPolicy({
-      sandboxRoot: input.sandboxRoot,
-      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-      mediaAccess: input.mediaAccess,
-      mediaLocalRoots: getAgentScopedMediaLocalRoots(input.cfg, agentId),
-    }),
+    mediaPolicy,
   });
   const sourceReply = await buildMessagePayload({
     cfg: input.cfg,

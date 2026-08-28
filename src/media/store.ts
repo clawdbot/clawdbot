@@ -12,6 +12,7 @@ import {
   detectMime,
   extensionForMime,
   getFileExtension,
+  mimeTypeFromFilePath,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
@@ -23,8 +24,16 @@ import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
-import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
+import { isGenericResponseContentType } from "./fetch-content-type.js";
+import {
+  MediaSizeLimitError,
+  readMediaSourceSafely,
+  type SaveMediaOptions,
+  writeMediaStreamToFile,
+} from "./store-ingest.js";
 import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
+
+export type { MediaMaxBytesForMime } from "./store-ingest.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
@@ -397,6 +406,22 @@ function isImageHeaderMime(contentType?: string): boolean {
   return normalizeMimeType(contentType)?.startsWith("image/") === true;
 }
 
+function resolveStreamDetectionFilePaths(params: {
+  originalFilename?: string;
+  detectionFilePathHint?: string;
+  fileNameHint?: string;
+  allowFileNameHint: boolean;
+}): { source?: string; classified?: string } {
+  const sourceHints = [params.originalFilename, params.detectionFilePathHint];
+  const recognizedSource = sourceHints.find((candidate) => mimeTypeFromFilePath(candidate));
+  const source = recognizedSource ?? sourceHints.find(Boolean);
+  return {
+    source,
+    classified:
+      recognizedSource ?? (params.allowFileNameHint ? params.fileNameHint : undefined) ?? source,
+  };
+}
+
 function resolveSavedMediaExtension(params: {
   detectedMime?: string;
   headerExt?: string;
@@ -468,108 +493,13 @@ async function writeSavedMediaBuffer(params: {
   );
 }
 
-async function writeMediaStreamToFile(params: {
-  stream: AsyncIterable<unknown>;
-  tempPath: string;
-  maxBytes: number;
-}): Promise<{ sniffBuffer: Buffer; size: number }> {
-  const handle = await fs.open(params.tempPath, "wx", MEDIA_FILE_MODE);
-  const sniffChunks: Buffer[] = [];
-  let sniffLen = 0;
-  let total = 0;
-  try {
-    for await (const chunk of params.stream) {
-      const buffer = Buffer.isBuffer(chunk)
-        ? chunk
-        : typeof chunk === "string"
-          ? Buffer.from(chunk)
-          : chunk instanceof ArrayBuffer
-            ? Buffer.from(chunk)
-            : ArrayBuffer.isView(chunk)
-              ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
-              : undefined;
-      if (!buffer) {
-        throw new TypeError(`Unsupported media stream chunk: ${typeof chunk}`);
-      }
-      if (buffer.byteLength === 0) {
-        continue;
-      }
-      total += buffer.byteLength;
-      if (total > params.maxBytes) {
-        throw new Error(`Media exceeds ${formatMediaLimitMb(params.maxBytes)} limit`);
-      }
-      if (sniffLen < 16384) {
-        const remaining = 16384 - sniffLen;
-        sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
-        sniffLen += Math.min(buffer.byteLength, remaining);
-      }
-      await handle.writeFile(buffer);
-    }
-    return {
-      sniffBuffer: Buffer.concat(sniffChunks, sniffLen),
-      size: total,
-    };
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
-}
-
-/** Stable error categories for unsafe or failed source-file ingestion. */
-type SaveMediaSourceErrorCode =
-  | "invalid-path"
-  | "not-found"
-  | "not-file"
-  | "path-mismatch"
-  | "too-large";
-
-/** Error raised when saveMediaSource cannot safely read or persist a source path. */
-class SaveMediaSourceError extends Error {
-  code: SaveMediaSourceErrorCode;
-
-  constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.code = code;
-    this.name = "SaveMediaSourceError";
-  }
-}
-
-function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
-  switch (err.code) {
-    case "symlink":
-      return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
-        cause: err,
-      });
-    case "not-file":
-      return new SaveMediaSourceError("not-file", "Media path is not a file", { cause: err });
-    case "path-mismatch":
-      return new SaveMediaSourceError("path-mismatch", "Media path changed during read", {
-        cause: err,
-      });
-    case "too-large":
-      return new SaveMediaSourceError(
-        "too-large",
-        `Media exceeds ${formatMediaLimitMb(maxBytes)} limit`,
-        { cause: err },
-      );
-    case "not-found":
-      return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
-    case "outside-workspace":
-      return new SaveMediaSourceError("invalid-path", "Media path is outside workspace root", {
-        cause: err,
-      });
-    default:
-      return new SaveMediaSourceError("invalid-path", "Media path is not safe to read", {
-        cause: err,
-      });
-  }
-}
-
 /** Saves a local path or HTTP(S) source into the media store after MIME/size validation. */
 export async function saveMediaSource(
   source: string,
   headers?: Record<string, string>,
   subdir = "",
   maxBytes = MAX_BYTES,
+  options: SaveMediaOptions = {},
 ): Promise<SavedMedia> {
   const dir = resolveMediaScopedDir(subdir, "saveMediaSource");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -580,23 +510,24 @@ export async function saveMediaSource(
       headers,
       subdir,
       maxBytes,
+      maxBytesForMime: options.maxBytesForMime,
+      contentTypeHint: options.contentTypeHint,
+      fileNameHint: options.fileNameHint,
       resolvePinnedHostnameForTest,
     });
   }
   const baseId = crypto.randomUUID();
-  try {
-    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes });
-    const mime = await detectMime({ buffer, filePath: source });
-    const ext = extensionForMime(mime) ?? path.extname(source);
-    const id = buildSavedMediaId({ baseId, ext });
-    await writeSavedMediaBuffer({ subdir, id, buffer });
-    return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
-  } catch (err) {
-    if (isFsSafeError(err)) {
-      throw toSaveMediaSourceError(err, maxBytes);
-    }
-    throw err;
-  }
+  const { buffer, stat, mime } = await readMediaSourceSafely({
+    source,
+    maxBytes,
+    maxBytesForMime: options.maxBytesForMime,
+    contentTypeHint: options.contentTypeHint,
+    fileNameHint: options.fileNameHint,
+  });
+  const ext = extensionForMime(mime) ?? path.extname(source);
+  const id = buildSavedMediaId({ baseId, ext });
+  await writeSavedMediaBuffer({ subdir, id, buffer });
+  return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
 }
 
 /** Saves an in-memory media buffer under a UUID-backed media ID. */
@@ -640,11 +571,19 @@ export async function saveMediaStream(
   maxBytes = MAX_BYTES,
   originalFilename?: string,
   detectionFilePathHint?: string,
+  options: SaveMediaOptions = {},
 ): Promise<SavedMedia> {
   const dir = resolveMediaScopedDir(subdir, "saveMediaStream");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const baseId = crypto.randomUUID();
   const headerExt = extensionForAuthoritativeHeaderMime(contentType);
+  const genericContentType = isGenericResponseContentType(contentType);
+  const detectionFilePaths = resolveStreamDetectionFilePaths({
+    originalFilename,
+    detectionFilePathHint,
+    fileNameHint: options.fileNameHint,
+    allowFileNameHint: genericContentType,
+  });
   return await saveMediaSiblingTempFile({
     dir,
     tempPrefix: `.${baseId}`,
@@ -653,12 +592,24 @@ export async function saveMediaStream(
         stream,
         tempPath,
         maxBytes,
+        contentType,
+        detectionFilePathHint: detectionFilePaths.source,
+        maxBytesForMime: options.maxBytesForMime,
       });
       const mime = await detectMime({
         buffer: sniffBuffer,
-        headerMime: contentType,
-        filePath: originalFilename ?? detectionFilePathHint,
+        headerMime: genericContentType ? undefined : contentType,
+        additionalMimeHints: genericContentType
+          ? [options.contentTypeHint, contentType]
+          : [options.contentTypeHint],
+        filePath: detectionFilePaths.classified,
       });
+      const finalMaxBytes = options.maxBytesForMime
+        ? Math.min(maxBytes, options.maxBytesForMime(mime))
+        : maxBytes;
+      if (size > finalMaxBytes) {
+        throw new MediaSizeLimitError(finalMaxBytes, mime);
+      }
       const ext = resolveSavedMediaExtension({
         detectedMime: mime,
         headerExt,

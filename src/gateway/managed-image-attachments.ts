@@ -1,11 +1,11 @@
 // Gateway managed media attachment store.
-// Validates, stores, serves, and cleans up outgoing image/audio/video attachments.
+// Validates, stores, serves, and cleans up outgoing image/audio/video/document attachments.
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
-import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { detectMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
@@ -28,6 +28,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
+import { isGenericBinaryMediaContentType } from "../media/media-facts.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
 import {
   createImageProcessor,
@@ -39,7 +40,8 @@ import {
   resolvePlaybackModeForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
-import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { findMediaSizeLimitError } from "../media/store-ingest.js";
+import { getMediaDir, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -84,6 +86,7 @@ const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 300;
 const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_ENTRIES = 128;
 const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const MANAGED_IMAGE_THUMBNAIL_MAX_PENDING = 128;
+const MANAGED_DATA_URL_SNIFF_BYTES = 16_384;
 const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const managedOutgoingImageTicketSecret = randomBytes(32);
@@ -110,7 +113,11 @@ type ManagedImageAttachmentLimitsConfig = Partial<
   Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
 >;
 
-type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video">;
+export type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
+
+export function isManagedMediaKind(kind: unknown): kind is ManagedMediaKind {
+  return kind === "image" || kind === "audio" || kind === "video" || kind === "document";
+}
 
 type ParsedMediaDataUrl =
   | { kind: "not-data-url" }
@@ -295,6 +302,15 @@ function getSanitizedManagedImageAttachmentError(
   if (isManagedImageAttachmentSafeError(error)) {
     return error;
   }
+  const sizeLimitError = findMediaSizeLimitError(error);
+  if (sizeLimitError) {
+    const detectedKind = mediaKindFromMime(sizeLimitError.mime);
+    return createManagedMediaByteLimitError({
+      kind: isManagedMediaKind(detectedKind) ? detectedKind : kind,
+      label,
+      maxBytes: sizeLimitError.maxBytes,
+    });
+  }
   return createManagedImageAttachmentError(
     `Managed ${kind} attachment ${JSON.stringify(label)} could not be prepared`,
   );
@@ -319,8 +335,18 @@ function maxBytesForManagedMediaKind(
   return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
 }
 
+function maxBytesForManagedMime(
+  mime: string | undefined,
+  imageLimits: ManagedImageAttachmentLimits,
+): number {
+  const kind = mediaKindFromMime(mime);
+  return isManagedMediaKind(kind)
+    ? maxBytesForManagedMediaKind(kind, imageLimits)
+    : Math.max(imageLimits.maxBytes, maxBytesForKind("unknown"));
+}
+
 function createManagedMediaByteLimitError(params: {
-  kind: ManagedMediaKind;
+  kind: ManagedMediaKind | "media";
   label: string;
   maxBytes: number;
 }): Error {
@@ -590,11 +616,11 @@ function deriveAltText(source: string, index: number) {
   return localName || fallback;
 }
 
-function parseMediaDataUrl(
+async function parseMediaDataUrl(
   source: string,
   label: string,
   imageLimits: ManagedImageAttachmentLimits,
-): ParsedMediaDataUrl {
+): Promise<ParsedMediaDataUrl> {
   const trimmed = source.trim();
   if (!trimmed.startsWith("data:")) {
     return { kind: "not-data-url" };
@@ -620,11 +646,19 @@ function parseMediaDataUrl(
     throw new Error("Invalid image data URL");
   }
 
-  const mediaKind = mediaKindFromMime(contentType);
-  if (mediaKind !== "image" && mediaKind !== "audio" && mediaKind !== "video") {
+  const declaredMediaKind = mediaKindFromMime(contentType);
+  if (!isManagedMediaKind(declaredMediaKind)) {
     return { kind: "unsupported-data-url" };
   }
 
+  const normalizedBase64 = base64Part.replace(/\s+/g, "");
+  const sniffBase64Length = Math.ceil(MANAGED_DATA_URL_SNIFF_BYTES / 3) * 4;
+  const detectedContentType = await detectMime({
+    buffer: Buffer.from(normalizedBase64.slice(0, sniffBase64Length), "base64"),
+    headerMime: contentType,
+  });
+  const detectedMediaKind = mediaKindFromMime(detectedContentType);
+  const mediaKind = isManagedMediaKind(detectedMediaKind) ? detectedMediaKind : declaredMediaKind;
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits);
   if (estimateBase64DecodedByteLength(base64Part) > maxBytes) {
     throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
@@ -632,8 +666,10 @@ function parseMediaDataUrl(
 
   return {
     kind: "media-data-url",
-    buffer: Buffer.from(base64Part.replace(/\s+/g, ""), "base64"),
-    contentType,
+    buffer: Buffer.from(normalizedBase64, "base64"),
+    contentType: isManagedMediaKind(detectedMediaKind)
+      ? (detectedContentType ?? contentType)
+      : contentType,
     mediaKind,
   };
 }
@@ -818,7 +854,7 @@ function resolveManagedSessionOwnerAgentId(
 
 function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind | null {
   const kind = mediaKindFromMime(record.original.contentType);
-  return kind === "image" || kind === "audio" || kind === "video" ? kind : null;
+  return isManagedMediaKind(kind) ? kind : null;
 }
 
 function buildManagedMediaBlock(
@@ -908,7 +944,7 @@ function collectManagedOutgoingAttachmentRefs(
 ) {
   const refs = new Map<string, { attachmentId: string; sessionKey: string }>();
   for (const block of blocks ?? []) {
-    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
+    if (!isManagedMediaKind(block?.type)) {
       continue;
     }
     for (const candidate of [block.url, block.openUrl]) {
@@ -1369,26 +1405,41 @@ export async function createManagedOutgoingMediaBlocks(params: {
     const isDataUrl = trimmedMediaUrl.startsWith("data:");
     const localMediaPath = isDataUrl ? undefined : resolveLocalMediaPath(mediaUrl);
     const label = isDataUrl ? fallbackLabel : deriveAltText(localMediaPath ?? mediaUrl, index);
-    const inferredKind = mediaKindFromMime(mimeTypeFromFilePath(localMediaPath ?? mediaUrl));
+    const sourceKind = mediaKindFromMime(mimeTypeFromFilePath(localMediaPath ?? mediaUrl));
+    const metadataMimeKind = isGenericBinaryMediaContentType(attachmentMetadata?.mimeType)
+      ? undefined
+      : kindFromMime(attachmentMetadata?.mimeType);
+    const metadataNameKind = mediaKindFromMime(mimeTypeFromFilePath(attachmentMetadata?.name));
+    const inferredKinds = [sourceKind, metadataMimeKind, metadataNameKind];
+    // Declared metadata may identify an otherwise opaque document, but it must
+    // never authorize an opaque local file as an image or hide a non-image signal.
+    const inferredKind =
+      inferredKinds.find((kind) => kind && kind !== "image") ??
+      (sourceKind === "image" ? sourceKind : undefined);
+    const hasUnverifiedLocalImageHint =
+      Boolean(localMediaPath) && (metadataMimeKind === "image" || metadataNameKind === "image");
     const hintedKind =
       dataUrlKind === "image" || dataUrlKind === "audio" || dataUrlKind === "video"
         ? dataUrlKind
-        : inferredKind === "image" || inferredKind === "audio" || inferredKind === "video"
+        : inferredKind === "image" ||
+            inferredKind === "audio" ||
+            inferredKind === "video" ||
+            inferredKind === "document"
           ? inferredKind
           : "media";
 
     let savedOriginalPath: string | null = null;
     try {
-      const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
+      const parsedDataUrl = await parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
       if (parsedDataUrl.kind === "unsupported-data-url") {
         continue;
       }
       if (
         localMediaPath &&
-        (hintedKind === "audio" || hintedKind === "video") &&
+        (hintedKind === "audio" || hintedKind === "video" || hintedKind === "document") &&
         params.allowLocalNonImage !== true
       ) {
-        throw new Error("Local audio/video media requires an explicitly trusted reply payload");
+        throw new Error("Local non-image media requires an explicitly trusted reply payload");
       }
       let resizeWarning: ManagedMediaBlock | null = null;
       let savedOriginal =
@@ -1417,16 +1468,23 @@ export async function createManagedOutgoingMediaBlocks(params: {
               // File URLs have already been normalized for display metadata and policy checks.
               // Pass that path to the store instead of treating URI syntax as a filename.
               const ingestSource = localMediaPath ?? mediaUrl;
+              const ingestMaxBytes = Math.max(limits.maxBytes, maxBytesForKind("unknown"));
               return await saveMediaSource(
                 ingestSource,
                 undefined,
                 "outgoing/originals",
-                Math.max(
-                  limits.maxBytes,
-                  maxBytesForKind("audio"),
-                  maxBytesForKind("video"),
-                  MEDIA_MAX_BYTES,
-                ),
+                ingestMaxBytes,
+                {
+                  maxBytesForMime: (mime) => maxBytesForManagedMime(mime, limits),
+                  contentTypeHint:
+                    localMediaPath && metadataMimeKind === "image"
+                      ? undefined
+                      : attachmentMetadata?.mimeType,
+                  fileNameHint:
+                    localMediaPath && metadataNameKind === "image"
+                      ? undefined
+                      : attachmentMetadata?.name,
+                },
               );
             })();
       savedOriginalPath = savedOriginal.path;
@@ -1434,16 +1492,19 @@ export async function createManagedOutgoingMediaBlocks(params: {
       if (!savedOriginalContentType) {
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginalPath = null;
+        if (hasUnverifiedLocalImageHint) {
+          throw new Error("Local image metadata could not be verified from the source");
+        }
         continue;
       }
       const mediaKind = mediaKindFromMime(savedOriginalContentType);
-      if (mediaKind !== "image" && mediaKind !== "audio" && mediaKind !== "video") {
+      if (!isManagedMediaKind(mediaKind)) {
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginalPath = null;
         continue;
       }
       if (localMediaPath && mediaKind !== "image" && params.allowLocalNonImage !== true) {
-        throw new Error("Local audio/video media requires an explicitly trusted reply payload");
+        throw new Error("Local non-image media requires an explicitly trusted reply payload");
       }
       const maxBytes = maxBytesForManagedMediaKind(mediaKind, limits);
       if (savedOriginal.size > maxBytes) {
@@ -1614,9 +1675,7 @@ function buildManagedMediaContentDisposition(value: string | null, contentType: 
   const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
   const base = (value ?? fallback).replace(/[\r\n"\\]/g, "_").trim();
   const filename = base || fallback;
-  return /^[\x20-\x7e]+$/u.test(filename)
-    ? `inline; filename="${filename}"`
-    : buildAssistantMediaContentDisposition(filename, contentType);
+  return buildAssistantMediaContentDisposition(filename, contentType);
 }
 
 export async function handleManagedOutgoingMediaHttpRequest(

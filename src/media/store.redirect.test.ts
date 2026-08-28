@@ -121,6 +121,101 @@ describe("media store remote sources", () => {
     await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("custom");
   });
 
+  it("uses declared metadata hints for an extensionless remote source", async () => {
+    await useActualSaveRemoteMedia();
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response("id,label\n1,alpha\n", {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+
+    const saved = await saveMediaSource("https://example.com/download", undefined, "remote", 1024, {
+      contentTypeHint: "text/csv",
+      fileNameHint: "report.csv",
+    });
+
+    expect(saved.contentType).toBe("text/csv");
+    expect(saved.id).toMatch(/\.csv$/u);
+    await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("id,label\n1,alpha\n");
+  });
+
+  it("uses a declared MIME hint behind a generic remote response type", async () => {
+    await useActualSaveRemoteMedia();
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response("id,label\n1,alpha\n", {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+
+    const saved = await saveMediaSource("https://example.com/download", undefined, "remote", 1024, {
+      contentTypeHint: "text/csv",
+    });
+
+    expect(saved.contentType).toBe("text/csv");
+    expect(saved.id).toMatch(/\.csv$/u);
+  });
+
+  it("keeps remote bytes authoritative over declared metadata", async () => {
+    await useActualSaveRemoteMedia();
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response(jpeg, {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+
+    const saved = await saveMediaSource("https://example.com/download", undefined, "remote", 1024, {
+      contentTypeHint: "text/csv",
+      fileNameHint: "report.csv",
+    });
+
+    expect(saved.contentType).toBe("image/jpeg");
+    expect(saved.id).toMatch(/\.jpg$/u);
+    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(jpeg);
+  });
+
+  it("keeps a recognized remote suffix authoritative over declared metadata", async () => {
+    await useActualSaveRemoteMedia();
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response("id,label\n1,alpha\n", {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+
+    const saved = await saveMediaSource(
+      "https://example.com/download.csv",
+      undefined,
+      "remote",
+      1024,
+      { contentTypeHint: "image/png", fileNameHint: "photo.png" },
+    );
+
+    expect(saved.contentType).toBe("text/csv");
+    expect(saved.id).toMatch(/\.csv$/u);
+  });
+
+  it("keeps a concrete remote response type authoritative over a declared filename", async () => {
+    await useActualSaveRemoteMedia();
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response("id,label\n1,alpha\n", {
+        status: 200,
+        headers: { "content-type": "text/csv" },
+      }),
+    );
+
+    const saved = await saveMediaSource("https://example.com/download", undefined, "remote", 1024, {
+      contentTypeHint: "image/png",
+      fileNameHint: "photo.png",
+    });
+
+    expect(saved.contentType).toBe("text/csv");
+    expect(saved.id).toMatch(/\.csv$/u);
+  });
+
   it("cancels a never-ending error body before canonical status handling", async () => {
     await useActualSaveRemoteMedia();
     const cancel = vi.fn(() => new Promise<void>(() => {}));

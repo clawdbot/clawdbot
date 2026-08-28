@@ -147,7 +147,7 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("publishes managed images with the current run owner", async () => {
+  it("publishes managed images and sandbox documents with the current run owner", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
@@ -157,12 +157,14 @@ describe("WebChat message tool internal source reply", () => {
         const sessionKey = "agent:main:webchat:dm:restart-proof";
         const sessionId = "restart-proof-session";
         const imagePaths = ["first.png", "second.png"].map((name) => path.join(workspaceDir, name));
+        const documentPath = path.join(workspaceDir, "report.csv");
         await fs.mkdir(workspaceDir, { recursive: true });
         await Promise.all(
           imagePaths.map((imagePath) =>
             fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64")),
           ),
         );
+        await fs.writeFile(documentPath, "account,balance\nprimary,42\n", "utf8");
 
         await replaceSessionEntry(
           { agentId: "main", sessionKey, storePath },
@@ -183,6 +185,8 @@ describe("WebChat message tool internal source reply", () => {
           sessionId,
           agentId: "main",
           runId: "restart-proof-run",
+          workspaceDir,
+          sandboxRoot: workspaceDir,
           getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
           resolveCommandSecretRefsViaGateway: async () => ({
             resolvedConfig: config,
@@ -194,8 +198,16 @@ describe("WebChat message tool internal source reply", () => {
 
         const sendParams = {
           action: "send" as const,
-          message: "Durable image reply",
+          message: "Durable attachment reply",
           mediaUrls: imagePaths,
+          attachments: [
+            {
+              type: "file" as const,
+              media: "/workspace/report.csv",
+              name: "declared-report.csv",
+              contentType: "text/csv",
+            },
+          ],
         };
         const updates: SessionTranscriptUpdate[] = [];
         const publishedDownloads: Array<Promise<unknown>> = [];
@@ -205,7 +217,9 @@ describe("WebChat message tool internal source reply", () => {
             update.message && typeof update.message === "object"
               ? (update.message as { content?: Array<Record<string, unknown>> }).content
               : undefined;
-          for (const block of content?.filter((entry) => entry.type === "image") ?? []) {
+          for (const block of content?.filter(
+            (entry) => entry.type === "image" || entry.type === "document",
+          ) ?? []) {
             publishedDownloads.push(
               resolveManagedOutgoingMediaArtifactDownload({
                 sessionKey,
@@ -262,18 +276,37 @@ describe("WebChat message tool internal source reply", () => {
           ? (assistant.content as Array<Record<string, unknown>>)
           : [];
         const image = content.find((block) => block.type === "image");
+        const document = content.find((block) => block.type === "document");
         expect(toolResult.details).toMatchObject({
           sourceReplySink: "internal-ui",
           idempotencyKey: expect.any(String),
         });
-        expect(content[0]).toEqual({ type: "text", text: "Durable image reply" });
+        const sourceReplyDetails = (
+          toolResult.details as {
+            sourceReply?: {
+              mediaUrls?: string[];
+              attachments?: Array<{ url?: string }>;
+            };
+          }
+        ).sourceReply;
+        expect(sourceReplyDetails?.attachments).toEqual(
+          sourceReplyDetails?.mediaUrls?.map((url) => expect.objectContaining({ url })),
+        );
+        expect(JSON.stringify(sourceReplyDetails)).not.toContain(workspaceDir);
+        expect(content[0]).toEqual({ type: "text", text: "Durable attachment reply" });
         expect(image).toMatchObject({
           type: "image",
           artifactId: expect.stringMatching(/^artifact_managed_image_/u),
         });
         expect(content.filter((block) => block.type === "image")).toHaveLength(2);
+        expect(document).toMatchObject({
+          type: "document",
+          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+          fileName: "declared-report.csv",
+          mimeType: "text/csv",
+        });
         expect(JSON.stringify(assistant)).not.toContain(workspaceDir);
-        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(3);
         const published = updates.find(
           (update) =>
             update.runId === "restart-proof-run" &&
@@ -288,12 +321,17 @@ describe("WebChat message tool internal source reply", () => {
         const publishedContent = (
           published?.message as { content?: Array<Record<string, unknown>> }
         )?.content;
-        expect(publishedContent?.filter((block) => block.type === "image")).toHaveLength(2);
+        expect(
+          publishedContent?.filter((block) => block.type === "image" || block.type === "document"),
+        ).toHaveLength(3);
         await expect(Promise.all(publishedDownloads)).resolves.toEqual([
           expect.objectContaining({ type: "image" }),
           expect.objectContaining({ type: "image" }),
+          expect.objectContaining({ type: "document", title: "declared-report.csv" }),
         ]);
-        for (const block of content.filter((entry) => entry.type === "image")) {
+        for (const block of content.filter(
+          (entry) => entry.type === "image" || entry.type === "document",
+        )) {
           await expect(
             resolveManagedOutgoingMediaArtifactDownload({
               sessionKey,
@@ -301,7 +339,7 @@ describe("WebChat message tool internal source reply", () => {
               artifactId: String(block.artifactId),
               stateDir,
             }),
-          ).resolves.toMatchObject({ type: "image" });
+          ).resolves.toMatchObject({ type: block.type });
         }
       },
     );

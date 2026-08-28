@@ -1528,6 +1528,36 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks)).toMatchObject({ type: "audio", fileName: "theme.mp3" });
   });
 
+  it("creates managed document blocks with media artifact ids", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "report.csv");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "account,balance\nprimary,42\n", "utf8");
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.join(stateDir, "workspace")],
+      allowLocalNonImage: true,
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = requireBlock(blocks);
+    expect(block).toMatchObject({
+      type: "document",
+      mimeType: "text/csv",
+      fileName: "report.csv",
+    });
+    const attachmentId = requireAttachmentIdFromUrl(block.url);
+    expect(block.artifactId).toBe(`${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`);
+    expect(readManagedImageRecord(attachmentId, stateDir)?.original).toMatchObject({
+      contentType: "text/csv",
+      filename: "report.csv",
+      width: null,
+      height: null,
+    });
+  });
+
   it("marks exotic managed media metadata for playback transcoding", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.caf");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -1582,6 +1612,28 @@ describe("createManagedOutgoingImageBlocks", () => {
         stateDir,
       }),
     ).rejects.toThrow(new RegExp(`Managed ${kind} attachment.*16 MiB byte limit`));
+  });
+
+  it("applies the byte-detected image cap before fully decoding generic data URLs", async () => {
+    const oversizedImage = Buffer.concat([
+      Buffer.from(TINY_PNG_BASE64, "base64"),
+      Buffer.alloc(32 * 1024),
+    ]).toString("base64");
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      await expect(
+        createManagedOutgoingImageBlocks({
+          sessionKey: "agent:main:main",
+          mediaUrls: [`data:application/octet-stream;base64,${oversizedImage}`],
+          stateDir,
+          limits: { maxBytes: 1024 },
+        }),
+      ).rejects.toThrow(/Managed image attachment .* exceeds the 1024 bytes byte limit/u);
+      expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedImage, "base64");
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
   });
 
   it("requires explicit reply trust for local audio", async () => {
@@ -1971,6 +2023,46 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
+  it("reports the detected image cap for oversized remote media", async () => {
+    const imageBuffer = Buffer.from(TINY_PNG_BASE64, "base64");
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/octet-stream");
+      res.end(imageBuffer);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    setMediaStoreNetworkDepsForTest({
+      resolvePinnedHostname: async (hostname) => ({
+        hostname,
+        addresses: ["127.0.0.1"],
+        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
+      }),
+    });
+
+    try {
+      await expect(
+        withEnvAsync(
+          { OPENCLAW_STATE_DIR: stateDir },
+          async () =>
+            await createManagedOutgoingImageBlocks({
+              sessionKey: "agent:main:main",
+              mediaUrls: [`http://127.0.0.1:${address.port}/download`],
+              stateDir,
+              limits: { maxBytes: 32 },
+            }),
+        ),
+      ).rejects.toThrow(/Managed image attachment .* exceeds the 32 bytes byte limit/u);
+    } finally {
+      setMediaStoreNetworkDepsForTest();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("rejects local image paths outside allowed roots", async () => {
     const outsideDir = tempDirs.make("managed-image-outside-");
     const outsidePath = path.join(outsideDir, "outside.png");
@@ -2005,6 +2097,86 @@ describe("createManagedOutgoingImageBlocks", () => {
 
     expect(blocks).toHaveLength(1);
     expect(requireBlock(blocks).type).toBe("image");
+  });
+
+  it("reports the detected image cap for oversized local media", async () => {
+    const allowedDir = path.join(stateDir, "workspace", "uploads");
+    const allowedPath = path.join(allowedDir, "inside.png");
+    await fs.mkdir(allowedDir, { recursive: true });
+    await fs.writeFile(allowedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [allowedPath],
+        stateDir,
+        localRoots: [path.join(stateDir, "workspace")],
+        limits: { maxBytes: 32 },
+      }),
+    ).rejects.toThrow(/Managed image attachment .* exceeds the 32 bytes byte limit/u);
+  });
+
+  it.each(["application/octet-stream", "binary/octet-stream"])(
+    "ignores generic %s metadata when authorizing a known local image",
+    async (mimeType) => {
+      const allowedDir = path.join(stateDir, "workspace", "uploads");
+      const allowedPath = path.join(allowedDir, "inside.png");
+      await fs.mkdir(allowedDir, { recursive: true });
+      await fs.writeFile(allowedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [allowedPath],
+        attachments: [{ type: "file", mimeType }],
+        stateDir,
+        localRoots: [path.join(stateDir, "workspace")],
+      });
+
+      expect(requireBlock(blocks)).toMatchObject({ type: "image", mimeType: "image/png" });
+    },
+  );
+
+  it("keeps byte detection authoritative after hinted-kind ingestion", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "report.png");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      Buffer.concat([Buffer.from("%PDF-1.4\n% test\n"), Buffer.alloc(128)]),
+    );
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      limits: { maxBytes: 32 },
+    });
+
+    expect(requireBlock(blocks)).toMatchObject({
+      type: "document",
+      mimeType: "application/pdf",
+    });
+  });
+
+  it("uses structured metadata to ingest an extensionless document", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "opaque-upload");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "id,label\n1,alpha\n");
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      attachments: [{ type: "file", name: "report.csv", mimeType: "text/csv" }],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+    });
+
+    const block = requireBlock(blocks);
+    expect(block).toMatchObject({ type: "document", mimeType: "text/csv" });
+    const record = readManagedImageRecord(requireAttachmentIdFromUrl(block.url), stateDir);
+    expect(record?.original.filename).toBe("report.csv");
   });
 
   it("allows managed inbound image paths before validating explicit roots", async () => {
@@ -2046,17 +2218,18 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
-  it("drops downloaded non-image sources without leaving orphaned originals", async () => {
+  it("rejects untrusted local documents without leaving orphaned originals", async () => {
     const pdfPath = path.join(stateDir, "not-an-image.pdf");
     await fs.writeFile(pdfPath, Buffer.from("%PDF-1.4\n% test\n"));
 
-    const blocks = await createManagedOutgoingImageBlocks({
-      sessionKey: "agent:main:main",
-      mediaUrls: [pdfPath],
-      stateDir,
-      localRoots: [stateDir],
-    });
-    expect(blocks).toStrictEqual([]);
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [pdfPath],
+        stateDir,
+        localRoots: [stateDir],
+      }),
+    ).rejects.toThrow(/Managed document attachment.*could not be prepared/u);
     const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
     let originals: string[] | null = null;
     try {
@@ -2065,6 +2238,51 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
     }
     expect(originals ?? []).toStrictEqual([]);
+  });
+
+  it("rejects untrusted extensionless documents identified by structured metadata", async () => {
+    const sourcePath = path.join(stateDir, "opaque-document");
+    await fs.writeFile(sourcePath, "id,label\n1,alpha\n");
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        attachments: [{ type: "file", name: "report.csv", mimeType: "TEXT/CSV; charset=utf-8" }],
+        stateDir,
+        localRoots: [stateDir],
+      }),
+    ).rejects.toThrow(/Managed document attachment.*could not be prepared/u);
+  });
+
+  it("does not let image metadata weaken a known local document gate", async () => {
+    const sourcePath = path.join(stateDir, "known-document.csv");
+    await fs.writeFile(sourcePath, "id,label\n1,alpha\n");
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        attachments: [{ type: "file", name: "photo.png", mimeType: "image/png" }],
+        stateDir,
+        localRoots: [stateDir],
+      }),
+    ).rejects.toThrow(/Managed document attachment.*could not be prepared/u);
+  });
+
+  it("does not let image metadata authorize opaque local bytes", async () => {
+    const sourcePath = path.join(stateDir, "opaque-local-file");
+    await fs.writeFile(sourcePath, "private opaque content\n");
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        attachments: [{ type: "file", name: "photo.png", mimeType: "image/png" }],
+        stateDir,
+        localRoots: [stateDir],
+      }),
+    ).rejects.toThrow(/Managed media attachment.*could not be prepared/u);
   });
 
   it("does not apply the configured image cap to managed audio", async () => {

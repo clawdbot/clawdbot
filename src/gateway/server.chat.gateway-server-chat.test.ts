@@ -1519,8 +1519,8 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.history carries managed images from a message-tool delivery mirror", async () => {
-    const replyText = "Two visible attachments.";
+  test("chat.history carries managed attachments from a message-tool delivery mirror", async () => {
+    const replyText = "Visible attachments.";
     const imageBlocks = ["first", "second"].map((name) => ({
       type: "image",
       artifactId: `artifact_managed_image_${name}`,
@@ -1529,13 +1529,21 @@ describe("gateway server chat", () => {
       alt: `${name}.png`,
       mimeType: "image/png",
     }));
+    const documentBlock = {
+      type: "document",
+      artifactId: "artifact_managed_media_report",
+      url: "/api/chat/media/outgoing/agent%3Amain%3Amain/report/full",
+      openUrl: "/api/chat/media/outgoing/agent%3Amain%3Amain/report/full",
+      fileName: "report.csv",
+      mimeType: "text/csv",
+    };
     const historyMessages = await loadChatHistoryWithMessages([
       createGatewayHistoryMessageToolCall(
         "call-message-images",
         {
           action: "send",
           message: replyText,
-          mediaUrls: ["/tmp/first.png", "/tmp/second.png"],
+          mediaUrls: ["/tmp/first.png", "/tmp/second.png", "/tmp/report.csv"],
         },
         1,
       ),
@@ -1543,7 +1551,7 @@ describe("gateway server chat", () => {
         role: "assistant",
         provider: "openclaw",
         model: "delivery-mirror",
-        content: [{ type: "text", text: replyText }, ...imageBlocks],
+        content: [{ type: "text", text: replyText }, ...imageBlocks, documentBlock],
         timestamp: 2,
       },
       {
@@ -1563,7 +1571,7 @@ describe("gateway server chat", () => {
     expect(historyMessages).toContainEqual(
       expect.objectContaining({
         role: "assistant",
-        content: [{ type: "text", text: replyText }, ...imageBlocks],
+        content: [{ type: "text", text: replyText }, ...imageBlocks, documentBlock],
         openclawMessageToolMirror: expect.objectContaining({
           toolCallId: "call-message-images",
           sourceReplySink: "internal-ui",

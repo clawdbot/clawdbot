@@ -13,6 +13,7 @@ import { normalizeOutboundLocation } from "../../channels/location.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
@@ -316,10 +317,30 @@ export async function buildMessagePayload(params: {
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
+  const attachmentSources = collectAttachmentSources(actionParams);
+  const attachmentMetadataByUrl = new Map(
+    attachmentSources.map((source) => [source.value.trim(), source] as const),
+  );
+  const sharedFilename = readToolStringParam(actionParams, "filename");
+  const sharedContentType =
+    readToolStringParam(actionParams, "contentType") ??
+    readToolStringParam(actionParams, "mimeType");
+  const attachments = mergedMediaUrls.map((url, index) => {
+    const source = attachmentMetadataByUrl.get(url.trim());
+    return {
+      url,
+      name:
+        source?.filename ??
+        (index === 0 ? sharedFilename : undefined) ??
+        basenameFromMediaSource(url),
+      mimeType: source?.contentType ?? (index === 0 ? sharedContentType : undefined),
+    };
+  });
   const payload: ReplyPayload = {
     text: message,
     ...(mediaUrl ? { mediaUrl } : {}),
     ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
+    ...(attachments.length ? { attachments } : {}),
     ...(asVoice ? { audioAsVoice: true } : {}),
     ...(asVideoNote ? { videoAsNote: true } : {}),
     ...(location ? { location } : {}),

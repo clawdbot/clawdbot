@@ -22,7 +22,9 @@ import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
-import { saveMediaStream, type SavedMedia } from "./store.js";
+import { isGenericResponseContentType, resolveResponseContentType } from "./fetch-content-type.js";
+import { findMediaSizeLimitError } from "./store-ingest.js";
+import { saveMediaStream, type MediaMaxBytesForMime, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
@@ -116,6 +118,7 @@ type SaveResponseMediaOptions = {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
+  maxBytesForMime?: MediaMaxBytesForMime;
 };
 
 /** Options for guarded URL fetches that are saved directly into the media store. */
@@ -123,6 +126,9 @@ type SaveRemoteMediaOptions = FetchMediaOptions & {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
+  maxBytesForMime?: MediaMaxBytesForMime;
+  detectionContentTypeHint?: string;
+  detectionFilePathHint?: string;
 };
 
 type GuardedMediaResponse = {
@@ -473,40 +479,6 @@ function resolveRemoteFileName(params: {
   );
 }
 
-function isGenericResponseContentType(value?: string | null): boolean {
-  const normalized = value?.split(";")[0]?.trim().toLowerCase();
-  return (
-    !normalized ||
-    normalized === "application/octet-stream" ||
-    normalized === "binary/octet-stream" ||
-    normalized === "application/zip"
-  );
-}
-
-function resolveResponseContentType(params: {
-  headerContentType?: string | null;
-  fallbackContentType?: string;
-}): string | undefined {
-  if (!params.fallbackContentType) {
-    return params.headerContentType ?? undefined;
-  }
-  if (isGenericResponseContentType(params.headerContentType)) {
-    return params.fallbackContentType;
-  }
-  const headerContentType = params.headerContentType?.split(";")[0]?.trim().toLowerCase();
-  const fallbackContentType = params.fallbackContentType.split(";")[0]?.trim().toLowerCase();
-  // Some platforms mislabel audio/video container uploads by top-level type.
-  // Preserve the caller hint when only that top-level prefix differs.
-  if (
-    headerContentType?.startsWith("video/") &&
-    fallbackContentType?.startsWith("audio/") &&
-    headerContentType.slice("video/".length) === fallbackContentType.slice("audio/".length)
-  ) {
-    return params.fallbackContentType;
-  }
-  return params.headerContentType ?? params.fallbackContentType;
-}
-
 async function* responseBodyChunks(
   body: ReadableStream<Uint8Array>,
   readIdleTimeoutMs?: number,
@@ -551,6 +523,9 @@ async function saveOkMediaResponse(params: {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
+  maxBytesForMime?: MediaMaxBytesForMime;
+  detectionContentTypeHint?: string;
+  detectionFilePathHint?: string;
 }): Promise<SavedRemoteMedia> {
   assertMediaContentLength({
     res: params.res,
@@ -578,16 +553,23 @@ async function saveOkMediaResponse(params: {
       params.maxBytes,
       params.originalFilename,
       detectionFilePathHint,
+      {
+        maxBytesForMime: params.maxBytesForMime,
+        contentTypeHint: params.detectionContentTypeHint,
+        fileNameHint: params.detectionFilePathHint,
+      },
     );
     return { ...saved, ...(fileName ? { fileName } : {}) };
   } catch (err) {
     if (err instanceof MediaFetchError) {
       throw err;
     }
-    if (isMediaLimitError(err)) {
+    const sizeLimitError = findMediaSizeLimitError(err);
+    if (sizeLimitError || isMediaLimitError(err)) {
+      const effectiveMaxBytes = sizeLimitError?.maxBytes ?? params.maxBytes;
       throw new MediaFetchError(
         "max_bytes",
-        `Failed to fetch media from ${params.sourceUrl}: payload exceeds maxBytes ${params.maxBytes}`,
+        `Failed to fetch media from ${params.sourceUrl}: payload exceeds maxBytes ${effectiveMaxBytes}`,
         { cause: err },
       );
     }
@@ -660,6 +642,7 @@ export async function saveResponseMedia(
     fallbackContentType: options.fallbackContentType,
     subdir: options.subdir,
     originalFilename: options.originalFilename,
+    maxBytesForMime: options.maxBytesForMime,
   });
 }
 
@@ -688,6 +671,9 @@ async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<Sav
       fallbackContentType: options.fallbackContentType,
       subdir: options.subdir,
       originalFilename: options.originalFilename,
+      maxBytesForMime: options.maxBytesForMime,
+      detectionContentTypeHint: options.detectionContentTypeHint,
+      detectionFilePathHint: options.detectionFilePathHint,
     });
   } finally {
     if (release) {
