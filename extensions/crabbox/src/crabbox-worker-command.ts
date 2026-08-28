@@ -94,7 +94,8 @@ export function provisionProfileError(result: SpawnResult): WorkerProviderError 
   return undefined;
 }
 
-export function isAuthoritativeLeaseAbsence(result: SpawnResult, identifier: string): boolean {
+// Recognition failure does not prove resource absence; only the stop owner can confirm cleanup.
+export function isUnrecognizedLease(result: SpawnResult, identifier: string): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
   if (
     !output.includes(identifier) ||
@@ -135,17 +136,6 @@ export async function stopCrabboxLease(params: {
     timeoutMs: params.timeoutMs ?? CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
-    return;
-  }
-  const alreadyStopped =
-    `${result.stderr}\n${result.stdout}`.includes(params.id) &&
-    /\balready (?:destroyed|released|stopped|terminated)\b/iu.test(
-      `${result.stderr}\n${result.stdout}`,
-    );
-  if (
-    result.termination === "exit" &&
-    (isAuthoritativeLeaseAbsence(result, params.id) || alreadyStopped)
-  ) {
     return;
   }
   throw crabboxCommandError("stop", result);
