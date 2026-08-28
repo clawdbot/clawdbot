@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   authorizeClientVoiceConfirmation as authorizeClientVoiceConfirmationForTest,
   bindAuthorizedClientVoiceConfirmation,
@@ -8,7 +8,10 @@ import {
   noteClientVoiceConfirmationUtterance as noteClientVoiceConfirmationUtteranceForTest,
   releaseClientVoiceConfirmationRun,
 } from "./client-voice-confirmation.js";
-import { resetClientVoiceConfirmationStateForTest } from "./client-voice-confirmation.test-support.js";
+import {
+  resetClientVoiceConfirmationStateForTest,
+  snapshotClientVoiceConfirmationStateForTest,
+} from "./client-voice-confirmation.test-support.js";
 
 function authorizeClientVoiceConfirmation(
   params: Omit<Parameters<typeof authorizeClientVoiceConfirmationForTest>[0], "agentId">,
@@ -64,7 +67,10 @@ function block(params: {
 }
 
 describe("client voice confirmation", () => {
-  afterEach(() => resetClientVoiceConfirmationStateForTest());
+  afterEach(() => {
+    resetClientVoiceConfirmationStateForTest();
+    vi.useRealTimers();
+  });
 
   it("does not pause a concurrent non-voice run sharing the session key", () => {
     block({ voiceSessionId: "voice-1", runId: "voice-run" });
@@ -217,14 +223,31 @@ describe("client voice confirmation", () => {
     ).toEqual({ allowed: true });
   });
 
-  it("rejects expired confirmations", () => {
+  it("prunes an abandoned confirmation when its TTL expires", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const confirmationId = block({ voiceSessionId: "voice-1", now: 1_000 });
     noteClientVoiceConfirmationUtterance({
       voiceSessionId: "voice-1",
       text: "confirm",
       timestamp: 1_001,
     });
+    expect(snapshotClientVoiceConfirmationStateForTest()).toMatchObject({
+      scopeOwners: 1,
+      pendingChallenges: 1,
+      recentUtterances: 1,
+      expiryOwners: 1,
+    });
 
+    vi.advanceTimersByTime(120_001);
+    expect(snapshotClientVoiceConfirmationStateForTest()).toEqual({
+      scopeOwners: 0,
+      pendingChallenges: 0,
+      recentUtterances: 0,
+      approvedRuns: 0,
+      approvedGrants: 0,
+      expiryOwners: 0,
+    });
     expect(() =>
       authorizeClientVoiceConfirmation({
         voiceSessionId: "voice-1",
@@ -346,7 +369,7 @@ describe("client voice confirmation", () => {
         confirmationId: first,
         now: 103,
       }),
-    ).toThrow("explicit spoken confirmation");
+    ).toThrow("missing, expired");
   });
 
   it("binds an approved fingerprint to its follow-up run", () => {
@@ -401,6 +424,10 @@ describe("client voice confirmation", () => {
       runId: "run-1",
       toolParams: { action: "send", message: "newer" },
       now: 110,
+    });
+    expect(snapshotClientVoiceConfirmationStateForTest()).toMatchObject({
+      scopeOwners: 1,
+      pendingChallenges: 1,
     });
     noteClientVoiceConfirmationUtterance({
       voiceSessionId: "voice-1",
@@ -495,7 +522,15 @@ describe("client voice confirmation", () => {
   });
 
   it("isolates same-named voice sessions across agents", () => {
-    const blocked = checkClientVoiceToolConfirmationPolicyForTest({
+    const blockedA = checkClientVoiceToolConfirmationPolicyForTest({
+      agentId: "agent-a",
+      voiceSessionId: "shared-id",
+      runId: "run-a",
+      toolName: "message",
+      toolParams: { action: "send", message: "A" },
+      now: 100,
+    });
+    const blockedB = checkClientVoiceToolConfirmationPolicyForTest({
       agentId: "agent-b",
       voiceSessionId: "shared-id",
       runId: "run-b",
@@ -503,24 +538,39 @@ describe("client voice confirmation", () => {
       toolParams: { action: "send", message: "B" },
       now: 100,
     });
-    expect(blocked.allowed).toBe(false);
-    if (blocked.allowed) {
+    expect(blockedA.allowed).toBe(false);
+    expect(blockedB.allowed).toBe(false);
+    if (blockedA.allowed || blockedB.allowed) {
       throw new Error("expected confirmation request");
     }
+    expect(snapshotClientVoiceConfirmationStateForTest()).toMatchObject({
+      scopeOwners: 2,
+      pendingChallenges: 2,
+    });
     noteClientVoiceConfirmationUtteranceForTest({
       agentId: "agent-a",
+      voiceSessionId: "shared-id",
+      text: "no",
+      timestamp: 101,
+    });
+    expect(snapshotClientVoiceConfirmationStateForTest()).toMatchObject({
+      scopeOwners: 1,
+      pendingChallenges: 1,
+    });
+    noteClientVoiceConfirmationUtteranceForTest({
+      agentId: "agent-b",
       voiceSessionId: "shared-id",
       text: "yes",
       timestamp: 101,
     });
 
-    expect(() =>
+    expect(
       authorizeClientVoiceConfirmationForTest({
         agentId: "agent-b",
         voiceSessionId: "shared-id",
-        confirmationId: confirmationIdFrom(blocked.reason),
+        confirmationId: confirmationIdFrom(blockedB.reason),
         now: 102,
-      }),
-    ).toThrow("explicit spoken confirmation");
+      }).confirmationId,
+    ).toBe(confirmationIdFrom(blockedB.reason));
   });
 });
