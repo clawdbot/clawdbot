@@ -2348,23 +2348,21 @@ describe("runTsdownBuildInvocation", () => {
         "setInterval(() => {}, 1000);",
       ].join("");
       const output = createWriteSink();
-      const run = startTimeoutFixture(parentScript, output);
+      const releaseAndWait = startTimeoutFixture(parentScript, output);
       let childPid: number | undefined;
 
       try {
         // The descendant publishes its PID only after installing its SIGTERM handler.
         childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
-        run.releaseTimeout();
-        const result = await run.runPromise;
+        const result = await releaseAndWait();
 
         expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
         expect(fs.readFileSync(termPath, "utf8")).toBe("SIGTERM");
         expect(output.chunks.join("")).toContain("forcing SIGKILL");
         await waitForDead(childPid, 2_000);
       } finally {
-        run.releaseTimeout();
-        await run.runPromise;
+        await releaseAndWait();
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
           await waitForDead(childPid, 2_000);
@@ -2397,15 +2395,14 @@ describe("runTsdownBuildInvocation", () => {
         "setInterval(() => {}, 1000);",
       ].join("");
       const output = createWriteSink();
-      const run = startTimeoutFixture(parentScript, output);
+      const releaseAndWait = startTimeoutFixture(parentScript, output);
       let childPid: number | undefined;
 
       try {
         // The descendant publishes its PID only after installing its SIGTERM handler.
         childPid = await waitForPidFile(childPidPath, 2_000);
         const startedAt = Date.now();
-        run.releaseTimeout();
-        const result = await run.runPromise;
+        const result = await releaseAndWait();
 
         expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
         expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
@@ -2413,8 +2410,7 @@ describe("runTsdownBuildInvocation", () => {
         expect(Date.now() - startedAt).toBeLessThan(900);
         await waitForDead(childPid, 2_000);
       } finally {
-        run.releaseTimeout();
-        await run.runPromise;
+        await releaseAndWait();
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
           await waitForDead(childPid, 2_000);

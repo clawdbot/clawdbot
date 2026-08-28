@@ -466,16 +466,17 @@ ${publishReadyPidScript(2)}
       "utf8",
     );
 
-    const run = startProcessWatchdogFixture(() =>
-      runManagedCommand({
-        bin: process.execPath,
-        args: [childPath, childPidPath, descendantPidPath],
-        shell: false,
-        stdio: "ignore",
-        timeoutMs: 500,
-      }),
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: [childPath, childPidPath, descendantPidPath],
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 500,
+        }),
+      ).rejects.toMatchObject({ code: "ETIMEDOUT" }),
     );
-    const timeoutAssertion = expect(run.runPromise).rejects.toMatchObject({ code: "ETIMEDOUT" });
     const killSpy = vi.spyOn(process, "kill");
     let childPid = 0;
     let descendantPid = 0;
@@ -484,17 +485,15 @@ ${publishReadyPidScript(2)}
       descendantPid = await waitForPidFile(descendantPidPath, 2_000);
       expect(isProcessAlive(childPid)).toBe(true);
       expect(isProcessAlive(descendantPid)).toBe(true);
-      run.releaseTimeout();
-      await timeoutAssertion;
+      await releaseAndWait();
       if (process.platform !== "win32") {
         expect(killSpy).toHaveBeenCalledWith(-childPid, "SIGKILL");
       }
       expect(isProcessAlive(childPid)).toBe(false);
       expect(isProcessAlive(descendantPid)).toBe(false);
     } finally {
-      run.releaseTimeout();
       try {
-        await timeoutAssertion;
+        await releaseAndWait();
       } finally {
         killSpy.mockRestore();
         try {
