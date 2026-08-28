@@ -298,6 +298,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
+          - ".agents/skills/update-team-server/**"
 
 "r: skill":
   - changed-files:
