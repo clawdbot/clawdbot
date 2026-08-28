@@ -84,6 +84,8 @@ type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
 type DeferredTurnMaintenanceRunState = {
   promise: Promise<void>;
   rerunRequested: boolean;
+  activeContextEngine: ContextEngine;
+  disposeActiveContextEngineAfterMaintenance: boolean;
   latestParams: DeferredTurnMaintenanceScheduleParams;
 };
 
@@ -427,9 +429,6 @@ async function runDeferredTurnMaintenanceWorker(
     if (longRunningTimer) {
       clearTimeout(longRunningTimer);
     }
-    if (params.disposeContextEngineAfterMaintenance) {
-      await disposeDeferredMaintenanceContextEngine(params.contextEngine);
-    }
   }
 }
 
@@ -448,11 +447,30 @@ function scheduleDeferredTurnMaintenance(
   const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
   if (activeRun) {
     const supersededParams = activeRun.rerunRequested ? activeRun.latestParams : undefined;
-    activeRun.rerunRequested = true;
-    activeRun.latestParams = { ...params, sessionKey };
+    const latestParams = { ...params, sessionKey };
+    // Coalesced resolutions may wrap one shared factory instance. Carry disposal
+    // ownership forward without closing an engine still used by active or newer work.
     if (
       supersededParams?.disposeContextEngineAfterMaintenance &&
-      supersededParams.contextEngine !== params.contextEngine
+      hasSameContextEngineInstance(supersededParams.contextEngine, latestParams.contextEngine)
+    ) {
+      latestParams.disposeContextEngineAfterMaintenance = true;
+    }
+    if (
+      latestParams.disposeContextEngineAfterMaintenance &&
+      hasSameContextEngineInstance(latestParams.contextEngine, activeRun.activeContextEngine)
+    ) {
+      activeRun.disposeActiveContextEngineAfterMaintenance = true;
+    }
+    activeRun.rerunRequested = true;
+    activeRun.latestParams = latestParams;
+    if (
+      supersededParams?.disposeContextEngineAfterMaintenance &&
+      !hasSameContextEngineInstance(
+        supersededParams.contextEngine,
+        activeRun.activeContextEngine,
+      ) &&
+      !hasSameContextEngineInstance(supersededParams.contextEngine, latestParams.contextEngine)
     ) {
       void disposeDeferredMaintenanceContextEngine(supersededParams.contextEngine);
     }
@@ -545,11 +563,31 @@ function scheduleDeferredTurnMaintenance(
       current.rerunRequested && shutdownTriggered ? current.latestParams : undefined;
     activeDeferredTurnMaintenanceRuns.delete(sessionKey);
     if (rerunParams) {
-      await scheduleDeferredTurnMaintenance(rerunParams);
-    } else if (
+      const rerunSharesActiveEngine = hasSameContextEngineInstance(
+        rerunParams.contextEngine,
+        current.activeContextEngine,
+      );
+      if (!rerunSharesActiveEngine && current.disposeActiveContextEngineAfterMaintenance) {
+        await disposeDeferredMaintenanceContextEngine(current.activeContextEngine);
+      }
+      const nextParams =
+        rerunSharesActiveEngine && current.disposeActiveContextEngineAfterMaintenance
+          ? { ...rerunParams, disposeContextEngineAfterMaintenance: true }
+          : rerunParams;
+      const scheduledRerun = scheduleDeferredTurnMaintenance(nextParams);
+      if (!scheduledRerun && nextParams.disposeContextEngineAfterMaintenance) {
+        await disposeDeferredMaintenanceContextEngine(nextParams.contextEngine);
+      } else {
+        await scheduledRerun;
+      }
+      return;
+    }
+    if (current.disposeActiveContextEngineAfterMaintenance) {
+      await disposeDeferredMaintenanceContextEngine(current.activeContextEngine);
+    }
+    if (
       discardedRerunParams?.disposeContextEngineAfterMaintenance &&
-      (!hasSameContextEngineInstance(discardedRerunParams.contextEngine, params.contextEngine) ||
-        !params.disposeContextEngineAfterMaintenance)
+      !hasSameContextEngineInstance(discardedRerunParams.contextEngine, current.activeContextEngine)
     ) {
       await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
     }
@@ -566,6 +604,9 @@ function scheduleDeferredTurnMaintenance(
   const state: DeferredTurnMaintenanceRunState = {
     promise: trackedPromise,
     rerunRequested: false,
+    activeContextEngine: params.contextEngine,
+    disposeActiveContextEngineAfterMaintenance:
+      params.disposeContextEngineAfterMaintenance === true,
     latestParams: { ...params, sessionKey },
   };
   activeDeferredTurnMaintenanceRuns.set(sessionKey, state);

@@ -824,23 +824,35 @@ describe("runContextEngineMaintenance", () => {
         plugins: { slots: { contextEngine: sharedEngineId } },
       };
       const firstResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
-      const repeatedResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
+      const firstRerunResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
+      const finalRerunResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
       let deferred: Promise<void> | undefined;
 
       try {
+        expect(firstResolution.configured.engine).not.toBe(firstRerunResolution.configured.engine);
+        expect(firstRerunResolution.configured.engine).not.toBe(
+          finalRerunResolution.configured.engine,
+        );
         await runContextEngineMaintenance({
           contextEngine: firstResolution.configured.engine,
           sessionId: "session-abort-waiting",
           sessionKey,
           sessionFile: "/tmp/session-abort-waiting.jsonl",
           reason: "turn",
-          disposeDeferredContextEngineAfterMaintenance: true,
           onDeferredMaintenance: (promise) => {
             deferred = promise;
           },
         });
         await vi.waitFor(() => expect(firstMaintain).toHaveBeenCalledTimes(1));
 
+        await runContextEngineMaintenance({
+          contextEngine: firstRerunResolution.configured.engine,
+          sessionId: "session-abort-waiting",
+          sessionKey,
+          sessionFile: "/tmp/session-abort-waiting.jsonl",
+          reason: "turn",
+          disposeDeferredContextEngineAfterMaintenance: true,
+        });
         await runContextEngineMaintenance({
           contextEngine: secondEngine,
           sessionId: "session-abort-waiting",
@@ -849,8 +861,9 @@ describe("runContextEngineMaintenance", () => {
           reason: "turn",
           disposeDeferredContextEngineAfterMaintenance: true,
         });
+        expect(firstEngine["dispose"]).not.toHaveBeenCalled();
         await runContextEngineMaintenance({
-          contextEngine: repeatedResolution.configured.engine,
+          contextEngine: finalRerunResolution.configured.engine,
           sessionId: "session-abort-waiting",
           sessionKey,
           sessionFile: "/tmp/session-abort-waiting.jsonl",
@@ -894,7 +907,8 @@ describe("runContextEngineMaintenance", () => {
         await Promise.allSettled(deferred ? [deferred] : []);
         await Promise.allSettled([
           firstResolution.fallback.engine.dispose?.(),
-          repeatedResolution.fallback.engine.dispose?.(),
+          firstRerunResolution.fallback.engine.dispose?.(),
+          finalRerunResolution.fallback.engine.dispose?.(),
         ]);
         process.off("SIGTERM", keepProcessAlive);
         resetDeferredTurnMaintenanceStateForTest();
