@@ -18,6 +18,7 @@ export function withPrimaryWebhookTrace(params: {
   result: CronCoreRunOutcome;
   delivered: boolean;
   error?: string;
+  deliverySuppressionReason?: "empty";
 }): CronCoreRunOutcome {
   const plan = resolveCronDeliveryPlan(params.job);
   const intended = params.result.delivery?.intended ?? {
@@ -30,11 +31,12 @@ export function withPrimaryWebhookTrace(params: {
       status: params.delivered ? "delivered" : "not-delivered",
       delivered: params.delivered,
       error: params.error,
+      deliverySuppressionReason: params.deliverySuppressionReason,
       failureNotification: { status: "not-requested" },
     },
     delivered: params.delivered,
-    deliverySuppressionReason: undefined,
-    deliveryAttempted: true,
+    deliverySuppressionReason: params.deliverySuppressionReason,
+    deliveryAttempted: params.deliverySuppressionReason === undefined,
     ...(params.error ? { deliveryError: params.error } : { deliveryError: undefined }),
     delivery: {
       ...params.result.delivery,

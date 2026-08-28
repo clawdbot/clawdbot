@@ -149,6 +149,31 @@ describe.sequential("cron delivery outcomes", () => {
               deliveryStatus: "delivered",
               delivered: true,
             });
+
+            for (const command of [
+              "process.exit(0)",
+              "process.stdout.write('  \\n')",
+              "process.exit(1)",
+            ]) {
+              await cron.update(job.id, {
+                payload: { kind: "command", argv: [process.execPath, "-e", command] },
+              });
+              await cron.run(job.id, "force");
+              const failed = command === "process.exit(1)";
+              expect(receiver.requests).toHaveLength(failed ? 2 : 1);
+              expect(await persistedJob(storePath, job.id)).toMatchObject({
+                state: {
+                  lastRunStatus: failed ? "error" : "ok",
+                  lastDeliveryStatus: failed ? "delivered" : "not-delivered",
+                },
+              });
+              if (!failed) {
+                expect(
+                  (await persistedJob(storePath, job.id))?.state.deliverySuppressionReason,
+                ).toBe("empty");
+              }
+            }
+            expect(receiver.requests[1]?.body).toMatchObject({ status: "error" });
           } finally {
             cron.stop();
             resetTaskRegistryForTests({ persist: false });

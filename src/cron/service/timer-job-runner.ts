@@ -73,12 +73,14 @@ async function deliverPrimaryWebhook(
     return result;
   }
   if (result.status !== "error" && !(typeof result.summary === "string" && result.summary.trim())) {
-    return withPrimaryWebhookTrace({
-      job,
-      result,
-      delivered: false,
-      error: "cron webhook delivery skipped: run produced no payload",
-    });
+    return settle(
+      withPrimaryWebhookTrace({
+        job,
+        result,
+        delivered: false,
+        deliverySuppressionReason: "empty",
+      }),
+    );
   }
   if (!state.deps.sendCronWebhook) {
     return withPrimaryWebhookTrace({
