@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { resolveCodexCliBin, resolveLocalAuthSpawnInvocation } from "./tui.js";
+import {
+  formatTuiAuthCommandArgv,
+  resolveCodexCliBin,
+  resolveLocalAuthSpawnInvocation,
+} from "./tui.js";
+
+describe("formatTuiAuthCommandArgv", () => {
+  it("renders bounded redacted argv without shell semantics", () => {
+    const rendered = formatTuiAuthCommandArgv("C:\\Users\\%USERNAME%\\codex.exe\n", ["login"]);
+    expect(rendered).toContain("%USERNAME%");
+    expect(rendered).toContain("\\n");
+    expect(rendered).not.toContain("\n");
+
+    const secret = "sk-proof-only-1234567890";
+    expect(formatTuiAuthCommandArgv("codex", ["login", secret])).not.toContain(secret);
+    expect(
+      formatTuiAuthCommandArgv("/tmp/" + "x".repeat(400), ["login"]).length,
+    ).toBeLessThanOrEqual(320);
+  });
+});
 
 describe("resolveCodexCliBin", () => {
   it("returns null or a valid Codex executable path", async () => {
