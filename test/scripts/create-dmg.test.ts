@@ -158,8 +158,11 @@ function readPngDimensions(imagePath: string): { width: number; height: number }
 
 function expectPrivateDmgMount(log: string): string {
   const attach = log.match(/^attach (.+)\/image-rw\.dmg -mountpoint (.+) -nobrowse$/m);
-  expect(attach).not.toBeNull();
-  const [, runRoot, mountPoint] = attach!;
+  const runRoot = attach?.[1];
+  const mountPoint = attach?.[2];
+  if (!runRoot || !mountPoint) {
+    throw new Error("Expected a DMG attach command with image and mount paths");
+  }
   // TMPDIR may itself live under /Volumes; ownership comes from the per-run root.
   expect(path.relative(tmpdir(), runRoot)).toMatch(/^openclaw-dmg\.[^/]+$/);
   expect(mountPoint).toBe(path.join(runRoot, "mount"));
