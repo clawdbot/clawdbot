@@ -624,7 +624,7 @@ describe("cli session history", () => {
     ["local media timestamp is missing", undefined, "2026-03-26T16:29:54.800Z", 2],
     ["imported timestamp is missing", Date.parse("2026-03-26T16:29:54.500Z"), undefined, 2],
   ])(
-    "handles mention-only imported rows when %s",
+    "handles captioned imported rows when %s",
     async (_label, localTimestamp, importedTimestamp, expectedLength) => {
       await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
         const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe05.png";
@@ -634,14 +634,14 @@ describe("cli session history", () => {
             type: "user",
             uuid: "image-only-user",
             ...(importedTimestamp === undefined ? {} : { timestamp: importedTimestamp }),
-            message: { role: "user", content: mention },
+            message: { role: "user", content: `look at this\n\n${mention}` },
           }),
           "utf-8",
         );
         const localMessages = [
           {
             role: "user",
-            content: "",
+            content: "look at this",
             ...(localTimestamp === undefined ? {} : { timestamp: localTimestamp }),
             __openclaw: {
               media: [
@@ -662,7 +662,7 @@ describe("cli session history", () => {
         if (expectedLength === 1) {
           expect(readRecord(readRecord(merged[0])["__openclaw"]).media).toHaveLength(1);
         } else {
-          expectFields(merged[1], { role: "user", content: mention });
+          expectFields(merged[1], { role: "user", content: `look at this\n\n${mention}` });
         }
       });
     },
@@ -670,24 +670,22 @@ describe("cli session history", () => {
 
   it("consumes each local media-bearing turn only once", () => {
     const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
-    const importedMessages = ["first-image-only-user", "second-image-only-user"].map(
-      (externalId, index) => ({
-        role: "user",
-        content: `@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
-        timestamp: timestamp + index * 60_000,
-        __openclaw: {
-          importedFrom: "claude-cli",
-          cliSessionId: "session-1",
-          externalId,
-        },
-      }),
-    );
+    const importedMessages = ["first-image-user", "second-image-user"].map((externalId, index) => ({
+      role: "user",
+      content: `look at this\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
+      timestamp: timestamp + index * 60_000,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId,
+      },
+    }));
 
     const merged = mergeImportedChatHistoryMessages({
       localMessages: [
         {
           role: "user",
-          content: "",
+          content: "look at this",
           timestamp,
           __openclaw: {
             media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
@@ -698,6 +696,35 @@ describe("cli session history", () => {
     });
 
     expect(merged).toEqual([expect.any(Object), importedMessages[1]]);
+  });
+
+  it("retains mention-only imports near unrelated local image turns", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const importedMessage = {
+      role: "user",
+      content: "@/Users/demo/workspace/.openclaw-cli-images/cafe06.png",
+      timestamp: timestamp + 60_000,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "orphaned-image-user",
+      },
+    };
+    const localMessage = {
+      role: "user",
+      content: "",
+      timestamp,
+      __openclaw: {
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/other.png" }],
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+
+    expect(merged).toEqual([localMessage, importedMessage]);
   });
 
   it("retains mention-only imported rows when no local media-bearing turn survives", async () => {

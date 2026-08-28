@@ -227,7 +227,11 @@ function findLocalImageMediaMatch(
   candidates: ComparableHistoryMessage[],
   imported: ComparableHistoryMessage,
 ): number {
-  if (!imported.hasCliImageMentions || imported.timestamp === undefined) {
+  if (
+    !imported.hasCliImageMentions ||
+    imported.timestamp === undefined ||
+    imported.text === undefined
+  ) {
     return -1;
   }
   const importedTimestamp = imported.timestamp;
@@ -235,7 +239,7 @@ function findLocalImageMediaMatch(
     (candidate) =>
       candidate.timestamp !== undefined &&
       Math.abs(candidate.timestamp - importedTimestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS &&
-      (imported.text === undefined || candidate.text === imported.text),
+      candidate.text === imported.text,
   );
 }
 
