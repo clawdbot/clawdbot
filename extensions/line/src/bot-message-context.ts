@@ -29,6 +29,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import { resolveLineMentionStrippedText } from "./mentions.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 type EventSource = webhook.Source | undefined;
@@ -264,6 +265,7 @@ async function finalizeLineInboundContext(params: {
   source: LineSourceInfoWithPeerId;
   rawBody: string;
   agentBody?: string;
+  commandBody?: string;
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
@@ -335,7 +337,7 @@ async function finalizeLineInboundContext(params: {
       body,
       bodyForAgent: agentBody,
       rawBody: params.rawBody,
-      commandBody: params.rawBody,
+      commandBody: params.commandBody ?? params.rawBody,
       inboundHistory: params.inboundHistory,
     },
     access: { commands: { authorized: params.commandAuthorized } },
@@ -475,6 +477,9 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     source: { userId, groupId, roomId, isGroup, peerId },
     rawBody,
     agentBody,
+    // The agent still reads the message as sent; only command parsing drops the
+    // mention, which LINE requires before a group message reaches the bot.
+    commandBody: resolveLineMentionStrippedText(message) || rawBody,
     timestamp,
     messageSid: messageId,
     commandAuthorized,
