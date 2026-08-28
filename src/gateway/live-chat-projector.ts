@@ -20,17 +20,18 @@ const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 /** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
 export function resolveAssistantLiveChatInput(
   data: unknown,
-): { text: string; delta: string } | undefined {
+): { text: string; delta: string; itemId?: string } | undefined {
   if (!data || typeof data !== "object") {
     return undefined;
   }
-  const record = data as { text?: unknown; delta?: unknown };
+  const record = data as { text?: unknown; delta?: unknown; itemId?: unknown };
   if (typeof record.text !== "string" && typeof record.delta !== "string") {
     return undefined;
   }
   return {
     text: typeof record.text === "string" ? record.text : "",
     delta: typeof record.delta === "string" ? record.delta : "",
+    ...(typeof record.itemId === "string" && record.itemId ? { itemId: record.itemId } : {}),
   };
 }
 
@@ -46,8 +47,17 @@ export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
+  scope?: { prefix: string };
 }): string {
-  const { previousText, nextText, nextDelta } = params;
+  const { previousText, nextText, nextDelta, scope } = params;
+  if (scope) {
+    const combined = scope.prefix + nextText;
+    const capped = capLiveAssistantBuffer(combined);
+    // Retire discarded prefix text with the active scope; a later shorter
+    // snapshot must not resurrect text that already fell out of the run cap.
+    scope.prefix = sliceUtf16Safe(scope.prefix, combined.length - capped.length);
+    return capped;
+  }
   if (nextText && previousText) {
     if (nextText.startsWith(previousText) && nextText.length > previousText.length) {
       return capLiveAssistantBuffer(nextText);

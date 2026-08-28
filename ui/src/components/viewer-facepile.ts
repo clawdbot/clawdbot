@@ -4,11 +4,10 @@ import type {
   SessionParticipant,
   SessionParticipantIdentity,
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import { readPresenceEntries } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import {
   presenceViewerLabel,
-  projectPresenceEntries,
+  projectPresencePayload,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -93,8 +92,8 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) personActivity?: PersonActivityRouting;
 
   override render() {
-    const projection = projectPresenceEntries(
-      readPresenceEntries(this.presencePayload) ?? [],
+    const projection = projectPresencePayload(
+      this.presencePayload,
       this.selfUserId,
       this.selfInstanceId,
     );

@@ -14,6 +14,8 @@ function isValidTabId(value) {
 export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
   const deniedTabIds = new Set();
   const tabRevisions = new Map();
+  const provenEpochs = new WeakMap();
+  let fileAccessGranted = false;
   let mode = ACCESS_MODE_SELECTED;
   let enabled = false;
   let transitioning = false;
@@ -40,13 +42,8 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
     }
   }
 
-  async function tabIsEligible(tab) {
-    return tabEligibility(tab, {
-      fileAccessAllowed:
-        tab?.url?.startsWith("file:") || tab?.pendingUrl?.startsWith("file:")
-          ? await fileAccessAllowed()
-          : true,
-    }).eligible;
+  function tabIsEligible(tab) {
+    return tabEligibility(tab, { fileAccessAllowed: fileAccessGranted }).eligible;
   }
 
   async function persistDeniedIds() {
@@ -93,10 +90,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
     mode = initialMode === ACCESS_MODE_ALL ? ACCESS_MODE_ALL : ACCESS_MODE_SELECTED;
     enabled = initialEnabled;
     initialized = (async () => {
-      const [stored, tabs] = await Promise.all([
+      const [stored, tabs, allowFiles] = await Promise.all([
         chromeApi.storage.session.get([DENIED_TAB_IDS_KEY]),
         chromeApi.tabs.query({}),
+        fileAccessAllowed(),
       ]);
+      // Chrome reloads the extension and closes its debugger sessions when this
+      // permission changes (Chromium extension_util.cc: SetAllowFileAccess).
+      fileAccessGranted = allowFiles;
       const existingIds = new Set();
       for (const tab of tabs) {
         if (isValidTabId(tab.id)) {
@@ -175,6 +176,25 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
     invalidateTab(tabId);
   }
 
+  function renewTabAccess(tabId, attachedEpoch, tab) {
+    const proof = attachedEpoch && provenEpochs.get(attachedEpoch);
+    const canRenew =
+      proof?.tabId === tabId &&
+      epochIsCurrent(tabId, attachedEpoch) &&
+      tab?.id === tabId &&
+      tabIsEligible(tab) &&
+      (mode === ACCESS_MODE_ALL || tab.groupId === proof.groupId);
+    // Every navigation retires in-flight commands. Only Chrome's full Tab
+    // observation can renew an already-proven attachment without losing events.
+    invalidateTab(tabId);
+    if (!canRenew) {
+      return undefined;
+    }
+    const epoch = capture(tabId);
+    provenEpochs.set(epoch, { tabId, groupId: tab.groupId });
+    return epoch;
+  }
+
   async function inspectTab(tabId, epoch = capture(tabId)) {
     if (!isValidTabId(tabId)) {
       return { accessible: false, eligible: false, denied: false, reason: "missing", tab: null };
@@ -194,15 +214,8 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
     if (!epochIsCurrent(tabId, epoch)) {
       return { accessible: false, eligible: false, denied: false, reason: "revoked", tab };
     }
-    let allowedFileAccess = true;
-    if (tab?.url?.startsWith("file:") || tab?.pendingUrl?.startsWith("file:")) {
-      allowedFileAccess = await fileAccessAllowed();
-      if (!epochIsCurrent(tabId, epoch)) {
-        return { accessible: false, eligible: false, denied: false, reason: "revoked", tab };
-      }
-    }
     const eligibility = tabEligibility(tab, {
-      fileAccessAllowed: allowedFileAccess,
+      fileAccessAllowed: fileAccessGranted,
     });
     if (!eligibility.eligible) {
       return { accessible: false, eligible: false, denied: false, reason: eligibility.reason, tab };
@@ -222,10 +235,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
       if (!epochIsCurrent(tabId, epoch)) {
         return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
       }
-      const currentEligible = await tabIsEligible(current);
-      if (!epochIsCurrent(tabId, epoch)) {
-        return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
-      }
+      const currentEligible = tabIsEligible(current);
       const currentSelected = await isSelectedTab(current);
       if (!epochIsCurrent(tabId, epoch)) {
         return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
@@ -242,6 +252,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
     }
     if (!epochIsCurrent(tabId, epoch)) {
       return { accessible: false, eligible: true, denied, reason: "revoked", tab };
+    }
+    if (!denied && selected) {
+      provenEpochs.set(epoch, { tabId, groupId: tab.groupId });
     }
     return {
       accessible: !denied && selected,
@@ -285,7 +298,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
         if (tabIsRevoking(tab.id)) {
           continue;
         }
-        if (!(await tabIsEligible(tab))) {
+        if (!tabIsEligible(tab)) {
           continue;
         }
         if (mode === ACCESS_MODE_ALL) {
@@ -315,7 +328,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
       invalidateTab(tabId);
       throw error;
     }
-    if (!(await tabIsEligible(tab))) {
+    if (!tabIsEligible(tab)) {
       deniedTabIds.delete(tabId);
       invalidateTab(tabId);
       throw new Error(`tab ${tabId} is restricted or unavailable to OpenClaw`);
@@ -387,6 +400,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab }) {
     capture,
     epochIsCurrent,
     invalidateTab,
+    renewTabAccess,
     invalidateAll: () => {
       revision += 1;
       discoveryRevision += 1;

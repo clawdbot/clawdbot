@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
@@ -63,6 +64,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayRuntimeBun: "gateway-runtime-bun",
+  gatewayRuntimeProbeFailed: "gateway-runtime-probe-failed",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
   gatewayTokenDrift: "gateway-token-drift",
@@ -554,12 +556,17 @@ async function auditGatewayRuntime(
 
   if (isBunRuntime(execPath)) {
     const runtime = await resolveBunRuntimeInfo(execPath);
-    if (!runtime.supported) {
+    if (runtime.status !== "supported") {
       issues.push({
-        code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
+        code:
+          runtime.status === "probe-failed"
+            ? SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed
+            : SERVICE_AUDIT_CODES.gatewayRuntimeBun,
         message:
-          "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
-        detail: execPath,
+          runtime.status === "probe-failed"
+            ? "Gateway service Bun runtime probe failed."
+            : "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
+        detail: runtime.status === "probe-failed" ? runtime.error.message : execPath,
         level: "recommended",
       });
     }
@@ -582,8 +589,7 @@ async function auditGatewayRuntime(
       if (!systemNode) {
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
-          message:
-            "System Node 22 LTS (22.22.3+) or Node 24.15+ not found; install it before migrating away from version managers.",
+          message: `System Node ${SUPPORTED_NODE_VERSIONS} not found; install it before migrating away from version managers.`,
           level: "recommended",
         });
       }

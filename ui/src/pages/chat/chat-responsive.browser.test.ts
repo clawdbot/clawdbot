@@ -1846,7 +1846,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 </div>
               </section>
             </main>
-            <openclaw-toast-host><div class="app-toast">Connection notice</div></openclaw-toast-host>
+            <openclaw-toast-host data-toast-placement="shell">
+              <div class="app-toast">Connection notice</div>
+            </openclaw-toast-host>
           </div>
         </body></html>`);
         // The card entrance animation moves every measured descendant together.

@@ -190,10 +190,13 @@ export async function repairLoadedGatewayServiceForStart(
   const installedRuntime = resolveGatewayDaemonRuntime(managedCommand?.programArguments);
   const installedRuntimePath =
     installedRuntime === "bun" ? managedCommand?.programArguments[0] : undefined;
-  const runtime =
-    installedRuntimePath && (await resolveBunRuntimeInfo(installedRuntimePath)).supported
-      ? "bun"
-      : "node";
+  const runtimeInfo = installedRuntimePath
+    ? await resolveBunRuntimeInfo(installedRuntimePath)
+    : undefined;
+  if (runtimeInfo?.status === "probe-failed") {
+    throw runtimeInfo.error;
+  }
+  const runtime = runtimeInfo?.status === "supported" ? "bun" : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,

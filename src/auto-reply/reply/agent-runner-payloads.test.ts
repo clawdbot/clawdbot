@@ -127,16 +127,17 @@ describe("buildReplyPayloads media filter integration", () => {
                 replyDelivery,
               }: ResolveReplyTransportParams) => {
                 const ambientThreadId = threadId != null ? String(threadId) : undefined;
-                const resolvedThreadId =
-                  replyDelivery?.chatType === "direct"
-                    ? undefined
-                    : replyToIsExplicit
+                const isFlatDirect =
+                  replyDelivery?.chatType === "direct" && replyDelivery.replyToMode === "off";
+                const resolvedThreadId = isFlatDirect
+                  ? undefined
+                  : replyDelivery
+                    ? replyToIsExplicit
                       ? (replyToId ?? ambientThreadId)
-                      : replyDelivery
-                        ? (ambientThreadId ?? replyToId ?? undefined)
-                        : (replyToId ?? ambientThreadId);
+                      : (ambientThreadId ?? replyToId ?? undefined)
+                    : (ambientThreadId ?? replyToId);
                 return {
-                  replyToId: resolvedThreadId,
+                  replyToId: isFlatDirect ? null : resolvedThreadId,
                   threadId: resolvedThreadId ?? null,
                 };
               },
@@ -744,6 +745,26 @@ describe("buildReplyPayloads media filter integration", () => {
       to: "user:U1",
       target: {},
       expected: [],
+    },
+    {
+      name: "dedupes an all-mode Mattermost DM reply against the same thread",
+      channel: "mattermost",
+      text: "same reply",
+      payload: { replyToId: "post-1", replyToTag: true },
+      params: { replyToMode: "all", originatingChatType: "direct" },
+      to: "user:U1",
+      target: { threadId: "post-1" },
+      expected: [],
+    },
+    {
+      name: "keeps an all-mode Mattermost DM reply when the tool sent it top-level",
+      channel: "mattermost",
+      text: "same reply",
+      payload: { replyToId: "post-1", replyToTag: true },
+      params: { replyToMode: "all", originatingChatType: "direct" },
+      to: "user:U1",
+      target: {},
+      expected: ["same reply"],
     },
     {
       name: "dedupes an implicit Mattermost send in the active thread",

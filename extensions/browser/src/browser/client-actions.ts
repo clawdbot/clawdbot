@@ -12,4 +12,10 @@ export {
   browserScreenshotAction,
   browserWaitForDownload,
 } from "./client-actions-core.js";
-export { browserConsoleMessages, browserPdfSave } from "./client-actions-observe.js";
+export {
+  browserConsoleMessages,
+  browserRequests,
+  browserPageText,
+  browserEmulateSetting,
+  browserPdfSave,
+} from "./client-actions-observe.js";
