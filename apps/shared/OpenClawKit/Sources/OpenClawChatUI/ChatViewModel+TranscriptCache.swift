@@ -116,8 +116,13 @@ extension OpenClawChatViewModel {
                 }
                 let durableSessions = cached.map(Self.durableSessionCacheProjection)
                 let organized = OpenClawChatSessionListOrganizer.organize(durableSessions)
+                let agentScoped = organized.filter {
+                    ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                        key: $0.key,
+                        activeAgentID: self.activeAgentId)
+                }
                 let scoped = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
-                    in: organized,
+                    in: agentScoped,
                     activeAgentId: self.activeAgentId)
                 self.sessions = self.applyingLocalUnreadOverrides(
                     to: scoped)

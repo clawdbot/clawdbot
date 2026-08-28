@@ -340,6 +340,31 @@ struct ChatViewModelTranscriptCacheTests {
         #expect(await MainActor.run { vm.sessions[0].observerDigest == nil })
     }
 
+    @Test func `cached session prepaint stays within the selected agent`() async throws {
+        let cache = TestTranscriptCache(sessions: [
+            cacheSessionEntry(key: "agent:main:owned", updatedAt: 3000),
+            cacheSessionEntry(key: "agent:gadget:foreign", updatedAt: 2000),
+            cacheSessionEntry(key: "shared-tool", updatedAt: 1000),
+        ])
+        let transport = GatedHistoryChatTransport { sessionKey, _ in
+            historyPayload(sessionKey: sessionKey, sessionID: "unused-live-session")
+        }
+        let vm = await makeViewModel(
+            sessionKey: "agent:main:main",
+            transport: transport,
+            activeAgentID: "main",
+            cache: cache,
+            load: false)
+        let snapshot = await MainActor.run { vm.currentSessionSnapshot() }
+
+        await MainActor.run { vm.paintFromCacheIfNeeded(session: snapshot) }
+        try await waitUntil("cached sessions painted") {
+            await MainActor.run { !vm.sessions.isEmpty }
+        }
+
+        #expect(await MainActor.run { vm.sessions.map(\.key) } == ["agent:main:owned", "shared-tool"])
+    }
+
     @Test func `session cache strips active markers and preserves terminal recap`() {
         var active = cacheSessionEntry(key: "active", updatedAt: 2000)
         active.status = "running"

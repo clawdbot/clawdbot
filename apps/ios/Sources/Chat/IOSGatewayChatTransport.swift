@@ -328,7 +328,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         let request = OpenClawChatGatewayRequests.sessionsList(
             limit: limit,
             search: search,
-            archived: archived)
+            archived: archived,
+            agentID: self.globalAgentId)
         let res = try await gateway.request(request)
         return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: res)
     }

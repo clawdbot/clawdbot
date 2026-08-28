@@ -104,6 +104,7 @@ extension NodeAppModel {
 
         do {
             let sourceGatewayID = self.chatTranscriptCacheGatewayID
+            let sourceAgentID = self.chatDeliveryAgentId
             let snapshot: ChatSessionRosterSnapshot
             if self.isLocalChatFixtureEnabled {
                 let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
@@ -124,11 +125,14 @@ extension NodeAppModel {
                         limit: limit,
                         search: nil,
                         archived: archived,
+                        agentID: sourceAgentID,
                         offset: offset)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
                     return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
                 }
-                guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) else {
+                guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
+                      self.chatDeliveryAgentId == sourceAgentID
+                else {
                     throw CancellationError()
                 }
             }

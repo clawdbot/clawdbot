@@ -5197,6 +5197,7 @@ extension NodeAppModel {
                 limit: 80,
                 search: nil,
                 archived: false,
+                agentID: self.chatDeliveryAgentId,
                 timeoutMs: 10000)
             let response = try await operatorGateway.request(request)
             let decoded = try JSONDecoder().decode(SessionsListResult.self, from: response)
