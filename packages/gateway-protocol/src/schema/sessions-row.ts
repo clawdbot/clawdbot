@@ -162,6 +162,9 @@ export const SessionRowSchema = Type.Object(
     modelOverrideSource: Type.Optional(
       Type.Union([Type.Literal("user"), Type.Literal("auto"), Type.Null()]),
     ),
+    modelSelectionSource: Type.Optional(
+      Type.Union([Type.Literal("default"), Type.Literal("session"), Type.Literal("parent")]),
+    ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
   { additionalProperties: true },

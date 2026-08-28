@@ -102,4 +102,27 @@ describe("SessionRowSchema", () => {
       }),
     ).toBe(false);
   });
+
+  it.each(["default", "session", "parent"] as const)(
+    "accepts model selection source %s",
+    (source) => {
+      expect(
+        Value.Check(SessionRowSchema, {
+          key: "agent:main:main",
+          kind: "global",
+          modelSelectionSource: source,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects an invalid model selection source", () => {
+    expect(
+      Value.Check(SessionRowSchema, {
+        key: "agent:main:main",
+        kind: "global",
+        modelSelectionSource: "user",
+      }),
+    ).toBe(false);
+  });
 });

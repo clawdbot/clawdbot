@@ -597,6 +597,7 @@ export async function projectSessionsPatchEntry(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        explicitDefaultSelection: true,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),
@@ -638,6 +639,7 @@ export async function projectSessionsPatchEntry(params: {
           model: resolved.model,
           isDefault: resolved.isDefault,
         },
+        explicitDefaultSelection: resolved.isDefault,
         profileOverride: resolved.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }

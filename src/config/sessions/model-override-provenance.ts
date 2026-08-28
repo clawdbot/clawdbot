@@ -44,7 +44,7 @@ export function hasUserPinnedModelSelection(
   if (entry.modelOverrideSource === "user") {
     return true;
   }
-  if (entry.modelOverrideSource === "auto") {
+  if (entry.modelOverrideSource !== undefined) {
     return false;
   }
   return !hasSessionAutoModelFallbackProvenance(entry);
@@ -55,6 +55,9 @@ export function resolveSessionModelOverrideSource(
   entry: ModelOverrideProvenanceEntry | undefined,
 ): "auto" | "user" | null {
   if (!normalizeOptionalString(entry?.modelOverride)) {
+    return null;
+  }
+  if (entry?.modelOverrideSource === "default") {
     return null;
   }
   if (entry?.modelOverrideSource) {

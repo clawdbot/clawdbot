@@ -29,6 +29,16 @@ describe("inheritSessionSelection", () => {
     });
     expect(automatic.authProfileOverrideCompactionCount).toBeUndefined();
   });
+
+  it("inherits an explicit configured-default selection", () => {
+    expect(
+      inheritSessionSelection({
+        sessionId: "explicit-default",
+        updatedAt: 1,
+        modelOverrideSource: "default",
+      }),
+    ).toMatchObject({ modelOverrideSource: "default" });
+  });
   it.each([
     { source: "auto" as const, profile: "google-vertex:fallback", inheritedProfile: undefined },
     { source: "user" as const, profile: "openai:work", inheritedProfile: "openai:work" },

@@ -192,6 +192,7 @@ export type GatewaySessionRow = {
   modelProvider?: string;
   model?: string;
   modelOverrideSource?: "user" | "auto" | null;
+  modelSelectionSource?: "default" | "session" | "parent";
   modelSelectionLocked?: boolean;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;

@@ -7642,6 +7642,35 @@ describe("chat model controls", () => {
     expect(container.querySelector('[data-chat-model-option=""]')).toBeNull();
   });
 
+  it("selects an inherited parent model instead of the configured default row", () => {
+    const { state } = createChatHeaderState({
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-sonnet-4-6", name: "Sonnet 4.6", provider: "anthropic" },
+      ],
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      model: "claude-sonnet-4-6",
+      modelProvider: "anthropic",
+      modelOverrideSource: null,
+      modelSelectionSource: "parent",
+    });
+    const container = renderModelControls(state);
+
+    expect(
+      container
+        .querySelector('[data-chat-model-option="anthropic/claude-sonnet-4-6"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      container
+        .querySelector('[data-chat-model-option="openai/gpt-5.5"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("false");
+  });
+
   it.each([
     {
       name: "clears a different model override from the actual default model row",

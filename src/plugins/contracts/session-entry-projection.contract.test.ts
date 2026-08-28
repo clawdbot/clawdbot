@@ -380,6 +380,28 @@ describe("plugin session extension SessionEntry projection", () => {
     ]);
   });
 
+  it("keeps modelSelectionMode available as a plugin session-entry slot", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "legacy-model-slot", name: "Legacy Model Slot" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "selection",
+          description: "existing plugin slot",
+          sessionEntrySlotKey: "modelSelectionMode",
+        });
+      },
+    });
+
+    expect(registry.registry.diagnostics).toEqual([]);
+    expect(registry.registry.sessionExtensions).toHaveLength(1);
+    expect(registry.registry.sessionExtensions[0]?.extension.sessionEntrySlotKey).toBe(
+      "modelSelectionMode",
+    );
+  });
+
   it("rejects sessionEntrySlotKey values inherited from Object.prototype", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({

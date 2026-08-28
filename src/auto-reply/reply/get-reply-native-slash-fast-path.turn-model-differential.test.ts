@@ -125,12 +125,13 @@ async function observeStatusSelection(
   if (!call) {
     throw new Error(`status path did not build a reply for ${fixture.name}`);
   }
-  const ref = call.sessionEntry?.modelOverride
-    ? {
-        provider: call.sessionEntry.providerOverride ?? call.provider,
-        model: call.sessionEntry.modelOverride,
-      }
-    : { provider: call.provider, model: call.model };
+  const ref =
+    call.sessionEntry?.modelOverrideSource !== "default" && call.sessionEntry?.modelOverride
+      ? {
+          provider: call.sessionEntry.providerOverride ?? call.provider,
+          model: call.sessionEntry.modelOverride,
+        }
+      : { provider: call.provider, model: call.model };
   return turnModelVerdict(
     ref,
     fixture.locked ? "locked" : fixture.heartbeat ? "heartbeat" : undefined,

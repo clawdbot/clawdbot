@@ -6,6 +6,7 @@ import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessio
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveStoredModelOverride } from "../sessions/stored-model-overrides.js";
 import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
 import type {
@@ -80,35 +81,62 @@ export function buildSingleRowStoreChildSessionsByKey(params: {
   return storeChildSessions ? new Map([[params.key, storeChildSessions]]) : new Map();
 }
 
-export function resolveSessionSelectedModelRef(params: {
+export function resolveSessionSelectedModel(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   agentId: string;
+  sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> {
-  const override = normalizeStoredOverrideModel({
-    providerOverride: params.entry?.providerOverride,
-    modelOverride: params.entry?.modelOverride,
+}): ReturnType<typeof resolveSessionModelRef> & {
+  source: "default" | "session" | "parent";
+} {
+  const configuredDefault = resolveSessionModelRef(params.cfg, undefined, params.agentId, {
+    allowPluginNormalization: params.allowPluginNormalization,
   });
-  if (!params.rowContext) {
-    return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
-      allowPluginNormalization: params.allowPluginNormalization,
-    });
-  }
+  const storedOverride = resolveStoredModelOverride({
+    sessionEntry: params.entry,
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.entry?.parentSessionKey,
+    defaultProvider: configuredDefault.provider,
+  });
+  const source = storedOverride?.source ?? "default";
+  const selectedEntry = storedOverride
+    ? {
+        providerOverride: storedOverride.provider,
+        modelOverride: storedOverride.model,
+        ...(storedOverride.routeResolution === "resolved"
+          ? { modelOverrideRouteResolution: "resolved" as const }
+          : {}),
+      }
+    : undefined;
+  const override = normalizeStoredOverrideModel({
+    providerOverride: selectedEntry?.providerOverride,
+    modelOverride: selectedEntry?.modelOverride,
+  });
   const key = [
     normalizeAgentId(params.agentId),
+    source,
     override.providerOverride ?? "",
     override.modelOverride ?? "",
   ].join("\0");
-  const cached = params.rowContext.selectedModelByOverrideRef.get(key);
+  const cached = params.rowContext?.selectedModelByOverrideRef.get(key);
   if (cached) {
-    return cached;
+    return { ...cached, source };
   }
-  const selected = resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
+  const selected = resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
     allowPluginNormalization: params.allowPluginNormalization,
   });
-  params.rowContext.selectedModelByOverrideRef.set(key, selected);
+  params.rowContext?.selectedModelByOverrideRef.set(key, selected);
+  return { ...selected, source };
+}
+
+export function resolveSessionSelectedModelRef(
+  params: Parameters<typeof resolveSessionSelectedModel>[0],
+): ReturnType<typeof resolveSessionModelRef> {
+  const { source: _source, ...selected } = resolveSessionSelectedModel(params);
   return selected;
 }
 

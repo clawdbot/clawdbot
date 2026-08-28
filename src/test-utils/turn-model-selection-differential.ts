@@ -267,4 +267,27 @@ export const TURN_MODEL_DIFFERENTIAL_FIXTURES: TurnModelDifferentialFixture[] = 
       command: turnModelVerdict(TURN_MODEL_PARENT_REF),
     },
   },
+  {
+    name: "explicit default rejects stale child and parent overrides",
+    ctx: { Provider: undefined, Surface: undefined, ChatType: "group" },
+    child: {
+      ...createTurnModelEntry({
+        chatType: "group",
+        groupId: "thread",
+        parentSessionKey: "agent:main:telegram:group:parent",
+        override: TURN_MODEL_SESSION_REF,
+      }),
+      modelOverrideSource: "default",
+    },
+    parent: {
+      key: "agent:main:telegram:group:parent",
+      entry: createTurnModelEntry({ sessionId: "parent-session", override: TURN_MODEL_PARENT_REF }),
+    },
+    expected: {
+      reply: turnModelVerdict(TURN_MODEL_DEFAULT_REF),
+      status: turnModelVerdict(TURN_MODEL_DEFAULT_REF),
+      harness: turnModelVerdict(TURN_MODEL_DEFAULT_REF),
+      command: turnModelVerdict(TURN_MODEL_DEFAULT_REF),
+    },
+  },
 ];

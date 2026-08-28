@@ -592,7 +592,7 @@ describe("mixed inline directives", () => {
     });
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
-    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBe("default");
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
@@ -630,7 +630,7 @@ describe("mixed inline directives", () => {
     });
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
-    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBe("default");
     expect(sessionEntry).toMatchObject({
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",

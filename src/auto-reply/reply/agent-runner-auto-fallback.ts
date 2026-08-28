@@ -62,8 +62,9 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
       delete fallbackRun.hasSessionModelOverride;
       delete fallbackRun.hasAutoFallbackProvenance;
     }
-    if (hasEntryModelOverride && params.entry?.modelOverrideSource) {
-      fallbackRun.modelOverrideSource = params.entry.modelOverrideSource;
+    const modelOverrideSource = params.entry?.modelOverrideSource;
+    if (hasEntryModelOverride && modelOverrideSource && modelOverrideSource !== "default") {
+      fallbackRun.modelOverrideSource = modelOverrideSource;
     } else {
       delete fallbackRun.modelOverrideSource;
     }

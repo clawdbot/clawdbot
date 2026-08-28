@@ -1003,6 +1003,7 @@ export function createSessionStatusTool(opts?: {
               entry: nextEntry,
               currentProvider,
               selection: modelSelection,
+              explicitDefaultSelection: modelSelection.isDefault,
               markLiveSwitchPending: true,
             });
             if (applied.updated) {
@@ -1023,6 +1024,7 @@ export function createSessionStatusTool(opts?: {
                       entry.modelProvider?.trim() ||
                       configured.provider,
                     selection: modelSelection,
+                    explicitDefaultSelection: modelSelection.isDefault,
                     markLiveSwitchPending: true,
                   });
                   if (

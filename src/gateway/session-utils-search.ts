@@ -104,6 +104,7 @@ export function resolveSessionListSearchModelFields(params: {
   cfg: OpenClawConfig;
   key: string;
   entry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
   rowContext?: SessionListRowContext;
 }): Array<string | undefined> {
   const parsedAgent = parseAgentSessionKey(params.key);
@@ -117,6 +118,8 @@ export function resolveSessionListSearchModelFields(params: {
     cfg: params.cfg,
     entry: params.entry,
     agentId,
+    sessionKey: params.key,
+    sessionStore: params.sessionStore,
     rowContext: params.rowContext,
     allowPluginNormalization: false,
   });

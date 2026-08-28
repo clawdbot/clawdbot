@@ -37,6 +37,7 @@ type ChatModelSelectState = {
   defaultModel: string;
   defaultLabel: string;
   modelOverrideSource: GatewaySessionRow["modelOverrideSource"];
+  modelSelectionSource: GatewaySessionRow["modelSelectionSource"];
   options: ChatModelSelectOption[];
 };
 
@@ -85,6 +86,21 @@ function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
     return state.modelOverrides[state.sessionKey] == null ? null : "user";
   }
   return resolveActiveSessionRow(state)?.modelOverrideSource;
+}
+
+function resolveModelSelectionSource(state: ChatModelSelectStateInput) {
+  if (Object.hasOwn(state.modelOverrides, state.sessionKey)) {
+    return state.modelOverrides[state.sessionKey] == null ? "default" : "session";
+  }
+  const row = resolveActiveSessionRow(state);
+  return (
+    row?.modelSelectionSource ??
+    (row?.modelOverrideSource === null
+      ? "default"
+      : row?.modelOverrideSource
+        ? "session"
+        : undefined)
+  );
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
@@ -251,6 +267,7 @@ export function resolveChatModelSelectState(
     defaultModel,
     defaultLabel: defaultModel ? `Default (${defaultLabel})` : "Default model",
     modelOverrideSource: resolveModelOverrideSource(state),
+    modelSelectionSource: resolveModelSelectionSource(state),
     options,
   };
 }

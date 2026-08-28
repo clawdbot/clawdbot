@@ -111,4 +111,30 @@ describe("resolveStoredModelOverride", () => {
       routeResolution: "raw",
     });
   });
+
+  it("does not inherit a parent pin after the child explicitly selects default", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: {
+          sessionId: "child-session",
+          updatedAt: 2,
+          modelOverrideSource: "default",
+          providerOverride: "google-vertex",
+          modelOverride: "stale-model",
+        },
+        sessionKey: "agent:main:dashboard:child",
+        parentSessionKey: "agent:main:dashboard:parent",
+        sessionStore: {
+          "agent:main:dashboard:parent": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-6",
+            modelOverrideSource: "user",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
 });

@@ -119,6 +119,7 @@ function applySessionModelSelectionToEntry(params: {
     entry: params.entry,
     currentProvider: params.currentProvider,
     selection: params.request,
+    explicitDefaultSelection: params.request.isDefault,
     profileOverride: params.request.profileOverride,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });

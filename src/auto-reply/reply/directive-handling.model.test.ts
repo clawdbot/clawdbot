@@ -11,6 +11,7 @@ import type {
   ProviderThinkingProfile,
 } from "../../plugins/provider-thinking.types.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 
 const authProfilesStoreMock = vi.hoisted(() => ({
   profiles: {} as Record<
@@ -1652,6 +1653,38 @@ describe("/model chat UX", () => {
     expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
+  });
+
+  it("persists explicit default intent so a later turn does not re-inherit its parent", async () => {
+    const parentKey = "agent:main:parent";
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model default continue",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      sessionEntry: createSessionEntry({
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+        modelOverrideSource: "user",
+      }),
+    });
+
+    expect(sessionEntry.modelOverrideSource).toBe("default");
+    expect(
+      resolveStoredModelOverride({
+        sessionEntry,
+        sessionStore: {
+          [parentKey]: {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "openai",
+            modelOverride: "gpt-4o",
+            modelOverrideSource: "user",
+          },
+        },
+        sessionKey: "agent:main:child",
+        parentSessionKey: parentKey,
+        defaultProvider: "anthropic",
+      }),
+    ).toBeNull();
   });
 
   it.each([

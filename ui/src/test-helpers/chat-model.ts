@@ -58,6 +58,7 @@ export function createSessionsListResult(
     model?: string | null;
     modelProvider?: string | null;
     modelOverrideSource?: GatewaySessionRow["modelOverrideSource"];
+    modelSelectionSource?: GatewaySessionRow["modelSelectionSource"];
     defaultsModel?: string | null;
     defaultsProvider?: string | null;
     defaultsThinkingLevels?: SessionsListResult["defaults"]["thinkingLevels"];
@@ -71,6 +72,7 @@ export function createSessionsListResult(
     model = null,
     modelProvider = model ? "openai" : null,
     modelOverrideSource,
+    modelSelectionSource,
     defaultsModel = "gpt-5",
     defaultsProvider = defaultsModel ? "openai" : null,
     defaultsThinkingLevels,
@@ -99,6 +101,7 @@ export function createSessionsListResult(
             ...(modelProvider ? { modelProvider } : {}),
             ...(model ? { model } : {}),
             ...(modelOverrideSource === undefined ? {} : { modelOverrideSource }),
+            ...(modelSelectionSource === undefined ? {} : { modelSelectionSource }),
             ...(thinkingDefault ? { thinkingDefault } : {}),
           }),
         ],

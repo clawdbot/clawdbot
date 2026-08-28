@@ -2138,6 +2138,13 @@ describe("initSessionState RawBody", () => {
       expected: { responseUsage: "full" },
     },
     {
+      name: "preserves explicit configured-default selection across daily rollover",
+      slug: "explicit-default",
+      entry: { modelOverrideSource: "default" as const },
+      expected: { modelOverrideSource: "default" },
+      persisted: true,
+    },
+    {
       name: "preserves user labels across dashboard session stale rollover (#101451)",
       slug: "label",
       sessionKey: "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77",

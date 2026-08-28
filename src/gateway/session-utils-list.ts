@@ -307,6 +307,7 @@ function filterSessionEntries(params: {
             cfg,
             key,
             entry,
+            sessionStore: store,
             rowContext: resolveSessionListRowContext(params),
           }),
           search,

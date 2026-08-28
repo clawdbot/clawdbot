@@ -6384,6 +6384,7 @@ public struct SessionRow: Codable, Sendable {
     public let model: String?
     public let modelprovider: String?
     public let modeloverridesource: AnyCodable?
+    public let modelselectionsource: AnyCodable?
     public let tooloverrides: [String: AnyCodable]?
 
     public init(
@@ -6457,6 +6458,7 @@ public struct SessionRow: Codable, Sendable {
         model: String? = nil,
         modelprovider: String? = nil,
         modeloverridesource: AnyCodable? = nil,
+        modelselectionsource: AnyCodable? = nil,
         tooloverrides: [String: AnyCodable]? = nil)
     {
         self.key = key
@@ -6529,6 +6531,7 @@ public struct SessionRow: Codable, Sendable {
         self.model = model
         self.modelprovider = modelprovider
         self.modeloverridesource = modeloverridesource
+        self.modelselectionsource = modelselectionsource
         self.tooloverrides = tooloverrides
     }
 
@@ -6603,6 +6606,7 @@ public struct SessionRow: Codable, Sendable {
         case model
         case modelprovider = "modelProvider"
         case modeloverridesource = "modelOverrideSource"
+        case modelselectionsource = "modelSelectionSource"
         case tooloverrides = "toolOverrides"
     }
 }

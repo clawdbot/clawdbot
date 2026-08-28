@@ -129,6 +129,7 @@ async function applySelectionToSession(params: {
       sessionEntry.modelProvider?.trim() ||
       params.defaultProvider,
     selection,
+    explicitDefaultSelection: selection.isDefault,
   });
   let appliedEntry = nextSessionEntry;
   let selectionApplied = true;

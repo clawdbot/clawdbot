@@ -83,6 +83,7 @@ export function applyModelOverrideWithAuthProfileCompatibility(params: {
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
   selectionSource?: "auto" | "user";
+  explicitDefaultSelection?: boolean;
   markLiveSwitchPending?: boolean;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): { updated: boolean } {
@@ -94,6 +95,9 @@ export function applyModelOverrideWithAuthProfileCompatibility(params: {
       ? { profileOverrideSource: params.profileOverrideSource }
       : {}),
     ...(params.selectionSource ? { selectionSource: params.selectionSource } : {}),
+    ...(params.explicitDefaultSelection
+      ? { explicitDefaultSelection: params.explicitDefaultSelection }
+      : {}),
     ...(params.markLiveSwitchPending !== undefined
       ? { markLiveSwitchPending: params.markLiveSwitchPending }
       : {}),

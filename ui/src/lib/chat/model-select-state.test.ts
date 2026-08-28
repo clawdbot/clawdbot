@@ -800,6 +800,34 @@ describe("chat-model-select-state", () => {
     expect(resolved.modelOverrideSource).toBe(expected);
   });
 
+  it("distinguishes an inherited parent model from explicit default", () => {
+    const inherited = createChatModelState({
+      agentDefaultModel: "openai/gpt-5.6-sol",
+      chatModelCatalog: createModelCatalog(
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+        { id: "claude-sonnet-4-6", name: "Sonnet 4.6", provider: "anthropic" },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "claude-sonnet-4-6",
+        modelProvider: "anthropic",
+        modelOverrideSource: null,
+        modelSelectionSource: "parent",
+      }),
+    });
+    const explicitDefault = {
+      ...inherited,
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        modelOverrideSource: null,
+        modelSelectionSource: "default",
+      }),
+    };
+
+    expect(resolveChatModelSelectState(inherited).modelSelectionSource).toBe("parent");
+    expect(resolveChatModelSelectState(explicitDefault).modelSelectionSource).toBe("default");
+  });
+
   it("reads pin provenance from a canonical main row when the route uses the alias key", () => {
     const state = createChatModelState({
       sessionsResult: createSessionsListResult({
@@ -832,6 +860,7 @@ describe("chat-model-select-state", () => {
 
     expect(resolveChatModelSelectState(pendingPin).currentOverride).toBe("openai/gpt-5-mini");
     expect(resolveChatModelSelectState(pendingPin).modelOverrideSource).toBe("user");
+    expect(resolveChatModelSelectState(pendingPin).modelSelectionSource).toBe("session");
 
     const pendingReset = {
       ...pendingPin,
@@ -845,6 +874,7 @@ describe("chat-model-select-state", () => {
 
     expect(resolveChatModelSelectState(pendingReset).currentOverride).toBe("");
     expect(resolveChatModelSelectState(pendingReset).modelOverrideSource).toBeNull();
+    expect(resolveChatModelSelectState(pendingReset).modelSelectionSource).toBe("default");
   });
 
   it("disambiguates duplicate friendly names in picker options and default labels", () => {

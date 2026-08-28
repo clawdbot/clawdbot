@@ -375,7 +375,8 @@ export async function accountFollowupTurn(params: {
       nextSessionFile: queueKey,
       nextProvider: accounting.providerUsed,
       nextModel: accounting.modelUsed,
-      nextModelOverrideSource: entry?.modelOverrideSource,
+      nextModelOverrideSource:
+        entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,
       nextAuthProfileId: entry?.authProfileOverride,
       nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(entry),
     });

@@ -34,6 +34,9 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
+  if (entry.modelOverrideSource === "default") {
+    preserved.modelOverrideSource = "default";
+  }
   if (resolveSessionModelOverrideSource(entry) === "user" && entry.modelOverride) {
     preserved.providerOverride = entry.providerOverride;
     preserved.modelOverride = entry.modelOverride;

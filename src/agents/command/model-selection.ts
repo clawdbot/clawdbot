@@ -113,8 +113,15 @@ export async function resolveEmbeddedModelSelection(params: {
   let model = defaultModel;
   let requestedRouteResolution: ModelFallbackRouteResolution = "resolved";
   let sessionEntry = params.sessionEntry;
-  const hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
-  let storedModelOverrideSource = hasStoredOverride ? sessionEntry?.modelOverrideSource : undefined;
+  const initialModelOverrideSource = sessionEntry?.modelOverrideSource;
+  const hasStoredOverride = Boolean(
+    initialModelOverrideSource !== "default" &&
+    (sessionEntry?.modelOverride || sessionEntry?.providerOverride),
+  );
+  let storedModelOverrideSource =
+    hasStoredOverride && initialModelOverrideSource !== "default"
+      ? initialModelOverrideSource
+      : undefined;
   let hasStoredAutoFallbackProvenance =
     hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
   let hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -226,11 +233,15 @@ export async function resolveEmbeddedModelSelection(params: {
         initialEntry,
         entry,
       });
+      const adoptedModelOverrideSource = sessionEntry?.modelOverrideSource;
       const adoptedHasStoredOverride = Boolean(
-        sessionEntry?.modelOverride || sessionEntry?.providerOverride,
+        adoptedModelOverrideSource !== "default" &&
+        (sessionEntry?.modelOverride || sessionEntry?.providerOverride),
       );
       storedModelOverrideSource = adoptedHasStoredOverride
-        ? sessionEntry?.modelOverrideSource
+        ? adoptedModelOverrideSource === "default"
+          ? undefined
+          : adoptedModelOverrideSource
         : undefined;
       hasStoredAutoFallbackProvenance =
         adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
@@ -256,12 +267,15 @@ export async function resolveEmbeddedModelSelection(params: {
     storedModelOverrideSource = undefined;
     hasStoredAutoFallbackProvenance = false;
   }
+  const canUseStoredOverrideFields = sessionEntry?.modelOverrideSource !== "default";
   const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? undefined
-    : (effectiveStoredOverride?.provider ?? sessionEntry?.providerOverride?.trim());
+    : (effectiveStoredOverride?.provider ??
+      (canUseStoredOverrideFields ? sessionEntry?.providerOverride?.trim() : undefined));
   const storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? undefined
-    : (effectiveStoredOverride?.model ?? sessionEntry?.modelOverride?.trim());
+    : (effectiveStoredOverride?.model ??
+      (canUseStoredOverrideFields ? sessionEntry?.modelOverride?.trim() : undefined));
   const storedModelOverrideRouteResolution = effectiveStoredOverride?.routeResolution;
   const currentRunModelChannel = [
     params.runContext.messageChannel,
