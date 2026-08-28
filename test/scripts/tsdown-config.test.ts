@@ -113,6 +113,11 @@ describe("tsdown config", () => {
         worker ? isWorkerDeployConfig : (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
       );
       expect(selected).toBeDefined();
+      if (worker) {
+        expect(selected?.copy).toBeUndefined();
+      } else {
+        expect(selected?.copy).toBeDefined();
+      }
       // Deliberately not named dist: the dependency's URL is relative to the
       // emitted loader, including the worker's extra directory component.
       const bundles = await build({
@@ -126,6 +131,11 @@ describe("tsdown config", () => {
         logLevel: "silent",
       });
       try {
+        if (worker) {
+          // The runtime graph owns the package's single native tree; this
+          // isolated worker build only proves that its loader shares it.
+          fs.cpSync(nativeSource, path.join(sourceRoot, "dist/native"), { recursive: true });
+        }
         fs.writeFileSync(path.join(sourceRoot, "package.json"), '{"type":"module"}');
         fs.renameSync(sourceRoot, relocatedRoot);
         const entry = path.join(
@@ -133,10 +143,7 @@ describe("tsdown config", () => {
           worker ? "output/worker/worker.mjs" : "output/plugin-sdk/memory-core-host-engine-fs.js",
         );
         const observer = worker ? entry : path.join(relocatedRoot, "output/observer.js");
-        const nativeOutput = path.join(
-          relocatedRoot,
-          worker ? "output/dist/native" : "dist/native",
-        );
+        const nativeOutput = path.join(relocatedRoot, "dist/native");
         const probe = async (
           name: string,
           mode: string,
