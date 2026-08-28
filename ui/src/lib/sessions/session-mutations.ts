@@ -17,11 +17,11 @@ import {
   type SessionCreateOutcome,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
+import { createSessionArchiveState } from "./session-archive-state.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionCreateReconciliation,
-  SessionArchiveVisibility,
   SessionDeleteBatchResult,
   SessionDeleteOptions,
   SessionDeleteOutcome,
@@ -39,8 +39,6 @@ import {
 
 /** The Gateway's single pin fact: `pinned` is a projection of `pinnedAt`. */
 type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
-
-type ConfirmedArchiveState = Pick<GatewaySessionRow, "archivedAt" | "archivedBy" | "sessionId">;
 
 type SessionMutationsHost = {
   connection: SessionConnectionOwner;
@@ -67,8 +65,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
     string,
     { token: symbol; previous: SessionPinFields; next: SessionPinFields }
   >();
-  const confirmedArchives = new Map<string, ConfirmedArchiveState>();
-  const pendingArchives = new Set<string>();
+  const archiveState = createSessionArchiveState(host.publishedRow, () =>
+    host.publish({ ...host.readState() }),
+  );
   const preparedWorkSessionKeys = new Set<string>();
   const pendingCreatedModelOverrides = new Set<string>();
 
@@ -388,12 +387,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (archivedPresentationRow) {
         const archivedAt = result.entry?.archivedAt ?? Date.now();
         const archivedSessionId = result.entry?.sessionId ?? archivedPresentationRow.sessionId;
-        confirmedArchives.set(normalizedKey, {
+        archiveState.observe(normalizedKey, true, {
+          ...archivedPresentationRow,
           archivedAt,
-          ...(archivedPresentationRow.archivedBy
-            ? { archivedBy: archivedPresentationRow.archivedBy }
-            : {}),
-          ...(archivedSessionId ? { sessionId: archivedSessionId } : {}),
+          sessionId: archivedSessionId,
         });
         const state = host.readState();
         if (state.result) {
@@ -418,8 +415,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
           });
         }
       } else if (patchParams.archived === false) {
-        confirmedArchives.delete(normalizedKey);
-        pendingArchives.delete(normalizedKey);
+        archiveState.clear(normalizedKey);
       }
       confirmPinPatch();
       if (!options.deferListRefresh) {
@@ -470,8 +466,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       const retireBeforeRevision = Date.now();
       host.retirePullRequestSummary(key);
-      confirmedArchives.delete(key.trim());
-      pendingArchives.delete(key.trim());
+      archiveState.clear(key);
       preparedWorkSessionKeys.delete(key.trim());
       host.publish({
         ...host.readState(),
@@ -556,8 +551,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     if (deleted.length > 0) {
       for (const key of deleted) {
         host.retirePullRequestSummary(key);
-        confirmedArchives.delete(key.trim());
-        pendingArchives.delete(key.trim());
+        archiveState.clear(key);
         preparedWorkSessionKeys.delete(key.trim());
       }
       host.publish({
@@ -656,96 +650,12 @@ export function createSessionMutations(host: SessionMutationsHost) {
       });
       return changed ? { ...result, sessions } : result;
     },
-    applyConfirmedArchives(result: SessionsListResult | null): SessionsListResult | null {
-      if (!result || confirmedArchives.size === 0) {
-        return result;
-      }
-      let changed = false;
-      const sessions = result.sessions.map((row) => {
-        const archive = confirmedArchives.get(row.key);
-        if (!archive) {
-          return row;
-        }
-        if (archive.sessionId && archive.sessionId !== row.sessionId) {
-          // An id-less row may be a same-key replacement whose identity has not arrived.
-          // Do not transfer archive state; retire it only after a different identity appears.
-          if (row.sessionId) {
-            confirmedArchives.delete(row.key);
-          }
-          return row;
-        }
-        if (row.archived === true) {
-          return row;
-        }
-        changed = true;
-        return {
-          ...row,
-          archived: true,
-          ...(archive.archivedAt !== undefined ? { archivedAt: archive.archivedAt } : {}),
-          ...(archive.archivedBy ? { archivedBy: archive.archivedBy } : {}),
-        };
-      });
-      return changed ? { ...result, sessions } : result;
-    },
-    observeArchiveState(key: string, archived: boolean | null, row?: GatewaySessionRow): void {
-      const normalizedKey = key.trim();
-      if (!normalizedKey || archived === null) {
-        return;
-      }
-      if (!archived) {
-        confirmedArchives.delete(normalizedKey);
-        pendingArchives.delete(normalizedKey);
-        return;
-      }
-      const previous = confirmedArchives.get(normalizedKey);
-      confirmedArchives.set(normalizedKey, {
-        ...(row?.archivedAt !== undefined
-          ? { archivedAt: row.archivedAt }
-          : previous?.archivedAt !== undefined
-            ? { archivedAt: previous.archivedAt }
-            : {}),
-        ...(row?.archivedBy
-          ? { archivedBy: row.archivedBy }
-          : previous?.archivedBy
-            ? { archivedBy: previous.archivedBy }
-            : {}),
-        ...(row?.sessionId
-          ? { sessionId: row.sessionId }
-          : previous?.sessionId
-            ? { sessionId: previous.sessionId }
-            : {}),
-      });
-    },
+    applyConfirmedArchives: archiveState.apply,
+    observeArchiveState: archiveState.observe,
     reset,
     retireModelOverride,
-    archiveVisibility(key: string): SessionArchiveVisibility | undefined {
-      const normalizedKey = key.trim();
-      if (pendingArchives.has(normalizedKey)) {
-        return "pending";
-      }
-      const archive = confirmedArchives.get(normalizedKey);
-      if (!archive) {
-        return undefined;
-      }
-      const row = host.publishedRow(normalizedKey);
-      // Share the archive confirmation with event-driven actions, but never
-      // hide a same-key replacement whose durable identity does not match.
-      return archive.sessionId && row && archive.sessionId !== row.sessionId
-        ? undefined
-        : "archived";
-    },
-    setArchivePending(key: string, pending: boolean) {
-      const normalizedKey = key.trim();
-      if (!normalizedKey || pendingArchives.has(normalizedKey) === pending) {
-        return;
-      }
-      if (pending) {
-        pendingArchives.add(normalizedKey);
-      } else {
-        pendingArchives.delete(normalizedKey);
-      }
-      host.publish({ ...host.readState() });
-    },
+    archiveVisibility: archiveState.visibility,
+    setArchivePending: archiveState.setPending,
     isPreparedWorkSession: (key: string) => preparedWorkSessionKeys.has(key.trim()),
     settlePrepared(result: SessionsListResult | null) {
       for (const row of result?.sessions ?? []) {
@@ -764,8 +674,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // rehydrates wholesale; only the model-override side map outlives that
       // replacement, so it is the one that needs an explicit rollback below.
       pendingPinPatches.clear();
-      confirmedArchives.clear();
-      pendingArchives.clear();
+      archiveState.clearAll();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
       host.publish({ ...state, modelOverrides: {} });
@@ -774,8 +683,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       pendingCreatedModelOverrides.clear();
       pendingModelPatches.clear();
       pendingPinPatches.clear();
-      confirmedArchives.clear();
-      pendingArchives.clear();
+      archiveState.clearAll();
       preparedWorkSessionKeys.clear();
     },
   };
