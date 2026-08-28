@@ -41,6 +41,7 @@ const CHILD_ENV_SECRET_KEY =
   /(?:^|_)(?:ACCESS_KEY|API_KEY|AUTH|COOKIE|CREDENTIAL|PASS|PASSWORD|PRIVATE_KEY|SECRET|SESSION|TOKEN)(?:_|$)/u;
 let activeCredential;
 let activeCredentialPromise;
+let cleanupPromise;
 let shutdownPromise;
 let shuttingDown = false;
 
@@ -106,13 +107,22 @@ async function stopOwnedChildren() {
 }
 
 export async function cleanupOwnedRuntime(credential = activeCredential) {
-  const pendingCredential = activeCredentialPromise;
-  if (!credential && pendingCredential) {
-    credential = await pendingCredential.catch(() => undefined);
-    if (activeCredentialPromise === pendingCredential) activeCredentialPromise = undefined;
+  if (cleanupPromise) return cleanupPromise;
+  const cleanup = (async () => {
+    const pendingCredential = activeCredentialPromise;
+    if (!credential && pendingCredential) {
+      credential = await pendingCredential.catch(() => undefined);
+      if (activeCredentialPromise === pendingCredential) activeCredentialPromise = undefined;
+    }
+    await stopOwnedChildren();
+    await credential?.release();
+  })();
+  cleanupPromise = cleanup;
+  try {
+    await cleanup;
+  } finally {
+    if (cleanupPromise === cleanup) cleanupPromise = undefined;
   }
-  await stopOwnedChildren();
-  await credential?.release();
 }
 
 export function removeRunnerScratch(root) {
@@ -875,7 +885,7 @@ async function sampleGatewayHealth(port, health, startedAt, isStopped) {
 function shutdownOnSignal(signal) {
   if (shutdownPromise) return;
   shuttingDown = true;
-  const exitCode = signal === "SIGINT" ? 130 : 143;
+  const exitCode = signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143;
   shutdownPromise = (async () => {
     await cleanupOwnedRuntime();
   })()
@@ -1426,6 +1436,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.once("SIGHUP", () => shutdownOnSignal("SIGHUP"));
   process.once("SIGINT", () => shutdownOnSignal("SIGINT"));
   process.once("SIGTERM", () => shutdownOnSignal("SIGTERM"));
   main().catch(async (error) => {

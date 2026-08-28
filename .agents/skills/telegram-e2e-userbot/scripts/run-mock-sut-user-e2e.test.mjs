@@ -108,17 +108,27 @@ test("signal cleanup waits for credential acquisition before releasing scratch",
       resolveCredential = resolve;
     }),
   );
-  const cleanup = cleanupOwnedRuntime();
-  let released = false;
-  resolveCredential({
+  const signalCleanup = cleanupOwnedRuntime();
+  let releaseCount = 0;
+  let finishRelease;
+  const releaseGate = new Promise((resolve) => {
+    finishRelease = resolve;
+  });
+  const credential = {
     async release() {
-      released = true;
+      releaseCount += 1;
+      await releaseGate;
       fs.rmSync(scratch, { recursive: true, force: true });
     },
-  });
+  };
+  resolveCredential(credential);
   await credentialPromise;
-  await cleanup;
-  assert.equal(released, true);
+  const mainCleanup = cleanupOwnedRuntime(credential);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(releaseCount, 1);
+  finishRelease();
+  await Promise.all([signalCleanup, mainCleanup]);
+  assert.equal(releaseCount, 1);
   assert.equal(fs.existsSync(scratch), false);
 });
 
