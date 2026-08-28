@@ -52,6 +52,7 @@ function resolveMemoryPluginIds(
 
 function resolveSandboxBackendPluginIds(
   context: ReturnType<typeof resolvePluginRuntimeLoadContext>,
+  persistedBackendIds: readonly string[] = [],
 ): string[] {
   if (!context.metadataSnapshot) {
     return [];
@@ -61,6 +62,7 @@ function resolveSandboxBackendPluginIds(
     agents?.defaults?.sandbox?.backend,
     ...Object.values(agents?.entries ?? {}).map((agent) => agent.sandbox?.backend),
     ...(agents?.list ?? []).map((agent) => agent.sandbox?.backend),
+    ...persistedBackendIds,
   ];
   const lookup = createInstalledPluginIndexScopeLookup(context.metadataSnapshot.index);
   const pluginIds = new Set<string>();
@@ -82,6 +84,7 @@ function resolveSandboxBackendPluginIds(
 function resolveScopePluginIds(params: {
   scope: PluginRegistryScope;
   context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+  persistedSandboxBackendIds?: readonly string[];
 }): string[] {
   if (params.scope === "configured-channels") {
     return resolveConfiguredChannelPluginIds({
@@ -104,7 +107,7 @@ function resolveScopePluginIds(params: {
     return resolveMemoryPluginIds(params.context);
   }
   if (params.scope === "sandbox-backends") {
-    return resolveSandboxBackendPluginIds(params.context);
+    return resolveSandboxBackendPluginIds(params.context, params.persistedSandboxBackendIds);
   }
   return resolveEffectivePluginIds({
     config: params.context.rawConfig,
@@ -119,10 +122,15 @@ export function ensurePluginRegistryLoaded(options?: {
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
+  persistedSandboxBackendIds?: readonly string[];
 }): void {
   const scope = options?.scope ?? "all";
   const context = resolvePluginRuntimeLoadContext(options);
-  const pluginIds = resolveScopePluginIds({ scope, context });
+  const pluginIds = resolveScopePluginIds({
+    scope,
+    context,
+    persistedSandboxBackendIds: options?.persistedSandboxBackendIds,
+  });
   const activateConfigured = scope === "configured-channels" && pluginIds.length > 0;
   const config = activateConfigured
     ? (withActivatedPluginIds({ config: context.config, pluginIds }) ?? context.config)

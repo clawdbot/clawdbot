@@ -15,7 +15,8 @@ export type CliPluginRegistryScope =
   | "channels"
   | "configured-channels"
   | "memory"
-  | "sandbox-backends";
+  | "sandbox-backends"
+  | "sandbox-management";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
 };
@@ -142,6 +143,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
         ),
       pluginRegistry: { scope: "sandbox-backends" },
     },
+  },
+  {
+    commandPath: ["sandbox", "list"],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
+  },
+  {
+    commandPath: ["sandbox", "recreate"],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
   },
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
   {
