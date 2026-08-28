@@ -888,9 +888,13 @@ export async function finalizeSetupWizard(
           ].join("\n"),
           t("wizard.finalize.webSearchTitle"),
         );
-      } else if (webSearchEnabled !== false && entry.requiresCredential === false) {
-        // Keyless providers (e.g. Parallel Search (Free), DuckDuckGo, Ollama) need
-        // no API key — report ready rather than the credential-required warning.
+      } else if (
+        webSearchEnabled !== false &&
+        (entry.requiresCredential === false || (entry.allowsKeyless === true && !hasCredential))
+      ) {
+        // Keyless providers (e.g. Parallel Search (Free), DuckDuckGo, Ollama, Tavily) need
+        // no API key — report ready
+        // rather than the credential-required warning.
         await prompter.note(
           [
             t("wizard.finalize.webSearchKeyFree"),
@@ -911,7 +915,11 @@ export async function finalizeSetupWizard(
           ].join("\n"),
           t("wizard.finalize.webSearchTitle"),
         );
-      } else if (entry.requiresCredential !== false && !hasCredential) {
+      } else if (
+        entry.requiresCredential !== false &&
+        !hasCredential &&
+        entry.allowsKeyless !== true
+      ) {
         await prompter.note(
           [
             t("wizard.finalize.webSearchNoKey", { provider: label }),

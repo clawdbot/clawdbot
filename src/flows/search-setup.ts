@@ -187,6 +187,23 @@ function providerNeedsCredential(
   return entry.requiresCredential !== false;
 }
 
+function providerAllowsKeyless(
+  entry: Pick<PluginWebSearchProviderEntry, "allowsKeyless">,
+): boolean {
+  return entry.allowsKeyless === true;
+}
+
+function formatKeylessSearchSetupNote(
+  entry: Pick<PluginWebSearchProviderEntry, "label" | "signupUrl" | "docsUrl">,
+  credentialLabel: string,
+): string {
+  return [
+    `No ${credentialLabel} stored — ${entry.label} will use rate-limited keyless access.`,
+    `Add a key later for higher limits: ${entry.signupUrl}`,
+    `Docs: ${entry.docsUrl ?? WEB_SEARCH_DOCS_URL}`,
+  ].join("\n");
+}
+
 function formatAuthProviderLabel(providerId: string): string {
   return providerId === "xai" ? "xAI" : providerId;
 }
@@ -564,11 +581,13 @@ export async function runSearchSetupFlow(
         ? t("wizard.search.keyFree")
         : providerIsReady(config, entry)
           ? t("wizard.search.configured")
-          : entry.credentialLabel
-            ? // Some providers need a non-key credential (e.g. SearXNG's base
-              // URL); a generic "API key required" suffix contradicts the hint.
-              t("wizard.search.credentialRequired", { label: entry.credentialLabel })
-            : t("wizard.search.apiKeyRequired");
+          : providerAllowsKeyless(entry)
+            ? undefined
+            : entry.credentialLabel
+              ? // Some providers need a non-key credential (e.g. SearXNG's base
+                // URL); a generic "API key required" suffix contradicts the hint.
+                t("wizard.search.credentialRequired", { label: entry.credentialLabel })
+              : t("wizard.search.apiKeyRequired");
     const hint = [normalizeOptionalString(entry.hint), credentialHint].filter(Boolean).join(" · ");
     return { value: entry.id, label: formatSearchProviderOptionLabel(entry.label, hint) };
   });
@@ -648,7 +667,10 @@ export async function runSearchSetupFlow(
       : false;
   const needsCredential = providerNeedsCredential(entry);
 
-  if (opts?.quickstartDefaults && (providerAuthProfileAvailable || keyConfigured || envAvailable)) {
+  if (
+    opts?.quickstartDefaults &&
+    (providerAuthProfileAvailable || keyConfigured || envAvailable || providerAllowsKeyless(entry))
+  ) {
     const result = existingKey
       ? applySearchKey(config, choice, existingKey)
       : applySearchProviderSelection(config, choice);
@@ -702,6 +724,10 @@ export async function runSearchSetupFlow(
     if (keyConfigured) {
       return await finalizeSelection(applySearchProviderSelection(config, choice));
     }
+    if (providerAllowsKeyless(entry) && !envAvailable) {
+      await prompter.note(formatKeylessSearchSetupNote(entry, credentialLabel), "Web search");
+      return await finalizeSelection(applySearchProviderSelection(config, choice));
+    }
     const ref = buildSearchEnvRef(config, choice);
     await prompter.note(
       [
@@ -720,8 +746,14 @@ export async function runSearchSetupFlow(
       ? `${credentialLabel} (leave blank to keep current)`
       : envAvailable
         ? `${credentialLabel} (leave blank to use env var)`
-        : credentialLabel,
-    placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+        : providerAllowsKeyless(entry)
+          ? `${credentialLabel} (leave blank for keyless)`
+          : credentialLabel,
+    placeholder: keyConfigured
+      ? "Leave blank to keep current"
+      : providerAllowsKeyless(entry) && !envAvailable
+        ? "Leave blank for keyless"
+        : entry.placeholder,
     sensitive: true,
   });
 
@@ -736,6 +768,11 @@ export async function runSearchSetupFlow(
   }
 
   if (keyConfigured || envAvailable) {
+    return await finalizeSelection(applySearchProviderSelection(config, choice));
+  }
+
+  if (providerAllowsKeyless(entry)) {
+    await prompter.note(formatKeylessSearchSetupNote(entry, credentialLabel), "Web search");
     return await finalizeSelection(applySearchProviderSelection(config, choice));
   }
 

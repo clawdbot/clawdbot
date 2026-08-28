@@ -106,6 +106,7 @@ function buildProviderEntry(params: {
       ? { onboardingScopes: normalizeOnboardingScopes(params.provider.onboardingScopes) }
       : {}),
     ...(params.provider.requiresCredential === false ? { requiresCredential: false } : {}),
+    ...(params.provider.allowsKeyless === true ? { allowsKeyless: true } : {}),
     ...(normalizeString(params.provider.credentialLabel)
       ? { credentialLabel: normalizeString(params.provider.credentialLabel) }
       : {}),

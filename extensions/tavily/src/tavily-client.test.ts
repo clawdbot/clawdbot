@@ -4,22 +4,26 @@ import { createStreamingResponse } from "../../test-support/streaming-error-resp
 
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
 const postTrustedWebToolsJson = vi.fn();
+const withTrustedWebSearchEndpoint = vi.fn();
 const writeCache = vi.fn();
+const resolveTavilyRequestAuth = vi.fn(() => ({ mode: "keyed" as const, apiKey: "test-key" }));
+const resolveTavilyBaseUrl = vi.fn(() => "https://api.tavily.com");
 
-vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>()),
+vi.mock("openclaw/plugin-sdk/provider-web-search", () => ({
   DEFAULT_CACHE_TTL_MINUTES: 5,
   normalizeCacheKey: (k: string) => k,
   postTrustedWebToolsJson,
+  withTrustedWebSearchEndpoint,
   readCache: () => undefined,
+  readResponseText: async () => ({ text: "" }),
   resolveCacheTtlMs: () => 300_000,
   writeCache,
 }));
 
 vi.mock("./config.js", () => ({
   DEFAULT_TAVILY_BASE_URL: "https://api.tavily.com",
-  resolveTavilyApiKey: () => "test-key",
-  resolveTavilyBaseUrl: () => "https://api.tavily.com",
+  resolveTavilyRequestAuth,
+  resolveTavilyBaseUrl,
   resolveTavilySearchTimeoutSeconds: () => 30,
   resolveTavilyExtractTimeoutSeconds: () => 60,
 }));
@@ -34,10 +38,19 @@ describe("tavily client X-Client-Source header", () => {
 
   beforeEach(() => {
     postTrustedWebToolsJson.mockReset();
+    withTrustedWebSearchEndpoint.mockReset();
     writeCache.mockReset();
+    resolveTavilyRequestAuth.mockReset();
+    resolveTavilyRequestAuth.mockReturnValue({ mode: "keyed", apiKey: "test-key" });
+    resolveTavilyBaseUrl.mockReset();
+    resolveTavilyBaseUrl.mockReturnValue("https://api.tavily.com");
     postTrustedWebToolsJson.mockImplementation(
       async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
         parse(Response.json({ results: [] })),
+    );
+    withTrustedWebSearchEndpoint.mockImplementation(
+      async (_params: unknown, run: (r: Response) => Promise<unknown>) =>
+        run(Response.json({ results: [] })),
     );
   });
 
@@ -46,7 +59,9 @@ describe("tavily client X-Client-Source header", () => {
 
     expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
     const params = postTrustedWebToolsJson.mock.calls[0]?.[0];
+    expect(params.apiKey).toBe("test-key");
     expect(params.extraHeaders).toEqual({ "X-Client-Source": "openclaw" });
+    expect(withTrustedWebSearchEndpoint).not.toHaveBeenCalled();
   });
 
   it("runTavilySearch reports malformed JSON with a stable provider error", async () => {
@@ -189,7 +204,9 @@ describe("tavily client X-Client-Source header", () => {
 
     expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
     const params = postTrustedWebToolsJson.mock.calls[0]?.[0];
+    expect(params.apiKey).toBe("test-key");
     expect(params.extraHeaders).toEqual({ "X-Client-Source": "openclaw" });
+    expect(withTrustedWebSearchEndpoint).not.toHaveBeenCalled();
   });
 
   it("runTavilyExtract reports malformed JSON with a stable provider error", async () => {
@@ -317,6 +334,60 @@ describe("tavily client X-Client-Source header", () => {
 
       await expect(operation).rejects.toBe(reason);
       expect(writeCache).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["search", "extract"] as const)(
+    "sends keyless access without Authorization for %s",
+    async (kind) => {
+      resolveTavilyRequestAuth.mockReturnValue({ mode: "keyless" });
+
+      if (kind === "search") {
+        await runTavilySearch({ query: "keyless query" });
+      } else {
+        await runTavilyExtract({ urls: ["https://example.com"] });
+      }
+
+      expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+      expect(withTrustedWebSearchEndpoint).toHaveBeenCalledOnce();
+      const params = withTrustedWebSearchEndpoint.mock.calls[0]?.[0] as {
+        url: string;
+        init: { headers?: Record<string, string> };
+      };
+      expect(params.url).toBe(
+        kind === "search" ? "https://api.tavily.com/search" : "https://api.tavily.com/extract",
+      );
+      expect(params.init.headers).toMatchObject({
+        "X-Client-Source": "openclaw",
+        "X-Tavily-Access-Mode": "keyless",
+      });
+      expect(params.init.headers?.Authorization).toBeUndefined();
+    },
+  );
+
+  it.each(["search", "extract"] as const)(
+    "forwards exact keyless %s cancellation to the guarded provider transport",
+    async (kind) => {
+      resolveTavilyRequestAuth.mockReturnValue({ mode: "keyless" });
+      const controller = new AbortController();
+      const reason = new Error(`${kind} keyless cancelled`);
+      withTrustedWebSearchEndpoint.mockImplementationOnce(
+        async (params: { signal?: AbortSignal }) =>
+          await new Promise((_resolve, reject) => {
+            params.signal?.addEventListener("abort", () => reject(reason), {
+              once: true,
+            });
+            queueMicrotask(() => controller.abort(reason));
+          }),
+      );
+
+      const operation =
+        kind === "search"
+          ? runTavilySearch({ query: "cancel", signal: controller.signal })
+          : runTavilyExtract({ urls: ["https://example.com/cancel"], signal: controller.signal });
+
+      await expect(operation).rejects.toBe(reason);
+      expect(withTrustedWebSearchEndpoint.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
     },
   );
 });

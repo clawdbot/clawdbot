@@ -94,6 +94,7 @@ export type WebSearchProviderPlugin = {
   hint: string;
   onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
+  allowsKeyless?: boolean;
   credentialLabel?: string;
   envVars: string[];
   /** Optional model-provider auth profile id that can satisfy this web provider without a tool-specific API key. */

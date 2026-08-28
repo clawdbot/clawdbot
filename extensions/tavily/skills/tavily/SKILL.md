@@ -18,7 +18,8 @@ metadata:
 ## web_search
 
 Tavily powers this automatically when selected as the search provider. Use for
-straightforward queries where you don't need Tavily-specific options.
+straightforward queries where you don't need Tavily-specific options. No API key
+is required on `https://api.tavily.com`; a key raises rate limits.
 
 | Parameter | Description              |
 | --------- | ------------------------ |
