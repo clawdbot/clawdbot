@@ -1367,6 +1367,75 @@ describe("openclaw agent database", () => {
     ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
   });
 
+  it("upgrades v17 recipient authority without parsing Doctor-owned malformed rows", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const validKey = "agent:worker-1:valid-authority";
+    const malformedKey = "agent:worker-1:malformed-authority";
+    const epoch = "11111111-1111-4111-8111-111111111111";
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      DROP TABLE session_recipient_authority;
+      PRAGMA user_version = 17;
+      UPDATE schema_meta SET schema_version = 17 WHERE meta_key = 'primary';
+    `);
+    legacy
+      .prepare(
+        `INSERT INTO session_nodes (
+           session_key, current_session_id, entry_json, entry_valid, updated_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        validKey,
+        "valid-session",
+        JSON.stringify({
+          sessionId: "valid-session",
+          updatedAt: 10,
+          recipientAuthorityEpoch: epoch,
+        }),
+        1,
+        10,
+      );
+    legacy
+      .prepare(
+        `INSERT INTO session_nodes (
+           session_key, current_session_id, entry_json, entry_valid, updated_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(malformedKey, "malformed-session", "{malformed", -1, 20);
+    legacy
+      .prepare("UPDATE session_nodes SET entry_valid = ? WHERE session_key = ?")
+      .run(1, validKey);
+    legacy
+      .prepare("UPDATE session_nodes SET entry_valid = ? WHERE session_key = ?")
+      .run(-1, malformedKey);
+    legacy.close();
+
+    const migrated = migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
+
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT session_key, entry_json, entry_valid FROM session_nodes WHERE session_key IN (?, ?) ORDER BY session_key",
+        )
+        .all(malformedKey, validKey),
+    ).toEqual([
+      { session_key: malformedKey, entry_json: "{malformed", entry_valid: -1 },
+      {
+        session_key: validKey,
+        entry_json: JSON.stringify({ sessionId: "valid-session", updatedAt: 10 }),
+        entry_valid: 1,
+      },
+    ]);
+    expect(
+      migrated.db
+        .prepare("SELECT session_key, epoch FROM session_recipient_authority WHERE session_key = ?")
+        .get(validKey),
+    ).toEqual({ session_key: validKey, epoch });
+  });
+
   it("migrates v13 session entries, routes, and generations into nodes and windows", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

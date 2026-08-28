@@ -15,6 +15,10 @@ import {
   deleteSessionMembersForRepair,
 } from "../config/sessions/session-accessor.sqlite-node-artifacts.js";
 import { replaceSessionOwnerInTransaction } from "../config/sessions/session-accessor.sqlite-owner.js";
+import {
+  deleteSessionRecipientAuthoritiesForCanonicalRepair,
+  reconcileSessionRecipientAuthorityForCanonicalRepair,
+} from "../config/sessions/session-accessor.sqlite-recipient-authority.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
@@ -266,6 +270,23 @@ function listCanonicalDestinationAliasKeys(
     .filter((sessionKey) => sessionKey !== winner.canonicalKey);
 }
 
+function canonicalRepairChangesEffectiveOwner(
+  candidates: readonly CanonicalSessionCandidate[],
+  selected: NonNullable<ReturnType<typeof selectCanonicalSessionCandidate>>,
+): boolean {
+  const canonical = candidates.find(
+    (candidate) =>
+      candidate.sqlitePath === selected.destination.sqlitePath &&
+      candidate.sessionKey === selected.winner.canonicalKey,
+  );
+  if (!canonical) {
+    return false;
+  }
+  const previous = canonical.entry.owner?.actor ?? canonical.entry.createdActor;
+  const next = selected.entry.owner?.actor ?? selected.entry.createdActor;
+  return previous?.type !== next?.type || previous?.id !== next?.id;
+}
+
 function applyCanonicalDestinationArtifacts(params: {
   copyWinnerAlias: boolean;
   database: OpenClawAgentDatabase;
@@ -332,6 +353,18 @@ async function repairCanonicalSessionGroupsInSingleDatabase(
         })),
       );
       for (const group of groups) {
+        reconcileSessionRecipientAuthorityForCanonicalRepair({
+          canonicalKey: group.selected.winner.canonicalKey,
+          destination: database,
+          ownerChanged: canonicalRepairChangesEffectiveOwner(group.candidates, group.selected),
+          sources: [
+            {
+              database,
+              sessionKeys: group.candidates.map((candidate) => candidate.sessionKey),
+              winnerSessionKey: group.selected.winner.sessionKey,
+            },
+          ],
+        });
         applyCanonicalDestinationArtifacts({
           copyWinnerAlias: true,
           database,
@@ -436,6 +469,25 @@ async function repairCanonicalSessionGroup(
     agentId: destination.agentId,
     allowCanonicalRepair: true,
     afterUpsertsInTransaction: (destinationDatabase) => {
+      reconcileSessionRecipientAuthorityForCanonicalRepair({
+        canonicalKey: winner.canonicalKey,
+        destination: destinationDatabase,
+        ownerChanged: canonicalRepairChangesEffectiveOwner(candidates, selected),
+        sources: [...byDatabase.entries()].map(([sqlitePath, storeCandidates]) => {
+          const sourceAgentId = storeCandidates[0]?.agentId;
+          if (!sourceAgentId) {
+            throw new Error(`Canonical repair source is empty for ${sqlitePath}`);
+          }
+          return {
+            database:
+              sqlitePath === destination.sqlitePath
+                ? destinationDatabase
+                : openOpenClawAgentDatabase({ agentId: sourceAgentId, path: sqlitePath }),
+            sessionKeys: storeCandidates.map((candidate) => candidate.sessionKey),
+            winnerSessionKey: sqlitePath === winner.sqlitePath ? winner.sessionKey : undefined,
+          };
+        }),
+      });
       applyCanonicalDestinationArtifacts({
         copyWinnerAlias: winner.sqlitePath === destination.sqlitePath,
         database: destinationDatabase,
@@ -476,6 +528,12 @@ async function repairCanonicalSessionGroup(
     const result = await applySessionEntryLifecycleMutation({
       agentId: storeCandidate.agentId,
       allowCanonicalRepair: true,
+      afterUpsertsInTransaction: (database) => {
+        deleteSessionRecipientAuthoritiesForCanonicalRepair(
+          database,
+          storeCandidates.map((candidate) => candidate.sessionKey),
+        );
+      },
       removals: storeCandidates.map((candidate) =>
         createCanonicalRepairRemoval(candidate, {
           archiveRemovedTranscript: true,

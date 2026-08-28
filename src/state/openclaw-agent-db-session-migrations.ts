@@ -318,12 +318,20 @@ export function migrateSessionRecipientAuthority(db: DatabaseSync, previousVersi
        ?,
        ?
      FROM session_nodes
-     WHERE json_type(entry_json, '$.recipientAuthorityEpoch') IS NOT NULL`,
+     WHERE CASE
+       WHEN json_valid(entry_json)
+       THEN COALESCE(json_type(entry_json, '$.recipientAuthorityEpoch') <> 'null', 0)
+       ELSE 0
+     END`,
   ).run(Date.now(), Date.now());
   db.exec(
     `UPDATE session_nodes
      SET entry_json = json_remove(entry_json, '$.recipientAuthorityEpoch')
-     WHERE json_type(entry_json, '$.recipientAuthorityEpoch') IS NOT NULL`,
+     WHERE CASE
+       WHEN json_valid(entry_json)
+       THEN json_type(entry_json, '$.recipientAuthorityEpoch') IS NOT NULL
+       ELSE 0
+     END`,
   );
 }
 

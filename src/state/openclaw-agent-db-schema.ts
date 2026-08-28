@@ -669,6 +669,9 @@ function ensureAgentSchema(
       ensureSessionEntryValidityProjection(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
       migrateSessionRecipientAuthority(db, previousVersion);
+      // Removing the legacy field fires the canonical entry-update trigger.
+      // Settle those valid rows again while malformed Doctor-owned rows stay rejected.
+      ensureSessionEntryValidityProjection(db);
       migrateMemoryChunkMetadataSchema(db);
       ensureOpenClawAgentBoardSchemaInTransaction(db);
       migrateSessionTranscriptGenerations(db, previousVersion);

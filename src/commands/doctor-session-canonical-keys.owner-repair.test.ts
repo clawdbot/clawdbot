@@ -2,10 +2,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  assignSessionOwner,
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceSessionOwnerInTransaction } from "../config/sessions/session-accessor.sqlite-owner.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../state/openclaw-agent-db-additive-columns.js";
@@ -44,6 +44,115 @@ function insertEmptyAlias(params: {
 }
 
 describe("doctor transcript owner repair", () => {
+  it.each([
+    { label: "same database", sourceAgentId: "main" },
+    { label: "cross database", sourceAgentId: "ops" },
+  ])(
+    "rotates competing recipient authority during $label owner replacement",
+    async ({ sourceAgentId }) => {
+      await withStateDirEnv("openclaw-doctor-recipient-authority-", async ({ stateDir }) => {
+        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+        const destinationStore = resolveSessionStorePathCore(storeTemplate, {
+          agentId: "main",
+          env,
+        });
+        const sourceStore = resolveSessionStorePathCore(storeTemplate, {
+          agentId: sourceAgentId,
+          env,
+        });
+        const canonicalKey = "agent:main:work";
+        const aliasKey = "agent:main:main";
+        const canonicalEpoch = "11111111-1111-4111-8111-111111111111";
+        const aliasEpoch = "22222222-2222-4222-8222-222222222222";
+        const cfg = {
+          agents: {
+            list: [
+              { id: "main", default: true },
+              ...(sourceAgentId === "ops" ? [{ id: "ops" }] : []),
+            ],
+          },
+          session: { mainKey: "work", store: storeTemplate },
+        } as OpenClawConfig;
+        insertLegacySession({
+          agentId: "main",
+          entry: {
+            createdActor: { type: "human", id: "owner-before" },
+            sessionId: "canonical-session",
+            updatedAt: 10,
+          },
+          env,
+          sessionKey: canonicalKey,
+          storePath: destinationStore,
+        });
+        insertLegacySession({
+          agentId: sourceAgentId,
+          entry: {
+            createdActor: { type: "human", id: "owner-after" },
+            sessionId: "alias-session",
+            updatedAt: 20,
+          },
+          env,
+          sessionKey: aliasKey,
+          storePath: sourceStore,
+        });
+        const destinationDatabase = openOpenClawAgentDatabase({
+          agentId: "main",
+          env,
+          path: resolveSqliteTargetFromSessionStorePath(destinationStore, {
+            agentId: "main",
+            env,
+          }).path,
+        });
+        const sourceDatabase = openOpenClawAgentDatabase({
+          agentId: sourceAgentId,
+          env,
+          path: resolveSqliteTargetFromSessionStorePath(sourceStore, {
+            agentId: sourceAgentId,
+            env,
+          }).path,
+        });
+        destinationDatabase.db
+          .prepare(
+            "INSERT INTO session_recipient_authority (session_key, epoch, created_at, updated_at) VALUES (?, ?, 1, 1)",
+          )
+          .run(canonicalKey, canonicalEpoch);
+        sourceDatabase.db
+          .prepare(
+            "INSERT INTO session_recipient_authority (session_key, epoch, created_at, updated_at) VALUES (?, ?, 1, 1)",
+          )
+          .run(aliasKey, aliasEpoch);
+
+        expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+          foundGroups: 1,
+          repairedGroups: 1,
+        });
+        expect(
+          loadExactSessionEntryReadOnly({
+            agentId: "main",
+            env,
+            sessionKey: canonicalKey,
+            storePath: destinationStore,
+          })?.entry,
+        ).toMatchObject({
+          createdActor: { type: "human", id: "owner-after" },
+          sessionId: "alias-session",
+        });
+        const repairedAuthority = destinationDatabase.db
+          .prepare("SELECT epoch FROM session_recipient_authority WHERE session_key = ?")
+          .get(canonicalKey) as { epoch: string };
+        expect(repairedAuthority.epoch).not.toBe(canonicalEpoch);
+        expect(repairedAuthority.epoch).not.toBe(aliasEpoch);
+        expect(repairedAuthority.epoch).toMatch(/^[0-9a-f-]{36}$/u);
+        expect(
+          sourceDatabase.db
+            .prepare("SELECT session_key FROM session_recipient_authority WHERE session_key = ?")
+            .get(aliasKey),
+        ).toBeUndefined();
+      });
+    },
+  );
+
   it.each([
     { sourceAgentId: "main", requiredAlias: true, requiredCanonical: false },
     { sourceAgentId: "ops", requiredAlias: true, requiredCanonical: false },
@@ -157,10 +266,18 @@ describe("doctor transcript owner repair", () => {
           sessionKey: canonicalKey,
           storePath: destinationStore,
         });
-        assignSessionOwner(
-          { agentId: "main", env, sessionKey: canonicalKey, storePath: destinationStore },
+        replaceSessionOwnerInTransaction(
+          openOpenClawAgentDatabase({
+            agentId: "main",
+            env,
+            path: resolveSqliteTargetFromSessionStorePath(destinationStore, {
+              agentId: "main",
+              env,
+            }).path,
+          }),
+          canonicalKey,
           {
-            owner: { type: "human", id: "profile-stale" },
+            actor: { type: "human", id: "profile-stale" },
             assignedBy: { type: "human", id: "profile-stale-assigner" },
             assignedAt: 10,
           },
@@ -175,15 +292,26 @@ describe("doctor transcript owner repair", () => {
         storePath: sourceStore,
       });
       const owner = winnerOwned
-        ? assignSessionOwner(
-            { agentId: sourceAgentId, env, sessionKey: winnerKey, storePath: sourceStore },
-            {
-              owner: { type: "human", id: "profile-winner" },
-              assignedBy: { type: "agent", id: "research" },
-              assignedAt: 1234,
-            },
-          )
+        ? {
+            actor: { type: "human" as const, id: "profile-winner" },
+            assignedBy: { type: "agent" as const, id: "research" },
+            assignedAt: 1234,
+          }
         : undefined;
+      if (owner) {
+        replaceSessionOwnerInTransaction(
+          openOpenClawAgentDatabase({
+            agentId: sourceAgentId,
+            env,
+            path: resolveSqliteTargetFromSessionStorePath(sourceStore, {
+              agentId: sourceAgentId,
+              env,
+            }).path,
+          }),
+          winnerKey,
+          owner,
+        );
+      }
 
       if ("malformed" in fixture) {
         openOpenClawAgentDatabase({
