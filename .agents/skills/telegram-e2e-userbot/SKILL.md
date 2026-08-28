@@ -28,7 +28,7 @@ TELEGRAM_E2E_SKILL_DIR="${TELEGRAM_E2E_SKILL_DIR:-$PWD/.agents/skills/telegram-e
 export TELEGRAM_E2E_SKILL_DIR
 ```
 
-The runner starts `pnpm openclaw` from this checkout. Before acquiring a
+The runner starts the built `dist/entry.js` from this checkout. Before acquiring a
 credential, verify that the exact ref has a dependency-ready runtime and usable
 build output without an implicit install or build. A bare worktree with missing
 dependencies or a missing or stale build stamp is not ready. Move to a trusted

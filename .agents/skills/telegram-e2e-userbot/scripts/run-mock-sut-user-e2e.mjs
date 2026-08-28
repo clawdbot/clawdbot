@@ -12,8 +12,8 @@ import {
   resolveChatTarget,
   selectChatTarget,
 } from "./scenario.mjs";
-import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
+import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
 const SKILL_DIR =
   process.env.TELEGRAM_E2E_SKILL_DIR || resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -853,17 +853,13 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       gatewayEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     }
     const startGateway = async () => {
-      const command = args.sourceGateway ? "node" : "pnpm";
+      const command = "node";
       const gatewayArgs = args.sourceGateway
         ? ["--import", "tsx", "src/entry.ts", "gateway", "--port", String(args.gatewayPort)]
-        : ["openclaw", "gateway", "--port", String(args.gatewayPort)];
+        : ["dist/entry.js", "gateway", "--port", String(args.gatewayPort)];
       const child = spawnProcess(command, gatewayArgs, { cwd: repoRoot, env: gatewayEnv });
       try {
-        await waitForGatewayReady(
-          child,
-          args.gatewayPort,
-          args.sourceGateway ? 300_000 : 45_000,
-        );
+        await waitForGatewayReady(child, args.gatewayPort, args.sourceGateway ? 300_000 : 45_000);
         return child;
       } catch (error) {
         await stopChild(child);
@@ -1179,8 +1175,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           drainedUpdates: drained.drained,
           gatewayLogTail:
             exitCode === 0 ? "" : redactRunnerText((gateway?.output ?? "").slice(-4000)),
-          mockLogTail:
-            exitCode === 0 ? "" : redactRunnerText((mock?.output ?? "").slice(-2000)),
+          mockLogTail: exitCode === 0 ? "" : redactRunnerText((mock?.output ?? "").slice(-2000)),
         },
         null,
         2,
