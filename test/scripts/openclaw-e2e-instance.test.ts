@@ -532,6 +532,51 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
+  it("preserves child stdin, arguments, and exit status through the Node watchdog", () => {
+    withTempDir("openclaw-e2e-instance-node-watchdog-stdin-", (tempDir) => {
+      writeNodeShim(tempDir);
+      const payload = "harmless watchdog stdin\nsecond line\n";
+      const args = ["two words", "--literal", "quote'arg"];
+      const child =
+        'const fs = require("node:fs"); process.stdout.write(JSON.stringify({ stdin: fs.readFileSync(0, "utf8"), args: process.argv.slice(1) })); process.exit(37);';
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_maybe_timeout 5s node -e ${shellQuote(child)} -- ${args.map(shellQuote).join(" ")}`,
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({ PATH: tempDir }),
+          input: payload,
+          timeout: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(37);
+      expect(result.stderr).toContain("using Node watchdog");
+      expect(JSON.parse(result.stdout)).toEqual({ stdin: payload, args });
+    });
+  });
+
+  it("treats Node-watchdog timeout values as data, not Node options", () => {
+    withTempDir("openclaw-e2e-instance-node-watchdog-option-", (tempDir) => {
+      writeNodeShim(tempDir);
+      const result = runBashWithHelper(
+        ["openclaw_e2e_maybe_timeout --version node --version"],
+        { PATH: tempDir },
+        5_000,
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("unsupported timeout value: --version");
+      expect(result.stdout).toBe("");
+    });
+  });
+
   for (const [shellSignal, expectedStatus] of [
     ["TERM", "143"],
     ["HUP", "129"],
