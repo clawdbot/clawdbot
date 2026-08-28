@@ -71,6 +71,44 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         .toEqual([button]);
     });
 
+    it.each(["label", "nested subtree"] as const)(
+      "updates the active name when aria-hidden changes on the %s",
+      async (target) => {
+        const button = document.createElement("button");
+        const label = document.createElement("span");
+        const wrapper = document.createElement("span");
+        button.title = "Edit configuration as text";
+        label.textContent = "Edit";
+        wrapper.append(label);
+        button.append(wrapper);
+        const hidden = target === "label" ? label : wrapper;
+        hidden.setAttribute("aria-hidden", "true");
+        document.body.append(button);
+        const titleNamedButton = page.getByRole("button", {
+          name: "Edit configuration as text",
+          exact: true,
+        });
+        const textNamedButton = page.getByRole("button", { name: "Edit", exact: true });
+        await titleNamedButton.hover();
+        expect(button.title).toBe("");
+        expect(titleNamedButton.elements()).toEqual([button]);
+
+        hidden.setAttribute("aria-hidden", "false");
+        await expect.poll(() => textNamedButton.elements()).toEqual([button]);
+        await textNamedButton.click();
+
+        hidden.setAttribute("aria-hidden", "true");
+        await expect.poll(() => titleNamedButton.elements()).toEqual([button]);
+        await titleNamedButton.click();
+
+        await page.elementLocator(button).unhover();
+        button.blur();
+        expect(button.title).toBe("Edit configuration as text");
+        expect(button.hasAttribute("aria-label")).toBe(false);
+        expect(titleNamedButton.elements()).toEqual([button]);
+      },
+    );
+
     it.each(["hidden", "display", "visibility", "aria-hidden"] as const)(
       "preserves title naming when the only text is %s",
       async (hidden) => {

@@ -164,7 +164,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     anchor.addEventListener("focusout", handleFocusOut);
     observer.observe(anchor, {
       attributes: true,
-      attributeFilter: ["title", "data-tooltip"],
+      attributeFilter: ["title", "data-tooltip", "aria-hidden"],
       characterData: true,
       subtree: true,
     });
