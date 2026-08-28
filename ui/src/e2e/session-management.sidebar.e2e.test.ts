@@ -749,6 +749,7 @@ suite.define(() => {
         "chat.startup",
         "sessions.groups.list",
         "sessions.groups.put",
+        "sessions.groups.reorder",
         "sessions.patch",
       ],
       sessionKey: "agent:main:candidate",

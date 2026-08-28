@@ -77,7 +77,8 @@ suite.define(() => {
           featureMethods: [
             "chat.startup",
             "sessions.assignOwner",
-            "sessions.groups.put",
+            "sessions.groups.add",
+            "sessions.groups.list",
             "sessions.patch",
           ],
           historyMessages: [
@@ -173,7 +174,8 @@ suite.define(() => {
           featureMethods: [
             "chat.startup",
             "sessions.assignOwner",
-            "sessions.groups.put",
+            "sessions.groups.add",
+            "sessions.groups.list",
             "sessions.patch",
           ],
           historyMessages: [

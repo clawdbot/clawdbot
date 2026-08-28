@@ -490,10 +490,11 @@ suite.define(() => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.groups.put"],
+      deferredMethods: ["sessions.groups.add"],
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "sessions.groups.add",
         "sessions.groups.list",
         "sessions.groups.put",
       ],
@@ -515,8 +516,8 @@ suite.define(() => {
       await field.waitFor({ state: "visible" });
       await field.fill("X".repeat(513));
       await field.press("Enter");
-      await gateway.waitForRequest("sessions.groups.put");
-      await gateway.rejectDeferred("sessions.groups.put", {
+      await gateway.waitForRequest("sessions.groups.add");
+      await gateway.rejectDeferred("sessions.groups.add", {
         code: "INVALID_REQUEST",
         message: "group name exceeds 512 characters",
       });
@@ -809,8 +810,10 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "sessions.groups.add",
         "sessions.groups.list",
         "sessions.groups.put",
+        "sessions.groups.reorder",
         "sessions.patch",
       ],
       sessionKey: "agent:main:session-0",
@@ -946,6 +949,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "sessions.groups.add",
         "sessions.groups.list",
         "sessions.groups.put",
       ],
@@ -967,9 +971,9 @@ suite.define(() => {
       await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
       });
-      const putRequest = await gateway.waitForRequest("sessions.groups.put");
-      expect(requireRecord(putRequest.params)).toMatchObject({
-        names: ["First group", "Second group"],
+      const addRequest = await gateway.waitForRequest("sessions.groups.add");
+      expect(requireRecord(addRequest.params)).toMatchObject({
+        name: "Second group",
       });
     } finally {
       await context.close();

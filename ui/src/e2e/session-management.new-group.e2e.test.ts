@@ -33,6 +33,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "sessions.groups.add",
         "sessions.groups.list",
         "sessions.groups.put",
         "sessions.patch",
@@ -65,7 +66,7 @@ suite.define(() => {
 
       // Opening the dialog writes nothing, hands focus to the field, and holds
       // the create action closed until a non-blank name exists.
-      expect(await gateway.getRequests("sessions.groups.put")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.groups.add")).toHaveLength(0);
       await expect
         .poll(() => field.evaluate((element) => element === document.activeElement))
         .toBe(true);
@@ -90,7 +91,7 @@ suite.define(() => {
       // Escape leaves the session untouched.
       await page.keyboard.press("Escape");
       await field.waitFor({ state: "detached" });
-      expect(await gateway.getRequests("sessions.groups.put")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.groups.add")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await openNewGroupDialog();
@@ -99,8 +100,8 @@ suite.define(() => {
       await page
         .locator('[data-session-section="category:Client work"]')
         .waitFor({ state: "visible" });
-      const putRequest = await gateway.waitForRequest("sessions.groups.put");
-      expect(requireRecord(putRequest.params)).toMatchObject({ names: ["Client work"] });
+      const addRequest = await gateway.waitForRequest("sessions.groups.add");
+      expect(requireRecord(addRequest.params)).toMatchObject({ name: "Client work" });
       const patched = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:move-me" && params.category === "Client work",

@@ -1,4 +1,5 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 
 export function sessionCategoryNames(
@@ -36,7 +37,7 @@ export async function rememberSessionCustomGroup(options: {
     if (!options.isCurrent()) {
       return "stale";
     }
-    options.onError(String(error));
+    options.onError(formatUiError(error));
     return "failed";
   }
 }

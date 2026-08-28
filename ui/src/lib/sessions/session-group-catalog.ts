@@ -346,16 +346,18 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     if (!scope) {
       return "stale";
     }
-    const advertised = isGatewayMethodAdvertised(host.snapshot(), "sessions.groups.add");
-    if (advertised !== true) {
-      return put([...host.readState().groups, name]);
-    }
     try {
       const result = await scope.client.request("sessions.groups.add", { name });
       if (!host.connection.isCurrent(scope)) {
         return "stale";
       }
-      publishCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+      publishPathFreeMutation(
+        mergeSessionGroupDefaults(readSessionCustomGroups(result), {
+          defaults: host.readState().groupSettings,
+        }),
+        readSidebarSectionOrder(result),
+      );
+      void host.refreshRows();
       return "completed";
     } catch (error) {
       return finishMutationFailure(host.connection.isCurrent(scope), error);
@@ -399,10 +401,6 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     if (!scope) {
       return "stale";
     }
-    const advertised = isGatewayMethodAdvertised(host.snapshot(), "sessions.groups.reorder");
-    if (advertised !== true) {
-      return put(names, sectionOrder);
-    }
     try {
       const result = await scope.client.request("sessions.groups.reorder", {
         names: [...names],
@@ -411,7 +409,13 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       if (!host.connection.isCurrent(scope)) {
         return "stale";
       }
-      publishCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+      publishPathFreeMutation(
+        mergeSessionGroupDefaults(readSessionCustomGroups(result), {
+          defaults: host.readState().groupSettings,
+        }),
+        readSidebarSectionOrder(result),
+      );
+      void host.refreshRows();
       return "completed";
     } catch (error) {
       return finishMutationFailure(host.connection.isCurrent(scope), error);

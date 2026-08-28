@@ -252,41 +252,58 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
-  it("falls back to put when adding a group on a gateway without method metadata", async () => {
+  it("adds a group through the atomic sessions.groups.add RPC", async () => {
     const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      if (method === "sessions.groups.put") {
+      if (method === "sessions.groups.add") {
         return {
           ok: true,
-          groups: (params.names as string[]).map((name, position) => ({ name, position })),
+          groups: [{ name: params.name as string, position: 0 }],
         };
+      }
+      if (method === "sessions.groups.list") {
+        return { groups: [{ name: "New", position: 0 }] };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
+    const { gateway } = createGatewayHarness(client, [
+      "sessions.groups.add",
+      "sessions.groups.list",
+    ]);
     const sessions = createSessionCapability(gateway);
 
     await sessions.groupsAdd("New");
 
     expect(sessions.state.groups).toEqual(["New"]);
-    expect(request).toHaveBeenCalledWith("sessions.groups.put", { names: ["New"] });
-    expect(request).not.toHaveBeenCalledWith("sessions.groups.add", expect.any(Object));
+    expect(request).toHaveBeenCalledWith("sessions.groups.add", { name: "New" });
+    expect(request).not.toHaveBeenCalledWith("sessions.groups.put", expect.any(Object));
     sessions.dispose();
   });
 
-  it("falls back to put when reordering groups on a gateway without method metadata", async () => {
+  it("reorders groups through the atomic sessions.groups.reorder RPC", async () => {
     const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      if (method === "sessions.groups.put") {
+      if (method === "sessions.groups.reorder") {
         return {
           ok: true,
           groups: (params.names as string[]).map((name, position) => ({ name, position })),
           sectionOrder: params.sectionOrder,
         };
       }
+      if (method === "sessions.groups.list") {
+        return {
+          groups: [
+            { name: "Beta", position: 0 },
+            { name: "Alpha", position: 1 },
+          ],
+        };
+      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
+    const { gateway } = createGatewayHarness(client, [
+      "sessions.groups.reorder",
+      "sessions.groups.list",
+    ]);
     const sessions = createSessionCapability(gateway);
 
     await sessions.groupsReorder(
@@ -295,11 +312,11 @@ describe("createSessionCapability", () => {
     );
 
     expect(sessions.state.groups).toEqual(["Beta", "Alpha"]);
-    expect(request).toHaveBeenCalledWith("sessions.groups.put", {
+    expect(request).toHaveBeenCalledWith("sessions.groups.reorder", {
       names: ["Beta", "Alpha"],
       sectionOrder: ["work", "category:Beta", "category:Alpha", "ungrouped"],
     });
-    expect(request).not.toHaveBeenCalledWith("sessions.groups.reorder", expect.any(Object));
+    expect(request).not.toHaveBeenCalledWith("sessions.groups.put", expect.any(Object));
     sessions.dispose();
   });
 

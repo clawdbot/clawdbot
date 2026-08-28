@@ -724,7 +724,7 @@ describe("sessions page lifecycle", () => {
     await page.rememberCustomGroup(name);
 
     expect(groupsAdd).toHaveBeenCalledWith(name);
-    expect(page.error).toBe("Error: group name exceeds 512 characters");
+    expect(page.error).toBe("group name exceeds 512 characters");
   });
 
   it("drops stale mutation state, errors, and navigation after disconnect", async () => {

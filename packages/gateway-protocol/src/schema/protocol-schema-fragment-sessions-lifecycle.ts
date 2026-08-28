@@ -1,3 +1,4 @@
+import * as sessionGroups from "./session-groups.js";
 import * as viewerPresence from "./sessions-viewer-presence.js";
 import * as sessions from "./sessions.js";
 
@@ -67,18 +68,18 @@ export const SessionLifecycleProtocolSchemas = {
   SessionsDeleteResult: sessions.SessionsDeleteResultSchema,
   SessionsAssignOwnerParams: sessions.SessionsAssignOwnerParamsSchema,
   SessionsAssignOwnerResult: sessions.SessionsAssignOwnerResultSchema,
-  SessionGroup: sessions.SessionGroupSchema,
-  SessionGroupDefaults: sessions.SessionGroupDefaultsSchema,
-  SessionsGroupsListParams: sessions.SessionsGroupsListParamsSchema,
-  SessionsGroupsListResult: sessions.SessionsGroupsListResultSchema,
-  SessionsGroupsDefaultsParams: sessions.SessionsGroupsDefaultsParamsSchema,
-  SessionsGroupsDefaultsResult: sessions.SessionsGroupsDefaultsResultSchema,
-  SessionsGroupsPutParams: sessions.SessionsGroupsPutParamsSchema,
-  SessionsGroupsRenameParams: sessions.SessionsGroupsRenameParamsSchema,
-  SessionsGroupsUpdateParams: sessions.SessionsGroupsUpdateParamsSchema,
-  SessionsGroupsUpdateResult: sessions.SessionsGroupsUpdateResultSchema,
-  SessionsGroupsDeleteParams: sessions.SessionsGroupsDeleteParamsSchema,
-  SessionsGroupsMutationResult: sessions.SessionsGroupsMutationResultSchema,
+  SessionGroup: sessionGroups.SessionGroupSchema,
+  SessionGroupDefaults: sessionGroups.SessionGroupDefaultsSchema,
+  SessionsGroupsListParams: sessionGroups.SessionsGroupsListParamsSchema,
+  SessionsGroupsListResult: sessionGroups.SessionsGroupsListResultSchema,
+  SessionsGroupsDefaultsParams: sessionGroups.SessionsGroupsDefaultsParamsSchema,
+  SessionsGroupsDefaultsResult: sessionGroups.SessionsGroupsDefaultsResultSchema,
+  SessionsGroupsPutParams: sessionGroups.SessionsGroupsPutParamsSchema,
+  SessionsGroupsRenameParams: sessionGroups.SessionsGroupsRenameParamsSchema,
+  SessionsGroupsUpdateParams: sessionGroups.SessionsGroupsUpdateParamsSchema,
+  SessionsGroupsUpdateResult: sessionGroups.SessionsGroupsUpdateResultSchema,
+  SessionsGroupsDeleteParams: sessionGroups.SessionsGroupsDeleteParamsSchema,
+  SessionsGroupsMutationResult: sessionGroups.SessionsGroupsMutationResultSchema,
   SessionsCompactParams: sessions.SessionsCompactParamsSchema,
   SessionsUsageParams: sessions.SessionsUsageParamsSchema,
 } as const;
