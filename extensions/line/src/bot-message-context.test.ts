@@ -140,6 +140,57 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
   });
 
+  const stickerEvent = (sticker: Partial<Record<string, unknown>>) =>
+    createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: {
+        id: "m-sticker",
+        type: "sticker",
+        packageId: "6136",
+        stickerId: "10979904",
+        stickerResourceType: "STATIC",
+        quoteToken: "quote-token",
+        ...sticker,
+      },
+    } as Partial<MessageEvent>);
+
+  it("describes a sticker with the keywords LINE sent for it", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ keywords: ["Thank you", "Thanks", "Grateful", "Bowing"] }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    // Only LINE's own sticker facts reach the agent; the package id names no
+    // package that a webhook carries.
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Thank you, Thanks, Grateful]");
+  });
+
+  it("falls back to the sender's own text for a message sticker", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ text: "See you tomorrow" }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: See you tomorrow]");
+  });
+
+  it("still reports a sticker that carries neither keywords nor text", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({}),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker]");
+  });
+
   it("skips media metadata projection for text-only messages", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-1" });
 

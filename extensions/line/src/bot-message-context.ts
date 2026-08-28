@@ -25,7 +25,10 @@ import {
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
@@ -178,34 +181,21 @@ async function resolveLineInboundRoute(params: {
   return { userId, groupId, roomId, isGroup, peerId, route };
 }
 
-const STICKER_PACKAGES: Record<string, string> = {
-  "1": "Moon & James",
-  "2": "Cony & Brown",
-  "3": "Brown & Friends",
-  "4": "Moon Special",
-  "789": "LINE Characters",
-  "6136": "Cony's Happy Life",
-  "6325": "Brown's Life",
-  "6359": "Choco",
-  "6362": "Sally",
-  "6370": "Edward",
-  "11537": "Cony",
-  "11538": "Brown",
-  "11539": "Moon",
-};
-
-function describeStickerKeywords(sticker: StickerEventMessage): string {
-  const keywords = (sticker as StickerEventMessage & { keywords?: string[] }).keywords;
-  if (keywords && keywords.length > 0) {
-    return keywords.slice(0, 3).join(", ");
+/**
+ * Describe a sticker from what its webhook actually carries: LINE sends up to
+ * 15 keywords for the sticker, and a message sticker also carries the sender's
+ * own text. The package name is not among those facts and cannot be derived
+ * from the package id, so it is not part of the description.
+ */
+function describeLineSticker(sticker: StickerEventMessage): string {
+  // LINE returns a random selection of the keywords on each event, so a few are
+  // enough to say what the sticker shows without flooding the turn.
+  const keywords = normalizeStringEntries(sticker.keywords ?? []).slice(0, 3);
+  if (keywords.length > 0) {
+    return `[Sent a sticker: ${keywords.join(", ")}]`;
   }
-
-  const stickerText = (sticker as StickerEventMessage & { text?: string }).text;
-  if (stickerText) {
-    return stickerText;
-  }
-
-  return "";
+  const senderText = normalizeOptionalString(sticker.text);
+  return senderText ? `[Sent a sticker: ${senderText}]` : "[Sent a sticker]";
 }
 
 function extractMessageText(message: MessageEvent["message"]): string {
@@ -224,14 +214,7 @@ function extractMessageText(message: MessageEvent["message"]): string {
     );
   }
   if (message.type === "sticker") {
-    const sticker = message;
-    const packageName = STICKER_PACKAGES[sticker.packageId] ?? "sticker";
-    const keywords = describeStickerKeywords(sticker);
-
-    if (keywords) {
-      return `[Sent a ${packageName} sticker: ${keywords}]`;
-    }
-    return `[Sent a ${packageName} sticker]`;
+    return describeLineSticker(message);
   }
   return "";
 }
