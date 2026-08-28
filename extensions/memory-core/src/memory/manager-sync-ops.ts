@@ -157,9 +157,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     try {
       await this.runSyncPass(params);
     } finally {
-      // Single enforcement point. Every exit from runSyncPass can have written cache rows:
-      // the targeted-session and full-reindex branches return early, and the incremental
-      // branches fall through. Bounding inside any one of them leaves the others unbounded.
+      // Run after every sync path and after any shadow reindex scope has ended,
+      // so the cap is enforced once against the published live database.
       this.pruneEmbeddingCacheIfNeeded?.();
     }
   }
