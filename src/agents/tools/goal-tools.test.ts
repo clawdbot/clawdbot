@@ -332,5 +332,72 @@ describe("goal tools", () => {
       expect(goal.tokensUsed).toBe(0);
       expect(goal.budgetLimitedAt).toBeUndefined();
     });
+
+    it("rejects an agent pausing a blocked goal (no pause-then-resume bypass)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "blocked", { blockedAt: 1 });
+
+      await expect(
+        updateSessionGoalStatus({
+          ...baseScope,
+          storePath,
+          actor: { type: "agent", id: "global" },
+          status: "paused",
+        }),
+      ).rejects.toThrow(/agents can only pause an active goal/);
+      expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("blocked");
+    });
+
+    it("rejects an agent pausing a budget-limited goal (no pause-then-resume bypass)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "budget_limited", {
+        tokenBudget: 20,
+        tokensUsed: 25,
+        budgetLimitedAt: 1,
+      });
+
+      await expect(
+        updateSessionGoalStatus({
+          ...baseScope,
+          storePath,
+          actor: { type: "agent", id: "global" },
+          status: "paused",
+        }),
+      ).rejects.toThrow(/agents can only pause an active goal/);
+      const goal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+      expect(goal?.status).toBe("budget_limited");
+      expect(goal?.tokensUsed).toBe(25);
+    });
+
+    it("allows an agent to pause an active goal", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "active");
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "agent", id: "global" },
+        status: "paused",
+      });
+      expect(goal.status).toBe("paused");
+      expect(goal.pausedAt).toBeTypeOf("number");
+    });
+
+    it("allows a human to pause a blocked goal (human keeps full pause path)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "blocked", { blockedAt: 1 });
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "human" },
+        status: "paused",
+      });
+      expect(goal.status).toBe("paused");
+    });
   });
 });
