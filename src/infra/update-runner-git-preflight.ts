@@ -114,6 +114,27 @@ async function removePathRecursive(target: string) {
     .catch(() => {});
 }
 
+async function resetPreflightCandidateWorktree(
+  worktreeDir: string,
+  shortSha: string,
+  step: StepFactory,
+) {
+  const resetStep = await runStep(
+    step(
+      `preflight reset (${shortSha})`,
+      ["git", "-C", worktreeDir, "reset", "--hard"],
+      worktreeDir,
+    ),
+  );
+  if (resetStep.exitCode !== 0) {
+    return false;
+  }
+  const cleanStep = await runStep(
+    step(`preflight clean (${shortSha})`, ["git", "-C", worktreeDir, "clean", "-fdx"], worktreeDir),
+  );
+  return cleanStep.exitCode === 0;
+}
+
 async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
   try {
     await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
@@ -304,6 +325,10 @@ async function testPreflightCandidates(params: {
   let sawOtherFailure = false;
   for (const sha of params.candidates) {
     const shortSha = sha.slice(0, 8);
+    if (!(await resetPreflightCandidateWorktree(params.worktreeDir, shortSha, params.step))) {
+      sawOtherFailure = true;
+      continue;
+    }
     const checkoutStep = await runStep(
       params.step(
         `preflight checkout (${shortSha})`,
@@ -337,7 +362,9 @@ async function testPreflightCandidates(params: {
     }
     try {
       const preferIgnoreScripts = shouldInstallWithoutScriptsOnWindows(manager.manager);
-      const ignoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+      const ignoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager, {
+        preferOffline: preferIgnoreScripts,
+      });
       const installArgv =
         preferIgnoreScripts && ignoreScriptsArgv
           ? ignoreScriptsArgv
