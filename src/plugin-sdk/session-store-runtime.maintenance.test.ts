@@ -43,7 +43,7 @@ describe("plugin session store maintenance", () => {
           maxDiskBytes: null,
           highWaterBytes: null,
         },
-        update: () => ({ model: "gpt-5.5" }),
+        update: () => ({ model: "gpt-5.6-luna" }),
       });
 
       expect(getSessionEntry({ sessionKey: modelRunSessionKey, storePath }) != null).toBe(
