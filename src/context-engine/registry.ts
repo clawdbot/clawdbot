@@ -1,7 +1,7 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { createAbortError } from "../infra/abort-signal.js";
+import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import type {
   ContextEngineFactory,
   ContextEngineFactoryContext,
@@ -550,7 +550,7 @@ export function isContextEngineAbortRejection(
   if (!signal?.aborted) {
     return false;
   }
-  if (error === signal.reason) {
+  if (error === signal.reason || isAbortError(error)) {
     return true;
   }
   const seen = new Set<Error>();

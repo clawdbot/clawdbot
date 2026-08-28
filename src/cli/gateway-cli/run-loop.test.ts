@@ -1898,6 +1898,7 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start } = await createSignaledLoopHarness();
       const sigusr1 = captureSignal("SIGUSR1");
+      const restartDrainSignal = gatewayWorkAdmissionActual.getGatewayRestartDrainSignal();
 
       sigusr1();
       await new Promise<void>((resolve) => {
@@ -1906,6 +1907,8 @@ describe("runGatewayLoop", () => {
 
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+      expect(restartDrainSignal.aborted).toBe(false);
+      expect(gatewayWorkAdmissionActual.isGatewayRestartDraining()).toBe(false);
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(

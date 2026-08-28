@@ -1775,13 +1775,53 @@ describe("Invalid engine fallback", () => {
     expect(listContextEngineQuarantines()).toEqual([]);
   });
 
-  it("quarantines unrelated abort-shaped maintenance failures after abort", async () => {
-    const engineId = uniqueEngineId("maintain-unrelated-abort");
+  it("does not quarantine standard AbortError from aborted maintenance", async () => {
+    const engineId = uniqueEngineId("maintain-standard-abort");
     const controller = new AbortController();
-    const unrelatedError = new Error("maintenance cancellation failed");
-    unrelatedError.name = "AbortError";
+    const abortError = new Error("This operation was aborted");
+    abortError.name = "AbortError";
+    let observedSignal: AbortSignal | undefined;
     registerTestContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Unrelated Abort Engine" },
+      info: { id: engineId, name: "Standard Abort Engine" },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }: { messages: AgentMessage[] }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async maintain({ abortSignal }) {
+        observedSignal = abortSignal;
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal?.addEventListener("abort", () => reject(abortError), { once: true });
+        });
+        return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+      },
+    }));
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    const maintenance = engine.maintain?.({
+      sessionId: "s1",
+      sessionFile: "/tmp/s1.jsonl",
+      abortSignal: controller.signal,
+    });
+    await vi.waitFor(() => expect(observedSignal).toBe(controller.signal));
+    controller.abort(new Error("gateway shutdown"));
+
+    await expect(maintenance).rejects.toBe(abortError);
+    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
+    expect(listContextEngineQuarantines()).toEqual([]);
+  });
+
+  it("quarantines standard AbortError when maintenance was not aborted", async () => {
+    const engineId = uniqueEngineId("maintain-unrelated-standard-abort");
+    const controller = new AbortController();
+    const abortError = new Error("This operation was aborted");
+    abortError.name = "AbortError";
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Unrelated Standard Abort Engine" },
       async ingest() {
         return { ingested: true };
       },
@@ -1792,8 +1832,7 @@ describe("Invalid engine fallback", () => {
         return { ok: true, compacted: false };
       },
       async maintain() {
-        controller.abort(new Error("gateway shutdown"));
-        throw unrelatedError;
+        throw abortError;
       },
     }));
     const engine = await resolveContextEngine(configWithSlot(engineId));
@@ -1806,12 +1845,13 @@ describe("Invalid engine fallback", () => {
       }),
     ).resolves.toMatchObject({ changed: false });
 
+    expect(controller.signal.aborted).toBe(false);
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
     expect(listContextEngineQuarantines()).toEqual([
       expect.objectContaining({
         engineId,
         operation: "maintain",
-        reason: "maintenance cancellation failed",
+        reason: "This operation was aborted",
       }),
     ]);
   });

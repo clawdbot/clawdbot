@@ -24,6 +24,7 @@ import {
   GatewayDrainingError,
   isGatewayDraining,
 } from "../../process/command-queue.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND as TURN_MAINTENANCE_TASK_KIND,
   registerContextEngineMaintenanceTaskOwner,
@@ -162,9 +163,10 @@ function createDeferredTurnMaintenanceAbortSignal(params?: {
   }
 
   const controller = new AbortController();
+  const abortSignal = AbortSignal.any([controller.signal, getGatewayRestartDrainSignal()]);
   state.controllers.add(controller);
   return {
-    abortSignal: controller.signal,
+    abortSignal,
     dispose: () => {
       state.controllers.delete(controller);
       if (state.controllers.size === 0) {

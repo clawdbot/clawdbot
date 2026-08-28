@@ -749,174 +749,197 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("settles abort-waiting deferred maintenance during shutdown without rerun", async () => {
-    await withStateDirEnv("openclaw-turn-maintenance-abort-waiting-", async () => {
-      resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
+  it.each([
+    {
+      name: "SIGTERM",
+      trigger: () => process.emit("SIGTERM", "SIGTERM"),
+    },
+    {
+      name: "accepted restart drain",
+      trigger: () => markGatewayDraining(),
+    },
+  ])(
+    "settles abort-waiting deferred maintenance during $name without rerun",
+    async ({ trigger }) => {
+      await withStateDirEnv("openclaw-turn-maintenance-abort-waiting-", async () => {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
 
-      const sessionKey = "agent:main:session-abort-waiting";
-      const lane = `context-engine-turn-maintenance:${sessionKey}`;
-      const keepProcessAlive = () => {};
-      process.on("SIGTERM", keepProcessAlive);
+        const sessionKey = "agent:main:session-abort-waiting";
+        const lane = `context-engine-turn-maintenance:${sessionKey}`;
+        const keepProcessAlive = () => {};
+        process.on("SIGTERM", keepProcessAlive);
 
-      let releaseFirstMaintenance: (() => void) | undefined;
-      let observedSignal: AbortSignal | undefined;
-      const firstMaintain = vi.fn(async (rawParams?: unknown) => {
-        const signal = (rawParams as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-        observedSignal = signal;
-        await new Promise<void>((resolve, reject) => {
-          releaseFirstMaintenance = resolve;
-          if (!signal) {
-            return;
-          }
-          const onAbort = () => {
-            signal.removeEventListener("abort", onAbort);
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new Error("maintenance aborted", { cause: signal.reason }),
-            );
+        let releaseFirstMaintenance: (() => void) | undefined;
+        let observedSignal: AbortSignal | undefined;
+        const firstMaintain = vi.fn(async (rawParams?: unknown) => {
+          const signal = (rawParams as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+          observedSignal = signal;
+          await new Promise<void>((resolve, reject) => {
+            releaseFirstMaintenance = resolve;
+            if (!signal) {
+              return;
+            }
+            const onAbort = () => {
+              signal.removeEventListener("abort", onAbort);
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("maintenance aborted", { cause: signal.reason }),
+              );
+            };
+            signal.addEventListener("abort", onAbort, { once: true });
+            if (signal.aborted) {
+              onAbort();
+            }
+          });
+          return {
+            changed: false,
+            bytesFreed: 0,
+            rewrittenEntries: 0,
           };
-          signal.addEventListener("abort", onAbort, { once: true });
-          if (signal.aborted) {
-            onAbort();
-          }
         });
-        return {
+        const secondMaintain = vi.fn(async () => ({
           changed: false,
           bytesFreed: 0,
           rewrittenEntries: 0,
+        }));
+        const createOwnedEngine = (
+          id: string,
+          maintain: typeof firstMaintain | typeof secondMaintain,
+        ) =>
+          ({
+            info: {
+              id,
+              name: "Test Engine",
+              turnMaintenanceMode: "background" as const,
+            },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }: { messages: unknown[] }) => ({
+              messages,
+              estimatedTokens: 0,
+            }),
+            compact: async () => ({ ok: true, compacted: false }),
+            maintain,
+            dispose: vi.fn(async () => {}),
+          }) as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const firstEngine = createOwnedEngine("first", firstMaintain);
+        const secondEngine = createOwnedEngine("second", secondMaintain);
+        registerLegacyContextEngine();
+        const sharedEngineId = "shutdown-shared-engine";
+        registerContextEngineForOwner(sharedEngineId, () => firstEngine, `test:${sharedEngineId}`, {
+          allowSameOwnerRefresh: true,
+        });
+        const contextEngineConfig = {
+          plugins: { slots: { contextEngine: sharedEngineId } },
         };
-      });
-      const secondMaintain = vi.fn(async () => ({
-        changed: false,
-        bytesFreed: 0,
-        rewrittenEntries: 0,
-      }));
-      const createOwnedEngine = (
-        id: string,
-        maintain: typeof firstMaintain | typeof secondMaintain,
-      ) =>
-        ({
-          info: {
-            id,
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-          dispose: vi.fn(async () => {}),
-        }) as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
-      const firstEngine = createOwnedEngine("first", firstMaintain);
-      const secondEngine = createOwnedEngine("second", secondMaintain);
-      registerLegacyContextEngine();
-      const sharedEngineId = "shutdown-shared-engine";
-      registerContextEngineForOwner(sharedEngineId, () => firstEngine, `test:${sharedEngineId}`, {
-        allowSameOwnerRefresh: true,
-      });
-      const contextEngineConfig = {
-        plugins: { slots: { contextEngine: sharedEngineId } },
-      };
-      const firstResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
-      const firstRerunResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
-      const finalRerunResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
-      let deferred: Promise<void> | undefined;
+        const firstResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
+        const firstRerunResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
+        const finalRerunResolution = await resolveLogicalTurnContextEngines(contextEngineConfig);
+        let deferred: Promise<void> | undefined;
 
-      try {
-        expect(firstResolution.configured.engine).not.toBe(firstRerunResolution.configured.engine);
-        expect(firstRerunResolution.configured.engine).not.toBe(
-          finalRerunResolution.configured.engine,
-        );
-        await runContextEngineMaintenance({
-          contextEngine: firstResolution.configured.engine,
-          sessionId: "session-abort-waiting",
-          sessionKey,
-          sessionFile: "/tmp/session-abort-waiting.jsonl",
-          reason: "turn",
-          onDeferredMaintenance: (promise) => {
-            deferred = promise;
-          },
-        });
-        await vi.waitFor(() => expect(firstMaintain).toHaveBeenCalledTimes(1));
+        try {
+          expect(firstResolution.configured.engine).not.toBe(
+            firstRerunResolution.configured.engine,
+          );
+          expect(firstRerunResolution.configured.engine).not.toBe(
+            finalRerunResolution.configured.engine,
+          );
+          await runContextEngineMaintenance({
+            contextEngine: firstResolution.configured.engine,
+            sessionId: "session-abort-waiting",
+            sessionKey,
+            sessionFile: "/tmp/session-abort-waiting.jsonl",
+            reason: "turn",
+            onDeferredMaintenance: (promise) => {
+              deferred = promise;
+            },
+          });
+          await vi.waitFor(() => expect(firstMaintain).toHaveBeenCalledTimes(1));
 
-        await runContextEngineMaintenance({
-          contextEngine: firstRerunResolution.configured.engine,
-          sessionId: "session-abort-waiting",
-          sessionKey,
-          sessionFile: "/tmp/session-abort-waiting.jsonl",
-          reason: "turn",
-          disposeDeferredContextEngineAfterMaintenance: true,
-        });
-        await runContextEngineMaintenance({
-          contextEngine: secondEngine,
-          sessionId: "session-abort-waiting",
-          sessionKey,
-          sessionFile: "/tmp/session-abort-waiting.jsonl",
-          reason: "turn",
-          disposeDeferredContextEngineAfterMaintenance: true,
-        });
-        expect(firstEngine["dispose"]).not.toHaveBeenCalled();
-        await runContextEngineMaintenance({
-          contextEngine: finalRerunResolution.configured.engine,
-          sessionId: "session-abort-waiting",
-          sessionKey,
-          sessionFile: "/tmp/session-abort-waiting.jsonl",
-          reason: "turn",
-          disposeDeferredContextEngineAfterMaintenance: true,
-        });
-        await vi.waitFor(() => expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1));
+          await runContextEngineMaintenance({
+            contextEngine: firstRerunResolution.configured.engine,
+            sessionId: "session-abort-waiting",
+            sessionKey,
+            sessionFile: "/tmp/session-abort-waiting.jsonl",
+            reason: "turn",
+            disposeDeferredContextEngineAfterMaintenance: true,
+          });
+          await runContextEngineMaintenance({
+            contextEngine: secondEngine,
+            sessionId: "session-abort-waiting",
+            sessionKey,
+            sessionFile: "/tmp/session-abort-waiting.jsonl",
+            reason: "turn",
+            disposeDeferredContextEngineAfterMaintenance: true,
+          });
+          expect(firstEngine["dispose"]).not.toHaveBeenCalled();
+          await runContextEngineMaintenance({
+            contextEngine: finalRerunResolution.configured.engine,
+            sessionId: "session-abort-waiting",
+            sessionKey,
+            sessionFile: "/tmp/session-abort-waiting.jsonl",
+            reason: "turn",
+            disposeDeferredContextEngineAfterMaintenance: true,
+          });
+          await vi.waitFor(() => expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1));
 
-        process.emit("SIGTERM", "SIGTERM");
-        let timeout: ReturnType<typeof setTimeout> | undefined;
-        const settled = await Promise.race([
-          waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => true),
-          new Promise<false>((resolve) => {
-            timeout = setTimeout(() => resolve(false), 500);
-          }),
-        ]);
-        if (timeout) {
-          clearTimeout(timeout);
+          trigger();
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const settled = await Promise.race([
+            waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => true),
+            new Promise<false>((resolve) => {
+              timeout = setTimeout(() => resolve(false), 500);
+            }),
+          ]);
+          if (timeout) {
+            clearTimeout(timeout);
+          }
+
+          expect(settled).toBe(true);
+          expect(observedSignal?.aborted).toBe(true);
+          expect(firstMaintain).toHaveBeenCalledTimes(1);
+          expect(secondMaintain).not.toHaveBeenCalled();
+          expect(firstEngine["dispose"]).toHaveBeenCalledTimes(1);
+          expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1);
+          expect(
+            listTasksForOwnerKey(sessionKey).find(
+              (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+            ),
+          ).toMatchObject({
+            status: "cancelled",
+            terminalSummary: "Deferred maintenance cancelled during shutdown.",
+          });
+          expect(getCommandLaneSnapshot(lane)).toMatchObject({
+            activeCount: 0,
+            queuedCount: 0,
+          });
+        } finally {
+          releaseFirstMaintenance?.();
+          await Promise.allSettled(deferred ? [deferred] : []);
+          await Promise.allSettled([
+            firstResolution.fallback.engine.dispose?.(),
+            firstRerunResolution.fallback.engine.dispose?.(),
+            finalRerunResolution.fallback.engine.dispose?.(),
+          ]);
+          process.off("SIGTERM", keepProcessAlive);
+          resetDeferredTurnMaintenanceStateForTest();
         }
+      });
+    },
+  );
 
-        expect(settled).toBe(true);
-        expect(observedSignal?.aborted).toBe(true);
-        expect(firstMaintain).toHaveBeenCalledTimes(1);
-        expect(secondMaintain).not.toHaveBeenCalled();
-        expect(firstEngine["dispose"]).toHaveBeenCalledTimes(1);
-        expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1);
-        expect(
-          listTasksForOwnerKey(sessionKey).find(
-            (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
-          ),
-        ).toMatchObject({
-          status: "cancelled",
-          terminalSummary: "Deferred maintenance cancelled during shutdown.",
-        });
-        expect(getCommandLaneSnapshot(lane)).toMatchObject({
-          activeCount: 0,
-          queuedCount: 0,
-        });
-      } finally {
-        releaseFirstMaintenance?.();
-        await Promise.allSettled(deferred ? [deferred] : []);
-        await Promise.allSettled([
-          firstResolution.fallback.engine.dispose?.(),
-          firstRerunResolution.fallback.engine.dispose?.(),
-          finalRerunResolution.fallback.engine.dispose?.(),
-        ]);
-        process.off("SIGTERM", keepProcessAlive);
-        resetDeferredTurnMaintenanceStateForTest();
-      }
-    });
-  });
-
-  it("does not start queued deferred maintenance after shutdown", async () => {
+  it.each([
+    {
+      name: "SIGTERM",
+      trigger: () => process.emit("SIGTERM", "SIGTERM"),
+    },
+    {
+      name: "accepted restart drain",
+      trigger: () => markGatewayDraining(),
+    },
+  ])("does not start queued deferred maintenance after $name", async ({ trigger }) => {
     await withStateDirEnv("openclaw-turn-maintenance-queued-abort-", async () => {
       resetCommandQueueStateForTest();
       resetTaskRegistryForTests({ persist: false });
@@ -969,7 +992,7 @@ describe("runContextEngineMaintenance", () => {
           },
         });
 
-        process.emit("SIGTERM", "SIGTERM");
+        trigger();
         releaseLane?.();
         await laneBlocker;
         await deferred;
@@ -1722,7 +1745,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("surfaces unrelated abort-shaped maintenance failures during shutdown", async () => {
+  it("surfaces unrelated maintenance failures during shutdown", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
       const keepProcessAlive = () => {};
@@ -1754,9 +1777,7 @@ describe("runContextEngineMaintenance", () => {
             await new Promise<void>((_resolve, reject) => {
               const onAbort = () => {
                 signal.removeEventListener("abort", onAbort);
-                const error = new Error("maintenance cancellation failed");
-                error.name = "AbortError";
-                reject(error);
+                reject(new Error("maintenance cleanup failed"));
               };
               signal.addEventListener("abort", onAbort, { once: true });
               if (signal.aborted) {
@@ -1791,7 +1812,7 @@ describe("runContextEngineMaintenance", () => {
         }
         expect(task).toMatchObject({
           status: "failed",
-          error: "maintenance cancellation failed",
+          error: "maintenance cleanup failed",
         });
         expect(getTaskFlowById(parentFlowId)?.status).toBe("failed");
       } finally {
