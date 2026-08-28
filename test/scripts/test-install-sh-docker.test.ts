@@ -1843,6 +1843,115 @@ describe("install-sh smoke runner", () => {
 });
 
 describe("bun global install smoke", () => {
+  const runForceKillOrderingFixture = (
+    first: "timer" | "drain",
+    failure?: "permission" | "uncleared",
+  ) => {
+    const tempDir = tempDirs.make("openclaw-bun-global-force-kill-");
+    const preloadPath = path.join(tempDir, "lifecycle.mjs");
+    // Drive both native-observed callback orders at the real CLI boundary.
+    // Only the child and clock are simulated; the helper owns all cleanup logic.
+    writeFileSync(
+      preloadPath,
+      `import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+let now = 0;
+let alive = true;
+let forceKills = 0;
+const timers = [];
+process.on("exit", () => console.log("force-kill-attempts=" + forceKills));
+process.kill = (pid, signal) => {
+  if (pid !== -1234) throw new Error("unexpected fixture signal target");
+  if (signal === "SIGKILL") {
+    forceKills++;
+    if (${JSON.stringify(failure)} === "permission" ||
+        (forceKills > 1 && ${JSON.stringify(failure)} !== "uncleared")) {
+      throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    }
+  }
+  if (signal === 0 && !alive) {
+    throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+  }
+  return true;
+};
+childProcess.spawn = () => {
+  const stream = () => Object.assign(new EventEmitter(), { setEncoding() {} });
+  const child = Object.assign(new EventEmitter(), {
+    pid: 1234, stdout: stream(), stderr: stream(),
+  });
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, delay) => {
+    const timer = { callback, delay, cleared: false, unref() {} };
+    timers.push(timer);
+    return timer;
+  };
+  globalThis.clearTimeout = (timer) => { if (timer) timer.cleared = true; };
+  const fire = async (delay, at) => {
+    now = at;
+    const timer = timers.find((entry) => !entry.cleared && entry.delay === delay);
+    if (!timer) throw new Error("missing fixture timer: " + delay);
+    timer.cleared = true;
+    timer.callback();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+  process.nextTick(async () => {
+    process.emit("SIGTERM");
+    child.emit("close", 0, null);
+    await Promise.resolve();
+    if (${JSON.stringify(first)} === "timer") {
+      await fire(100, 100);
+      await fire(25, 100);
+    } else {
+      await fire(25, 100);
+      if (${JSON.stringify(failure)} === "permission") return;
+      await fire(100, 100);
+    }
+    alive = ${JSON.stringify(failure)} === "uncleared";
+    await fire(25, 200);
+  });
+  return child;
+};
+syncBuiltinESMExports();
+`,
+    );
+    return spawnSync(
+      process.execPath,
+      ["--import", preloadPath, BUN_GLOBAL_ASSERTIONS_PATH, "run-with-timeout", "60000", "fixture"],
+      {
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "100" },
+      },
+    );
+  };
+
+  it.runIf(process.platform !== "win32").each(["timer", "drain"] as const)(
+    "force-kills Bun descendants once when the %s callback runs first",
+    (first) => {
+      const result = runForceKillOrderingFixture(first);
+      expect(result.status, result.stderr).toBe(143);
+      expect(result.stdout).toContain("force-kill-attempts=1");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("propagates Bun force-kill permission failures", () => {
+    const result = runForceKillOrderingFixture("drain", "permission");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("kill EPERM");
+    expect(result.stdout).toContain("force-kill-attempts=1");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails when a Bun process group remains after force-kill cleanup",
+    () => {
+      const result = runForceKillOrderingFixture("timer", "uncleared");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("command process group remained active after SIGKILL");
+      expect(result.stdout).toContain("force-kill-attempts=1");
+    },
+  );
+
   it("packs the current tree and verifies the installed package runtime through Bun", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
     const assertions = readFileSync(BUN_GLOBAL_ASSERTIONS_PATH, "utf8");
