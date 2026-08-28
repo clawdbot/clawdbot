@@ -22,6 +22,49 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
   "Chromium snapshot-to-action name fidelity",
   () => {
+    it("returns selector no-match snapshots without waiting for the snapshot timeout", async () => {
+      const rootDir = tempDirs.make("openclaw-snapshot-selector-absence-");
+      const port = await getFreePort();
+      const cdpUrl = `http://127.0.0.1:${port}`;
+      const context = await getPlaywrightCore().chromium.launchPersistentContext(
+        path.join(rootDir, "profile"),
+        {
+          headless: true,
+          executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+          args: [`--remote-debugging-port=${port}`],
+        },
+      );
+      try {
+        const page = context.pages()[0] ?? (await context.newPage());
+        await page.setContent('<main><button id="present">Present</button></main>');
+        const session = await context.newCDPSession(page);
+        const { targetInfo } = await session.send("Target.getTargetInfo");
+        await session.detach();
+        const target = { cdpUrl, targetId: targetInfo.targetId };
+
+        const startedAt = performance.now();
+        const missing = await snapshotRoleViaPlaywright({
+          ...target,
+          selector: "#missing",
+          timeoutMs: 30_000,
+        });
+        const elapsedMs = performance.now() - startedAt;
+        const present = await snapshotRoleViaPlaywright({
+          ...target,
+          selector: "#present",
+          timeoutMs: 30_000,
+        });
+
+        expect(missing.snapshot).toBe("(empty)");
+        expect(missing.refs).toEqual({});
+        expect(elapsedMs).toBeLessThan(1_000);
+        expect(present.snapshot).toContain('button "Present"');
+      } finally {
+        await closePlaywrightBrowserConnection({ cdpUrl });
+        await context.close();
+      }
+    }, 30_000);
+
     it("resolves encoded and omitted names, raw AX names, and native frame refs", async () => {
       const rootDir = tempDirs.make("openclaw-snapshot-labels-");
       const port = await getFreePort();

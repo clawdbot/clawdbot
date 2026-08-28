@@ -218,6 +218,35 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
   });
 
+  it("returns an empty snapshot immediately when a selector matches no elements", async () => {
+    const ariaSnapshot = vi.fn(async () => {
+      throw new Error("ariaSnapshot should not wait for a selector with no matches");
+    });
+    const locator = {
+      count: vi.fn(async () => 0),
+      ariaSnapshot,
+    };
+    const page = {
+      locator: vi.fn(() => locator),
+      mainFrame: vi.fn(() => ({ id: "main-frame" })),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      selector: "#missing",
+    });
+
+    expect(result.snapshot).toBe("(empty)");
+    expect(result.refs).toEqual({});
+    expect(locator.count).toHaveBeenCalledOnce();
+    expect(ariaSnapshot).not.toHaveBeenCalled();
+  });
+
   it("stores frame-scoped refs with the exact captured frame", async () => {
     const ariaSnapshot = vi.fn(async () => '- button "Save"');
     const frame = { id: "frame-1", locator: vi.fn(() => ({ ariaSnapshot })) };

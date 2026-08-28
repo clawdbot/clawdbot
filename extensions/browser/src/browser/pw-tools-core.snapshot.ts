@@ -451,7 +451,10 @@ export async function snapshotRoleViaPlaywright(opts: {
         : selector
           ? page.locator(selector)
           : page.locator(":root");
-      const ariaSnapshot = await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
+      const ariaSnapshot =
+        selector && (await locator.count()) === 0
+          ? ""
+          : await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
       const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
       return await finalizeRoleSnapshotViaPlaywright({
         page,
