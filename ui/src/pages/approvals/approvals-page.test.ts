@@ -98,7 +98,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function stubGrants(history: ReturnType<typeof vi.fn>): GatewayBrowserClient["request"] {
+function stubGrants(
+  history: (method: string, params?: unknown) => unknown,
+): GatewayBrowserClient["request"] {
   // The page also loads the standing-grant ledger; answer it out of band so
   // history tests keep their ordered mock queues and call counts.
   return ((method: string, params?: unknown) =>

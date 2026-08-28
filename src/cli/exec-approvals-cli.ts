@@ -558,7 +558,9 @@ type StandingGrantCliEntry = {
 
 function describeGrantState(grant: StandingGrantCliEntry, nowMs: number): string {
   if (grant.revokedAtMs !== null) {
-    return `revoked${grant.revokedBy ? ` by ${grant.revokedBy}` : ""}`;
+    // revokedBy carries the revoking client's self-reported display name;
+    // escape it visibly rather than relying on the table's silent strip.
+    return `revoked${grant.revokedBy ? ` by ${escapeApprovalTextForTerminal(grant.revokedBy)}` : ""}`;
   }
   if (grant.expiresAtMs !== null && grant.expiresAtMs <= nowMs) {
     return "expired";
@@ -589,8 +591,8 @@ function renderStandingGrants(grants: StandingGrantCliEntry[]): void {
       ],
       rows: grants.map((grant) => ({
         ID: grant.grantId,
-        Automation: grant.cronJobName ?? grant.cronJobId,
-        Command: grant.command,
+        Automation: escapeApprovalTextForTerminal(grant.cronJobName ?? grant.cronJobId),
+        Command: escapeApprovalTextForTerminal(grant.command),
         Uses: String(grant.useCount),
         State: describeGrantState(grant, now),
       })),
