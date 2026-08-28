@@ -612,13 +612,7 @@ export function createChannelIngressDrain<
           });
         }
       } catch (err) {
-        if (disposed) {
-          return;
-        }
-        if (options.abortSignal?.aborted) {
-          return;
-        }
-        if (state.phase === "settled") {
+        if (isStopped() || state.phase === "settled") {
           return;
         }
         // Guillotine / supersede own settleOnce — do not fail/release again.
