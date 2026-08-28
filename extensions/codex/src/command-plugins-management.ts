@@ -1,4 +1,8 @@
 // Codex plugin module implements command plugins management behavior.
+import {
+  renderMessagePresentationFallbackText,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
@@ -81,7 +85,7 @@ export async function handleCodexPluginsSubcommand(
     if (args.length > 0) {
       return { text: "Usage: /codex plugins help" };
     }
-    return { text: buildPluginsHelp() };
+    return withChatGptPluginNavigation({ blocks: [{ type: "text", text: buildPluginsHelp() }] });
   }
 
   if (normalized === "list") {
@@ -89,9 +93,16 @@ export async function handleCodexPluginsSubcommand(
       return { text: "Usage: /codex plugins list" };
     }
     const current = await io.readConfig();
-    return {
-      text: formatPluginList(current.plugins ?? {}, { globalEnabled: current.enabled === true }),
-    };
+    return withChatGptPluginNavigation({
+      blocks: [
+        {
+          type: "text",
+          text: formatPluginList(current.plugins ?? {}, {
+            globalEnabled: current.enabled === true,
+          }),
+        },
+      ],
+    });
   }
 
   if (normalized === "available") {
@@ -193,24 +204,41 @@ function buildPluginsMenuReply(): PluginCommandResult {
     { label: "help", command: "/codex plugins help" },
     { label: "back", command: "/codex" },
   ];
-  const text = [
-    "Codex sub-plugins. Pick a sub-action or type:",
-    "",
-    "  1. /codex plugins list",
-    "  2. /codex plugins available",
-    "  3. /codex plugins enable",
-    "  4. /codex plugins disable",
-    "  5. /codex plugins help",
-    "",
-    "Type '/codex' to go back to the main menu.",
-  ].join("\n");
-  return {
-    text,
-    presentation: buildCodexCommandPickerPresentation(
+  return withChatGptPluginNavigation(
+    buildCodexCommandPickerPresentation(
       "Codex sub-plugins",
       "Pick a Codex sub-plugin action:",
       buttons,
     ),
+  );
+}
+
+function withChatGptPluginNavigation(presentation: MessagePresentation): PluginCommandResult {
+  // These public pages use the browser's own session; never put Codex credentials in a URL.
+  const linked: MessagePresentation = {
+    ...presentation,
+    blocks: [
+      ...presentation.blocks,
+      {
+        type: "buttons",
+        buttons: [
+          { label: "Browse plugins", action: { type: "url", url: "https://chatgpt.com/plugins" } },
+          {
+            label: "Manage plugins",
+            action: { type: "url", url: "https://chatgpt.com/#settings/Plugins" },
+          },
+        ],
+      },
+      {
+        type: "context",
+        text: "Use the same ChatGPT account and workspace as Codex. ChatGPT setup does not install or authorize a plugin in OpenClaw; an owner or operator.admin must use /codex plugins available and /codex plugins install <plugin>@<marketplace>. After setup, return here and use /new or /reset before trying the plugin.",
+      },
+    ],
+  };
+  return {
+    text: renderMessagePresentationFallbackText({ presentation: linked }),
+    presentation: linked,
+    presentationTextMode: "fallback",
   };
 }
 

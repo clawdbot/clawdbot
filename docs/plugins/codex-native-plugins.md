@@ -49,6 +49,20 @@ for the OpenAI account and admin model.
 
 ## Quickstart
 
+Run `/codex plugins` or `/codex plugins menu` for **Browse plugins** and
+**Manage plugins** links. They open the existing
+[ChatGPT plugin directory](https://chatgpt.com/plugins) and
+[ChatGPT Plugins settings](https://chatgpt.com/#settings/Plugins), including
+when no Codex plugins are configured. `/codex plugins help` also includes
+these links; channels without buttons receive the URLs as text.
+
+Sign in to the same ChatGPT account and workspace used by Codex. Managing or
+connecting a plugin in ChatGPT does not install or authorize it in OpenClaw.
+An owner or `operator.admin` must still use `/codex plugins available` and
+`/codex plugins install <plugin>@<marketplace>` for local installation and
+authorization. After hosted setup, return to OpenClaw and use `/new` or
+`/reset` before trying the plugin; opening a page does not verify readiness.
+
 Preview migration from the source Codex home:
 
 ```bash
