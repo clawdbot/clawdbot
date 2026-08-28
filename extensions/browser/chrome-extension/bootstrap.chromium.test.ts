@@ -22,6 +22,7 @@ import { getFreePort } from "../src/browser/test-port.js";
 import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
 import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.js";
 import chromeExtensionManifest from "./manifest.json" with { type: "json" };
+import { holdNavigationAccessCheck } from "./navigation-race.test-support.js";
 import { relayTestKey } from "./relay-key.test-support.js";
 
 declare const chrome: {
@@ -563,6 +564,13 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           diagnostic.mark("injection.used", true);
           return Promise.reject(new Error("page.goto: Frame has been detached"));
         });
+        const worker = context
+          .serviceWorkers()
+          .find((entry) => entry.url().startsWith(`chrome-extension://${extensionId}/`));
+        if (!worker) {
+          throw new Error("Extension service worker missing");
+        }
+        const finishNavigationProbe = await holdNavigationAccessCheck(worker, proofUrl);
         try {
           const navigationResponse = await dispatcher.dispatch({
             method: "POST",
@@ -603,6 +611,9 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           diagnostic.flush();
           detachedNavigation.mockRestore();
           browserState.resolved.ssrfPolicy = previousSsrfPolicy;
+          const probe = await finishNavigationProbe();
+          expect(probe.heldReads).toBeGreaterThan(0);
+          expect(probe.sawLoad).toBe(true);
         }
 
         const registration = status.registrations.find(

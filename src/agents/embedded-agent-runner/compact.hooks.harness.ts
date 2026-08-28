@@ -106,6 +106,9 @@ export const resolveSessionAgentIdsMock = vi.fn(() => ({
   defaultAgentId: "main",
   sessionAgentId: "main",
 }));
+export const resolveAgentConfigMock = vi.fn(
+  (_config?: unknown, _agentId?: string): unknown => undefined,
+);
 export const resolveDefaultAgentDirMock = vi.fn(() => "/tmp/agents/main/agent");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
@@ -490,6 +493,8 @@ export function resetCompactSessionStateMocks(): void {
   resolveSessionAgentIdMock.mockReturnValue("main");
   resolveSessionAgentIdsMock.mockReset();
   resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
+  resolveAgentConfigMock.mockReset();
+  resolveAgentConfigMock.mockReturnValue(undefined);
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
   sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());
@@ -1008,7 +1013,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../agent-scope.js", () => ({
     listAgentEntries: vi.fn(() => []),
-    resolveAgentConfig: vi.fn(() => undefined),
+    resolveAgentConfig: resolveAgentConfigMock,
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
     resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp"),

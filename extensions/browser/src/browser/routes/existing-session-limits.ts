@@ -50,4 +50,9 @@ export const EXISTING_SESSION_LIMITS = {
       "selector/frame snapshots are not supported for existing-session profiles; snapshot the whole page and use refs.",
   },
   responseBody: "response body is not supported for existing-session profiles yet.",
+  requests:
+    "requests is not supported for existing-session profiles; use a managed browser profile to collect network requests, or snapshot to inspect the current page.",
+  text: "text is not supported for existing-session profiles; use snapshot to read the page, or switch to a managed browser profile for text extraction.",
+  emulation:
+    "emulate is not supported for existing-session profiles; use a managed browser profile for device, media, timezone, or locale settings.",
 } as const;

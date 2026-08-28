@@ -33,7 +33,20 @@ export function describeBrowserTool(opts: {
     "Repeated compatible snapshots with stable document identity mark newly appeared ref-bearing elements with [new].",
     `navigate returns the loaded page's compact snapshot inline (efficient interactive tier; use action=snapshot for a full snapshot); do not call snapshot after navigate.${opts.capabilities.actKinds.includes("batch") ? " Batch act results that report a cross-document navigation also include fresh page state;" : ""} After a single act that triggers navigation, snapshot before using refs.`,
     "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
-    `For page text, use a selector-scoped snapshot${evaluateEnabled ? " or act:evaluate" : ""} that returns only relevant text or structured data, then reason over that bounded result with the active model. Use efficient snapshots for controls and action discovery; they omit most non-interactive prose.`,
+    actions.has("text")
+      ? "For page prose, use action=text with optional selector and maxChars; it reads the first selector match, else article, main, or body. Use efficient snapshots for controls; they omit most prose."
+      : `For page text, use snapshot${evaluateEnabled ? " or a bounded act:evaluate" : ""}; efficient snapshots omit most prose.`,
+    "Use snapshot query to keep lines matching all whitespace-separated tokens, case-insensitively; matching lines retain element refs.",
+    ...(actions.has("requests")
+      ? [
+          "Use requests for the recent network log; filter matches URL/type, limit defaults to 50, and clear=true clears the collected log after reading.",
+        ]
+      : []),
+    ...(actions.has("emulate")
+      ? [
+          "Use emulate with device, colorScheme, timezoneId, or locale; at least one setting is required.",
+        ]
+      : []),
     ...(actions.has("upload")
       ? [
           "For file chooser uploads, pass the trigger ref with paths in the same upload call when available; use paths-only arming only when a later trigger is intentional. Use inputRef or element to set a file input directly.",

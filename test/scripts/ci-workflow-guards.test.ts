@@ -5860,13 +5860,13 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it.each([
-    [".github/workflows/mantis-discord-smoke.yml"],
-    [".github/workflows/plugin-clawhub-release.yml"],
-  ])("bounds %s git fetches", (workflowPath) => {
+    [".github/workflows/mantis-discord-smoke.yml", 2],
+    [".github/workflows/plugin-clawhub-release.yml", 3],
+  ])("bounds %s git fetches", (workflowPath, expectedFetchCount) => {
     const source = readFileSync(workflowPath, "utf8");
     const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
 
-    expect(gitFetchLines, workflowPath).toHaveLength(2);
+    expect(gitFetchLines, workflowPath).toHaveLength(expectedFetchCount);
     expect(
       gitFetchLines.every((line) =>
         line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
@@ -6633,32 +6633,37 @@ exit 1
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
     const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
+    const renderStep = macosSwift.steps.find(
+      (step: WorkflowStep) => step.name === "Render isolated macOS health fixtures",
+    );
 
     expect(macosSwift.env.SWIFT_TEST_EXECUTION).toBe(
       "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}",
     );
-    expect(testStep.run).toContain(
-      "swift_test_args=(--package-path apps/macos --enable-code-coverage)",
+    expect(testStep.id).toBe("swift-test");
+    expect(renderStep.if).toBe(
+      "${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}",
     );
-    expect(testStep.run).toContain('if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]');
-    expect(testStep.run).toContain("swift_test_args+=(--parallel)");
-    expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
-    expect(testStep.run).toContain('swift test "${swift_test_args[@]}"');
-    expect(testStep.run).not.toContain(
-      "swift test --package-path apps/macos --parallel --enable-code-coverage",
-    );
-    expect(testStep.run).not.toContain("for attempt in");
 
-    for (const execution of ["parallel", "serial"] as const) {
-      const root = tempDirs.make(`openclaw-swift-test-first-attempt-${execution}-`);
+    for (const { execution, buildExitCode } of [
+      { execution: "parallel", buildExitCode: 0 },
+      { execution: "serial", buildExitCode: 0 },
+      { execution: "parallel", buildExitCode: 23 },
+    ]) {
+      const root = tempDirs.make(`openclaw-swift-test-${execution}-${buildExitCode}-`);
       const binDir = path.join(root, "bin");
       const callsPath = path.join(root, "swift-calls");
+      const outputPath = path.join(root, "github-output");
       mkdirSync(binDir, { recursive: true });
       writeFileSync(
         path.join(binDir, "swift"),
         `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$SWIFT_CALLS"
+if [[ "\${1:-}" == "build" ]]; then
+  [[ ! -s "$GITHUB_OUTPUT" ]] || exit 24
+  exit "$BUILD_EXIT_CODE"
+fi
 test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
 [[ "$test_count" -gt 1 ]]
 `,
@@ -6669,18 +6674,27 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
         cwd: root,
         env: {
           ...process.env,
+          BUILD_EXIT_CODE: String(buildExitCode),
+          GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           SWIFT_CALLS: callsPath,
           SWIFT_TEST_EXECUTION: execution,
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(buildExitCode || 1);
       expect(calls).toEqual([
-        `test --package-path apps/macos --enable-code-coverage --${
-          execution === "parallel" ? "parallel" : "no-parallel"
-        }`,
+        "build --package-path apps/macos --build-tests --enable-code-coverage",
+        ...(buildExitCode === 0
+          ? [
+              `test --package-path apps/macos --enable-code-coverage --skip-build --${
+                execution === "parallel" ? "parallel" : "no-parallel"
+              }`,
+            ]
+          : []),
       ]);
+      const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
+      expect(output).toBe(buildExitCode === 0 ? "debug-tests-built=true" : "");
     }
   });
 

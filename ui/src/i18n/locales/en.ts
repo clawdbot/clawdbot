@@ -2440,6 +2440,11 @@ export const en: TranslationMap = {
   },
   browser: {
     title: "Browser",
+    open: "Open",
+    openPanel: "Open browser panel",
+    moreActions: "More actions",
+    copyUrl: "Copy URL",
+    openNewTab: "Open in new tab",
     toggle: "Toggle browser panel",
     close: "Close browser panel",
     resize: "Resize browser panel",

@@ -4,6 +4,8 @@
  * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
  * maps high-level actions onto browser control client calls.
  */
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createBrowserNodeProxyRequest,
@@ -20,6 +22,9 @@ import {
   executeActAction,
   executeConsoleAction,
   executeDownloadAction,
+  executeEmulateAction,
+  executeRequestsAction,
+  executeTextAction,
   executeTabsAction,
   formatBrowserExternalToolResult,
 } from "./browser-tool.actions.js";
@@ -102,6 +107,45 @@ const browserToolDeps = {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 };
+
+function withBrowserTabDetails(
+  result: AgentToolResult<unknown>,
+  fallbackTargetId?: unknown,
+): AgentToolResult<unknown> {
+  // Control UI browser-tab preview card metadata; UI-only, replay strips details.
+  try {
+    const details = asNullableRecord(result.details);
+    if (
+      !details ||
+      details.ok === false ||
+      details.isError === true ||
+      (Array.isArray(details.results) &&
+        details.results.some((entry) => asNullableRecord(entry)?.ok === false)) ||
+      asNullableRecord(details.aborted)?.reason === "closed"
+    ) {
+      return result;
+    }
+    const targetId = readStringValue(details.targetId) ?? readStringValue(fallbackTargetId);
+    if (!targetId) {
+      return result;
+    }
+    const url = readStringValue(details.url);
+    const title = readStringValue(details.title);
+    return {
+      ...result,
+      details: {
+        ...details,
+        browserTab: {
+          targetId: truncateUtf16Safe(targetId, 128),
+          ...(url ? { url: truncateUtf16Safe(url, 2048) } : {}),
+          ...(title ? { title: truncateUtf16Safe(title, 512) } : {}),
+        },
+      },
+    };
+  } catch {
+    return result;
+  }
+}
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
@@ -414,7 +458,7 @@ export function createBrowserTool(opts?: {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
-  return {
+  const tool: AnyAgentTool = {
     label: "Browser",
     name: "browser",
     resultContentSource: "network",
@@ -427,7 +471,9 @@ export function createBrowserTool(opts?: {
         : (args as Record<string, unknown>);
       const action = readStringParam(params, "action", { required: true });
       if (!capabilities.actions.some((candidate) => candidate === action)) {
-        throw new Error(`browser action ${JSON.stringify(action)} is unavailable for this run`);
+        throw new Error(
+          `browser action ${JSON.stringify(action)} is unavailable for this run; use an available action such as snapshot, or select a managed browser profile in an unbound run.`,
+        );
       }
       const requestedProfile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
@@ -513,6 +559,15 @@ export function createBrowserTool(opts?: {
         // The node resolves omissions against its own config; Gateway defaults
         // never cross this execution-owner boundary.
         profile = requestedProfile;
+      }
+      if (
+        !proxyRequest &&
+        isUserBrowserProfile &&
+        ["requests", "text", "emulate"].includes(action)
+      ) {
+        throw new Error(
+          `action=${action} is not supported for existing-session profiles; use action=snapshot to inspect this page, or select a managed browser profile for ${action}.`,
+        );
       }
       const nodeRoute = nodeTarget ? createBrowserNodeSessionTabRoute(nodeTarget) : undefined;
       const toolTimeoutMs =
@@ -970,6 +1025,22 @@ export function createBrowserTool(opts?: {
           sessionTabs.touch(canonicalTargetId ?? targetId);
           return result;
         }
+        case "requests":
+        case "text":
+        case "emulate": {
+          const execute =
+            action === "requests"
+              ? executeRequestsAction
+              : action === "text"
+                ? executeTextAction
+                : executeEmulateAction;
+          const result = await execute({ input: params, baseUrl, profile, proxyRequest, signal });
+          sessionTabs.touch(
+            readStringValue(asNullableRecord(result.details)?.targetId) ??
+              readStringValue(params.targetId),
+          );
+          return result;
+        }
         case "pdf": {
           const targetId = normalizeOptionalString(params.targetId);
           const result = proxyRequest
@@ -1063,6 +1134,33 @@ export function createBrowserTool(opts?: {
         default:
           throw new Error(`Unknown action: ${action}`);
       }
+    },
+  };
+  return {
+    ...tool,
+    execute: async (...args) => {
+      const result = await tool.execute(...args);
+      const params = asNullableRecord(args[1]) ?? {};
+      const action = readStringParam(params, "action", { required: true });
+      const actRequest = action === "act" ? readActRequestParam(params) : undefined;
+      const targetId =
+        actRequest?.targetId ??
+        params.targetId ??
+        (bindingResult?.ok ? bindingResult.binding.targetId : undefined);
+      return [
+        "open",
+        "focus",
+        "navigate",
+        "screenshot",
+        "snapshot",
+        "text",
+        "requests",
+        "console",
+        "emulate",
+        "act",
+      ].includes(action) && actRequest?.kind !== "close"
+        ? withBrowserTabDetails(result, targetId)
+        : result;
     },
   };
 }

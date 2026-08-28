@@ -201,10 +201,19 @@ describe("Crabbox profile warm images", () => {
     }
   });
 
-  it("keeps warm images disabled by default and rejects non-boolean opt-ins", () => {
+  it("captures by default only for profiles that forward no setup environment", () => {
     const { warmImage, ...withoutWarmImage } = PROFILE;
     expect(warmImage).toBe(true);
-    expect(parseCrabboxProfile(withoutWarmImage).warmImage).toBe(false);
+    expect(parseCrabboxProfile(withoutWarmImage).warmImage).toBe(true);
+    const forwardsSetupEnv = {
+      ...withoutWarmImage,
+      setup: "install-toolchain",
+      setupEnv: ["REGISTRY_TOKEN"],
+    };
+    expect(parseCrabboxProfile(forwardsSetupEnv).warmImage).toBe(false);
+    // An explicit choice always wins over the derived default in both directions.
+    expect(parseCrabboxProfile({ ...forwardsSetupEnv, warmImage: true }).warmImage).toBe(true);
+    expect(parseCrabboxProfile({ ...withoutWarmImage, warmImage: false }).warmImage).toBe(false);
     expect(() => parseCrabboxProfile({ ...PROFILE, warmImage: "yes" })).toThrow(
       "Crabbox profile warmImage must be a boolean",
     );

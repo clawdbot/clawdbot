@@ -20,15 +20,14 @@ import {
   renderRateLimitReplyCopy,
 } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import type { AgentTurnInternalResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
@@ -46,6 +45,7 @@ import {
   buildRestartLifecycleReplyText,
   isReplyOperationRestartAbort,
   isReplyOperationUserAbort,
+  resolveReplyOperationTerminationFields,
   resolveRestartLifecycleError,
 } from "./reply-operation-abort.js";
 
@@ -118,13 +118,26 @@ export async function handleAgentExecutionError(params: {
   const turn = params.turn;
   const err = params.error;
   const takePendingLifecycleTerminal = () => {
-    const terminal = params.state.pendingLifecycleTerminal?.backstop;
+    const terminal =
+      params.state.pendingLifecycleTerminal?.backstop ??
+      createAgentLifecycleTerminalBackstop({
+        runId: params.runId,
+        sessionKey: turn.sessionKey,
+        startedAt: params.overloadRetryState.turnStartedAtMs,
+        getLifecycleGeneration: () => params.state.lifecycleGeneration,
+        resolveTerminationFields: (error) =>
+          resolveReplyOperationTerminationFields(
+            error,
+            turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal,
+            turn.replyOperation,
+          ),
+      });
     params.state.pendingLifecycleTerminal = undefined;
     return terminal;
   };
   const resolveReplyOperationAbortAction = (abortError: unknown): ErrorAction | undefined => {
     if (isReplyOperationRestartAbort(turn.replyOperation)) {
-      takePendingLifecycleTerminal()?.emit("end", abortError);
+      takePendingLifecycleTerminal().emit("end", abortError);
       return {
         kind: "final",
         payload:
@@ -134,7 +147,7 @@ export async function handleAgentExecutionError(params: {
       };
     }
     if (isReplyOperationUserAbort(turn.replyOperation)) {
-      takePendingLifecycleTerminal()?.emit("error", abortError);
+      takePendingLifecycleTerminal().emit("error", abortError);
       return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
     }
     return undefined;
@@ -160,7 +173,7 @@ export async function handleAgentExecutionError(params: {
       `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
         `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
     );
-    takePendingLifecycleTerminal()?.emit("error", err);
+    takePendingLifecycleTerminal().emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
       ? renderControlUiAgentFailureCopy(
           "model switch could not be completed. The requested model may be temporarily unavailable.",
@@ -229,7 +242,7 @@ export async function handleAgentExecutionError(params: {
     restartLifecycleError instanceof GatewayDrainingError ||
     restartLifecycleError instanceof CommandLaneClearedError
   ) {
-    takePendingLifecycleTerminal()?.emit("error", restartLifecycleError);
+    takePendingLifecycleTerminal().emit("error", restartLifecycleError);
     turn.replyOperation?.fail(
       restartLifecycleError instanceof GatewayDrainingError
         ? "gateway_draining"
@@ -242,7 +255,7 @@ export async function handleAgentExecutionError(params: {
     };
   }
   if (isCompactionFailure) {
-    takePendingLifecycleTerminal()?.emit("error", err);
+    takePendingLifecycleTerminal().emit("error", err);
     defaultRuntime.error(
       `Auto-compaction failed (${message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
     );
@@ -414,7 +427,7 @@ export async function handleAgentExecutionError(params: {
     return { kind: "retry" };
   }
   if (providerRequestError) {
-    takePendingLifecycleTerminal()?.emit("error", err);
+    takePendingLifecycleTerminal().emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
     return {
@@ -496,31 +509,7 @@ export async function handleAgentExecutionError(params: {
     isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
     cfg: turn.followupRun.run.config,
   });
-  const abortedSignal =
-    turn.replyOperation?.abortSignal.aborted === true
-      ? turn.replyOperation.abortSignal
-      : turn.opts?.abortSignal?.aborted === true
-        ? turn.opts.abortSignal
-        : undefined;
-  const abortLifecycleFields = resolveAgentRunErrorLifecycleFields(err, abortedSignal);
-  const failedLifecycleTerminal = takePendingLifecycleTerminal();
-  if (failedLifecycleTerminal) {
-    failedLifecycleTerminal.emit("error", err, { fallbackExhaustedFailure: true });
-  } else {
-    emitAgentEvent({
-      runId: params.runId,
-      lifecycleGeneration: params.state.lifecycleGeneration,
-      ...(turn.sessionKey ? { sessionKey: turn.sessionKey } : {}),
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: message,
-        endedAt: Date.now(),
-        ...abortLifecycleFields,
-        fallbackExhaustedFailure: true,
-      },
-    });
-  }
+  takePendingLifecycleTerminal().emit("error", err, { fallbackExhaustedFailure: true });
   turn.replyOperation?.fail("run_failed", err);
   await params.modelPatch.fail(err);
   return {

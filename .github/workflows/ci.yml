@@ -3885,15 +3885,36 @@ jobs:
             --parallel
 
       - name: Swift test
+        id: swift-test
         run: |
           set -euo pipefail
-          swift_test_args=(--package-path apps/macos --enable-code-coverage)
+          swift build --package-path apps/macos --build-tests --enable-code-coverage
+          echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
+          swift_test_args=(--package-path apps/macos --enable-code-coverage --skip-build)
           if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
             swift_test_args+=(--parallel)
           else
             swift_test_args+=(--no-parallel)
           fi
           swift test "${swift_test_args[@]}"
+
+      - name: Render isolated macOS health fixtures
+        id: health-render
+        if: ${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        run: bash scripts/test-macos-health-render.sh
+
+      - name: Upload macOS health component renders
+        if: ${{ always() && steps.health-render.outputs.artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-health-component-renders
+          path: |
+            ${{ steps.health-render.outputs.artifact-path }}/ready.png
+            ${{ steps.health-render.outputs.artifact-path }}/startup-grace.png
+            ${{ steps.health-render.outputs.artifact-path }}/stale-socket.png
+            ${{ steps.health-render.outputs.artifact-path }}/disabled.png
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Save SwiftPM cache
         if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'

@@ -84,6 +84,8 @@ const PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH = "scripts/e2e/plugin-lifecycle-ma
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const DOCTOR_SWITCH_BUSCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/busctl";
+const DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH =
+  "scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs";
 const DOCTOR_SWITCH_LOGINCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/loginctl";
 const DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/systemctl";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
@@ -5234,6 +5236,7 @@ done
       "cp scripts/e2e/lib/doctor-install-switch/shims/systemctl",
       "cp scripts/e2e/lib/doctor-install-switch/shims/loginctl",
       "cp scripts/e2e/lib/doctor-install-switch/shims/busctl",
+      "cp scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs",
       "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1",
       "scripts/e2e/lib/package-compat.mjs",
     ]);
@@ -5376,7 +5379,10 @@ done
     ]);
 
     const binDir = join(home, "bin");
-    writeExecutables(binDir, { busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8") });
+    writeExecutables(binDir, {
+      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
+      "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
+    });
     const { readSystemdServiceExecStart } =
       await import("../../src/daemon/systemd-service-files.js");
     expect(
@@ -5409,7 +5415,10 @@ done
     const binDir = join(home, "bin");
     const serviceName = "openclaw-gateway-fixture.service";
     const unitPath = join(home, ".config/systemd/user", serviceName);
-    writeExecutables(binDir, { busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8") });
+    writeExecutables(binDir, {
+      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
+      "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
+    });
     const env = {
       HOME: home,
       PATH: `${binDir}:${process.env.PATH}`,

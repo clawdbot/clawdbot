@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { parseSystemdExecStart } from "./systemd-exec-start.mjs";
 
 const manager = "org.freedesktop.systemd1";
 const rootObjectPath = "/org/freedesktop/systemd1";
@@ -9,6 +10,14 @@ const args = process.argv.slice(2);
 function fail() {
   process.stderr.write("doctor-switch busctl shim: unexpected invocation or unavailable unit\n");
   process.exit(1);
+}
+
+function parseWords(value) {
+  try {
+    return parseSystemdExecStart(value);
+  } catch {
+    return fail();
+  }
 }
 
 function readUnitContent(unitPath, missingUnitName) {
@@ -22,43 +31,6 @@ function readUnitContent(unitPath, missingUnitName) {
     }
     return fail();
   }
-}
-
-function splitWords(value) {
-  const words = [];
-  let word = "";
-  let quote = "";
-  let escaped = false;
-  for (const character of value) {
-    if (escaped) {
-      word += character;
-      escaped = false;
-    } else if (character === "\\" && quote !== "'") {
-      escaped = true;
-    } else if (quote) {
-      if (character === quote) {
-        quote = "";
-      } else {
-        word += character;
-      }
-    } else if (character === '"' || character === "'") {
-      quote = character;
-    } else if (/\s/u.test(character)) {
-      if (word) {
-        words.push(word);
-        word = "";
-      }
-    } else {
-      word += character;
-    }
-  }
-  if (quote || escaped) {
-    fail();
-  }
-  if (word) {
-    words.push(word);
-  }
-  return words;
 }
 
 function encodeUnitName(name) {
@@ -155,14 +127,14 @@ for (const rawLine of content.split(/\r?\n/u)) {
   const directive = line.slice(0, separator);
   const value = line.slice(separator + 1).trim();
   if (directive === "ExecStart") {
-    programArguments = splitWords(value).map(expandHome);
+    programArguments = parseWords(value).map(expandHome);
   } else if (directive === "WorkingDirectory") {
-    workingDirectory = expandHome(splitWords(value)[0] || "").replace(/^-/, "");
+    workingDirectory = expandHome(parseWords(value)[0] || "").replace(/^-/, "");
   } else if (directive === "Environment") {
     if (!value) {
       environment.clear();
     }
-    for (const assignment of splitWords(value)) {
+    for (const assignment of parseWords(value)) {
       const assignmentSeparator = assignment.indexOf("=");
       if (assignmentSeparator <= 0) {
         fail();
@@ -176,7 +148,7 @@ for (const rawLine of content.split(/\r?\n/u)) {
     if (!value) {
       environmentFiles.length = 0;
     }
-    for (const filename of splitWords(value)) {
+    for (const filename of parseWords(value)) {
       const optional = filename.startsWith("-");
       environmentFiles.push([expandHome(optional ? filename.slice(1) : filename), optional]);
     }
@@ -184,7 +156,7 @@ for (const rawLine of content.split(/\r?\n/u)) {
     if (!value) {
       unsetEnvironment.length = 0;
     } else {
-      unsetEnvironment.push(...splitWords(value));
+      unsetEnvironment.push(...parseWords(value));
     }
   }
 }

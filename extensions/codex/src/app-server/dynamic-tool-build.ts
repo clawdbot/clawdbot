@@ -152,6 +152,7 @@ type DynamicToolBuildParams = {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   };
+  registerRunCleanup?: OpenClawCodingToolsOptions["registerRunCleanup"];
 };
 /** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
 function resolveOpenClawCodingToolsSessionKeys(
@@ -381,6 +382,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       hasRepliedRef: params.hasRepliedRef,
       modelHasVision,
       computerContextEpoch: input.computerContextEpoch,
+      registerRunCleanup: input.registerRunCleanup,
       requireExplicitMessageTarget:
         params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

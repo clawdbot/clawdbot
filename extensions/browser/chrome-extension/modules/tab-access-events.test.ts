@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTabAccessEvents } from "./tab-access-events.js";
+import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
 function deferred<T>() {
   let resolve = (_value: T) => {};
@@ -18,7 +19,11 @@ function createHarness(
     | undefined;
   let debuggerDetachListener: ((source: { tabId?: number }, reason: string) => void) | undefined;
   let tabsUpdatedListener:
-    | ((tabId: number, changeInfo: { groupId?: number; url?: string }) => void)
+    | ((
+        tabId: number,
+        changeInfo: { groupId?: number; url?: string },
+        tab: BrowserTabSnapshot,
+      ) => void)
     | undefined;
   let tabsReplacedListener: ((addedTabId: number, removedTabId: number) => void) | undefined;
   let groupUpdatedListener: (() => void) | undefined;
@@ -38,6 +43,10 @@ function createHarness(
     ),
     invalidateTab: vi.fn(() => {
       revision += 1;
+    }),
+    renewTabAccess: vi.fn(() => {
+      revision += 1;
+      return undefined;
     }),
     invalidateAll: vi.fn(() => {
       revision += 1;
@@ -128,7 +137,8 @@ function createHarness(
     setAccessible: (next: boolean) => {
       accessible = next;
     },
-    tabsUpdatedListener,
+    tabsUpdatedListener: (tabId: number, changeInfo: { groupId?: number; url?: string }) =>
+      tabsUpdatedListener?.(tabId, changeInfo, { id: tabId, ...changeInfo }),
     tabsReplacedListener,
   };
 }

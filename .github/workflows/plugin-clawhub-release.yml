@@ -16,7 +16,12 @@ on:
         required: false
         type: string
       ref:
-        description: Dry-run target ref to validate; real OIDC publishes must dispatch the workflow with --ref set to the target release tag/ref
+        description: Exact target SHA for protected-tooling release publication, or a dry-run target ref
+        required: false
+        default: ""
+        type: string
+      release_tag:
+        description: Exact release tag that must peel to ref for protected-tooling publication
         required: false
         default: ""
         type: string
@@ -24,9 +29,24 @@ on:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
         type: string
+      release_publish_run_attempt:
+        description: Exact approving OpenClaw Release Publish workflow run attempt
+        required: false
+        default: ""
+        type: string
       release_publish_branch:
         description: Branch name of the approving OpenClaw Release Publish workflow run
         required: false
+        type: string
+      release_publish_full_ref:
+        description: Full ref of the approving OpenClaw Release Publish workflow run
+        required: false
+        default: ""
+        type: string
+      release_publish_workflow_sha:
+        description: Exact SHA of the approving OpenClaw Release Publish workflow run
+        required: false
+        default: ""
         type: string
       dry_run:
         description: Validate the full ClawHub artifact handoff without publishing.
@@ -73,12 +93,21 @@ jobs:
       - name: Resolve checked-out ref
         id: ref
         env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
           TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] || {
+              echo "Invalid ClawHub release tag: ${RELEASE_TAG}" >&2
+              exit 1
+            }
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
+              "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          fi
           if [[ -n "${TARGET_REF}" ]]; then
             if git rev-parse --verify --quiet "${TARGET_REF}^{commit}" >/dev/null; then
               target_sha="$(git rev-parse "${TARGET_REF}^{commit}")"
@@ -96,7 +125,11 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.ref.outputs.sha }}
           WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
         run: |
           set -euo pipefail
           if [[ "${TARGET_SHA}" != "${WORKFLOW_SHA}" ]]; then
@@ -104,9 +137,15 @@ jobs:
               echo "Dry-run publish target differs from workflow ref; allowing validation-only dispatch."
               exit 0
             fi
-            echo "Plugin ClawHub OIDC publishes must run from the same ref that is being published." >&2
-            echo "The ref input is only supported for dry_run=true." >&2
-            echo "For real publishes, dispatch this workflow with --ref pointing at the target release tag/ref and omit the ref input." >&2
+            if [[ "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]] &&
+              [[ -n "${RELEASE_PUBLISH_RUN_ID// }" ]] &&
+              [[ "${RELEASE_PUBLISH_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]] &&
+              [[ -n "${RELEASE_TAG}" ]] &&
+              [[ "$(git rev-parse "${RELEASE_TAG}^{commit}")" == "${TARGET_SHA}" ]]; then
+              echo "Protected release tooling is publishing the exact immutable release tag target."
+              exit 0
+            fi
+            echo "Plugin ClawHub OIDC publish target is not bound to protected tooling and the exact release tag." >&2
             exit 1
           fi
 
@@ -286,7 +325,10 @@ jobs:
           ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.release_publish_workflow_sha }}
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
@@ -303,7 +345,7 @@ jobs:
             echo "Direct Plugin ClawHub Release recovery with release_publish_run_id; relying on this workflow's clawhub-plugin-release environment approval."
           fi
           RUN_JSON="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" |
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}" |
               jq '{
                 repository: .repository.full_name,
                 workflowName: .name,
@@ -374,7 +416,7 @@ jobs:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-          SOURCE_REF: ${{ github.ref }}
+          SOURCE_REF: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
@@ -423,7 +465,7 @@ jobs:
       tags: ${{ matrix.plugin.publishTag }}
       source_repo: ${{ github.repository }}
       source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-      source_ref: ${{ github.ref }}
+      source_ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
       source_path: ${{ matrix.plugin.packageDir }}
       inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
       publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
