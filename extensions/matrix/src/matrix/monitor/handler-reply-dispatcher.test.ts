@@ -4,14 +4,6 @@ import type { MatrixClient } from "../sdk.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => ({ visibleReplySent: true })));
-const getSessionEntryMock = vi.hoisted(() => vi.fn());
-const resolveStorePathMock = vi.hoisted(() => vi.fn(() => "/tmp/matrix-proof.sqlite"));
-
-vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
-  getSessionEntry: getSessionEntryMock,
-  resolveStorePath: resolveStorePathMock,
-}));
 
 vi.mock("./replies.js", async () => {
   const actual = await vi.importActual<typeof import("./replies.js")>("./replies.js");
@@ -21,13 +13,9 @@ vi.mock("./replies.js", async () => {
   };
 });
 
-function createDispatcher(
-  reasoningDefault: "off" | "on" | "stream" = "stream",
-  sessionKey?: string,
-) {
+function createDispatcher() {
   return createMatrixReplyDispatcher({
-    cfg: { agents: { defaults: { reasoningDefault } } },
-    ...(sessionKey ? { sessionKey } : {}),
+    cfg: {},
     prefixOptions: { responsePrefixContextProvider: () => ({ identityName: undefined }) },
     humanDelay: { mode: "off" },
     typingCallbacks: {
@@ -60,41 +48,30 @@ function createDispatcher(
 describe("createMatrixReplyDispatcher", () => {
   beforeEach(() => {
     deliverMatrixRepliesMock.mockReset().mockResolvedValue({ visibleReplySent: true });
-    getSessionEntryMock.mockReset().mockReturnValue(undefined);
-    resolveStorePathMock.mockReset().mockReturnValue("/tmp/matrix-proof.sqlite");
   });
 
-  it("disables both reasoning lanes when visibility is off", () => {
-    const dispatcher = createDispatcher("off");
+  it.each([
+    { level: "off" as const, delivered: false },
+    { level: "stream" as const, delivered: false },
+    { level: "on" as const, delivered: true },
+  ])(
+    "delivers durable reasoning only when the resolved mode is $level",
+    async ({ level, delivered }) => {
+      const dispatcher = createDispatcher();
+      dispatcher.setReasoningLevel(level);
 
-    expect(dispatcher.reasoningPayloadsEnabled).toBe(false);
-    expect(dispatcher.turnDispatcherOptions.onReasoningStream).toBeUndefined();
-    expect(dispatcher.turnDispatcherOptions.onReasoningEnd).toBeUndefined();
-  });
+      await dispatcher.deliverReply(
+        { text: "Resolved thought", isReasoning: true },
+        { kind: "final" },
+      );
 
-  it("fails closed when the session reasoning preference cannot be read", () => {
-    getSessionEntryMock.mockImplementation(() => {
-      throw new Error("session store unavailable");
-    });
-
-    const dispatcher = createDispatcher("on", "agent:main:main");
-
-    expect(dispatcher.reasoningPayloadsEnabled).toBe(false);
-    expect(dispatcher.turnDispatcherOptions.onReasoningStream).toBeUndefined();
-    expect(dispatcher.turnDispatcherOptions.onReasoningEnd).toBeUndefined();
-  });
-  it("enables only durable reasoning when visibility is on", () => {
-    const dispatcher = createDispatcher("on");
-
-    expect(dispatcher.reasoningPayloadsEnabled).toBe(true);
-    expect(dispatcher.turnDispatcherOptions.onReasoningStream).toBeUndefined();
-    expect(dispatcher.turnDispatcherOptions.onReasoningEnd).toBeUndefined();
-  });
+      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(delivered ? 1 : 0);
+    },
+  );
 
   it("delivers stream-mode reasoning when the reasoning block ends", async () => {
     const dispatcher = createDispatcher();
-
-    expect(dispatcher.reasoningPayloadsEnabled).toBe(false);
+    dispatcher.setReasoningLevel("stream");
 
     expect(dispatcher.turnDispatcherOptions.onReasoningStream?.({ text: "Checking tools" })).toBe(
       false,
@@ -120,6 +97,7 @@ describe("createMatrixReplyDispatcher", () => {
       .mockImplementationOnce(async () => await firstDelivery)
       .mockResolvedValue({ visibleReplySent: true });
     const dispatcher = createDispatcher();
+    dispatcher.setReasoningLevel("stream");
 
     dispatcher.turnDispatcherOptions.onReasoningStream?.({ text: "First window" });
     const firstEnd = dispatcher.turnDispatcherOptions.onReasoningEnd?.();

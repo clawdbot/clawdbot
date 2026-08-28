@@ -293,6 +293,32 @@ describe("getReplyFromConfig message hooks", () => {
     expect(triggerCount).toBe(2);
   });
 
+  it.each(["on", "stream"] as const)(
+    "reports the current-turn inline reasoning mode %s before the agent run",
+    async (level) => {
+      const body = `/reasoning ${level} explain this`;
+      const onReasoningLevelResolved = vi.fn();
+      mocks.resolveReplyDirectives.mockResolvedValueOnce(
+        createGetReplyContinueDirectivesResult({
+          body,
+          abortKey: "agent:main:telegram:-100123",
+          from: "telegram:user",
+          to: "telegram:chat",
+          senderId: "user",
+          commandSource: "message",
+          senderIsOwner: true,
+          resetHookTriggered: false,
+          resolvedReasoningLevel: level,
+        }),
+      );
+
+      await getReplyFromConfig(buildCtx(), { onReasoningLevelResolved }, withFastReplyConfig({}));
+
+      expect(onReasoningLevelResolved).toHaveBeenCalledExactlyOnceWith(level);
+      expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    },
+  );
+
   it("prepares durable session state before media understanding", async () => {
     const order: string[] = [];
     mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(() => {

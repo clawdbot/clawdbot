@@ -1,4 +1,3 @@
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
@@ -10,7 +9,6 @@ import {
   getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixExtraContent } from "../../outbound.js";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
@@ -39,34 +37,8 @@ import {
 type MatrixDraftController = Awaited<ReturnType<typeof createMatrixDraftController>>;
 type MatrixReasoningLevel = "on" | "stream" | "off";
 
-function resolveMatrixReasoningLevel(params: {
-  cfg: CoreConfig;
-  agentId?: string;
-  sessionKey?: string;
-}): MatrixReasoningLevel {
-  const agentDefault = resolveAgentConfig(params.cfg, params.agentId ?? "main")?.reasoningDefault;
-  const configuredDefault = agentDefault ?? params.cfg.agents?.defaults?.reasoningDefault;
-  const configDefault: MatrixReasoningLevel =
-    configuredDefault === "on" || configuredDefault === "stream" ? configuredDefault : "off";
-  if (!params.sessionKey) {
-    return configDefault;
-  }
-  try {
-    const level = getSessionEntry({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
-    })?.reasoningLevel;
-    return level === "on" || level === "stream" || level === "off" ? level : configDefault;
-  } catch {
-    return "off";
-  }
-}
-
 export function createMatrixReplyDispatcher(config: {
   cfg: CoreConfig;
-  agentId?: string;
-  sessionKey?: string;
   prefixOptions: Omit<ReturnType<typeof createReplyPrefixOptions>, "onModelSelected">;
   humanDelay: ReturnType<
     typeof import("openclaw/plugin-sdk/agent-runtime").resolveHumanDelayConfig
@@ -87,8 +59,6 @@ export function createMatrixReplyDispatcher(config: {
 }) {
   const {
     cfg,
-    agentId,
-    sessionKey,
     prefixOptions,
     humanDelay,
     typingCallbacks,
@@ -105,9 +75,7 @@ export function createMatrixReplyDispatcher(config: {
     mediaLocalRoots,
     logVerboseMessage,
   } = config;
-  const reasoningLevel = resolveMatrixReasoningLevel({ cfg, agentId, sessionKey });
-  const reasoningDurableEnabled = reasoningLevel === "on";
-  const reasoningWindowEnabled = reasoningLevel === "stream";
+  let reasoningLevel: MatrixReasoningLevel = "off";
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
   // Tool, block, and final payloads are delivered separately but share one first-reply slot.
   const hasRepliedRef = { value: false };
@@ -145,6 +113,9 @@ export function createMatrixReplyDispatcher(config: {
     deliver: async (payload: ReplyPayload, info: { kind: string }) => {
       if (info.kind === "final") {
         await reasoningNoticeDeliveryQueue;
+      }
+      if (payload.isReasoning === true && reasoningLevel !== "on") {
+        return mergeMatrixReplyDeliveryResults([]);
       }
       const completeDelivery = async (
         result: MatrixReplyDeliveryResult,
@@ -472,35 +443,31 @@ export function createMatrixReplyDispatcher(config: {
       }
       runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
     },
-    onReasoningStream: reasoningWindowEnabled
-      ? (payload: { text?: string }) => {
-          latestReasoningStreamText = normalizeOptionalString(payload.text) ?? "";
+    onReasoningStream: (payload: { text?: string }) => {
+      if (reasoningLevel === "stream") {
+        latestReasoningStreamText = normalizeOptionalString(payload.text) ?? "";
+      }
+      return false;
+    },
+    onReasoningEnd: async () => {
+      const text = latestReasoningStreamText;
+      latestReasoningStreamText = "";
+      if (reasoningLevel !== "stream" || !text) {
+        return false;
+      }
+      const delivery = reasoningNoticeDeliveryQueue
+        .then(async () => (await deliverReplies([{ text, isReasoning: true }])).visibleReplySent)
+        .catch((error: unknown) => {
+          nonFinalReplyDeliveryFailed = true;
+          runtime.error?.(`matrix reasoning reply failed: ${String(error)}`);
           return false;
-        }
-      : undefined,
-    onReasoningEnd: reasoningWindowEnabled
-      ? async () => {
-          const text = latestReasoningStreamText;
-          latestReasoningStreamText = "";
-          if (!text) {
-            return false;
-          }
-          const delivery = reasoningNoticeDeliveryQueue
-            .then(
-              async () => (await deliverReplies([{ text, isReasoning: true }])).visibleReplySent,
-            )
-            .catch((error: unknown) => {
-              nonFinalReplyDeliveryFailed = true;
-              runtime.error?.(`matrix reasoning reply failed: ${String(error)}`);
-              return false;
-            });
-          reasoningNoticeDeliveryQueue = delivery.then(
-            () => undefined,
-            () => undefined,
-          );
-          return await delivery;
-        }
-      : undefined,
+        });
+      reasoningNoticeDeliveryQueue = delivery.then(
+        () => undefined,
+        () => undefined,
+      );
+      return await delivery;
+    },
     onReplyStart: typingCallbacks.onReplyStart,
     onIdle: typingCallbacks.onIdle,
   };
@@ -514,8 +481,13 @@ export function createMatrixReplyDispatcher(config: {
     deliverReply,
     onReplyError,
     turnDispatcherOptions,
+    setReasoningLevel: (level: MatrixReasoningLevel) => {
+      reasoningLevel = level;
+      if (level !== "stream") {
+        latestReasoningStreamText = "";
+      }
+    },
     finalReplyDeliveryFailed: () => finalReplyDeliveryFailed,
     nonFinalReplyDeliveryFailed: () => nonFinalReplyDeliveryFailed,
-    reasoningPayloadsEnabled: reasoningDurableEnabled,
   };
 }

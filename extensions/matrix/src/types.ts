@@ -230,7 +230,6 @@ export type MatrixConfig = {
 };
 
 export type CoreConfig = {
-  agents?: OpenClawConfig["agents"];
   channels?: {
     matrix?: MatrixConfig;
     defaults?: {

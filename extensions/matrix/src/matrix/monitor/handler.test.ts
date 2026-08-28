@@ -3059,12 +3059,17 @@ describe("matrix monitor handler draft streaming", () => {
       ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
       isCompactionNotice?: boolean;
       isError?: boolean;
+      isReasoning?: boolean;
       replyToId?: string;
     },
     info: { kind: string },
   ) => Promise<unknown>;
   type ReplyOpts = {
     preserveProgressCallbackStartOrder?: boolean;
+    reasoningPayloadsEnabled?: boolean;
+    onReasoningLevelResolved?: (level: "off" | "on" | "stream") => void;
+    onReasoningStream?: (payload: { text?: string }) => Promise<boolean> | boolean;
+    onReasoningEnd?: () => Promise<boolean> | boolean;
     onReplyStart?: () => Promise<void> | void;
     onPartialReply?: (payload: { text: string }) => void;
     onBlockReplyQueued?: (
@@ -3191,11 +3196,11 @@ describe("matrix monitor handler draft streaming", () => {
       }) as never,
     });
 
-    const dispatch = async () => {
+    const dispatch = async (body = "hello") => {
       // Start handler without awaiting — it blocks on runGate.
       const handlerDone = handler(
         "!room:example.org",
-        createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+        createMatrixTextMessageEvent({ eventId: "$msg1", body }),
       );
       await captured;
       return {
@@ -3220,6 +3225,44 @@ describe("matrix monitor handler draft streaming", () => {
 
     expect(opts.preserveProgressCallbackStartOrder).toBe(true);
 
+    await finish();
+  });
+
+  it("applies the current-turn inline on mode before durable reasoning delivery", async () => {
+    const { dispatch } = createStreamingHarness({ streaming: "off" });
+    const { deliver, opts, finish } = await dispatch("/reasoning on explain this");
+
+    expect(opts.reasoningPayloadsEnabled).toBe(true);
+    opts.onReasoningLevelResolved?.("on");
+    await deliver({ text: "Reasoning:\nInline on thought", isReasoning: true }, { kind: "final" });
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "Reasoning:\nInline on thought", isReasoning: true }],
+      }),
+    );
+    await finish();
+  });
+
+  it("applies the current-turn inline stream mode before reasoning callbacks", async () => {
+    const { dispatch } = createStreamingHarness({ streaming: "off" });
+    const { deliver, opts, finish } = await dispatch("/reasoning stream explain this");
+
+    opts.onReasoningLevelResolved?.("stream");
+    await opts.onReasoningStream?.({ text: "Reasoning:\nInline stream thought" });
+    await opts.onReasoningEnd?.();
+    await deliver({ text: "Inline final" }, { kind: "final" });
+
+    expect(deliverMatrixRepliesMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        replies: [{ text: "Reasoning:\nInline stream thought", isReasoning: true }],
+      }),
+    );
+    expect(deliverMatrixRepliesMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ replies: [{ text: "Inline final" }] }),
+    );
     await finish();
   });
 

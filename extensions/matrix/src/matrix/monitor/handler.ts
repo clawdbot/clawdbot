@@ -421,8 +421,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       draftControllerRef = draftController;
       const replyDispatcher = createMatrixReplyDispatcher({
         cfg,
-        agentId: _route.agentId,
-        sessionKey: _route.sessionKey,
         prefixOptions,
         humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
         typingCallbacks,
@@ -439,7 +437,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         mediaLocalRoots,
         logVerboseMessage,
       });
-      const { deliverReply, onReplyError, reasoningPayloadsEnabled, turnDispatcherOptions } =
+      const { deliverReply, onReplyError, setReasoningLevel, turnDispatcherOptions } =
         replyDispatcher;
       const pinnedMainDmOwner = isDirectMessage
         ? await (async () => {
@@ -569,7 +567,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             replyOptions: {
               preserveProgressCallbackStartOrder: true,
               skillFilter: roomConfig?.skills,
-              reasoningPayloadsEnabled: reasoningPayloadsEnabled || undefined,
+              // Core resolves inline and stored reasoning policy after Matrix creates its dispatcher.
+              // Admit typed payloads here, then let the resolved-turn callback select the Matrix lane.
+              reasoningPayloadsEnabled: true,
+              onReasoningLevelResolved: setReasoningLevel,
               // Preserve explicit block streaming with draft previews: drafts update the live
               // block, while block deliveries finalize completed blocks as separate events.
               disableBlockStreaming: !blockStreamingEnabled,

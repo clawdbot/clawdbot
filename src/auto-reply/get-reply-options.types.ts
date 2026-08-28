@@ -11,6 +11,7 @@ import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcrip
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+import type { ReasoningLevel } from "./thinking.shared.js";
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
@@ -295,6 +296,8 @@ export type GetReplyOptions = {
   progressPreambleEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
   reasoningPayloadsEnabled?: boolean;
+  /** Reports the canonical reasoning visibility resolved for this turn. */
+  onReasoningLevelResolved?: (level: ReasoningLevel) => void;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
   commentaryPayloadsEnabled?: boolean;
   /** Optional turn-frozen commentary owner; visibility is live by default.
