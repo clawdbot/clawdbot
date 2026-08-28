@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -66,6 +67,36 @@ const actionSectionCases = [
   { route: "mcp", heading: "Configured servers" },
   { route: "model-providers", heading: "Default models" },
 ] as const;
+
+const settingsRowRoutes = [
+  "profile",
+  "appearance",
+  "lobsterdex",
+  "notifications",
+  "connection",
+  "channels",
+  "communications",
+  "talk",
+  "devices",
+  "cloud-workers",
+  "agents",
+  "ai-agents",
+  "labs",
+  "model-setup",
+  "model-providers",
+  "mcp",
+  "memory",
+  "automation",
+  "security",
+  "secrets",
+  "approvals",
+  "infrastructure",
+  "updates",
+  "advanced",
+  "plugins",
+  "about",
+  "debug",
+] as const satisfies readonly RouteId[];
 
 const responsiveViewports = [
   { width: 390, height: 844 },
@@ -212,6 +243,44 @@ suite.define(() => {
     } finally {
       await context.close();
     }
+  });
+
+  it("binds every settings row subtitle directly to its title", async () => {
+    await suite.withPage(
+      { colorScheme: "dark", locale: "en-US", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        await installMockGateway(page);
+        let auditedPairCount = 0;
+
+        for (const route of settingsRowRoutes) {
+          const pathname = pathForRoute(route);
+          await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+          await waitForControlUiRoute(page, {
+            pathname,
+            routeId: route,
+          });
+
+          const titleDescriptionPairs = page.locator(
+            ".settings-row__text > .settings-row__title + .settings-row__desc",
+          );
+          const gaps = await titleDescriptionPairs.evaluateAll((descriptions) =>
+            descriptions.map((description) => {
+              const title = description.previousElementSibling;
+              if (!(title instanceof HTMLElement)) {
+                throw new Error("settings row description is missing its title");
+              }
+              const titleBox = title.getBoundingClientRect();
+              const descriptionBox = description.getBoundingClientRect();
+              return Math.round(descriptionBox.y - titleBox.y - titleBox.height);
+            }),
+          );
+          auditedPairCount += gaps.length;
+          expect(gaps, `${route} title/subtitle gaps`).toEqual(gaps.map(() => 0));
+        }
+
+        expect(auditedPairCount).toBeGreaterThan(0);
+      },
+    );
   });
 
   it("keeps settings introductions, section headings, and Learn more links on one layout system", async () => {
