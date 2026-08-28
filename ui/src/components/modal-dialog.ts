@@ -192,8 +192,8 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         without-header
         light-dismiss
         .label=${this.label}
-        @wa-show=${this.handleShow}
-        @wa-after-show=${this.handleAfterShow}
+        @focusin=${this.handleInitialFocus}
+        @wa-after-show=${this.handleInitialFocus}
         @wa-after-hide=${this.handleAfterHide}
         @wa-hide=${this.handleHide}
       >
@@ -260,31 +260,28 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
   }
 
-  private handleAfterShow = (event?: Event) => {
-    if (event && event.target !== event.currentTarget) {
+  private handleInitialFocus = (event: Event) => {
+    if (event.target !== event.currentTarget) {
       return;
     }
     if (!this.isConnected) {
       return;
     }
-    // Both the scheduled show hook and wa-after-show land here, and the second
-    // arrives after the open animation. If focus already moved to a slotted
-    // field (user click, autofill, e2e input), refocusing the autofocus target
-    // would steal it mid-typing; `this` means focus sits on dialog chrome.
-    const active = document.activeElement;
+    // Late animation completion must not replace focus already inside the form.
+    const root = this.getRootNode();
+    const active =
+      root instanceof ShadowRoot ? root.activeElement : this.ownerDocument.activeElement;
     if (active instanceof HTMLElement && active !== this && this.contains(active)) {
       return;
     }
-    const autofocusTarget = this.querySelector<HTMLElement>("[autofocus]");
-    autofocusTarget?.focus({ preventScroll: true });
-  };
-
-  private handleShow = (event: Event) => {
-    if (event.target !== event.currentTarget) {
-      return;
-    }
-    // Web Awesome cannot see autofocus targets through this adapter's slot.
-    queueMicrotask(() => requestAnimationFrame(() => this.handleAfterShow()));
+    // Web Awesome's opening frame focuses its native dialog without seeing our
+    // slotted content. Restore the field it just displaced before input arrives.
+    const previous = event instanceof FocusEvent ? event.relatedTarget : null;
+    const target =
+      previous instanceof HTMLElement && this.contains(previous)
+        ? previous
+        : this.querySelector<HTMLElement>("[autofocus]");
+    target?.focus({ preventScroll: true });
   };
 
   private handleAfterHide = (event: Event) => {
