@@ -204,7 +204,7 @@ suite.define(() => {
         await expect.poll(() => disclosure.count()).toBe(1);
         await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
         await expect
-          .poll(() => disclosure.locator("summary").textContent())
+          .poll(() => disclosure.locator(":scope > summary").textContent())
           .toContain("Advanced settings");
         await expect
           .poll(() => page.getByText("Show Advanced Settings", { exact: true }).count())
@@ -219,7 +219,7 @@ suite.define(() => {
           });
         }
 
-        await disclosure.locator("summary").click();
+        await disclosure.locator(":scope > summary").click();
         await expect.poll(() => disclosure.getAttribute("open")).not.toBeNull();
 
         if (captureUiProofEnabled) {
@@ -230,7 +230,7 @@ suite.define(() => {
           });
         }
 
-        await disclosure.locator("summary").click();
+        await disclosure.locator(":scope > summary").click();
         await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
         await page.waitForTimeout(750);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
