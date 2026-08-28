@@ -244,7 +244,7 @@ describe("ChatAudioPlayer", () => {
     );
   });
 
-  it("renders decoded waveform peaks when the player reaches the viewport", async () => {
+  it("renders decoded waveform peaks and recovers them after a renewed media ticket", async () => {
     const intersectionCallbacks: IntersectionObserverCallback[] = [];
     vi.stubGlobal(
       "IntersectionObserver",
@@ -329,9 +329,24 @@ describe("ChatAudioPlayer", () => {
     expect(media.getAttribute("src")).toBe("blob:waveform-audio");
     expect(fetchMock).toHaveBeenCalledOnce();
 
+    Object.defineProperty(media, "error", { configurable: true, value: {} as MediaError });
+    media.dispatchEvent(new Event("error"));
+    await player.updateComplete;
+    expect(player.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+
+    player.src = "https://example.com/waveform-reuse.mp3?mediaTicket=recovered";
+    await player.updateComplete;
+    await vi.waitFor(() =>
+      expect(player.querySelector("audio")?.getAttribute("src")).toBe(
+        "https://example.com/waveform-reuse.mp3?mediaTicket=recovered",
+      ),
+    );
+
     player.authToken = "new-principal";
     await player.updateComplete;
-    expect(media.getAttribute("src")).toBe("https://example.com/waveform-reuse.mp3");
+    expect(player.querySelector("audio")?.getAttribute("src")).toBe(
+      "https://example.com/waveform-reuse.mp3?mediaTicket=recovered",
+    );
 
     player.remove();
     const refreshed = document.createElement("openclaw-chat-audio-player");

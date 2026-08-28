@@ -116,6 +116,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         changedProperties.has("playback") ||
         changedProperties.has("authToken"))
     ) {
+      this.releaseWaveformBlob?.();
+      this.releaseWaveformBlob = undefined;
       this.sourceController.cancel();
     }
   }
