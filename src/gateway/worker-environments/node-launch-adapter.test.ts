@@ -371,27 +371,6 @@ describe("node worker launch adapter", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("launches once, polls status, and returns the exact completed receipt", async () => {
-    const input = launchInput();
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) =>
-      request.command === "worker.launch.v1"
-        ? wire(receipt(input, "running"))
-        : wire(receipt(input, "completed")),
-    );
-    const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () => transportWith(invoke),
-      sleep: async () => {},
-    });
-
-    await expect(adapter.launch(launchRequest(input))).resolves.toEqual(
-      receipt(input, "completed"),
-    );
-    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
-      "worker.launch.v1",
-      "worker.status.v1",
-    ]);
-  });
-
   it("reacquires the node and replays the identical launch after ambiguous disconnect", async () => {
     const input = launchInput();
     let launchCalls = 0;

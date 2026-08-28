@@ -26,6 +26,7 @@ import {
   listActiveEmbeddedRunSessionKeys,
 } from "../embedded-agent-runner/run-state.js";
 import {
+  getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
 } from "./main-session-recovery-state.js";
@@ -409,8 +410,8 @@ export async function recoverStore(params: {
           storePath: params.storePath,
         });
         if (
-          current?.mainRestartRecovery?.chargedAttempts === MAX_RECOVERY_RETRIES &&
-          !current.mainRestartRecovery.reservation
+          getMainSessionRecoveryRetryCount(current?.mainRestartRecovery) === MAX_RECOVERY_RETRIES &&
+          !current?.mainRestartRecovery?.reservation
         ) {
           params.onExhaustedTarget?.({
             canonicalSessionKey: dispatchSessionKey,

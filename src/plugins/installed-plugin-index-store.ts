@@ -8,7 +8,7 @@ import {
 } from "../config/plugin-install-record-map.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-row.js";
+import { getPersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
@@ -208,7 +208,16 @@ export async function readPersistedInstalledPluginIndex(
 export function readPersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): InstalledPluginIndex | null {
-  return parseInstalledPluginIndexSqliteRow(
-    parsePersistedInstalledPluginIndexRow(readPersistedInstalledPluginIndexRowSync(options)),
-  );
+  const entry = getPersistedInstalledPluginIndexCacheEntry(options);
+  if (entry.index === undefined) {
+    const value = entry.state.status === "present" ? entry.state.value : undefined;
+    entry.index =
+      value &&
+      typeof value === "object" &&
+      "revision" in value &&
+      typeof value.revision === "number"
+        ? parseInstalledPluginIndex("index" in value ? value.index : undefined)
+        : null;
+  }
+  return entry.index;
 }

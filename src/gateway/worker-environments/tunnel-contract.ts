@@ -103,7 +103,7 @@ export type WorkerWorkspaceQuiescence = {
   resume(): Promise<void>;
 };
 
-export type WorkerTurnLaunchRequest = {
+type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
   turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;

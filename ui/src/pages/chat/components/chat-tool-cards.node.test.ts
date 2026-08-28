@@ -1,7 +1,11 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { extractToolCardsCached as extractToolCards } from "../../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached as extractToolCards,
+  isToolCardError,
+  resolveToolCardOutcome,
+} from "../../../lib/chat/tool-cards.ts";
 import * as toolDisplay from "../../../lib/chat/tool-display.ts";
 
 function resolveToolDisplay({ name = "" }: Parameters<typeof toolDisplay.resolveToolDisplay>[0]) {
@@ -610,8 +614,7 @@ describe("isRunningToolCard", () => {
     expect(isRunningToolCard(liveCard, false)).toBe(false);
   });
 
-  it("derives a closed outcome from result presence and error state", async () => {
-    const { resolveToolCardOutcome } = await import("../../../lib/chat/tool-cards.ts");
+  it("derives a closed outcome from result presence and error state", () => {
     const call = { id: "t:call", name: "edit" } as const;
 
     expect(resolveToolCardOutcome(call, false)).toBe("unknown");
@@ -645,34 +648,41 @@ describe("isRunningToolCard", () => {
     expect(finished[0]).toMatchObject({ live: true, completed: true });
   });
 
-  it("keeps a live card running when partial update output emits a result block", () => {
-    // The stream emits toolresult blocks for partial `update` output; only
-    // resultReceived may complete a live card, or a running tool flips to
-    // "succeeded" (or "failed", if the partial text looks like an error).
-    const partial = extractToolCards({
-      role: "assistant",
-      toolCallId: "call-live",
-      __openclawToolStreamLive: true,
-      __openclawToolStreamResultReceived: false,
-      content: [
-        { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
-        { type: "toolresult", name: "bash", text: '{"error": "partial text"}' },
-      ],
-    });
-    expect(partial).toHaveLength(1);
-    expect(partial[0]).toMatchObject({ live: true, completed: false });
-    expect(partial[0]?.outputText).toContain("partial text");
+  it.each(['{"error": "partial text"}', '{"status":"failed"}', "Tool not found", "partial text"])(
+    "keeps partial output %s nonterminal until the live result arrives",
+    (text) => {
+      // The stream emits toolresult blocks for partial `update` output; only
+      // resultReceived may complete a live card, or a running tool flips to
+      // "succeeded" (or "failed", if the partial text looks like an error).
+      const partial = extractToolCards({
+        role: "assistant",
+        toolCallId: "call-live",
+        __openclawToolStreamLive: true,
+        __openclawToolStreamResultReceived: false,
+        content: [
+          { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
+          { type: "toolresult", name: "bash", text },
+        ],
+      });
+      expect(partial).toHaveLength(1);
+      expect(partial[0]).toMatchObject({ live: true, completed: false });
+      expect(partial[0]?.outputText).toBe(text);
+      expect(partial.map(isToolCardError)).toEqual([false]);
+      expect(partial.map((card) => resolveToolCardOutcome(card, true))).toEqual(["running"]);
+      expect(partial.map((card) => resolveToolCardOutcome(card, false))).toEqual(["unknown"]);
 
-    const done = extractToolCards({
-      role: "assistant",
-      toolCallId: "call-live",
-      __openclawToolStreamLive: true,
-      __openclawToolStreamResultReceived: true,
-      content: [
-        { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
-        { type: "toolresult", name: "bash", text: "ok" },
-      ],
-    });
-    expect(done[0]).toMatchObject({ live: true, completed: true });
-  });
+      const done = extractToolCards({
+        role: "assistant",
+        toolCallId: "call-live",
+        __openclawToolStreamLive: true,
+        __openclawToolStreamResultReceived: true,
+        content: [
+          { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
+          { type: "toolresult", name: "bash", text: "ok" },
+        ],
+      });
+      expect(done[0]).toMatchObject({ live: true, completed: true });
+      expect(done.map((card) => resolveToolCardOutcome(card, true))).toEqual(["succeeded"]);
+    },
+  );
 });

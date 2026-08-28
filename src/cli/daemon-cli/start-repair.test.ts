@@ -163,17 +163,25 @@ describe("repairLoadedGatewayServiceForStart", () => {
       OPENCLAW_SERVICE_VERSION: "inline" as const,
       TELEGRAM_DEFAULT_BOTTOKEN: "file" as const,
     };
+    const programArguments = [
+      "/usr/bin/node",
+      "--max-old-space-size=24576",
+      "--require=/tmp/service-preload.js",
+      "/usr/local/bin/openclaw",
+      "gateway",
+    ];
     const state: GatewayServiceState = {
       installed: true,
       loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {
-        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        programArguments,
         environment: {
           ...existingEnvironment,
           OPENCLAW_WRAPPER: "/srv/operator/openclaw",
           OPERATOR_DROPIN_ONLY: "operator-owned",
+          NODE_OPTIONS: "--max-old-space-size=512",
           TELEGRAM_DEFAULT_BOTTOKEN: "operator-drop-in-token",
         },
         environmentValueSources: {
@@ -181,10 +189,11 @@ describe("repairLoadedGatewayServiceForStart", () => {
           TELEGRAM_DEFAULT_BOTTOKEN: "inline",
         },
         managedDefinition: {
-          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          programArguments,
           environment: existingEnvironment,
           environmentValueSources: existingEnvironmentValueSources,
         },
+        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
       },
     };
 
@@ -197,6 +206,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     });
 
     const planArg = readFirstInstallPlanArg();
+    expect(planArg.existingCommand).toBe(state.command);
     expect(planArg.existingEnvironment).toBe(existingEnvironment);
     expect(planArg.existingEnvironmentValueSources).toBe(existingEnvironmentValueSources);
     expect(planArg.env).not.toHaveProperty("OPERATOR_DROPIN_ONLY");

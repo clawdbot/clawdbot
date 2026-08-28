@@ -409,6 +409,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
   "tools.exec.commandHighlighting":
     "Show parser-derived command highlights in exec approval prompts (default: false). Enable this to render highlighted command text without changing exec approval policy.",
+  "tools.exec.grantExpiryDays":
+    "Default lifetime, in days (1-3650), for standing grants minted by allow-always on automation approvals. Unset keeps grants valid until revoked or the owning automation changes. Terms freeze at mint, so changing this affects only future grants.",
   "tools.exec.safeBinTrustedDirs":
     "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
   "tools.exec.safeBinProfiles":

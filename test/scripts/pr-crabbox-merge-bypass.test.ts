@@ -4,6 +4,7 @@ import { validateCrabboxMergeBypass } from "../../scripts/pr-lib/crabbox-merge-b
 
 const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
+const workflowSha = "d".repeat(40);
 const planDigest = "c".repeat(64);
 const runId = "run_abc123";
 const leaseId = "cbx_def456";
@@ -46,6 +47,7 @@ function input() {
               planDigest,
               runId,
               targetCount: 8,
+              workflowSha,
             }),
           },
           status: "completed",
@@ -79,6 +81,7 @@ function input() {
       state: "active",
       user: { login: "maintainer" },
     },
+    mainRef: { object: { sha: workflowSha }, ref: "refs/heads/main" },
     pullRequest: {
       base: { ref: "main", repo: { full_name: "openclaw/openclaw" }, sha: baseSha },
       draft: false,
@@ -90,7 +93,7 @@ function input() {
       conclusion: "success",
       event: "workflow_dispatch",
       head_branch: "main",
-      head_sha: baseSha,
+      head_sha: workflowSha,
       id: 8001,
       path: ".github/workflows/pr-crabbox-gate-publisher.yml",
       status: "completed",
@@ -124,6 +127,7 @@ describe("Crabbox admin merge bypass verifier", () => {
       ],
       planDigest,
       targetCount: 8,
+      workflowSha,
     });
   });
 
@@ -162,14 +166,21 @@ describe("Crabbox admin merge bypass verifier", () => {
         value.publisherRun.path =
           ".github/workflows/pr-crabbox-gate-publisher.yml@refs/pull/123/merge";
       },
-      /not bound to the protected-main publisher workflow/u,
+      /not bound to the current protected-main publisher workflow/u,
     ],
     [
-      "stale publisher SHA",
+      "summary and publisher SHA mismatch",
       (value: ReturnType<typeof input>) => {
-        value.publisherRun.head_sha = "d".repeat(40);
+        value.publisherRun.head_sha = "e".repeat(40);
       },
-      /not bound to the protected-main publisher workflow/u,
+      /not bound to the current protected-main publisher workflow/u,
+    ],
+    [
+      "protected main drift",
+      (value: ReturnType<typeof input>) => {
+        value.mainRef.object.sha = "e".repeat(40);
+      },
+      /not bound to the current protected-main publisher workflow/u,
     ],
     [
       "non-canonical CI workflow path",

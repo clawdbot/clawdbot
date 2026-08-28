@@ -527,6 +527,24 @@ forcing one model tool call per await.
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
 
+### Source in session history
+
+In the built-in OpenClaw runtime, the JSON Code Mode tool executes the original
+input. Session history preserves computations such as `const API_TOKEN = computeToken();`
+and boolean or null initializers in the outer call's JavaScript or TypeScript
+`code` and `command` fields, while masking credential literals, recognizable
+tokens, registered secrets, and configured redaction patterns. Credential
+assignments use full masks so repeated storage redaction stays stable.
+
+This treatment does not extend to shell commands, nested tool calls, unrelated
+argument strings, or assistant prose. Large or unrecognized source syntax
+remains subject to diagnostic masking. Stored source is a redacted record, not
+a place to recover credentials; no additional setting is required.
+This applies to new calls; already-redacted source cannot be reconstructed.
+The Copilot runtime's separate transcript journal does not yet preserve this
+source structure. Native Codex uses a separate freeform source path; this
+behavior does not describe its storage.
+
 ## `wait`
 
 `wait` continues a suspended code-mode VM.
@@ -664,6 +682,12 @@ type ToolCatalog = {
   all(): readonly ToolCatalogHandle[];
 };
 ```
+
+`catalog.search(...)` returns a frozen array of callable handles, or an empty
+array when no tools match. If the matching callable names exceed the output
+budget, search rejects with guidance to narrow the query or lower `limit`.
+It never silently substitutes an empty or partial match list. A narrower search
+remains available after the error.
 
 Paired Gateway nodes are available through the `nodes` global:
 
@@ -897,7 +921,9 @@ type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: un
 
 Rules: output order matches guest calls. Nested tool results, cumulative guest
 output, and the final value share the `maxOutputBytes` serialized UTF-8 budget.
-When a successful result exceeds the budget, OpenClaw returns a bounded value
+Catalog search rejects when its callable-name array cannot fit this budget;
+narrow the query or lower `limit` and retry. For other successful results that
+exceed the budget, OpenClaw returns a bounded value
 with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
 rerun with narrower arguments. Treat that marker as a successful partial result:
 reduce the search scope, paginate, select fewer files, or return a smaller

@@ -59,6 +59,7 @@ type RunLifecycleHost = Omit<
   agentsList?: { mainKey?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
   chatRunId?: string | null;
+  chatRunLifecycleGeneration?: number;
   chatRunSessionAbortable?: boolean;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
@@ -476,6 +477,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {
+    if (host.chatRunId) {
+      host.chatRunLifecycleGeneration = (host.chatRunLifecycleGeneration ?? 0) + 1;
+    }
     host.chatRunId = null;
     host.chatRunSessionAbortable = undefined;
   }

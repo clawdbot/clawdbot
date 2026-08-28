@@ -3836,6 +3836,30 @@ describe("update-cli", () => {
       expectedPersistedChannel: undefined,
     },
     {
+      name: "routes a stored dev channel on package installs to the git update flow",
+      installKind: "package" as const,
+      options: { yes: true },
+      storedChannel: "dev" as const,
+      expectedChannel: "dev" as const,
+      expectedPersistedChannel: undefined,
+    },
+    {
+      name: "keeps a stored-dev package install on the package path for a one-off --tag",
+      installKind: "package" as const,
+      options: { tag: "latest", yes: true },
+      storedChannel: "dev" as const,
+      expectedChannel: undefined,
+      expectedPersistedChannel: undefined,
+    },
+    {
+      name: "keeps explicit dev channel precedence over a one-off --tag",
+      installKind: "package" as const,
+      options: { channel: "dev", tag: "latest", yes: true },
+      storedChannel: "dev" as const,
+      expectedChannel: "dev" as const,
+      expectedPersistedChannel: undefined,
+    },
+    {
       name: "switches git installs to package mode for explicit beta and persists it",
       installKind: "git" as const,
       options: { channel: "beta" },
@@ -3848,7 +3872,8 @@ describe("update-cli", () => {
     async ({ installKind, options, storedChannel, expectedChannel, expectedPersistedChannel }) => {
       if (installKind === "package") {
         mockPackageInstallStatus(createCaseDir("openclaw-update"));
-      } else {
+      }
+      if (installKind === "git" || expectedChannel !== undefined) {
         vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode: "git" }));
       }
       if (storedChannel) {
@@ -3858,7 +3883,16 @@ describe("update-cli", () => {
         });
       }
 
-      await updateCommand(options);
+      if (installKind === "package" && expectedChannel !== undefined) {
+        // Git commands are mocked, but package-to-git routing stages real directories.
+        // Left on the default <home>/openclaw they outlive this case and make
+        // a later test fail with "OPENCLAW_GIT_DIR appeared while cloning".
+        await withEnvAsync({ OPENCLAW_GIT_DIR: createCaseDir("openclaw-update-git") }, async () => {
+          await updateCommand(options);
+        });
+      } else {
+        await updateCommand(options);
+      }
 
       if (expectedChannel !== undefined) {
         expectUpdateCallChannel(expectedChannel);

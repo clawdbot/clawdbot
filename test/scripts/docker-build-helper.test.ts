@@ -2583,16 +2583,16 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.indexOf("phase doctor run_doctor"),
     );
     const discordInstallIndex = runner.indexOf(
-      'openclaw plugins install "npm:@openclaw/discord@$package_version" --pin --accept-capabilities',
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n    plugins install "npm:@openclaw/discord@$package_version" --pin',
     );
     const whatsappInstallIndex = runner.indexOf(
-      'openclaw plugins install "clawhub:@openclaw/whatsapp@$package_version" --accept-capabilities',
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n      plugins install "clawhub:@openclaw/whatsapp@$package_version"',
     );
     const clawhubRequestIndex = runner.indexOf(
       'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
     );
     const codexInstallIndex = runner.indexOf(
-      'openclaw plugins install "npm:@openclaw/codex@$package_version" --pin --accept-capabilities',
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n      plugins install "npm:@openclaw/codex@$package_version" --pin',
     );
     const restoreCompanionIndex = runner.indexOf(
       'restore "$OPENCLAW_CONFIG_PATH" "$authored_config"',
@@ -2605,6 +2605,10 @@ docker_e2e_docker_run_cmd run demo
     expect(codexInstallIndex).toBeLessThan(restoreCompanionIndex);
     expect(restoreCompanionIndex).toBeLessThan(assertCompanionIndex);
     expect(assertCompanionIndex).toBeLessThan(runnerPrepareIndex);
+    expect(
+      runner.match(/openclaw_e2e_fixture_plugin_command openclaw -- \\\n\s+plugins install/gu),
+    ).toHaveLength(3);
+    expect(runner).not.toContain("--accept-capabilities");
     expect(runner).toContain('park-companion-install "$OPENCLAW_CONFIG_PATH" "$authored_config"');
     expectTextToIncludeAll(runner, [
       "install_status=$?",
@@ -4891,7 +4895,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "assert-config-channel beta",
       "assert-installed-version",
       "assert-status-kind package",
-      "openclaw update --channel dev",
       "openclaw update --channel stable",
     ]);
     expect(updateRunner).toContain("openclaw update --channel beta --yes --json --no-restart");

@@ -6,13 +6,16 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
+  accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import {
+  resolveAssistantTextTail,
   streamCausalInsertIndex,
   streamCausalInterval,
   streamCausalTimestamp,
@@ -254,33 +257,6 @@ function visibleAssistantStreamText(
   return stream;
 }
 
-function hasAssistantStreamReplacement(
-  messages: unknown[],
-  stream: string,
-  isHiddenAssistantMessage: AssistantMessageVisibility,
-  startIndex: number,
-  endIndex = messages.length,
-): boolean {
-  const expected = stream.trim();
-  if (!expected) {
-    return false;
-  }
-  return messages.slice(startIndex, endIndex).some((message) => {
-    if (!message || typeof message !== "object") {
-      return false;
-    }
-    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-    if (role && role !== "assistant") {
-      return false;
-    }
-    if (role === "assistant" && isHiddenAssistantMessage(message)) {
-      return false;
-    }
-    const text = extractText(message)?.trim();
-    return Boolean(text && (text === expected || text.startsWith(expected)));
-  });
-}
-
 export function assistantMessageReplacesCurrentStream(
   state: StreamReconciliationState,
   message: unknown,
@@ -290,9 +266,7 @@ export function assistantMessageReplacesCurrentStream(
     isHiddenStreamText: () => false,
   }).findLast((part) => part.source === "current");
   return Boolean(
-    currentPart &&
-    (hasAssistantStreamReplacement([message], currentPart.replacementText, () => false, 0) ||
-      hasAssistantStreamReplacement([message], currentPart.text, () => false, 0)),
+    currentPart && hasAssistantStreamPartReplacement([message], currentPart, () => false, 0),
   );
 }
 
@@ -348,7 +322,7 @@ export function visibleAssistantStreamParts(
     const afterBoundaryRunId =
       normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
     const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
-    if (!usesItemId && segment.boundaryMarker !== true) {
+    if (!usesItemId && segment.boundaryMarker !== true && segment.persisted !== true) {
       toolIndexedSegmentIndex += 1;
     }
     const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
@@ -356,7 +330,7 @@ export function visibleAssistantStreamParts(
       usesAccumulatedText ? trimAccumulatedStreamPrefix(segment.text, previousText) : segment.text,
       opts.isHiddenStreamText,
     );
-    if (visible) {
+    if (visible && segment.persisted !== true) {
       parts.push({
         text: visible,
         replacementText: segment.text,
@@ -408,12 +382,7 @@ export function visibleCurrentAssistantStreamTail(
   const segments = Array.isArray(streamHost.chatStreamSegments)
     ? streamHost.chatStreamSegments
     : [];
-  let previousText: string | null = null;
-  for (const segment of segments) {
-    if (streamSegmentUsesAccumulatedText(segment) && typeof segment.text === "string") {
-      previousText = advanceAccumulatedStreamText(previousText, segment.text);
-    }
-  }
+  const previousText = accumulatedStreamText(segments);
   return visibleAssistantStreamText(
     trimAccumulatedStreamPrefix(state.chatStream, previousText),
     isHiddenStreamText,
@@ -430,21 +399,20 @@ export function hasAssistantStreamPartReplacement(
   if (part.itemId) {
     return hasKeyedAssistantStreamReplacement(messages, part.itemId, startIndex, endIndex);
   }
-  return (
-    hasAssistantStreamReplacement(
-      messages,
-      part.replacementText,
-      isHiddenAssistantMessage,
-      startIndex,
-      endIndex,
-    ) ||
-    hasAssistantStreamReplacement(
-      messages,
-      part.text,
-      isHiddenAssistantMessage,
-      startIndex,
-      endIndex,
-    )
+  const persistedTexts = messages.slice(startIndex, endIndex).map((message) => {
+    const identity = readSessionMessageIdentity(message);
+    if (
+      (identity?.role && identity.role !== "assistant") ||
+      (identity?.runId && part.runId && identity.runId !== part.runId) ||
+      isHiddenAssistantMessage(message) ||
+      isKeyedAssistantStreamFallbackMessage(message)
+    ) {
+      return null;
+    }
+    return extractText(message)?.trim() ?? null;
+  });
+  return [part.replacementText, part.text].some(
+    (text) => Boolean(text.trim()) && !resolveAssistantTextTail(persistedTexts, text.trim()),
   );
 }
 

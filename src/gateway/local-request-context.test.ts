@@ -7,7 +7,6 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
-import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -146,10 +145,16 @@ describe("local gateway request context", () => {
         },
       })
       .mockResolvedValueOnce({ authModes: {}, authStore: { version: 1, profiles: {} } });
-    setPreparedModelRuntimeAuthLoader(candidate, refreshAuth);
     const loadOwner = vi
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockResolvedValue(asPublishedOwner(candidate));
+      .mockImplementation(async () => {
+        const auth = await refreshAuth({ providerIds: ["local-auth-provider"] });
+        return asPublishedOwner({
+          ...candidate,
+          authModes: auth.authModes,
+          authStore: auth.authStore,
+        });
+      });
 
     const list = () =>
       withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
@@ -172,6 +177,14 @@ describe("local gateway request context", () => {
     expect(refreshAuth).toHaveBeenNthCalledWith(2, {
       providerIds: ["local-auth-provider"],
     });
+    expect(loadOwner).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
+    );
+    expect(loadOwner).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
+    );
     loadOwner.mockRestore();
   });
 

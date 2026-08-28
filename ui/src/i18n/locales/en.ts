@@ -2045,6 +2045,15 @@ export const en: TranslationMap = {
       "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
+    scope: {
+      standingGrant:
+        'Always allow runs this exact command for "{automation}" without asking, until revoked (revocable)',
+      standingGrantDays:
+        'Always allow runs this exact command for "{automation}" without asking, for {count} days (revocable)',
+      messageSend: "Sends to {count} recipient(s) via {target}",
+      payment: "Pays {amount} {currency} to {target}",
+      externalPost: "Posts externally to {target}",
+    },
     expiresIn: "expires in {time}",
     expired: "expired",
     execApprovalNeeded: "Exec approval needed",
@@ -2714,6 +2723,7 @@ export const en: TranslationMap = {
     retry: "Retry",
   },
   modelSetup: {
+    missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     heading: "Connect a verified AI model",
     intro:
       "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
@@ -4425,6 +4435,25 @@ export const en: TranslationMap = {
         "These model-provider credentials need attention:\n{facts}\nExplain what expired and how to re-authenticate them.",
     },
   },
+  standingGrants: {
+    title: "Standing grants",
+    description:
+      "Allow-always on an automation approval mints a standing grant for that exact command. Revoking one makes the next occurrence ask again.",
+    historyTitle: "Approval history",
+    empty: "No standing grants. Answer an automation approval with Always allow to mint one.",
+    stateUntilRevoked: "Until revoked",
+    stateExpiresIn: "Expires in {count}d",
+    stateExpired: "Expired",
+    stateRevoked: "Revoked",
+    revoke: "Revoke",
+    revoking: "Revoking…",
+    columns: {
+      automation: "Automation",
+      command: "Command",
+      uses: "Uses",
+      state: "State",
+    },
+  },
   approvalHistory: {
     description:
       "Terminal exec, plugin, and system-agent approvals recorded by this gateway, newest first.",
@@ -5252,6 +5281,9 @@ export const en: TranslationMap = {
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
+      namingWorktree: "Naming worktree…",
+      creatingWorktree: "Creating worktree…",
+      runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",
@@ -6209,6 +6241,7 @@ export const en: TranslationMap = {
     },
     selectors: {
       loadMoreSessions: "Show more",
+      loadMoreRosterSessions: "Load more sessions",
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",

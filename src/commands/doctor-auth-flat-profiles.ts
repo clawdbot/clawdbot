@@ -295,8 +295,8 @@ function listAuthProfileSqliteMigrationCandidates(
   return listAuthProfileRepairCandidates(cfg, env).map((candidate) => ({
     agentDir: candidate.agentDir,
     authPath: candidate.authPath,
-    statePath: resolveAuthStatePath(candidate.agentDir),
-    legacyPath: resolveLegacyAuthStorePath(candidate.agentDir),
+    statePath: resolveAuthStatePath(path.dirname(candidate.authPath)),
+    legacyPath: resolveLegacyAuthStorePath(path.dirname(candidate.authPath)),
   }));
 }
 
@@ -1270,7 +1270,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         }),
       );
       const expectedStateSha256 = digestAuthProfileMigrationValue(
-        readPersistedAuthProfileStateRaw(candidate.agentDir),
+        candidate.agentDir
+          ? readPersistedAuthProfileStateRaw(candidate.agentDir)
+          : readPersistedSharedAuthProfileStateRaw(env),
       );
       const canonicalSourceCarriesState = canonicalStore
         ? hasAuthProfileState(coerceAuthProfileState(canonicalStore))

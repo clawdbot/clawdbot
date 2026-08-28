@@ -43,7 +43,12 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+      agentIdBySessionKey: new Map(),
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {},
+    })),
   };
 });
 
@@ -502,6 +507,22 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(1)?.[0]).toMatchObject({
       agentId: "research",
     });
+  });
+
+  it("refreshes aggregate cost usage when the configured agent set changes", async () => {
+    const request = { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" };
+    const respond = vi.fn();
+    for (const entries of [{ main: {} }, { main: {}, research: {} }]) {
+      await expectDefined(
+        usageHandlers["usage.cost"],
+        "cost handler",
+      )({
+        respond,
+        params: request,
+        context: { getRuntimeConfig: () => ({ agents: { entries } }) },
+      } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+    }
+    expect(respond.mock.calls.map((call) => call[1].totals.totalTokens)).toEqual([1, 2]);
   });
 
   it("keeps cost usage cache entries scoped by the complete day bucket", async () => {

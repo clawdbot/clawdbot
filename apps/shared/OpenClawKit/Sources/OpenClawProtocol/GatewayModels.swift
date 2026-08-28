@@ -323,6 +323,9 @@ public enum QuestionStatus: String, Codable, Sendable {
 
 public enum ChatRunStartupPhase: String, Codable, Sendable {
     case preparingWorkspace = "preparing_workspace"
+    case namingWorktree = "naming_worktree"
+    case creatingWorktree = "creating_worktree"
+    case runningSetup = "running_setup"
     case provisioningEnvironment = "provisioning_environment"
     case preparingContext = "preparing_context"
     case startingModel = "starting_model"
@@ -14538,6 +14541,8 @@ public struct ModelChoice: Codable, Sendable {
     public let alias: String?
     public let tags: [String]?
     public let available: Bool?
+    public let unavailablereason: AnyCodable?
+    public let unavailableuntil: Int?
     public let contextwindow: Int?
     public let contextwindows: [[String: AnyCodable]]?
     public let contextwindowdefault: String?
@@ -14556,6 +14561,8 @@ public struct ModelChoice: Codable, Sendable {
         alias: String? = nil,
         tags: [String]? = nil,
         available: Bool? = nil,
+        unavailablereason: AnyCodable? = nil,
+        unavailableuntil: Int? = nil,
         contextwindow: Int? = nil,
         contextwindows: [[String: AnyCodable]]? = nil,
         contextwindowdefault: String? = nil,
@@ -14573,6 +14580,8 @@ public struct ModelChoice: Codable, Sendable {
         self.alias = alias
         self.tags = tags
         self.available = available
+        self.unavailablereason = unavailablereason
+        self.unavailableuntil = unavailableuntil
         self.contextwindow = contextwindow
         self.contextwindows = contextwindows
         self.contextwindowdefault = contextwindowdefault
@@ -14592,6 +14601,8 @@ public struct ModelChoice: Codable, Sendable {
         case alias
         case tags
         case available
+        case unavailablereason = "unavailableReason"
+        case unavailableuntil = "unavailableUntil"
         case contextwindow = "contextWindow"
         case contextwindows = "contextWindows"
         case contextwindowdefault = "contextWindowDefault"
@@ -17726,6 +17737,32 @@ public struct ExternalPostApprovalScope: Codable, Sendable {
     }
 }
 
+public struct StandingGrantApprovalScope: Codable, Sendable {
+    public let kind: String
+    public let automation: String
+    public let command: String
+    public let expiresindays: Int?
+
+    public init(
+        kind: String,
+        automation: String,
+        command: String,
+        expiresindays: Int? = nil)
+    {
+        self.kind = kind
+        self.automation = automation
+        self.command = command
+        self.expiresindays = expiresindays
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case automation
+        case command
+        case expiresindays = "expiresInDays"
+    }
+}
+
 public struct ExecApprovalPresentation: Codable, Sendable {
     public let kind: String
     public let commandtext: String
@@ -18157,17 +18194,28 @@ public struct ApprovalResolveParams: Codable, Sendable {
     public let kind: ApprovalKind
     public let decision: ApprovalDecision
     public let reviewer: [String: AnyCodable]?
+    public let grantexpiresindays: Int?
 
     public init(
         id: String,
         kind: ApprovalKind,
         decision: ApprovalDecision,
-        reviewer: [String: AnyCodable]? = nil)
+        reviewer: [String: AnyCodable]? = nil,
+        grantexpiresindays: Int? = nil)
     {
         self.id = id
         self.kind = kind
         self.decision = decision
         self.reviewer = reviewer
+        self.grantexpiresindays = grantexpiresindays
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case decision
+        case reviewer
+        case grantexpiresindays = "grantExpiresInDays"
     }
 }
 
@@ -18558,15 +18606,131 @@ public struct ExecApprovalResolveParams: Codable, Sendable {
     public let id: String
     public let decision: String
     public let reviewer: [String: AnyCodable]?
+    public let grantexpiresindays: Int?
 
     public init(
         id: String,
         decision: String,
-        reviewer: [String: AnyCodable]? = nil)
+        reviewer: [String: AnyCodable]? = nil,
+        grantexpiresindays: Int? = nil)
     {
         self.id = id
         self.decision = decision
         self.reviewer = reviewer
+        self.grantexpiresindays = grantexpiresindays
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case decision
+        case reviewer
+        case grantexpiresindays = "grantExpiresInDays"
+    }
+}
+
+public struct ExecApprovalGrantsListParams: Codable, Sendable {
+    public let limit: Int?
+
+    public init(
+        limit: Int? = nil)
+    {
+        self.limit = limit
+    }
+}
+
+public struct ExecApprovalStandingGrant: Codable, Sendable {
+    public let grantid: String
+    public let mintedbyapprovalid: String
+    public let agentid: String
+    public let cronjobid: String
+    public let cronjobname: AnyCodable
+    public let command: String
+    public let cwd: AnyCodable
+    public let createdatms: Int
+    public let expiresatms: AnyCodable
+    public let revokedatms: AnyCodable
+    public let revokedby: AnyCodable
+    public let lastusedatms: AnyCodable
+    public let usecount: Int
+
+    public init(
+        grantid: String,
+        mintedbyapprovalid: String,
+        agentid: String,
+        cronjobid: String,
+        cronjobname: AnyCodable,
+        command: String,
+        cwd: AnyCodable,
+        createdatms: Int,
+        expiresatms: AnyCodable,
+        revokedatms: AnyCodable,
+        revokedby: AnyCodable,
+        lastusedatms: AnyCodable,
+        usecount: Int)
+    {
+        self.grantid = grantid
+        self.mintedbyapprovalid = mintedbyapprovalid
+        self.agentid = agentid
+        self.cronjobid = cronjobid
+        self.cronjobname = cronjobname
+        self.command = command
+        self.cwd = cwd
+        self.createdatms = createdatms
+        self.expiresatms = expiresatms
+        self.revokedatms = revokedatms
+        self.revokedby = revokedby
+        self.lastusedatms = lastusedatms
+        self.usecount = usecount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case grantid = "grantId"
+        case mintedbyapprovalid = "mintedByApprovalId"
+        case agentid = "agentId"
+        case cronjobid = "cronJobId"
+        case cronjobname = "cronJobName"
+        case command
+        case cwd
+        case createdatms = "createdAtMs"
+        case expiresatms = "expiresAtMs"
+        case revokedatms = "revokedAtMs"
+        case revokedby = "revokedBy"
+        case lastusedatms = "lastUsedAtMs"
+        case usecount = "useCount"
+    }
+}
+
+public struct ExecApprovalGrantsListResult: Codable, Sendable {
+    public let grants: [ExecApprovalStandingGrant]
+
+    public init(
+        grants: [ExecApprovalStandingGrant])
+    {
+        self.grants = grants
+    }
+}
+
+public struct ExecApprovalGrantsRevokeParams: Codable, Sendable {
+    public let grantid: String
+
+    public init(
+        grantid: String)
+    {
+        self.grantid = grantid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case grantid = "grantId"
+    }
+}
+
+public struct ExecApprovalGrantsRevokeResult: Codable, Sendable {
+    public let outcome: AnyCodable
+
+    public init(
+        outcome: AnyCodable)
+    {
+        self.outcome = outcome
     }
 }
 
@@ -22069,6 +22233,7 @@ public enum ApprovalScope: Codable, Sendable {
     case messageSend(MessageSendApprovalScope)
     case payment(PaymentApprovalScope)
     case externalPost(ExternalPostApprovalScope)
+    case standingGrant(StandingGrantApprovalScope)
 
     private enum CodingKeys: String, CodingKey {
         case discriminator = "kind"
@@ -22081,6 +22246,7 @@ public enum ApprovalScope: Codable, Sendable {
         case "message-send": self = try .messageSend(MessageSendApprovalScope(from: decoder))
         case "payment": self = try .payment(PaymentApprovalScope(from: decoder))
         case "external-post": self = try .externalPost(ExternalPostApprovalScope(from: decoder))
+        case "standing-grant": self = try .standingGrant(StandingGrantApprovalScope(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
@@ -22095,6 +22261,7 @@ public enum ApprovalScope: Codable, Sendable {
         case .messageSend(let value): try value.encode(to: encoder)
         case .payment(let value): try value.encode(to: encoder)
         case .externalPost(let value): try value.encode(to: encoder)
+        case .standingGrant(let value): try value.encode(to: encoder)
         }
     }
 }

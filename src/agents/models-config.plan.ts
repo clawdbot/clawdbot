@@ -9,9 +9,11 @@ import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.j
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { modelKey, normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
+  normalizeProviderMapKeys,
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
 import {
@@ -62,6 +64,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  sourceModelInputOmissions?: ReadonlySet<string>;
 }) => Promise<Record<string, ProviderConfig>>;
 
 /**
@@ -118,6 +121,24 @@ function buildPluginCatalogWrites(
   );
 }
 
+function buildSourceModelInputOmissions(
+  sourceProviders: Record<string, ProviderConfig> | undefined,
+  manifestPlugins: PluginMetadataSnapshot["manifestRegistry"]["plugins"] | undefined,
+): ReadonlySet<string> {
+  return new Set(
+    Object.entries(normalizeProviderMapKeys(sourceProviders)).flatMap(([providerId, provider]) =>
+      (provider.models ?? [])
+        .filter((model) => !Object.hasOwn(model, "input"))
+        .map((model) =>
+          modelKey(
+            providerId,
+            normalizeConfiguredProviderCatalogModelId(providerId, model.id, { manifestPlugins }),
+          ),
+        ),
+    ),
+  );
+}
+
 /** Resolves providers for models.json with injectable implicit-provider discovery. */
 async function resolveProvidersForModelsJsonWithDeps(
   params: {
@@ -134,6 +155,11 @@ async function resolveProvidersForModelsJsonWithDeps(
   const cfg = context.cfg.models?.providers
     ? { ...context.cfg, models: { ...context.cfg.models, providers: explicitProviders } }
     : context.cfg;
+  const manifestPlugins = context.pluginMetadataSnapshot?.manifestRegistry.plugins;
+  const sourceModelInputOmissions = buildSourceModelInputOmissions(
+    context.sourceConfigForSecrets.models?.providers,
+    manifestPlugins,
+  );
   // When models.mode is "replace" the user opts out of provider discovery, so
   // skip the (potentially slow) implicit-provider resolver entirely and return
   // only the explicit providers. See openclaw#66957.
@@ -149,6 +175,7 @@ async function resolveProvidersForModelsJsonWithDeps(
     env,
     ...(context.workspaceDir ? { workspaceDir: context.workspaceDir } : {}),
     explicitProviders,
+    sourceModelInputOmissions,
     ...(context.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: context.pluginMetadataSnapshot }
       : {}),
@@ -171,6 +198,8 @@ async function resolveProvidersForModelsJsonWithDeps(
   return mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
+    sourceModelInputOmissions,
+    manifestPlugins,
   });
 }
 

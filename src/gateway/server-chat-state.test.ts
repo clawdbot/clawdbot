@@ -52,30 +52,33 @@ describe("createChatRunState", () => {
     expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-2");
   });
 
-  it("retains only the latest startup status until observable run activity begins", () => {
-    const state = createChatRunState();
-    const event = (seq: number, stream: string, data: Record<string, unknown>) =>
-      state.recordProgressEvent("run-1", {
-        runId: "run-1",
-        seq,
-        stream,
-        ts: 1_000 + seq,
-        sessionKey: "main",
-        data,
-      });
+  it.each(["naming_worktree", "creating_worktree", "running_setup", "preparing_context"])(
+    "retains only the latest startup status (%s) until observable run activity begins",
+    (phase) => {
+      const state = createChatRunState();
+      const event = (seq: number, stream: string, data: Record<string, unknown>) =>
+        state.recordProgressEvent("run-1", {
+          runId: "run-1",
+          seq,
+          stream,
+          ts: 1_000 + seq,
+          sessionKey: "main",
+          data,
+        });
 
-    event(1, "run_status", { phase: "preparing_workspace" });
-    event(2, "run_status", { phase: "preparing_context" });
-    expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
-      { seq: 2, stream: "run_status", data: { phase: "preparing_context" } },
-    ]);
+      event(1, "run_status", { phase: "preparing_workspace" });
+      event(2, "run_status", { phase });
+      expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
+        { seq: 2, stream: "run_status", data: { phase } },
+      ]);
 
-    event(3, "tool", { phase: "start", name: "read", toolCallId: "read-1" });
-    event(4, "run_status", { phase: "starting_model" });
-    expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
-      { seq: 3, stream: "tool", data: { phase: "start", toolCallId: "read-1" } },
-    ]);
-  });
+      event(3, "tool", { phase: "start", name: "read", toolCallId: "read-1" });
+      event(4, "run_status", { phase: "starting_model" });
+      expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
+        { seq: 3, stream: "tool", data: { phase: "start", toolCallId: "read-1" } },
+      ]);
+    },
+  );
 
   it("keeps completed owners and standalone notices reconstructable until bounded eviction", () => {
     const state = createChatRunState();

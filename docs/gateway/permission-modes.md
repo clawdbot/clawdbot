@@ -26,7 +26,7 @@ Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested w
 
 File tools recognize aliases of the session's trusted root and working directory, including absolute paths using those aliases. This does not expand the boundary: unrelated external symlinks pointing inward remain denied, as do symlinks and raw `symlink/..` traversal that escape the root. `read-only` sessions still omit mutation tools.
 
-A new managed worktree session defaults to `workspace` when no mode is specified. Other sessions with no recorded mode keep the existing config-driven behavior.
+New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 
 ## Policy precedence and clamping
 

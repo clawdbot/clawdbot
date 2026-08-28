@@ -239,7 +239,6 @@ export type SidebarSessionPatch = {
   category?: string | null;
 };
 
-export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
 export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 

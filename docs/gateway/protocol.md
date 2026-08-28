@@ -374,6 +374,7 @@ Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 - `operator.write`
 - `operator.admin`
 - `operator.approvals`
+- `operator.questions`
 - `operator.pairing`
 - `operator.talk`
 - `operator.talk.secrets`

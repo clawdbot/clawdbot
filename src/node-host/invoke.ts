@@ -463,12 +463,14 @@ async function sendExecFinishedEvent(
 async function runViaMacAppExecHost(params: {
   approvals: ExecApprovalsResolved;
   request: ExecHostRequest;
+  signal?: AbortSignal;
 }): Promise<ExecHostResponse | null> {
   const { approvals, request } = params;
   return await requestExecHostViaSocket({
     socketPath: approvals.socketPath,
     token: approvals.token,
     request,
+    signal: params.signal,
   });
 }
 
@@ -943,21 +945,8 @@ async function dispatchInvoke(
     sendInvokeResult: async (result) => {
       await sendInvokeResult(client, frame, result);
     },
-    sendExecFinishedEvent: async ({
-      sessionKey,
-      runId,
-      commandText,
-      result,
-      suppressNotifyOnExit,
-    }) => {
-      await sendExecFinishedEvent({
-        client,
-        sessionKey,
-        runId,
-        commandText,
-        result,
-        suppressNotifyOnExit,
-      });
+    sendExecFinishedEvent: async (event) => {
+      await sendExecFinishedEvent({ ...event, client });
     },
     preferMacAppExecHost,
   });

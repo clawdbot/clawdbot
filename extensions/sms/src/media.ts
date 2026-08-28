@@ -249,7 +249,10 @@ export async function prepareHostedSmsMedia(
       mediaUrl: params.mediaUrl,
       routePath: route.localRoutePath,
       publicBaseUrl: route.publicBaseUrl,
-      maxBytes: aggregateMediaBudget,
+      maxBytes: Math.min(
+        params.account.mediaMaxBytes ?? aggregateMediaBudget,
+        aggregateMediaBudget,
+      ),
       mediaAccess,
     }),
   );
@@ -414,6 +417,7 @@ export async function materializeSmsInboundMedia(params: {
     };
   }
 
+  // The operator cap applies per attachment; Twilio's aggregate budget spans the message.
   let remainingBytes = TWILIO_MMS_MAX_BYTES;
   let unavailableCount = declaredUnavailableCount;
   const batchTimeoutSignal = AbortSignal.timeout(TWILIO_MEDIA_BATCH_TIMEOUT_MS);
@@ -444,7 +448,7 @@ export async function materializeSmsInboundMedia(params: {
           },
           filePathHint: inboundMediaFileName(media.contentType, index),
           fallbackContentType: media.contentType,
-          maxBytes: remainingBytes,
+          maxBytes: Math.min(params.account.mediaMaxBytes ?? remainingBytes, remainingBytes),
           ssrfPolicy: { hostnameAllowlist: [TWILIO_API_HOSTNAME] },
           timeoutMs: TWILIO_MEDIA_TOTAL_TIMEOUT_MS,
           responseHeaderTimeoutMs: TWILIO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,

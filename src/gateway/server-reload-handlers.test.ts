@@ -29,6 +29,7 @@ import {
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
@@ -60,6 +61,7 @@ import {
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
 import {
+  captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
@@ -2460,7 +2462,7 @@ describe("gateway hot reload superseded tail recovery", () => {
     await reloadA;
 
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, { preserveManualStop: true });
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
 
@@ -3279,7 +3281,7 @@ describe("gateway restart deferral preflight", () => {
     }
 
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, { preserveManualStop: true });
     expect(runtimePublished).toBe(true);
     expect(setState).toHaveBeenCalledTimes(1);
   });
@@ -3323,7 +3325,7 @@ describe("gateway restart deferral preflight", () => {
     }
 
     expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("telegram");
+    expect(startChannel).toHaveBeenCalledWith("telegram", undefined, { preserveManualStop: true });
     expect(logReload.warn).toHaveBeenCalledWith(
       expect.stringContaining("channel reload timeout after"),
     );
@@ -5177,45 +5179,53 @@ describe("gateway Gmail hot reload handlers", () => {
   });
 
   it("keeps committed config after a Gmail watcher follow-up fails", async () => {
-    vi.useFakeTimers();
-    const writeListenerRef = createConfigWriteListenerRef();
-    const initialConfig = createGmailConfig("old@example.com");
-    const nextConfig: OpenClawConfig = {
-      ...createGmailConfig("next@example.com"),
-      models: { providers: {} },
-    };
-    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
-    hoisted.startGmailWatcherWithLogs.mockRejectedValueOnce(new Error("start failed"));
-    const reloader = startManagedGatewayConfigReloader({
-      initialConfig,
-      readSnapshot: vi.fn(async () => createValidConfigSnapshot(nextConfig, "hash-next")) as never,
-      subscribeToWrites: captureConfigWriteListener(writeListenerRef),
-      logReload,
+    await withGatewayRestartSignal(async (signalSpy) => {
+      vi.useFakeTimers();
+      const writeListenerRef = createConfigWriteListenerRef();
+      const initialConfig = createGmailConfig("old@example.com");
+      const nextConfig: OpenClawConfig = {
+        ...createGmailConfig("next@example.com"),
+        models: { providers: {} },
+      };
+      const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
+      hoisted.startGmailWatcherWithLogs.mockRejectedValueOnce(new Error("start failed"));
+      const reloader = startManagedGatewayConfigReloader({
+        initialConfig,
+        readSnapshot: vi.fn(async () =>
+          createValidConfigSnapshot(nextConfig, "hash-next"),
+        ) as never,
+        subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+        logReload,
+      });
+      try {
+        const registeredWriteListener = writeListenerRef.current;
+        if (!registeredWriteListener) {
+          throw new Error("Expected config write listener to be registered");
+        }
+
+        registeredWriteListener(
+          createConfigWriteNotification(
+            nextConfig,
+            "hash-next",
+            1,
+            "runtime-hash-next",
+            "source-hash-next",
+          ),
+        );
+        await vi.runAllTimersAsync();
+
+        expect(hoisted.refreshContextWindowCache).toHaveBeenCalledTimes(1);
+        expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+        expect(logReload.warn).toHaveBeenCalledWith(
+          "gmail watcher reload failed after config commit: start failed; restarting gateway",
+        );
+        expect(logReload.error).not.toHaveBeenCalled();
+        expect(signalSpy).toHaveBeenCalledOnce();
+      } finally {
+        await reloader.stop();
+      }
     });
-    const registeredWriteListener = writeListenerRef.current;
-    if (!registeredWriteListener) {
-      throw new Error("Expected config write listener to be registered");
-    }
-
-    registeredWriteListener(
-      createConfigWriteNotification(
-        nextConfig,
-        "hash-next",
-        1,
-        "runtime-hash-next",
-        "source-hash-next",
-      ),
-    );
-    await vi.runAllTimersAsync();
-
-    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledTimes(1);
-    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
-    expect(logReload.warn).toHaveBeenCalledWith(
-      "gmail watcher reload failed after config commit: start failed; restarting gateway",
-    );
-    expect(logReload.error).not.toHaveBeenCalled();
-    await reloader.stop();
   });
 
   it("does not start a Gmail restart after the managed reloader stops before hot reload applies", async () => {
@@ -5323,7 +5333,7 @@ describe("gateway plugin hot reload handlers", () => {
     expect(runtimeEnv.env[envKey]).toBeUndefined();
     expect(targetEnv[envKey]).toBeUndefined();
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, { preserveManualStop: true });
   });
 
   it("skips channel work when the candidate env adds a skip flag", async () => {
@@ -5388,7 +5398,6 @@ describe("gateway plugin hot reload handlers", () => {
   });
 
   it("publishes candidate env before cron, plugin, and channel replacements start", async () => {
-    vi.useFakeTimers();
     const envKey = "OPENCLAW_TEST_HOT_RELOAD_SERVICE_ENV";
     const targetEnv: NodeJS.ProcessEnv = { [envKey]: "old" };
     const initialConfig = {
@@ -5449,34 +5458,47 @@ describe("gateway plugin hot reload handlers", () => {
     );
     const reloader = startManagedGatewayConfigReloader({
       initialConfig,
-      readSnapshot: vi.fn() as never,
+      readSnapshot: vi.fn(async () => createValidConfigSnapshot(nextConfig, "hot-env")),
       subscribeToWrites: captureConfigWriteListener(writeListenerRef, false),
       startChannel: vi.fn(async () => {
         events.push(`channel:${targetEnv[envKey]}`);
       }),
       reloadPlugins,
     });
-    const listener = writeListenerRef.current;
-    if (!listener) {
-      throw new Error("Expected config write listener to be registered");
+    try {
+      const listener = writeListenerRef.current;
+      if (!listener) {
+        throw new Error("Expected config write listener to be registered");
+      }
+      const application = createRuntimeConfigWriteApplication();
+      listener(
+        attachRuntimeConfigWriteApplication(
+          createConfigWriteNotification(
+            nextConfig,
+            "hot-env",
+            1,
+            "runtime-hot-env",
+            "source-hot-env",
+            {
+              preparedCandidate: { runtimeConfig: nextConfig, compareConfig, runtimeEnv },
+            },
+          ),
+          application,
+        ),
+      );
+      await expect(application.result).resolves.toBe("applied");
+
+      expect(events).toEqual([
+        "cron-build:candidate:old",
+        "lookup:candidate:old",
+        "cron:candidate",
+        "plugin:candidate",
+        "channel:candidate",
+      ]);
+      expect(targetEnv[envKey]).toBe("candidate");
+    } finally {
+      await reloader.stop();
     }
-
-    listener(
-      createConfigWriteNotification(nextConfig, "hot-env", 1, "runtime-hot-env", "source-hot-env", {
-        preparedCandidate: { runtimeConfig: nextConfig, compareConfig, runtimeEnv },
-      }),
-    );
-    await vi.runAllTimersAsync();
-
-    expect(events).toEqual([
-      "cron-build:candidate:old",
-      "lookup:candidate:old",
-      "cron:candidate",
-      "plugin:candidate",
-      "channel:candidate",
-    ]);
-    expect(targetEnv[envKey]).toBe("candidate");
-    await reloader.stop();
   });
 
   it("keeps mixed reload state old until the plugin replacement commit", async () => {
@@ -6156,8 +6178,8 @@ describe("gateway plugin hot reload handlers", () => {
     expect(logChannels.error).toHaveBeenCalledWith(
       "failed to stop discord channel before plugin reload: stop failed",
     );
-    expect(startChannel).toHaveBeenCalledWith("telegram");
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("telegram", undefined, { preserveManualStop: true });
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, { preserveManualStop: true });
     expect(startRootCounts).toEqual([1, 1]);
     expect(pruneInactiveChannelAccountState).not.toHaveBeenCalled();
     expect(setState).not.toHaveBeenCalled();
@@ -6433,9 +6455,14 @@ describe("deferred channel reload abort generation", () => {
     );
   });
 
-  it.each([false, true])(
-    "cancels superseded active-work deferral (runtime committed: %s)",
-    async (committed) => {
+  it.each([
+    [false, "config"],
+    [true, "config"],
+    [false, "lifecycle"],
+    [true, "lifecycle"],
+  ] as const)(
+    "settles active-work deferral (runtime committed: %s, cancellation: %s)",
+    async (committed, cancellationKind) => {
       const logChannels = { info: vi.fn(), error: vi.fn() };
       const channels = {
         start: vi.fn(async () => {}),
@@ -6443,7 +6470,10 @@ describe("deferred channel reload abort generation", () => {
       };
       const reloadPlugins: ReloadHandlerParams["reloadPlugins"] = async (params) => {
         await params.commitRuntime();
-        return makePluginReloadResult({ restartChannels: new Set(["whatsapp"]) });
+        return makePluginReloadResult({
+          restartChannels: new Set(["whatsapp"]),
+          activeChannels: new Set(["whatsapp"]),
+        });
       };
       const { applyHotReload } = createTestHandlers(logChannels, channels, { reloadPlugins });
       hoisted.activeTaskBlockers.push(
@@ -6462,18 +6492,31 @@ describe("deferred channel reload abort generation", () => {
             publish: async (commit) => await commit(),
           },
         );
-        const cancellation = committed
-          ? GatewayHotReloadCancelledError
-          : GatewayConfigReloadSupersededError;
+        const cancellation =
+          committed || cancellationKind === "lifecycle"
+            ? GatewayHotReloadCancelledError
+            : GatewayConfigReloadSupersededError;
         const reloadError = reloadPromise.then(
           () => null,
           (error: unknown) => error,
         );
         await vi.advanceTimersByTimeAsync(10);
 
-        transactionCurrent = false;
+        if (cancellationKind === "lifecycle") {
+          abortPendingChannelReloads();
+        } else {
+          transactionCurrent = false;
+        }
         await vi.advanceTimersByTimeAsync(500);
         const error = await reloadError;
+        if (committed && cancellationKind === "config") {
+          expect(error).toBeNull();
+          expect(channels.stop).toHaveBeenCalledOnce();
+          expect(channels.start).toHaveBeenCalledOnce();
+          expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
+          expect(hoisted.rejectPendingPreparedModelRuntimeReplacement).not.toHaveBeenCalled();
+          return;
+        }
         expect(error).toBeInstanceOf(cancellation);
 
         expect(channels.stop).not.toHaveBeenCalled();
@@ -6495,14 +6538,13 @@ describe("deferred channel reload abort generation", () => {
     },
   );
 
-  it.each([
-    ...(["channel", "plugin"] as const).flatMap((surface) =>
+  it.each(
+    (["channel", "plugin"] as const).flatMap((surface) =>
       (["same write", "newer content", "lifecycle stop", "publication failure"] as const).map(
         (outcome) => ({ surface, outcome }),
       ),
     ),
-    { surface: "committed plugin", outcome: "same write" } as const,
-  ])(
+  )(
     "settles a deferred $surface receipt after watcher handoff: $outcome",
     async ({ surface, outcome }) => {
       const initialConfig = {
@@ -6542,13 +6584,6 @@ describe("deferred channel reload abort generation", () => {
         );
       });
       const reloadPlugins = vi.fn<ReloadHandlerParams["reloadPlugins"]>(async (params) => {
-        if (surface === "committed plugin") {
-          await params.commitRuntime();
-          return makePluginReloadResult({
-            restartChannels: new Set(["whatsapp"]),
-            activeChannels: new Set(["whatsapp"]),
-          });
-        }
         await params.beforeReplace(new Set(["whatsapp"]));
         if (params.isAborted?.()) {
           return makePluginReloadResult({ cancelled: true });
@@ -6609,17 +6644,6 @@ describe("deferred channel reload abort generation", () => {
         await vi.advanceTimersByTimeAsync(500);
         await vi.advanceTimersByTimeAsync(300);
         await snapshotStarted.promise;
-        if (surface === "committed plugin") {
-          // A no-op replay cannot finish the interrupted runtime tail after commit.
-          expect(settled).toHaveBeenCalledExactlyOnceWith("failed");
-          expect(setState).toHaveBeenCalledOnce();
-          expect(startChannel).not.toHaveBeenCalled();
-          snapshotGate.resolve();
-          unrelatedRequest.release();
-          await vi.advanceTimersByTimeAsync(500);
-          await expect(application.result).resolves.toBe("failed");
-          return;
-        }
         expect(settled).not.toHaveBeenCalled();
         expect(setState).not.toHaveBeenCalled();
         expect(stopChannel).not.toHaveBeenCalled();
@@ -6677,6 +6701,146 @@ describe("deferred channel reload abort generation", () => {
     },
   );
 
+  it.each(["same watcher echo", "newer admitted write", "prepared refresh failure"] as const)(
+    "finishes committed runtime work before settling its receipt: %s",
+    async (successor) => {
+      const initialConfig: OpenClawConfig = {
+        gateway: { reload: {} },
+        channels: { whatsapp: { enabled: true, selfChatMode: false } },
+      };
+      const nextConfig: OpenClawConfig = {
+        ...initialConfig,
+        plugins: { entries: { fixture: { enabled: true } } },
+      };
+      activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: "whatsapp" }),
+              reload: {
+                configPrefixes: ["channels.whatsapp.selfChatMode"],
+                noopPrefixes: ["channels.whatsapp"],
+              },
+            },
+          },
+        ]),
+      );
+      const watcher = new chokidar.FSWatcher();
+      const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher);
+      const writeListenerRef = createConfigWriteListenerRef();
+      const channels = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+      const commitTerminalConfig = vi.fn();
+      const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const watchedConfig = successor === "newer admitted write" ? initialConfig : nextConfig;
+      const continuePlugin = createDeferred();
+      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+      let blocker: ReturnType<typeof tryBeginGatewayRootWorkAdmission> = null;
+      let successorRequest: Promise<RuntimeConfigWriteApplicationStatus> | undefined;
+      const submitWrite = (config: OpenClawConfig, hash: string, revision: number) =>
+        runWithGatewayIndependentRootWorkAdmission(async () => {
+          const application = createRuntimeConfigWriteApplication(
+            captureGatewayRootWorkAdmissionContinuationScope()?.run,
+          );
+          writeListenerRef.current!(
+            attachRuntimeConfigWriteApplication(
+              createConfigWriteNotification(config, hash, revision, "runtime", "source"),
+              application,
+            ),
+          );
+          return await application.result;
+        });
+      const reloader = startManagedGatewayConfigReloader({
+        initialConfig,
+        readSnapshot: vi.fn(async () => createValidConfigSnapshot(watchedConfig, "same-write")),
+        subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+        startChannel: channels.start,
+        stopChannel: channels.stop,
+        reloadPlugins: async (params) => {
+          await params.beforeReplace(new Set(), new Map([["whatsapp", new Set(["default"])]]));
+          if (params.isAborted?.()) {
+            return makePluginReloadResult({ cancelled: true });
+          }
+          await params.commitRuntime();
+          if (params.sourceConfig === nextConfig) {
+            await continuePlugin.promise;
+          }
+          return makePluginReloadResult({ activeChannels: new Set(["whatsapp"]) });
+        },
+        commitTerminalConfig,
+        logReload,
+        requestRecoveryRestart,
+      });
+      if (successor === "prepared refresh failure") {
+        hoisted.refreshPreparedModelRuntimeSnapshots.mockRejectedValueOnce(
+          new Error("prepared runtime refresh failed"),
+        );
+      }
+      vi.useFakeTimers();
+      const request = submitWrite(nextConfig, "same-write", 1);
+
+      try {
+        await vi.advanceTimersByTimeAsync(10);
+        expect(channels.stop).toHaveBeenCalledOnce();
+        blocker = tryBeginGatewayRootWorkAdmission();
+        if (!blocker) {
+          throw new Error("Expected unrelated gateway request admission");
+        }
+        continuePlugin.resolve();
+        await vi.advanceTimersByTimeAsync(10);
+        expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("deferring until"));
+        // A newer RPC remains admitted while waiting for the queued successor reload.
+        // The committed tail must not wait for that request to finish first.
+        if (successor === "newer admitted write") {
+          successorRequest = submitWrite(initialConfig, "newer-write", 2);
+        } else {
+          watcher.emit("change", "/tmp/openclaw.json");
+        }
+        await vi.advanceTimersByTimeAsync(500);
+        blocker.release();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(request).resolves.toBe(
+          successor === "prepared refresh failure"
+            ? "applied-restart-required"
+            : successor === "newer admitted write"
+              ? "superseded"
+              : "applied",
+        );
+        if (successor === "prepared refresh failure") {
+          expect(channels.stop).toHaveBeenCalledOnce();
+          expect(channels.start).not.toHaveBeenCalled();
+          expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+          expect(hoisted.rejectPendingPreparedModelRuntimeReplacement).toHaveBeenCalledOnce();
+        } else {
+          const reloadCount = successorRequest ? 2 : 1;
+          expect(channels.stop).toHaveBeenCalledTimes(reloadCount);
+          expect(channels.start).toHaveBeenCalledTimes(reloadCount);
+          expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(
+            nextConfig,
+            expect.anything(),
+          );
+          expect(hoisted.rejectPendingPreparedModelRuntimeReplacement).not.toHaveBeenCalled();
+          expect(commitTerminalConfig).toHaveBeenCalledWith(nextConfig);
+          if (successorRequest) {
+            await expect(successorRequest).resolves.toBe("applied");
+            expect(commitTerminalConfig).toHaveBeenLastCalledWith(initialConfig);
+          }
+        }
+        expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(watchedConfig);
+        expect(logReload.error).not.toHaveBeenCalled();
+      } finally {
+        continuePlugin.resolve();
+        blocker?.release();
+        await reloader.stop();
+        await request;
+        await successorRequest;
+        watch.mockRestore();
+      }
+    },
+  );
+
   it("new reload lifecycle is not affected by a previous lifecycle abort", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const channels = {
@@ -6710,7 +6874,9 @@ describe("deferred channel reload abort generation", () => {
       await expect(reloadPromise).resolves.toBe("applied");
 
       expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
-      expect(channels.start).toHaveBeenCalledWith("whatsapp");
+      expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
+        preserveManualStop: true,
+      });
     } finally {
       vi.useRealTimers();
       hoisted.activeTaskBlockers.length = 0;

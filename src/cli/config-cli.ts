@@ -27,7 +27,6 @@ import {
   buildConfigSetOperations,
   buildUnsetOperation,
   configPatchModeError,
-  modeError,
   readConfigPatchOperations,
   type ConfigPatchOptions,
   type ConfigUnsetOptions,
@@ -40,15 +39,9 @@ import {
   strictlyValidateConfigSnapshotForCli,
 } from "./config-cli-validation.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
-import {
-  hasBatchMode,
-  hasProviderBuilderOptions,
-  hasRefBuilderOptions,
-  parseBatchSource,
-  type ConfigSetOptions,
-} from "./config-set-input.js";
-import { resolveConfigSetMode } from "./config-set-parser.js";
+import type { ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
@@ -83,34 +76,12 @@ export async function runConfigSet(opts: {
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const isBatchMode = hasBatchMode(opts.cliOptions);
-    const modeResolution = resolveConfigSetMode({
-      hasBatchMode: isBatchMode,
-      hasRefBuilderOptions: hasRefBuilderOptions(opts.cliOptions),
-      hasProviderBuilderOptions: hasProviderBuilderOptions(opts.cliOptions),
-      strictJson: Boolean(opts.cliOptions.strictJson || opts.cliOptions.json),
-    });
-    if (!modeResolution.ok) {
-      throw modeError(modeResolution.error);
-    }
-    if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
-      throw modeError("--allow-exec requires --dry-run.");
-    }
-    if (opts.cliOptions.merge && opts.cliOptions.replace) {
-      throw modeError("choose either --merge or --replace, not both.");
-    }
-
-    const batchEntries = parseBatchSource(opts.cliOptions);
-    if (batchEntries && (opts.path !== undefined || opts.value !== undefined)) {
-      throw modeError("batch mode does not accept <path> or <value> arguments.");
-    }
     await runConfigOperations({
       runtime,
       operations: buildConfigSetOperations({
         path: opts.path,
         value: opts.value,
         opts: opts.cliOptions,
-        batchEntries: batchEntries ?? null,
       }),
       options: opts.cliOptions,
       successMode: "set",
@@ -149,9 +120,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const parsedPath = parseConfigSetPath(opts.path);
     const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
     const { snapshot, pluginMetadataSnapshot } = read;
-    if (!ensureValidConfigSnapshotForCli(snapshot, runtime, { json: opts.json })) {
-      return;
-    }
+    ensureValidConfigSnapshotForCli(snapshot, runtime, { json: opts.json });
     if (!pluginMetadataSnapshot) {
       throw new Error("Config plugin metadata unavailable; refusing to display config values.");
     }
@@ -165,12 +134,10 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
         : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
       if (opts.json) {
         writeRuntimeJson(runtime, formatCliJsonFailure(message));
-        runtime.exit(1);
-        return;
+        exitCliAfterOutput(runtime, 1);
       }
       runtime.error(danger(message));
-      runtime.exit(1);
-      return;
+      exitCliAfterOutput(runtime, 1);
     }
     if (opts.json) {
       writeRuntimeJson(runtime, res.value ?? null);
@@ -189,11 +156,10 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     }
     if (opts.json) {
       writeRuntimeJson(runtime, formatCliJsonFailure(err));
-      runtime.exit(1);
-      return;
+      exitCliAfterOutput(runtime, 1);
     }
     runtime.error(danger(formatErrorMessage(err)));
-    runtime.exit(1);
+    exitCliAfterOutput(runtime, 1);
   }
 }
 
@@ -212,10 +178,9 @@ export async function runConfigUnset(opts: {
       throw new Error("--json can only be used with --dry-run.");
     }
     const pathTokens = parseConcreteConfigPathTokens(opts.path);
-    const parsedPath = pathTokens.map(String);
     await runConfigOperations({
       runtime,
-      operations: [buildUnsetOperation(parsedPath, pathTokens)],
+      operations: [buildUnsetOperation(pathTokens.map(String), pathTokens)],
       options: cliOptions,
       successMode: "set",
     });
@@ -235,7 +200,7 @@ async function runConfigFile(opts: { json?: boolean; runtime?: RuntimeEnv }) {
     writeRuntimeStdout(runtime, `${path}\n`);
   } catch (err) {
     runtime.error(danger(formatErrorMessage(err)));
-    runtime.exit(1);
+    exitCliAfterOutput(runtime, 1);
   }
 }
 
@@ -249,7 +214,7 @@ async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
     writeRuntimeJson(runtime, schema);
   } catch (err) {
     runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
-    runtime.exit(1);
+    exitCliAfterOutput(runtime, 1);
   }
 }
 
@@ -258,7 +223,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
     const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
-    const snapshot = strictlyValidateConfigSnapshotForCli(
+    const snapshot = await strictlyValidateConfigSnapshotForCli(
       read.snapshot,
       read.pluginMetadataSnapshot,
     );
@@ -277,8 +242,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
           `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
         );
       }
-      runtime.exit(1);
-      return;
+      exitCliAfterOutput(runtime, 1);
     }
     if (!snapshot.valid) {
       const issues = normalizeConfigIssues(snapshot.issues);
@@ -300,8 +264,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
         );
         runtime.error(`Inspect with ${formatCliCommand("openclaw config validate")}.`);
       }
-      runtime.exit(1);
-      return;
+      exitCliAfterOutput(runtime, 1);
     }
     const warnings = normalizeConfigIssues(snapshot.warnings);
     if (opts.json) {
@@ -316,6 +279,9 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       }
     }
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     if (opts.json) {
       writeRuntimeJson(
         runtime,
@@ -325,7 +291,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     } else {
       runtime.error(danger(`Config validation error: ${formatErrorMessage(err)}`));
     }
-    runtime.exit(1);
+    exitCliAfterOutput(runtime, 1);
   }
 }
 

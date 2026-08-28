@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +22,6 @@ const BOOTSTRAP_PATH = "scripts/crabbox-untrusted-bootstrap.sh";
 const CHECK_NAME = CRABBOX_GATE_CHECK_NAME;
 const CHECK_APP_ID = 15368;
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
-const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const RUN_ID_PATTERN = /^run_[a-z0-9]+$/u;
 const LEASE_ID_PATTERN = /^cbx_[a-z0-9]+$/u;
 const MAX_PROOF_AGE_MS = 2 * 60 * 60 * 1000;
@@ -97,31 +96,19 @@ export function validatePublisherRequest(event, env) {
   }
   const inputs = assertExactKeys(
     record(event, "workflow event").inputs,
-    ["base_sha", "bootstrap_sha256", "crabbox_lease_id", "crabbox_run_id", "head_sha", "pr_number"],
+    ["base_sha", "head_sha", "pr_number"],
     "workflow inputs",
   );
   const context = {
     actor,
     baseSha: requiredString(inputs.base_sha, "base_sha"),
-    bootstrapSha256: requiredString(inputs.bootstrap_sha256, "bootstrap_sha256"),
     headSha: requiredString(inputs.head_sha, "head_sha"),
-    leaseId: requiredString(inputs.crabbox_lease_id, "crabbox_lease_id"),
     prNumber: requiredPositiveInteger(inputs.pr_number, "pr_number"),
     repository: REPOSITORY,
-    runId: requiredString(inputs.crabbox_run_id, "crabbox_run_id"),
     workflowSha,
   };
   if (!SHA_PATTERN.test(context.baseSha) || !SHA_PATTERN.test(context.headSha)) {
     throw new Error("base_sha and head_sha must be exactly 40 lowercase hex characters");
-  }
-  if (context.baseSha !== workflowSha) {
-    throw new Error("base_sha must match the exact protected-main workflow SHA");
-  }
-  if (!SHA256_PATTERN.test(context.bootstrapSha256)) {
-    throw new Error("bootstrap_sha256 must be exactly 64 lowercase hex characters");
-  }
-  if (!RUN_ID_PATTERN.test(context.runId) || !LEASE_ID_PATTERN.test(context.leaseId)) {
-    throw new Error("Crabbox run or lease id is malformed");
   }
   return context;
 }
@@ -163,6 +150,29 @@ function validateTrustedMain(value, workflowSha) {
   }
 }
 
+function validateBaseAncestry(value, context) {
+  const comparison = record(value, "base ancestry comparison");
+  const baseCommit = record(comparison.base_commit, "base ancestry comparison.base_commit");
+  const mergeBase = record(
+    comparison.merge_base_commit,
+    "base ancestry comparison.merge_base_commit",
+  );
+  const identical = comparison.status === "identical";
+  if (
+    baseCommit.sha !== context.baseSha ||
+    mergeBase.sha !== context.baseSha ||
+    comparison.behind_by !== 0 ||
+    (identical
+      ? context.baseSha !== context.workflowSha || comparison.ahead_by !== 0
+      : comparison.status !== "ahead" ||
+        context.baseSha === context.workflowSha ||
+        !Number.isSafeInteger(comparison.ahead_by) ||
+        comparison.ahead_by < 1)
+  ) {
+    throw new Error("pull request base is not an ancestor of the trusted publisher workflow SHA");
+  }
+}
+
 function parseTime(value, label) {
   const timestamp = Date.parse(requiredString(value, label));
   if (!Number.isFinite(timestamp)) {
@@ -171,7 +181,150 @@ function parseTime(value, label) {
   return timestamp;
 }
 
-export function validateBrokerProof({ bootstrapSha256, context, events, log, now, run, userId }) {
+function validateServicePrincipal(value) {
+  const principal = record(value, "Crabbox service principal");
+  const allowedKeys = new Set(["admin", "auth", "org", "owner", "tokenExpiresAt"]);
+  if (
+    Object.keys(principal).some((key) => !allowedKeys.has(key)) ||
+    principal.auth !== "bearer" ||
+    principal.org !== ORGANIZATION ||
+    principal.admin !== false ||
+    principal.owner === "unknown" ||
+    (principal.tokenExpiresAt !== undefined && typeof principal.tokenExpiresAt !== "string")
+  ) {
+    throw new Error("Crabbox coordinator did not resolve the expected service principal");
+  }
+  return {
+    auth: principal.auth,
+    org: principal.org,
+    owner: requiredString(principal.owner, "Crabbox service principal owner"),
+  };
+}
+
+function validateCrabboxConfig(value, coordinator) {
+  const config = record(value, "Crabbox resolved config");
+  if (
+    config.coordinator !== coordinator ||
+    record(config.aws, "Crabbox resolved config.aws").instanceProfile !== ""
+  ) {
+    throw new Error("Crabbox AWS gate requires the trusted coordinator and no instance profile");
+  }
+}
+
+function parseCrabboxTiming(result, expectedLabel) {
+  if (result.exitCode !== 0) {
+    throw new Error(`Crabbox AWS command failed with exit code ${result.exitCode}`);
+  }
+  const timing = result.stderr
+    .trimEnd()
+    .split("\n")
+    .toReversed()
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .find((value) => isRecord(value) && value.provider === "aws");
+  const report = record(timing, "Crabbox timing report");
+  if (
+    report.provider !== "aws" ||
+    report.runStatus !== "succeeded" ||
+    report.exitCode !== 0 ||
+    report.leaseStopped !== true ||
+    report.label !== expectedLabel ||
+    !RUN_ID_PATTERN.test(report.runId) ||
+    !LEASE_ID_PATTERN.test(report.leaseId)
+  ) {
+    throw new Error("Crabbox timing report is not a successful released AWS proof");
+  }
+  return {
+    leaseId: report.leaseId,
+    runId: report.runId,
+  };
+}
+
+function sanitizedCrabboxEnvironment(env, home) {
+  const sanitized = {
+    CI: "1",
+    CRABBOX_COORDINATOR: requiredEnv(env, "CRABBOX_COORDINATOR"),
+    CRABBOX_COORDINATOR_TOKEN: requiredEnv(env, "CRABBOX_COORDINATOR_TOKEN"),
+    CRABBOX_ENV_ALLOW: "CI",
+    HOME: home,
+    LANG: env.LANG ?? "C.UTF-8",
+    NO_COLOR: "1",
+    PATH: requiredEnv(env, "PATH"),
+    TMPDIR: env.RUNNER_TEMP ?? env.TMPDIR ?? tmpdir(),
+  };
+  const accessClientId = env.CRABBOX_ACCESS_CLIENT_ID ?? "";
+  const accessClientSecret = env.CRABBOX_ACCESS_CLIENT_SECRET ?? "";
+  if (Boolean(accessClientId) !== Boolean(accessClientSecret)) {
+    throw new Error("Crabbox Access client id and secret must be provided together");
+  }
+  if (accessClientId) {
+    sanitized.CRABBOX_ACCESS_CLIENT_ID = accessClientId;
+    sanitized.CRABBOX_ACCESS_CLIENT_SECRET = accessClientSecret;
+  }
+  return sanitized;
+}
+
+export function appendCrabboxOutputTail(current, chunk) {
+  return Buffer.concat([current, Buffer.from(chunk)]).subarray(-64 * 1024);
+}
+
+async function executeCrabbox({ args, bin, env, stream = false }) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(bin, args, {
+      cwd: process.cwd(),
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    child.stdout.on("data", (chunk) => {
+      if (stream) {
+        process.stdout.write(chunk);
+      } else {
+        stdout = appendCrabboxOutputTail(stdout, chunk);
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = appendCrabboxOutputTail(stderr, chunk);
+      if (stream) {
+        process.stderr.write(chunk);
+      }
+    });
+    child.on("error", reject);
+    child.on("close", (exitCode) => {
+      resolve({ exitCode, stderr: stderr.toString(), stdout: stdout.toString() });
+    });
+  });
+}
+
+function buildCrabboxRunArgs(context, bootstrapSha256) {
+  const label = `openclaw-pr-gate:${context.prNumber}:${context.baseSha}:${context.headSha}`;
+  const args =
+    `run --provider aws --target linux --class standard --market on-demand --network public ` +
+    `--tailscale=false --no-hydrate --fresh-pr ${REPOSITORY}#${context.prNumber} ` +
+    `--idle-timeout 90m --ttl 240m --stop-after always --timing-json --label ${label} ` +
+    `--script ${BOOTSTRAP_PATH} --`;
+  const command = buildCrabboxGateCommand(context.plan, bootstrapSha256);
+  return {
+    args: [...args.split(" "), context.headSha, "/bin/bash", "-lc", command],
+    label,
+  };
+}
+
+export function validateBrokerProof({
+  bootstrapSha256,
+  context,
+  events,
+  log,
+  now,
+  principal,
+  run,
+}) {
   const proof = record(run, "Crabbox run");
   const plan = validateCrabboxGatePlan(context.plan);
   if (plan.baseSha !== context.baseSha || plan.headSha !== context.headSha) {
@@ -179,7 +332,7 @@ export function validateBrokerProof({ bootstrapSha256, context, events, log, now
   }
   const expectedCommand = [
     "--script",
-    ".local/crabbox-untrusted-bootstrap.sh",
+    BOOTSTRAP_PATH,
     context.headSha,
     "/bin/bash",
     "-lc",
@@ -191,8 +344,8 @@ export function validateBrokerProof({ bootstrapSha256, context, events, log, now
   ]);
   if (
     proof.id !== context.runId ||
-    proof.owner !== `github:${userId}` ||
-    proof.org !== ORGANIZATION ||
+    proof.owner !== principal.owner ||
+    proof.org !== principal.org ||
     proof.provider !== "aws" ||
     proof.target !== "linux" ||
     proof.state !== "succeeded" ||
@@ -327,18 +480,16 @@ const defaultResolvePlan = resolvePlanInDetachedWorktree;
 
 export async function runPublisher({
   broker,
+  clock = Date.now,
   event,
   github,
   organization,
   env,
-  now = Date.now(),
   resolvePlan = defaultResolvePlan,
+  runCrabbox = executeCrabbox,
 }) {
   const context = validatePublisherRequest(event, env);
   const localBootstrapHash = bootstrapHash();
-  if (localBootstrapHash !== context.bootstrapSha256) {
-    throw new Error("requested bootstrap hash does not match trusted main");
-  }
   validateActiveAdminMembership(
     await organization.request(
       "GET",
@@ -354,15 +505,41 @@ export async function runPublisher({
     await github.request("GET", `/repos/${REPOSITORY}/git/ref/heads/main`),
     context.workflowSha,
   );
+  validateBaseAncestry(
+    await github.request(
+      "GET",
+      `/repos/${REPOSITORY}/compare/${context.baseSha}...${context.workflowSha}`,
+    ),
+    context,
+  );
   context.plan = await Promise.resolve(resolvePlan(context));
   if (context.plan.baseSha !== context.baseSha || context.plan.headSha !== context.headSha) {
     throw new Error("Crabbox gate plan does not bind the requested base and head");
   }
-  const user = record(
-    await github.request("GET", `/users/${encodeURIComponent(context.actor)}`),
-    "GitHub actor",
-  );
-  const userId = requiredPositiveInteger(user.id, "GitHub actor id");
+  const principal = validateServicePrincipal(await broker.request("/v1/whoami"));
+  const crabboxBin = requiredEnv(env, "CRABBOX_BIN");
+  const crabboxHome = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-publisher-"));
+  try {
+    const crabboxEnv = sanitizedCrabboxEnvironment(env, crabboxHome);
+    const configResult = await runCrabbox({
+      args: ["config", "show", "--provider", "aws", "--json"],
+      bin: crabboxBin,
+      env: crabboxEnv,
+    });
+    if (configResult.exitCode !== 0) {
+      throw new Error(`Crabbox config resolution failed with exit code ${configResult.exitCode}`);
+    }
+    validateCrabboxConfig(JSON.parse(configResult.stdout), requiredEnv(env, "CRABBOX_COORDINATOR"));
+    const { args, label } = buildCrabboxRunArgs(context, localBootstrapHash);
+    const timing = parseCrabboxTiming(
+      await runCrabbox({ args, bin: crabboxBin, env: crabboxEnv, stream: true }),
+      label,
+    );
+    context.runId = timing.runId;
+    context.leaseId = timing.leaseId;
+  } finally {
+    rmSync(crabboxHome, { force: true, recursive: true });
+  }
   const runResponse = record(
     await broker.request(`/v1/runs/${context.runId}`),
     "Crabbox run response",
@@ -376,9 +553,9 @@ export async function runPublisher({
     context,
     events: eventsResponse.events,
     log: await broker.request(`/v1/runs/${context.runId}/logs`, { text: true }),
-    now,
+    now: clock(),
+    principal,
     run: runResponse.run,
-    userId,
   });
   validatePullRequest(
     await github.request("GET", `/repos/${REPOSITORY}/pulls/${context.prNumber}`),
@@ -409,6 +586,7 @@ export async function runPublisher({
           planDigest: crabboxGatePlanDigest(context.plan),
           runId: context.runId,
           targetCount: context.plan.targets.length,
+          workflowSha: context.workflowSha,
         }),
         title: "Crabbox AWS exact-head gate passed",
       },
@@ -430,24 +608,30 @@ export async function runPublisher({
 }
 
 export function createJsonApi({
-  accessClientId,
-  accessClientSecret,
+  accessClientId = "",
+  accessClientSecret = "",
   baseUrl,
   token,
   fetchImpl = fetch,
 }) {
-  const base = new URL(baseUrl);
-  requiredString(accessClientId, "Crabbox Access client id");
-  requiredString(accessClientSecret, "Crabbox Access client secret");
-  requiredString(token, "Crabbox coordinator token");
+  const base = new URL(requiredString(baseUrl, "Crabbox coordinator URL"));
+  const hasAccess = Boolean(accessClientId);
+  if (hasAccess !== Boolean(accessClientSecret)) {
+    throw new Error("Crabbox Access client id and secret must be provided together");
+  }
+  const headers = {
+    Authorization: `Bearer ${requiredString(token, "Crabbox coordinator token")}`,
+    ...(hasAccess
+      ? {
+          "CF-Access-Client-Id": accessClientId,
+          "CF-Access-Client-Secret": accessClientSecret,
+        }
+      : {}),
+  };
   return {
     async request(requestPath, options = {}) {
       const response = await fetchImpl(new URL(requestPath, base), {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "CF-Access-Client-Id": accessClientId,
-          "CF-Access-Client-Secret": accessClientSecret,
-        },
+        headers,
         signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) {
@@ -488,8 +672,8 @@ async function main() {
   const event = JSON.parse(readFileSync(requiredEnv(process.env, "GITHUB_EVENT_PATH"), "utf8"));
   const brokerUrl = requiredEnv(process.env, "CRABBOX_COORDINATOR");
   const broker = createJsonApi({
-    accessClientId: requiredEnv(process.env, "CRABBOX_ACCESS_CLIENT_ID"),
-    accessClientSecret: requiredEnv(process.env, "CRABBOX_ACCESS_CLIENT_SECRET"),
+    accessClientId: process.env.CRABBOX_ACCESS_CLIENT_ID,
+    accessClientSecret: process.env.CRABBOX_ACCESS_CLIENT_SECRET,
     baseUrl: brokerUrl.endsWith("/") ? brokerUrl : `${brokerUrl}/`,
     token: requiredEnv(process.env, "CRABBOX_COORDINATOR_TOKEN"),
   });

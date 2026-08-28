@@ -57,13 +57,13 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
 
-type ApprovalFailure = Exclude<BeforeToolCallFailureDisposition, "blocked">;
-
 export class CodexAppServerEventProjector {
+  readonly transcriptCheckpoint: CodexTranscriptCheckpoint;
   private readonly asyncDeliveryProjection: CodexAsyncDeliveryProjection;
   private readonly assistantProjection: CodexAssistantProjection;
   private readonly reasoningProjection: CodexReasoningProjection;
@@ -90,7 +90,6 @@ export class CodexAppServerEventProjector {
   private contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
   private readonly responseCompletions = new CodexResponseCompletionProjection();
   private completedCompactionCount = 0;
-  private lastTranscriptTimestamp = 0;
   private pendingSteeringAssistantBoundaryItemId: string | undefined;
 
   constructor(
@@ -99,6 +98,7 @@ export class CodexAppServerEventProjector {
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
   ) {
+    this.transcriptCheckpoint = new CodexTranscriptCheckpoint(params, threadId, turnId);
     this.asyncDeliveryProjection = new CodexAsyncDeliveryProjection(
       params,
       threadId,
@@ -128,11 +128,12 @@ export class CodexAppServerEventProjector {
       threadId,
       turnId,
       this.toolProgressProjection,
-      () => this.nextTranscriptTimestamp(),
+      this.transcriptCheckpoint.nextTimestamp,
       {
         nativePostToolUseRelayEnabled: options.nativePostToolUseRelayEnabled,
         prepareNativeMcpAppResultDetails: options.prepareNativeMcpAppResultDetails,
         trajectoryRecorder: options.trajectoryRecorder,
+        checkpointMessage: this.transcriptCheckpoint.enqueue,
       },
     );
     this.eventProjection = new CodexEventProjection(
@@ -147,20 +148,14 @@ export class CodexAppServerEventProjector {
       params,
       (event) => this.emitAgentEvent(event),
       (text) => this.toolProgressProjection.matchesEcho(text),
-      () => this.nextTranscriptTimestamp(),
+      this.transcriptCheckpoint.nextTimestamp,
+      this.transcriptCheckpoint.enqueueCommentary,
     );
     this.reasoningProjection = new CodexReasoningProjection(
       params,
       (event) => this.emitAgentEvent(event),
       options.onNativePlanUpdate,
     );
-  }
-
-  private nextTranscriptTimestamp(): number {
-    // Commentary and tool mirrors share this clock so equal wall-clock values
-    // still preserve the app-server receipt order in the durable transcript.
-    this.lastTranscriptTimestamp = Math.max(Date.now(), this.lastTranscriptTimestamp + 1);
-    return this.lastTranscriptTimestamp;
   }
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
@@ -236,7 +231,7 @@ export class CodexAppServerEventProjector {
 
   recordNativeToolApprovalFailure(
     toolCallId: string,
-    disposition: ApprovalFailure,
+    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">,
     approvalKind?: CodexApprovalKind,
   ): void {
     this.nativeToolLifecycleProjector.recordApprovalFailureDisposition(toolCallId, disposition);
@@ -300,9 +295,11 @@ export class CodexAppServerEventProjector {
         break;
       case "item/started":
         await this.handleItemStarted(params);
+        await this.transcriptCheckpoint.flush();
         break;
       case "item/completed":
         await this.handleItemCompleted(params);
+        await this.transcriptCheckpoint.flush();
         break;
       case "item/commandExecution/outputDelta":
         this.toolProgressProjection.handleOutputDelta(params, "bash");
@@ -353,6 +350,7 @@ export class CodexAppServerEventProjector {
         break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
+        await this.transcriptCheckpoint.flush();
         break;
       case "model/rerouted":
         this.eventProjection.handleModelRerouted(params);
@@ -566,7 +564,7 @@ export class CodexAppServerEventProjector {
         threadId: this.threadId,
         turnId: this.turnId,
         itemId,
-        timestamp: this.nextTranscriptTimestamp(),
+        timestamp: this.transcriptCheckpoint.nextTimestamp(),
       });
       this.eventProjection.emitCompactionEnd(itemId, true);
     }

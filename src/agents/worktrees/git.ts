@@ -38,7 +38,12 @@ export function gitEnvironment(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export async function runGit(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    input?: string | Uint8Array;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<GitResult> {
   return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
 }

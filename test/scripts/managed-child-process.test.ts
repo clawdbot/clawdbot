@@ -13,6 +13,8 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "../../scripts/lib/managed-child-process.mts";
+import { waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -447,28 +449,25 @@ describe("managed-child-process", () => {
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1_000);
 spawn(process.execPath, [
   "-e",
   ${JSON.stringify(`
 const fs = require("node:fs");
 process.on("SIGTERM", () => {});
-setTimeout(() => process.exit(0), 5_000);
 setInterval(() => {}, 1000);
 ${publishReadyPidScript(1)}
 `)},
   process.argv[3],
 ], { stdio: "ignore" });
-process.on("SIGTERM", () => {});
-setInterval(() => {}, 1_000);
 ${publishReadyPidScript(2)}
 `,
       "utf8",
     );
 
-    let childPid = 0;
-    let descendantPid = 0;
-    try {
-      await expect(
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      expect(
         runManagedCommand({
           bin: process.execPath,
           args: [childPath, childPidPath, descendantPidPath],
@@ -476,18 +475,38 @@ ${publishReadyPidScript(2)}
           stdio: "ignore",
           timeoutMs: 500,
         }),
-      ).rejects.toMatchObject({ code: "ETIMEDOUT" });
-
-      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
-      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      ).rejects.toMatchObject({ code: "ETIMEDOUT" }),
+    );
+    const killSpy = vi.spyOn(process, "kill");
+    let childPid = 0;
+    let descendantPid = 0;
+    try {
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      descendantPid = await waitForPidFile(descendantPidPath, 2_000);
+      expect(isProcessAlive(childPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
+      await releaseAndWait();
+      if (process.platform !== "win32") {
+        expect(killSpy).toHaveBeenCalledWith(-childPid, "SIGKILL");
+      }
       expect(isProcessAlive(childPid)).toBe(false);
       expect(isProcessAlive(descendantPid)).toBe(false);
     } finally {
-      if (childPid && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-      }
-      if (descendantPid && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
+      try {
+        await releaseAndWait();
+      } finally {
+        killSpy.mockRestore();
+        try {
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+            await waitForDead(childPid, 2_000);
+          }
+        } finally {
+          if (descendantPid && isProcessAlive(descendantPid)) {
+            process.kill(descendantPid, "SIGKILL");
+            await waitForDead(descendantPid, 2_000);
+          }
+        }
       }
     }
   });

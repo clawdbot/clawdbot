@@ -28,7 +28,14 @@ import {
   resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
 } from "../../scripts/tsdown-build.mts";
-import { createDeferred } from "../helpers/promise.js";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -92,75 +99,6 @@ async function expectPathMissing(targetPath: string) {
     throw new Error("expected missing path error");
   }
   expect(Reflect.get(statError, "code")).toBe("ENOENT");
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
-}
-
-// Pid files are written with plain writeFileSync, so an existence poll can
-// observe the open-truncate 0-byte window and parse NaN (the #109140 flake
-// class). Wait until the content parses to a real pid, not just for the file.
-async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      const pid = Number.parseInt(fs.readFileSync(filePath, "utf8"), 10);
-      if (Number.isInteger(pid) && pid > 0) {
-        return pid;
-      }
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for pid in ${filePath}`);
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for pid ${pid} to exit`);
-}
-
-function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
 }
 
 describe("resolveTsdownBuildInvocation", () => {
@@ -2265,44 +2203,28 @@ describe("runTsdownBuildInvocation", () => {
   }
 
   function startTimeoutFixture(parentScript: string, output: ReturnType<typeof createWriteSink>) {
-    const ready = createDeferred();
-    const schedule = globalThis.setTimeout;
-    // Keep the real watchdog delay, but hold its callback until the child is ready.
-    // Restore before yielding so grace and process-group polling use real timers.
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, ms, ...args) =>
-        schedule(() => {
-          void ready.promise.then(() => callback(...args));
-        }, ms),
-      );
-    try {
-      return {
-        runPromise: runTsdownBuildInvocation(
-          {
-            command: process.execPath,
-            args: ["-e", parentScript],
-            options: {
-              stdio: ["ignore", "pipe", "pipe"],
-              shell: false,
-              env: process.env,
-            },
+    return startProcessWatchdogFixture(() =>
+      runTsdownBuildInvocation(
+        {
+          command: process.execPath,
+          args: ["-e", parentScript],
+          options: {
+            stdio: ["ignore", "pipe", "pipe"],
+            shell: false,
+            env: process.env,
           },
-          {
-            stdout: output.sink,
-            stderr: output.sink,
-            env: {
-              ...process.env,
-              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
-              OPENCLAW_TSDOWN_TIMEOUT_MS: "250",
-            },
+        },
+        {
+          stdout: output.sink,
+          stderr: output.sink,
+          env: {
+            ...process.env,
+            OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+            OPENCLAW_TSDOWN_TIMEOUT_MS: "250",
           },
-        ),
-        releaseTimeout: ready.resolve,
-      };
-    } finally {
-      timeoutSpy.mockRestore();
-    }
+        },
+      ),
+    );
   }
 
   it("streams child output while preserving diagnostics for post-run checks", async () => {
@@ -2426,23 +2348,21 @@ describe("runTsdownBuildInvocation", () => {
         "setInterval(() => {}, 1000);",
       ].join("");
       const output = createWriteSink();
-      const run = startTimeoutFixture(parentScript, output);
+      const releaseAndWait = startTimeoutFixture(parentScript, output);
       let childPid: number | undefined;
 
       try {
         // The descendant publishes its PID only after installing its SIGTERM handler.
         childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
-        run.releaseTimeout();
-        const result = await run.runPromise;
+        const result = await releaseAndWait();
 
         expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
         expect(fs.readFileSync(termPath, "utf8")).toBe("SIGTERM");
         expect(output.chunks.join("")).toContain("forcing SIGKILL");
         await waitForDead(childPid, 2_000);
       } finally {
-        run.releaseTimeout();
-        await run.runPromise;
+        await releaseAndWait();
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
           await waitForDead(childPid, 2_000);
@@ -2475,15 +2395,14 @@ describe("runTsdownBuildInvocation", () => {
         "setInterval(() => {}, 1000);",
       ].join("");
       const output = createWriteSink();
-      const run = startTimeoutFixture(parentScript, output);
+      const releaseAndWait = startTimeoutFixture(parentScript, output);
       let childPid: number | undefined;
 
       try {
         // The descendant publishes its PID only after installing its SIGTERM handler.
         childPid = await waitForPidFile(childPidPath, 2_000);
         const startedAt = Date.now();
-        run.releaseTimeout();
-        const result = await run.runPromise;
+        const result = await releaseAndWait();
 
         expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
         expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
@@ -2491,8 +2410,7 @@ describe("runTsdownBuildInvocation", () => {
         expect(Date.now() - startedAt).toBeLessThan(900);
         await waitForDead(childPid, 2_000);
       } finally {
-        run.releaseTimeout();
-        await run.runPromise;
+        await releaseAndWait();
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
           await waitForDead(childPid, 2_000);

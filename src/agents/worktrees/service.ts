@@ -339,21 +339,33 @@ async function canResetFailedWorktreeAdd(
   return branchExists.code === 1;
 }
 
-async function runSetupScript(repoRoot: string, worktreePath: string): Promise<void> {
+async function runSetupScript(
+  repoRoot: string,
+  worktreePath: string,
+  params: CreateManagedWorktreeParams,
+): Promise<void> {
   const setupScript = path.join(repoRoot, ".openclaw", "worktree-setup.sh");
   const stat = await fs.stat(setupScript).catch(() => undefined);
   if (!stat?.isFile() || (stat.mode & 0o111) === 0) {
     return;
   }
   const timeoutMs = 120_000;
+  params.onProgress?.("setup");
+  // Checkout may outlive its caller. Revalidate before starting repository code,
+  // then retain process ownership through cancellation and rollback.
+  params.signal?.throwIfAborted();
+  params.commitGuard?.();
   const result = await runCommandWithTimeout([setupScript], {
     timeoutMs,
     cwd: worktreePath,
+    signal: params.signal,
+    killProcessTree: true,
     env: {
       OPENCLAW_SOURCE_TREE_PATH: repoRoot,
       OPENCLAW_WORKTREE_PATH: worktreePath,
     },
   });
+  params.signal?.throwIfAborted();
   if (result.code !== 0) {
     throw createCommandError("worktree setup", result, { timeoutMs });
   }
@@ -624,6 +636,7 @@ export class ManagedWorktreeService {
   }
 
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
+    params.signal?.throwIfAborted();
     const repository = await resolveRepository(params.repoRoot);
     if (params.ownerId) {
       const ownerKind = params.ownerKind ?? "manual";
@@ -638,6 +651,7 @@ export class ManagedWorktreeService {
           waitMs: WORKTREE_CREATE_LEASE_WAIT_MS,
           leaseLabel: "managed worktree owner lease",
           operationLabel: "agents.worktrees.create.owner-lease",
+          signal: params.signal,
         },
         async () => {
           const existing = findLiveRegistryWorktreeByOwner(this.env, ownerKind, ownerId);
@@ -676,6 +690,7 @@ export class ManagedWorktreeService {
         waitMs: WORKTREE_CREATE_LEASE_WAIT_MS,
         leaseLabel: "managed worktree creation lease",
         operationLabel: "agents.worktrees.create.lease",
+        signal: params.signal,
       },
       async () => await this.createForRepository(params, repository, allocationName),
     );
@@ -686,6 +701,8 @@ export class ManagedWorktreeService {
     repository: Awaited<ReturnType<typeof resolveRepository>>,
     inferredName: string,
   ): Promise<ManagedWorktreeRecord> {
+    params.signal?.throwIfAborted();
+    params.onProgress?.("checkout");
     const root = path.join(await this.worktreesRoot(), repository.fingerprint);
     const name = validateName(
       params.name ??
@@ -734,9 +751,13 @@ export class ManagedWorktreeService {
     if (branchExists.code !== 1) {
       throw commandError("git show-ref --verify", branchExists);
     }
-    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+    // Default-base resolution fetches remote refs; it is an effect, not just discovery.
+    params.signal?.throwIfAborted();
     params.commitGuard?.();
+    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
     await fs.mkdir(root, { recursive: true });
+    params.signal?.throwIfAborted();
+    params.commitGuard?.();
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
     const runRepositorySetup = params.runSetupScript !== false;
@@ -749,6 +770,8 @@ export class ManagedWorktreeService {
         throw commandError("git worktree add", added);
       }
       await resetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch);
+      params.signal?.throwIfAborted();
+      params.commitGuard?.();
       gitBase = "HEAD";
       recordBase = "HEAD";
       added = await runGit(repository.repoRoot, worktreeAddArgs(), {
@@ -760,10 +783,13 @@ export class ManagedWorktreeService {
     }
     let provisionedPaths: string[];
     try {
+      params.signal?.throwIfAborted();
+      params.commitGuard?.();
       provisionedPaths = await provisionIncludedFiles(repository.sourceRoot, worktreePath);
       if (runRepositorySetup) {
-        await runSetupScript(repository.sourceRoot, worktreePath);
+        await runSetupScript(repository.sourceRoot, worktreePath, params);
       }
+      params.signal?.throwIfAborted();
       params.commitGuard?.();
     } catch (error) {
       try {

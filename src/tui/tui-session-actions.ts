@@ -473,7 +473,9 @@ export function createSessionActions(context: SessionActionContext) {
         messages?: unknown[];
         sessionId?: string;
         sessionInfo?: SessionInfoEntry &
-          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">>;
+          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">> & {
+            activeRunIds?: unknown;
+          };
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
         fastMode?: FastMode;
@@ -633,7 +635,14 @@ export function createSessionActions(context: SessionActionContext) {
           : status === "killed" || sessionInfo?.abortedLastRun === true
             ? ({ state: "interrupted" } as const)
             : ({ state: "completed" } as const);
-      return { loaded: true, runOutcome };
+      const activeRunIds = sessionInfo?.activeRunIds;
+      return {
+        loaded: true,
+        runOutcome,
+        ...(Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string")
+          ? { activeRunIds }
+          : {}),
+      };
     } catch (err) {
       if (isCurrentLoad() && !isAbortError(err)) {
         chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);

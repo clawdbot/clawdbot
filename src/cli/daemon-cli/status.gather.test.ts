@@ -599,7 +599,7 @@ describe("gatherDaemonStatus", () => {
 
   it("reports the heap limit from the installed Gateway service", async () => {
     serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      programArguments: ["/bin/node", "--max-heap-size=8192", "cli", "gateway", "--port", "19001"],
       environment: {
         OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
         OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
@@ -609,7 +609,10 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus({ probe: false });
 
-    expect(status.service.gatewayHeap).toMatchObject({ appliedMiB: 6144 });
+    expect(status.service.gatewayHeap).toMatchObject({
+      nodeOptions: "--max-old-space-size=6144",
+      execArgv: ["--max-heap-size=8192"],
+    });
     expect(status.service.gatewayHeap?.memorySource).toMatch(/^(constrained|physical)$/u);
   });
 

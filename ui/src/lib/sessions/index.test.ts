@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
@@ -903,7 +904,7 @@ describe("createSessionCapability", () => {
     await sessions.refresh({ force: true });
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
-      expect.objectContaining({ configuredAgentsOnly: true, limit: 50 }),
+      expect.objectContaining({ configuredAgentsOnly: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
     );
     const publishedKeys: string[][] = [];
     sessions.subscribe((next) => {

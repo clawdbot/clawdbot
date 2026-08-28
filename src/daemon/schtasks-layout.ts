@@ -292,7 +292,12 @@ export function buildTaskScript({
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
-      if (!value || key.toUpperCase() === "PATH") {
+      // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
+      if (
+        value === undefined ||
+        (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
+        key.toUpperCase() === "PATH"
+      ) {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));

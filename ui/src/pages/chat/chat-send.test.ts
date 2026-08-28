@@ -56,6 +56,7 @@ import {
 } from "./composer-persistence.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
+import { handleChatScrollTakeover } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
@@ -2562,6 +2563,56 @@ describe("handleSendChat", () => {
     expect(host.chatUserNearBottom).toBe(false);
     expect(host.sessionsResult?.sessions[0]?.thinkingLevel).toBe("low");
   });
+
+  it.each([false, true])(
+    "preserves reader ownership across pending delivery with steer=%s",
+    async (steer) => {
+      const settings = createDeferred<boolean>();
+      const ack = createDeferred<{ status: string; runId: string }>();
+      const container = document.createElement("div");
+      Object.defineProperties(container, {
+        scrollHeight: { value: 2000 },
+        clientHeight: { value: 400 },
+      });
+      container.scrollTop = 1600;
+      const scrollToEnd = vi.fn(() => true);
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": () => ack.promise },
+        chatMessage: "send while reading",
+        chatRunId: steer ? "active-run" : null,
+        chatHasAutoScrolled: true,
+        chatScrollElement: () => container,
+        chatScrollToEnd: scrollToEnd,
+        pendingSettingsPatches: { "agent:main": settings.promise },
+        settings: { chatFollowUpMode: "steer" },
+      });
+      const send = handleSendChat(host);
+      await Promise.resolve();
+      expect(scrollToEnd).toHaveBeenCalledWith({ source: "manual", behavior: "auto" });
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      container.scrollTop = 1200;
+      handleChatScrollTakeover(host);
+      expect(host.chatFollowLocked).toBe(true);
+      scrollToEnd.mockClear();
+
+      settings.resolve(true);
+      await waitForFast(() =>
+        expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()),
+      );
+      ack.resolve({ status: "started", runId: "accepted-run" });
+      await send;
+      await Promise.resolve();
+
+      expect(host.chatFollowLocked).toBe(true);
+      expect(host.chatHasAutoScrolled).toBe(true);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(container.scrollTop).toBe(1200);
+    },
+  );
 
   it("preserves draft edits made while waiting for a model picker update", async () => {
     const switchUpdate = createDeferred<boolean>();

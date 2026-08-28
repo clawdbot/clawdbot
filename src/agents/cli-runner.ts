@@ -402,7 +402,9 @@ export async function runPreparedCliAgent(
     if (
       !assistantText &&
       !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true
+      params.allowEmptyAssistantReplyAsSilent !== true &&
+      // Strict isolated completion owns valid-empty output after reasoning is removed.
+      !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
     ) {
       const process = output.diagnostics?.process;
       if (process) {
