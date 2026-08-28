@@ -551,12 +551,18 @@ export function resolveBuildAllEnvironment(
   now: () => Date = () => new Date(),
   readGitCommit: () => string | null = readCurrentGitCommit,
 ) {
-  return resolveBuildIdentityEnvironment({
+  const buildEnv = resolveBuildIdentityEnvironment({
     commitLabel: "build commit",
     env,
     now,
     readGitCommit,
   });
+  // Older installed updaters already send this marker to candidate builds.
+  // Updates need runtime artifacts; explicit declaration/package builds still win.
+  if (buildEnv.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
+    buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ??= "1";
+  }
+  return buildEnv;
 }
 
 export function resolveBuildAllTsdownPlan(
@@ -1009,7 +1015,7 @@ export function runBuildAllSteps(
     steps?: BuildAllStep[];
   } = {},
 ) {
-  let buildEnv = params.env ?? resolveBuildAllEnvironment();
+  let buildEnv = resolveBuildAllEnvironment(params.env);
   const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;

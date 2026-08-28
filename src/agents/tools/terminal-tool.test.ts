@@ -13,6 +13,11 @@ import {
   resetAgentRunRegistryForTest,
 } from "../../infra/agent-run-registry.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
+import { consumeRepairableCodeModeFailure } from "../code-mode-repair-provenance.js";
+import { createSubscribedCodeModeHarness } from "../code-mode.bridge.lifecycle.test-support.js";
+import { applyCodeModeCatalog } from "../code-mode.js";
+import { resultDetails } from "../code-mode.test-support.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createTerminalTool } from "./terminal-tool.js";
@@ -306,6 +311,35 @@ describe("terminal tool", () => {
       expect(approvalMocks.decide).not.toHaveBeenCalled();
     },
   );
+
+  it("preserves required-sandbox no-start through Code Mode before terminal input approval or write", async () => {
+    const { backend, manager, sessionId } = await openAgentTerminal();
+    const harness = createSubscribedCodeModeHarness({ name: "terminal-sandbox-denial" });
+    const terminal = wrapToolWithBeforeToolCallHook(
+      makeTool(manager, {
+        config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+        execSession: { sandbox: "required" },
+      }),
+      { runId: harness.runId },
+    );
+    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, terminal] });
+    try {
+      const details = resultDetails(
+        await harness.tools[0]!.execute("terminal-input", {
+          code: `return await terminal(${JSON.stringify({ action: "input", sessionId, data: "echo untouched\r" })});`,
+        }),
+      );
+      expect(details).toMatchObject({ status: "failed", bridgeDispatchStarted: true });
+      expect(details.error).toContain("sandbox runtime is unavailable");
+      expect(backend.writes).toEqual([]);
+      expect(approvalMocks.register).not.toHaveBeenCalled();
+      expect(approvalMocks.decide).not.toHaveBeenCalled();
+      expect(consumeRepairableCodeModeFailure(details)).toBe(true);
+    } finally {
+      harness.dispose();
+      manager.closeAgent(agentOwner, sessionId);
+    }
+  });
 
   it("rejects terminal input when the authoritative persisted session is missing", async () => {
     const { backend, manager, sessionId } = await openAgentTerminal();

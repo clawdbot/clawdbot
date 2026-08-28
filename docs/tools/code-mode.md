@@ -187,13 +187,20 @@ and correct across successive turns. A failed `exec` or `wait` does not automati
 end the agent run when OpenClaw's host execution record proves that no potentially
 mutating nested action started, including before a suspended run resumed.
 
+An exec host-policy rejection can carry this proof even after hooks, approval
+resolution, and tool implementation entry: the host owns the narrower fact that
+no command process or remote dispatch started. A corrected call runs the ordinary
+hooks and approvals again. Consumed voice confirmations stay consumed; recovery
+does not restore a grant or authorize replay.
+
 Catalog search, handle `describe()`, `skills.list()`, and `skills.read()` are
 read-only discovery. A guest error after only these operations still allows
 ordinary recovery from a failed `exec`; discovery does not count as a mutation.
 
 OpenClaw does not automatically replay a failed program. If earlier calls
 may have changed state or a failed call may have partially applied, OpenClaw
-first limits recovery to an authorized read-only inspection of the current state. It does
+deliberately permits one temporary read-only recovery attempt to inspect the
+current state. The internal instruction identifies OpenClaw as its source. It does
 not expose writes, sends, shell commands, or other mutations during that
 reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
 restrictions, approval requirements, and tool-policy denials retain their

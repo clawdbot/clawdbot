@@ -1329,7 +1329,7 @@ describe("gateway session utils", () => {
     expect(options).toHaveProperty("manifestRegistry");
   });
 
-  test("keeps stored thinking text without a catalog and clamps it when one is present", () => {
+  test("keeps stored thinking without capability facts and clamps it with a known profile", () => {
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
       resolveThinkingProfile: () => ({
         levels: [{ id: "off" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
@@ -1345,20 +1345,21 @@ describe("gateway session utils", () => {
         },
       },
     } as OpenClawConfig;
-    const row = (entry: SessionEntry, withCatalog: boolean) =>
+    const row = (entry: SessionEntry, catalog?: { reasoning?: boolean }) =>
       buildGatewaySessionRow({
         cfg,
         storePath: "",
         store: {},
         key: "agent:main:main",
         entry,
-        ...(withCatalog
+        ...(catalog
           ? {
               modelCatalog: [
                 {
                   provider: "openai",
                   id: "gpt-5.6-sol",
                   name: "GPT-5.6 Sol (API route)",
+                  ...catalog,
                 },
               ],
             }
@@ -1367,8 +1368,9 @@ describe("gateway session utils", () => {
 
     const stored = { sessionId: "stored", thinkingLevel: "ultra" } as SessionEntry;
 
-    expect(row(stored, false).thinkingLevel).toBe("ultra");
-    expect(row(stored, true).thinkingLevel).toBe("high");
+    expect(row(stored).thinkingLevel).toBe("ultra");
+    expect(row(stored, {}).thinkingLevel).toBe("ultra");
+    expect(row(stored, { reasoning: true }).thinkingLevel).toBe("high");
   });
 
   test("strips retired thinking provenance from Gateway patch results", async () => {

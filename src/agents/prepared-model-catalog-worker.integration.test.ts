@@ -327,6 +327,15 @@ async function createStaticSnapshot(
   };
 }
 
+async function createReadyWorkerFixture(spinMs: number) {
+  const fixture = await createStaticSnapshot(spinMs);
+  // Ordering tests begin at discovery, not cold worker/module startup. The normal
+  // auth request prepares the same worker without running catalog hooks.
+  await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
+  expect(fs.existsSync(fixture.marker)).toBe(false);
+  return fixture;
+}
+
 async function waitForMarker(marker: string): Promise<void> {
   await expect.poll(() => fs.existsSync(marker), { timeout: 30_000 }).toBe(true);
 }
@@ -763,48 +772,61 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async () => {
-    const fixture = await createStaticSnapshot(750);
+    const fixture = await createReadyWorkerFixture(750);
     let settled = false;
     const first = fixture.snapshot.loadFullModelCatalog?.().finally(() => {
       settled = true;
     });
     const second = fixture.snapshot.loadFullModelCatalog?.();
-    await waitForMarker(fixture.marker);
+    const completion = Promise.all([first, second]);
+    void completion.catch(() => {});
+    try {
+      await waitForMarker(fixture.marker);
 
-    expect(settled).toBe(false);
-    const [catalog, sharedCatalog] = await Promise.all([first, second]);
-    expect(sharedCatalog).toBe(catalog);
-    expect(catalog?.entries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
-      }),
-    );
-    await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
-    await expect(fixture.snapshot.loadFullModelCatalog?.({ refresh: true })).resolves.toEqual(
-      expect.objectContaining({
-        entries: expect.arrayContaining([
-          expect.objectContaining({
-            provider: PROVIDER_ID,
-            id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
-          }),
-        ]),
-      }),
-    );
-    expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");
+      expect(settled).toBe(false);
+      const [catalog, sharedCatalog] = await completion;
+      expect(sharedCatalog).toBe(catalog);
+      expect(catalog?.entries).toContainEqual(
+        expect.objectContaining({
+          provider: PROVIDER_ID,
+          id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
+        }),
+      );
+      await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
+      await expect(fixture.snapshot.loadFullModelCatalog?.({ refresh: true })).resolves.toEqual(
+        expect.objectContaining({
+          entries: expect.arrayContaining([
+            expect.objectContaining({
+              provider: PROVIDER_ID,
+              id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
+            }),
+          ]),
+        }),
+      );
+      expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");
+    } finally {
+      fixture.supersede();
+      await Promise.allSettled([completion]);
+    }
   });
 
   it("terminates discovery when its owning generation is superseded", async () => {
-    const fixture = await createStaticSnapshot(10_000);
+    const fixture = await createReadyWorkerFixture(10_000);
     const catalog = fixture.snapshot.loadFullModelCatalog?.();
-    await waitForMarker(fixture.marker);
-    fixture.supersede();
+    void catalog?.catch(() => {});
+    try {
+      await waitForMarker(fixture.marker);
+      fixture.supersede();
 
-    await expect(catalog).rejects.toThrow("superseded");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
-    });
-    expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\n");
+      await expect(catalog).rejects.toThrow("superseded");
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\n");
+    } finally {
+      fixture.supersede();
+      await Promise.allSettled([catalog]);
+    }
   });
 
   it("preserves ref-only api-key and token profiles through the real worker", async () => {

@@ -102,7 +102,7 @@ export async function rebuildRolledBackGitRuntime(params: {
       "git rollback build",
       managerScriptArgs(manager.manager, "build"),
       resolveBuildEnv(
-        manager.env,
+        manager.env ?? params.defaultCommandEnv,
         params.channel === "dev"
           ? path.join(params.gitRoot, ".artifacts", "build-all-cache")
           : undefined,

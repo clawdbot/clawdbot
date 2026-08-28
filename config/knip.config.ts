@@ -410,10 +410,6 @@ const config = {
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
-    // Transitional public failover predicates stay available until their remaining callers
-    // migrate in later consolidation PRs; focused tests audit the retained behavior.
-    "src/agents/failover/classify.ts": ["exports"],
-    "src/agents/failover/provider-patterns.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
