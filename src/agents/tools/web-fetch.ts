@@ -554,7 +554,7 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) {
     return;
   }
-  // readResponseText may finish after an abort races with body reading. Recheck
+  // Async fetch, provider, and payload work can finish after an abort. Recheck
   // before wrapping, caching, or returning content from a canceled tool call.
   throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
@@ -702,14 +702,15 @@ async function maybeFetchProviderWebFetchPayload(
   },
 ): Promise<Record<string, unknown> | null> {
   const providerFallback = await params.resolveProviderFallback();
+  throwIfFetchAborted(params.signal);
   if (!providerFallback) {
     return null;
   }
-  const rawPayload = await providerFallback.definition.execute({
-    url: params.urlToFetch,
-    extractMode: params.extractMode,
-    maxChars: params.maxChars,
-  });
+  const rawPayload = await providerFallback.definition.execute(
+    { url: params.urlToFetch, extractMode: params.extractMode, maxChars: params.maxChars },
+    { signal: params.signal },
+  );
+  throwIfFetchAborted(params.signal);
   const payload = await buildWebFetchPayload({
     providerId: providerFallback.provider.id,
     payload: rawPayload,
@@ -718,6 +719,7 @@ async function maybeFetchProviderWebFetchPayload(
     maxChars: params.maxChars,
     tookMs: params.tookMs,
   });
+  throwIfFetchAborted(params.signal);
   writeCache(FETCH_CACHE, params.cacheKey, payload, params.cacheTtlMs);
   return payload;
 }
@@ -811,9 +813,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
   try {
     if (!res.ok) {
-      if (params.signal?.aborted) {
-        throw params.signal.reason instanceof Error ? params.signal.reason : new Error("aborted");
-      }
+      throwIfFetchAborted(params.signal);
       const payload = await maybeFetchProviderWebFetchPayload({
         ...params,
         urlToFetch: params.url,
@@ -875,6 +875,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
               tookMs: Date.now() - start,
             });
           } catch {
+            throwIfFetchAborted(params.signal);
             payload = null;
           }
           if (payload) {
