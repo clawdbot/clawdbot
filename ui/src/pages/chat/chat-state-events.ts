@@ -258,20 +258,26 @@ function hasRecoveredTerminalReply(state: ChatPageHost, runId: string): boolean 
   });
 }
 
+type TerminalRecoveryOwnership = {
+  sessionKey: string;
+  runId: string;
+  client: ChatPageHost["client"];
+  connectionEpoch: number;
+  runLifecycleGeneration: number;
+};
+
 function terminalRecoveryStillOwned(
   state: ChatPageHost,
-  sessionKey: string,
-  runId: string,
-  client: ChatPageHost["client"],
-  connectionEpoch: number,
+  ownership: TerminalRecoveryOwnership,
 ): boolean {
   return (
     state.connected &&
-    state.client === client &&
-    state.connectionEpoch === connectionEpoch &&
-    areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
-    (state.chatRunId === null || state.chatRunId === runId) &&
-    !hasRecoveredTerminalReply(state, runId)
+    state.client === ownership.client &&
+    state.connectionEpoch === ownership.connectionEpoch &&
+    areUiSessionKeysEquivalent(state.sessionKey, ownership.sessionKey) &&
+    (state.chatRunId === null || state.chatRunId === ownership.runId) &&
+    (state.chatRunLifecycleGeneration ?? 0) === ownership.runLifecycleGeneration &&
+    !hasRecoveredTerminalReply(state, ownership.runId)
   );
 }
 
@@ -285,10 +291,15 @@ async function recoverMissingTerminalReply(
   if (!runId) {
     return;
   }
-  const client = state.client;
-  const connectionEpoch = state.connectionEpoch;
+  const ownership: TerminalRecoveryOwnership = {
+    sessionKey,
+    runId,
+    client: state.client,
+    connectionEpoch: state.connectionEpoch,
+    runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
+  };
   for (let attempt = 0; ; attempt += 1) {
-    if (!terminalRecoveryStillOwned(state, sessionKey, runId, client, connectionEpoch)) {
+    if (!terminalRecoveryStillOwned(state, ownership)) {
       return;
     }
     await loadChatHistory(state, {
@@ -296,7 +307,7 @@ async function recoverMissingTerminalReply(
       supersedeInFlight: true,
     });
     state.requestUpdate?.();
-    if (!terminalRecoveryStillOwned(state, sessionKey, runId, client, connectionEpoch)) {
+    if (!terminalRecoveryStillOwned(state, ownership)) {
       return;
     }
     const delayMs = MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS[attempt];
