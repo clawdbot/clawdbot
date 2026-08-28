@@ -227,7 +227,7 @@ const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
     reason: "Serialized mock Gateway closure cannot capture module imports.",
   },
   {
-    file: "src/gateway/mcp-app-standalone.ts",
+    file: "src/gateway/mcp-app-standalone-host.ts",
     name: "asStandaloneRecord",
     kind: "variable",
     reason: "Serialized standalone app closure cannot capture module imports.",

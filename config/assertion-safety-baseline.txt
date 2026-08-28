@@ -2875,7 +2875,6 @@ src/gateway/local-request-context.ts	2
 src/gateway/managed-image-attachments.ts	8
 src/gateway/mcp-app-operations.ts	3
 src/gateway/mcp-app-reconstruction.ts	3
-src/gateway/mcp-app-standalone.ts	7
 src/gateway/mcp-grant-store.ts	2
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.request.ts	2
