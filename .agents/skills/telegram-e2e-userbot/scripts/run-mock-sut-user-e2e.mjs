@@ -563,6 +563,7 @@ export async function runCommand(command, args, options) {
     child = ownChild(
       spawn(command, args, {
         cwd: options.cwd,
+        detached: true,
         env: options.env,
         stdio: ["ignore", "pipe", "pipe"],
       }),

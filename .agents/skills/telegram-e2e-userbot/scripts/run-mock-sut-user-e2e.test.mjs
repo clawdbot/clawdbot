@@ -144,31 +144,47 @@ test("lease revocation between startup Bot API calls prevents update polling", a
 test("lease loss during a credential command stops every owned child before its side effect", async (context) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-lease-fence-"));
   const sideEffect = path.join(temp, "sent");
+  const wrapperReady = path.join(temp, "wrapper-ready");
+  const childScript = path.join(temp, "child.cjs");
+  const wrapperScript = path.join(temp, "wrapper.cjs");
   context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  fs.writeFileSync(
+    childScript,
+    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.SIDE_EFFECT,"sent"),200); setInterval(()=>{},1000);',
+  );
+  fs.writeFileSync(
+    wrapperScript,
+    'const fs=require("node:fs"); const {spawn}=require("node:child_process"); spawn(process.execPath,[process.env.CHILD_SCRIPT],{env:process.env,stdio:"ignore"}); fs.writeFileSync(process.env.WRAPPER_READY,"ready"); setInterval(()=>{},1000);',
+  );
   const gateway = startOwnedChild();
   const leaseError = new Error("lease revoked during credential command");
-  const leaseFailure = new Promise((resolve) =>
-    setTimeout(() => resolve({ type: "lease-failure", error: leaseError }), 20),
-  );
+  const leaseFailure = new Promise((resolve) => {
+    const deadline = Date.now() + 1_000;
+    const poll = setInterval(() => {
+      if (fs.existsSync(wrapperReady) || Date.now() >= deadline) {
+        clearInterval(poll);
+        resolve({ type: "lease-failure", error: leaseError });
+      }
+    }, 5);
+  });
 
   await assert.rejects(
-    runCommand(
-      process.execPath,
-      [
-        "-e",
-        'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.SIDE_EFFECT,"sent"),200); setInterval(()=>{},1000);',
-      ],
-      {
-        cwd: process.cwd(),
-        env: { ...process.env, SIDE_EFFECT: sideEffect },
-        leaseFailure,
-        timeoutMs: 1_000,
+    runCommand(process.execPath, [wrapperScript], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        CHILD_SCRIPT: childScript,
+        SIDE_EFFECT: sideEffect,
+        WRAPPER_READY: wrapperReady,
       },
-    ),
+      leaseFailure,
+      timeoutMs: 1_000,
+    }),
     (error) => error === leaseError,
   );
   await exited(gateway);
   await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(fs.existsSync(wrapperReady), true);
   assert.equal(fs.existsSync(sideEffect), false);
 });
 
