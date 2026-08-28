@@ -733,7 +733,7 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` with `{ "ok": true, "mode": "now" }` means the event was enqueued and a wake was requested, not that a heartbeat completed. Use `mode: "next-heartbeat"` to enqueue without requesting an immediate wake.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
 
     A supplied `agentId` must name a configured agent. Supply it explicitly when the fleet has no implicit or retained legacy owner. A caller-selected `sessionKey` requires `mode: "now"`, `hooks.allowRequestSessionKey: true`, and the configured prefix policy; deferred wakes use the main session.
 
@@ -755,7 +755,7 @@ limits, routing policy, and error responses.
 
     Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys require the same caller-key opt-in and prefix policy as request keys.
 
-    `forEach: "<key>"` fans out over a top-level payload array. Each item sees a one-element array, so the Gmail preset's `messages[0]` means the current email. Agent fan-out admission answers after at most about 8 seconds of dispatch waiting; pending items continue in the background and a partial batch returns non-2xx. Retrying the same batch reuses pending or admitted agent items while the bounded in-memory replay cache retains them. It is not durable exactly-once delivery, and mapped wake actions are not deduplicated. The reference covers batch caps and response shapes.
+    `forEach: "<key>"` fans out over a top-level payload array. Each item sees a one-element array, so the Gmail preset's `messages[0]` means the current email. Agent fan-out admission answers after at most about 8 seconds of dispatch waiting; pending items continue in the background and a partial batch returns non-2xx. Retrying the same batch reuses pending or admitted agent items while the bounded in-memory replay cache retains them. It is not durable exactly-once delivery; mapped wake actions have no replay identity, and the queue may coalesce repeated wakes. The reference covers batch caps and response shapes.
 
   </Accordion>
 </AccordionGroup>
