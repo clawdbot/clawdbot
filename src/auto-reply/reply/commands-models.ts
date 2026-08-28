@@ -60,8 +60,11 @@ export type ModelsProviderData = {
   providers: string[];
   resolvedDefault: { provider: string; model: string };
   modelNames: Map<string, string>;
-  modelCatalog: ModelCatalogEntry[];
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
+};
+
+type PreparedModelsProviderData = ModelsProviderData & {
+  modelCatalog: ModelCatalogEntry[];
 };
 
 export type ModelsRuntimeChoice = {
@@ -153,11 +156,11 @@ function addRuntimeChoice(
   return choices;
 }
 
-export async function buildModelsProviderData(
+export async function buildPreparedModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
   options: { view?: "default" | "all"; workspaceDir?: string } = {},
-): Promise<ModelsProviderData> {
+): Promise<PreparedModelsProviderData> {
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
@@ -586,7 +589,7 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const parsed = parseModelsArgs(argText);
 
-  const { byProvider, providers, modelNames } = await buildModelsProviderData(
+  const { byProvider, providers, modelNames } = await buildPreparedModelsProviderData(
     params.cfg,
     params.agentId,
     {

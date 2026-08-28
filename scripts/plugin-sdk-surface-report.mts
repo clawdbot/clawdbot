@@ -325,7 +325,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
       // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
       // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
-      4351,
+      // +1: prepared model-provider builder preserves the stable builder's return contract.
+      4352,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -427,7 +428,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
       // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
       // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
-      2587,
+      // +1: prepared model-provider builder preserves the stable builder's return contract.
+      2588,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
