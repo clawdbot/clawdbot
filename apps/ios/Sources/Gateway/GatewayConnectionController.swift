@@ -49,18 +49,6 @@ final class GatewayConnectionController {
         }
     }
 
-    static func resolvedManualPort(host: String, port: Int) -> Int? {
-        if port > 0 {
-            return port <= 65535 ? port : nil
-        }
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmedHost.isEmpty else { return nil }
-        if trimmedHost.hasSuffix(".ts.net") || trimmedHost.hasSuffix(".ts.net.") {
-            return 443
-        }
-        return 18789
-    }
-
     struct TrustPrompt: Identifiable, Equatable {
         let stableID: String
         let gatewayName: String
@@ -338,7 +326,7 @@ final class GatewayConnectionController {
                 self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
                 return .accepted
             case let .failure(failure):
-                let message = gatewayTLSProbeFailureMessage(
+                let message = self.tlsProbeFailureMessage(
                     failure,
                     host: target.host,
                     port: target.port)
@@ -690,25 +678,6 @@ final class GatewayConnectionController {
             return false
         }
         return true
-    }
-
-    private static func clearDeviceAuthTokens(gatewayID: String) {
-        if let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted() {
-            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
-            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
-        }
-        if let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) {
-            DeviceAuthStore.clearToken(
-                deviceId: shareIdentity.deviceId,
-                role: "node",
-                gatewayID: gatewayID,
-                profile: .shareExtension)
-            DeviceAuthStore.clearToken(
-                deviceId: shareIdentity.deviceId,
-                role: "operator",
-                gatewayID: gatewayID,
-                profile: .shareExtension)
-        }
     }
 
     private func clearLegacyManualGatewayDefaults(matching stableID: String) {
@@ -1369,22 +1338,6 @@ extension GatewayConnectionController {
         return nil
     }
 
-    private func resolveManualTLSParams(
-        stableID: String,
-        tlsEnabled: Bool) -> GatewayTLSParams?
-    {
-        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-        if tlsEnabled || stored != nil {
-            return GatewayTLSParams(
-                required: true,
-                expectedFingerprint: stored,
-                allowTOFU: false,
-                storeKey: stableID)
-        }
-
-        return nil
-    }
-
     private func probeTLSFingerprint(
         host: String,
         port: Int,
@@ -1441,7 +1394,7 @@ extension GatewayConnectionController {
             self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
             return .accepted
         case let .failure(failure):
-            let message = gatewayTLSProbeFailureMessage(failure, host: host, port: port)
+            let message = self.tlsProbeFailureMessage(failure, host: host, port: port)
             self.appModel?.gatewayStatusText = message
             return .failed(message)
         }
@@ -1509,6 +1462,54 @@ extension GatewayConnectionController {
         }
     }
 
+    private func tlsProbeFailureMessage(
+        _ failure: GatewayTLSFingerprintProbeFailure,
+        host: String,
+        port: Int) -> String
+    {
+        switch failure {
+        case .endpointUnreachable:
+            if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".ts.net") {
+                String(
+                    format: String(localized: """
+                    Can't reach gateway at %1$@:%2$@. \
+                    Verify Tailscale Serve is enabled and publishes this Gateway.
+                    """),
+                    host,
+                    String(port))
+            } else {
+                String(
+                    format: String(
+                        localized: "Can't reach gateway at %1$@:%2$@. Check Tailscale or LAN."),
+                    host,
+                    String(port))
+            }
+        case .tlsHandshakeTimeout:
+            String(
+                format: String(localized: """
+                TLS fingerprint verification timed out for %1$@:%2$@. \
+                Secure endpoint was reached, but TLS did not finish in time.
+                """),
+                host,
+                String(port))
+        case .tlsUnavailable:
+            String(
+                format: String(localized: """
+                No secure gateway endpoint was detected at %1$@:%2$@. \
+                Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address \
+                with Unencrypted selected.
+                """),
+                host,
+                String(port))
+        case .certificateUnavailable:
+            String(
+                format: String(
+                    localized: "Could not read the TLS certificate from %1$@:%2$@."),
+                host,
+                String(port))
+        }
+    }
+
     private func resolveServiceEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: Int)? {
         guard case let .service(name, type, domain, _) = endpoint else { return nil }
         let key = "\(domain)|\(type)|\(name)"
@@ -1557,7 +1558,7 @@ extension GatewayConnectionController {
             }
             return nil
         case let .failure(failure):
-            let message = gatewayTLSProbeFailureMessage(failure, host: host, port: port)
+            let message = self.tlsProbeFailureMessage(failure, host: host, port: port)
             self.appModel?.gatewayStatusText = message
             return .failed(message)
         }

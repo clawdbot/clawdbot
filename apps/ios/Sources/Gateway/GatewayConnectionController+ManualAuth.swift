@@ -2,6 +2,52 @@ import Foundation
 import OpenClawKit
 
 extension GatewayConnectionController {
+    static func resolvedManualPort(host: String, port: Int) -> Int? {
+        if port > 0 {
+            return port <= 65535 ? port : nil
+        }
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmedHost.isEmpty else { return nil }
+        if trimmedHost.hasSuffix(".ts.net") || trimmedHost.hasSuffix(".ts.net.") {
+            return 443
+        }
+        return 18789
+    }
+
+    static func clearDeviceAuthTokens(gatewayID: String) {
+        if let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted() {
+            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
+            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
+        }
+        if let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) {
+            DeviceAuthStore.clearToken(
+                deviceId: shareIdentity.deviceId,
+                role: "node",
+                gatewayID: gatewayID,
+                profile: .shareExtension)
+            DeviceAuthStore.clearToken(
+                deviceId: shareIdentity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID,
+                profile: .shareExtension)
+        }
+    }
+
+    func resolveManualTLSParams(
+        stableID: String,
+        tlsEnabled: Bool) -> GatewayTLSParams?
+    {
+        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
+        if tlsEnabled || stored != nil {
+            return GatewayTLSParams(
+                required: true,
+                expectedFingerprint: stored,
+                allowTOFU: false,
+                storeKey: stableID)
+        }
+        return nil
+    }
+
     static func migrateLegacyDeviceAuth() {
         guard
             let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted(),
