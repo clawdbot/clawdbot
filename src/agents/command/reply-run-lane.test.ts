@@ -6,7 +6,7 @@ import {
   resolveActiveReplyRunSessionId,
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
-import { acquireSessionReplyLane, SessionReplyLaneBusyError } from "./reply-run-lane.js";
+import { acquireSessionReplyLane } from "./reply-run-lane.js";
 
 const SESSION_KEY = "agent:test:reply-run-lane";
 
@@ -63,9 +63,9 @@ describe("acquireSessionReplyLane", () => {
         resetTriggered: false,
       }),
     );
-    await expect(
-      acquireSessionReplyLane(SESSION_KEY, "lane-3", { timeoutMs: 50 }),
-    ).rejects.toBeInstanceOf(SessionReplyLaneBusyError);
+    await expect(acquireSessionReplyLane(SESSION_KEY, "lane-3", { timeoutMs: 50 })).rejects.toThrow(
+      /still has an active reply run after waiting/,
+    );
   });
 
   it("rejects promptly when aborted while waiting", async () => {

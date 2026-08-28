@@ -30,9 +30,9 @@ import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js"
  * gateway; past that the session is genuinely stuck and the caller should hear
  * about it rather than pile up more waiters.
  */
-export const REPLY_LANE_ACQUIRE_TIMEOUT_MS = 2 * RUN_STALE_TAKEOVER_MS;
+const REPLY_LANE_ACQUIRE_TIMEOUT_MS = 2 * RUN_STALE_TAKEOVER_MS;
 
-export class SessionReplyLaneBusyError extends Error {
+class SessionReplyLaneBusyError extends Error {
   constructor(sessionKey: string, waitedMs: number) {
     super(
       `Session "${sessionKey}" still has an active reply run after waiting ` +

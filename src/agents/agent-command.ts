@@ -123,7 +123,7 @@ async function agentCommandInternal(
     thinkOverride,
     thinkOnce,
     verboseOverride,
-    sessionId,
+    sessionId: preparedRunSessionId,
     sessionKey,
     sessionStore,
     storePath,
@@ -143,6 +143,11 @@ async function agentCommandInternal(
     modelManifestContext,
   } = prepared;
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
+  // A recovery successor handoff can rotate the durable entry while this turn
+  // waits for the reply lane. The lane adopts the rotated identity, so this is
+  // the run's identity from acquisition onwards: admission, the durable entry
+  // and delivery must all speak of the session the lane actually holds.
+  let sessionId = preparedRunSessionId;
   let sessionEntry = prepared.sessionEntry,
     runOwnedSessionId = sessionId;
   const sessionStateActor = classifySessionStateActor({
@@ -194,6 +199,8 @@ async function agentCommandInternal(
     if (sessionKey && !isRawModelRun && !suppressVisibleSessionEffects) {
       const laneOptions = { abortSignal: opts.abortSignal, routeThreadId: opts.threadId };
       sessionReplyLane = await acquireSessionReplyLane(sessionKey, sessionId, laneOptions);
+      sessionId = sessionReplyLane.sessionId;
+      runOwnedSessionId = sessionId;
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     }
     sessionWorkAdmission = await beginSessionWorkAdmission({
@@ -242,7 +249,10 @@ async function agentCommandInternal(
     return await sessionWorkAdmission.run(async () => {
       preparedRunAdmission = prepareAgentCommandExecutionIdentity({
         opts,
-        prepared,
+        // Recovery binds the execution identity to a session id; after a
+        // handoff that must be the adopted one, not the one prepared before
+        // the wait.
+        prepared: sessionId === prepared.sessionId ? prepared : { ...prepared, sessionId },
         ingress: admissionIngress,
         lifecycleGeneration,
       });
