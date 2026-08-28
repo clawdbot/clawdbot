@@ -3,6 +3,69 @@ import OpenClawProtocol
 import Testing
 
 struct GatewayProtocolGeneratedModelsTests {
+    @Test(arguments: ["clawhub", "official"], [false, true])
+    func `optional install literals preserve omitted and explicit values`(
+        source: String,
+        acknowledged: Bool) throws
+    {
+        let identifier = source == "clawhub" ? "packageName" : "pluginId"
+        let acknowledgement = acknowledged ? #","acknowledgeInstallPolicyWarning":true"# : ""
+        let data = Data(#"{"source":"\#(source)","\#(identifier)":"fixture"\#(acknowledgement)}"#.utf8)
+        let request = try JSONDecoder().decode(PluginsInstallParams.self, from: data)
+        let expected: Bool? = acknowledged ? true : nil
+        switch request {
+        case let .clawhub(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .official(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        }
+        let actualJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+        let expectedJSON = try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
+        #expect(actualJSON == expectedJSON)
+    }
+
+    @Test
+    func `optional install literals default to absent`() throws {
+        let clawhub = PluginsInstallParamsClawhub(packagename: "fixture")
+        let official = PluginsInstallParamsOfficial(pluginid: "fixture")
+        #expect(clawhub.acknowledgeinstallpolicywarning == nil)
+        #expect(official.acknowledgeinstallpolicywarning == nil)
+        for request in [PluginsInstallParams.clawhub(clawhub), .official(official)] {
+            let encoded = try #require(
+                JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+            #expect(encoded["acknowledgeInstallPolicyWarning"] == nil)
+        }
+    }
+
+    @Test(arguments: [true, false])
+    func `optional install literal initializers preserve and validate supplied values`(literal: Bool) throws {
+        let clawhub = PluginsInstallParamsClawhub(packagename: "fixture", acknowledgeinstallpolicywarning: literal)
+        let official = PluginsInstallParamsOfficial(pluginid: "fixture", acknowledgeinstallpolicywarning: literal)
+        #expect(clawhub.acknowledgeinstallpolicywarning == literal)
+        #expect(official.acknowledgeinstallpolicywarning == literal)
+        for request in [PluginsInstallParams.clawhub(clawhub), .official(official)] {
+            if literal {
+                let encoded = try #require(
+                    JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+                #expect(encoded["acknowledgeInstallPolicyWarning"] as? Bool == true)
+            } else {
+                #expect(throws: EncodingError.self) {
+                    try JSONEncoder().encode(request)
+                }
+            }
+        }
+    }
+
+    @Test(arguments: ["clawhub", "official"], ["false", "null"])
+    func `optional install literals reject present invalid values`(source: String, literal: String) {
+        let identifier = source == "clawhub" ? "packageName" : "pluginId"
+        let data = Data(
+            #"{"source":"\#(source)","\#(identifier)":"fixture","acknowledgeInstallPolicyWarning":\#(literal)}"#
+                .utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(PluginsInstallParams.self, from: data)
+        }
+    }
+
     @Test(arguments: [
         (#"{"type":"profile","id":"same"}"#, "profile"),
         (#"{"type":"agent","id":"same"}"#, "agent"),

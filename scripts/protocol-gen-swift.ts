@@ -295,7 +295,7 @@ function emitStruct(
       }
     }
     const initializerParams = Object.entries(props)
-      .filter(([key]) => !literalPropByKey.has(key))
+      .filter(([key]) => !literalPropByKey.has(key) || !required.has(key))
       .map(([key, prop]) => {
         const propName = safeName(key);
         const req = required.has(key);
@@ -314,7 +314,7 @@ function emitStruct(
         Object.entries(props)
           .map(([key]) => {
             const propName = safeName(key);
-            if (literalPropByKey.has(key)) {
+            if (literalPropByKey.has(key) && required.has(key)) {
               return `        self.${propName} = ${swiftLiteralSource(literalPropByKey.get(key)!)}`;
             }
             return `        self.${propName} = ${propName}`;
@@ -342,7 +342,14 @@ function emitStruct(
             const literal = literalPropByKey.get(key);
             if (literal !== undefined) {
               const literalType = swiftType(propSchema, true, true);
-              return `        let decoded${capitalizedPropName} = try container.decode(${literalType}.self, forKey: .${propName})\n        guard decoded${capitalizedPropName} == ${swiftLiteralSource(literal)} else {\n            throw DecodingError.dataCorruptedError(\n                forKey: .${propName},\n                in: container,\n                debugDescription: "Expected ${key} to equal ${String(literal)}"\n            )\n        }\n        self.${propName} = ${swiftLiteralSource(literal)}`;
+              const decodedName = `decoded${capitalizedPropName}`;
+              const decode = `try container.decode(${literalType}.self, forKey: .${propName})`;
+              // Optional literals retain presence; decodeIfPresent would silently accept forbidden null.
+              const decodedValue = required.has(key)
+                ? decode
+                : `container.contains(.${propName})\n            ? ${decode}\n            : nil`;
+              const absent = required.has(key) ? "" : `${decodedName} == nil || `;
+              return `        let ${decodedName} = ${decodedValue}\n        guard ${absent}${decodedName} == ${swiftLiteralSource(literal)} else {\n            throw DecodingError.dataCorruptedError(\n                forKey: .${propName},\n                in: container,\n                debugDescription: "Expected ${key} to equal ${String(literal)}"\n            )\n        }\n        self.${propName} = ${required.has(key) ? swiftLiteralSource(literal) : decodedName}`;
             }
             if (required.has(key)) {
               return `        self.${propName} = try container.decode(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
@@ -357,13 +364,17 @@ function emitStruct(
           .map(([key]) => {
             const propName = safeName(key);
             const literal = literalPropByKey.get(key);
-            if (literal !== undefined) {
+            if (literal !== undefined && required.has(key)) {
               return `        try container.encode(${swiftLiteralSource(literal)}, forKey: .${propName})`;
             }
             if (required.has(key)) {
               return `        try container.encode(${propName}, forKey: .${propName})`;
             }
-            return `        try container.encodeIfPresent(${propName}, forKey: .${propName})`;
+            const validation =
+              literal === undefined
+                ? ""
+                : `        if let ${propName}, ${propName} != ${swiftLiteralSource(literal)} {\n            throw EncodingError.invalidValue(\n                ${propName},\n                .init(\n                    codingPath: container.codingPath + [CodingKeys.${propName}],\n                    debugDescription: "Expected ${key} to equal ${String(literal)}"\n                )\n            )\n        }\n`;
+            return `${validation}        try container.encodeIfPresent(${propName}, forKey: .${propName})`;
           })
           .join("\n") +
         "\n    }\n}",

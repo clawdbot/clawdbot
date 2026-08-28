@@ -24575,13 +24575,14 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
     public init(
         packagename: String,
         version: String? = nil,
+        acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil
     )
     {
         self.source = "clawhub"
         self.packagename = packagename
         self.version = version
-        self.acknowledgeinstallpolicywarning = true
+        self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
     }
 
@@ -24618,15 +24619,17 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
         self.source = "clawhub"
         self.packagename = try container.decode(String.self, forKey: .packagename)
         self.version = try container.decodeIfPresent(String.self, forKey: .version)
-        let decodedAcknowledgeinstallpolicywarning = try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
-        guard decodedAcknowledgeinstallpolicywarning == true else {
+        let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
+            ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
+            : nil
+        guard decodedAcknowledgeinstallpolicywarning == nil || decodedAcknowledgeinstallpolicywarning == true else {
             throw DecodingError.dataCorruptedError(
                 forKey: .acknowledgeinstallpolicywarning,
                 in: container,
                 debugDescription: "Expected acknowledgeInstallPolicyWarning to equal true"
             )
         }
-        self.acknowledgeinstallpolicywarning = true
+        self.acknowledgeinstallpolicywarning = decodedAcknowledgeinstallpolicywarning
         self.acknowledgecapabilities = try container.decodeIfPresent([String: AnyCodable].self, forKey: .acknowledgecapabilities)
     }
 
@@ -24635,7 +24638,16 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
         try container.encode("clawhub", forKey: .source)
         try container.encode(packagename, forKey: .packagename)
         try container.encodeIfPresent(version, forKey: .version)
-        try container.encode(true, forKey: .acknowledgeinstallpolicywarning)
+        if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
+            throw EncodingError.invalidValue(
+                acknowledgeinstallpolicywarning,
+                .init(
+                    codingPath: container.codingPath + [CodingKeys.acknowledgeinstallpolicywarning],
+                    debugDescription: "Expected acknowledgeInstallPolicyWarning to equal true"
+                )
+            )
+        }
+        try container.encodeIfPresent(acknowledgeinstallpolicywarning, forKey: .acknowledgeinstallpolicywarning)
         try container.encodeIfPresent(acknowledgecapabilities, forKey: .acknowledgecapabilities)
     }
 }
@@ -24648,12 +24660,13 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
 
     public init(
         pluginid: String,
+        acknowledgeinstallpolicywarning: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil
     )
     {
         self.source = "official"
         self.pluginid = pluginid
-        self.acknowledgeinstallpolicywarning = true
+        self.acknowledgeinstallpolicywarning = acknowledgeinstallpolicywarning
         self.acknowledgecapabilities = acknowledgecapabilities
     }
 
@@ -24688,15 +24701,17 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
         }
         self.source = "official"
         self.pluginid = try container.decode(String.self, forKey: .pluginid)
-        let decodedAcknowledgeinstallpolicywarning = try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
-        guard decodedAcknowledgeinstallpolicywarning == true else {
+        let decodedAcknowledgeinstallpolicywarning = container.contains(.acknowledgeinstallpolicywarning)
+            ? try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
+            : nil
+        guard decodedAcknowledgeinstallpolicywarning == nil || decodedAcknowledgeinstallpolicywarning == true else {
             throw DecodingError.dataCorruptedError(
                 forKey: .acknowledgeinstallpolicywarning,
                 in: container,
                 debugDescription: "Expected acknowledgeInstallPolicyWarning to equal true"
             )
         }
-        self.acknowledgeinstallpolicywarning = true
+        self.acknowledgeinstallpolicywarning = decodedAcknowledgeinstallpolicywarning
         self.acknowledgecapabilities = try container.decodeIfPresent([String: AnyCodable].self, forKey: .acknowledgecapabilities)
     }
 
@@ -24704,7 +24719,16 @@ public struct PluginsInstallParamsOfficial: Codable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("official", forKey: .source)
         try container.encode(pluginid, forKey: .pluginid)
-        try container.encode(true, forKey: .acknowledgeinstallpolicywarning)
+        if let acknowledgeinstallpolicywarning, acknowledgeinstallpolicywarning != true {
+            throw EncodingError.invalidValue(
+                acknowledgeinstallpolicywarning,
+                .init(
+                    codingPath: container.codingPath + [CodingKeys.acknowledgeinstallpolicywarning],
+                    debugDescription: "Expected acknowledgeInstallPolicyWarning to equal true"
+                )
+            )
+        }
+        try container.encodeIfPresent(acknowledgeinstallpolicywarning, forKey: .acknowledgeinstallpolicywarning)
         try container.encodeIfPresent(acknowledgecapabilities, forKey: .acknowledgecapabilities)
     }
 }
