@@ -769,7 +769,7 @@ textarea.settings-input {
 /* ── Mobile ── */
 
 @media (max-width: 640px) {
-  .shell--settings .content:has(.settings-workspace),
+  .shell--settings .content:not(.content--custodian),
   .content:has(.plugins-hub-header) {
     --content-inline-padding: var(--space-3);
     --settings-header-inline-padding: 0;

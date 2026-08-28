@@ -152,18 +152,13 @@ suite.define(() => {
           };
         }, route);
 
-      const layouts = [];
       for (const route of mobileSettingsRoutes) {
         const pathname = pathForRoute(route);
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
-        await page.locator(".settings-workspace").last().waitFor({ state: "attached" });
-        layouts.push({ route, ...(await readShellInsets(route)) });
-      }
-      for (const layout of layouts) {
-        if (layout.contentPaddingInline !== 12 || layout.topbarPaddingInline !== 12) {
-          throw new Error(`${layout.route} settings shell alignment: ${JSON.stringify(layout)}`);
-        }
+        await expect
+          .poll(() => readShellInsets(route), { message: `${route} settings shell alignment` })
+          .toEqual({ contentPaddingInline: 12, topbarPaddingInline: 12 });
       }
 
       for (const route of mobileStandaloneSettingsPageRoutes) {
