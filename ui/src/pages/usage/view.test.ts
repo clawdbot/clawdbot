@@ -68,7 +68,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       totals: null,
       aggregates: null,
       costDaily: [],
-      cacheStatus: undefined,
+      cacheRefresh: "complete",
       providerUsage: [],
       providerUsageStalled: false,
       providerUsageUnavailable: false,

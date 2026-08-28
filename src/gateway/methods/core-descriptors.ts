@@ -287,6 +287,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // in shared/session-method-scopes.ts. The admin-only sticky configured-default
   // persistence guard lives in server-methods/sessions-mutations.ts.
   ["sessions.patch", "sessions-mutations", "dynamic", "<=2026.7"],
+  ["sessions.goal.update", "sessions-goal", "operator.write", "2026.8"],
+  ["sessions.goal.clear", "sessions-goal", "operator.write", "2026.8"],
   ["sessions.pluginPatch", "sessions-mutations", "operator.admin", "<=2026.7"],
   ["sessions.cleanup", "sessions-read", "operator.admin", "<=2026.7"],
   ["sessions.reset", "sessions-mutations", "operator.admin", "<=2026.7"],

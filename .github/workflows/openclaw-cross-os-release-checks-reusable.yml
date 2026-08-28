@@ -562,7 +562,7 @@ jobs:
         run: mkdir -p "$(pnpm store path --silent)"
 
       - name: Install workflow validation dependencies
-        if: inputs.candidate_artifact_name != ''
+        if: inputs.candidate_artifact_name != '' || inputs.mode != 'fresh'
         working-directory: workflow
         env:
           CI: "true"

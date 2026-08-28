@@ -1,4 +1,5 @@
 // Codex helper facade keeps the existing config import surface stable.
+export { resolveCodexAppServerUserHomeDir } from "./auth-start-options.js";
 export {
   CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -29,7 +30,6 @@ export {
 } from "./config-parsing.js";
 export {
   canUseCodexModelBackedApprovalsReviewerForModel,
-  resolveCodexAppServerUserHomeDir,
   resolveCodexModelBackedReviewerPolicyContext,
 } from "./config-reviewer.js";
 export { readCodexRequirementsToml } from "./config-requirements.js";

@@ -15,7 +15,8 @@ import {
 const dirs: string[] = [];
 
 async function makeTmpDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mirror-test-"));
+  // Keep nested socket paths within macOS's 104-byte sockaddr_un.sun_path.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-mir-"));
   dirs.push(dir);
   return dir;
 }

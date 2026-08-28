@@ -290,7 +290,7 @@ Runner choice follows contributor trust, not whether a pull request came from a 
 
 ### Runner backend modes
 
-The `macos-swift` lane runs its first Blacksmith test attempt in parallel. If that attempt fails, its two in-job retries run serially to escape process and timer contention; manual dispatches, hosted fallbacks, and workflow-level reruns remain serial from their first attempt.
+The `macos-swift` lane runs Swift tests once per job. Automatic first attempts use parallel execution; manual dispatches and rerun attempts use serial execution. A failing test fails the job without an in-job retry.
 
 The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`:
 
@@ -899,10 +899,12 @@ run under the same service token, ordered complete events, canonical command
 and bootstrap upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
 base/head/plan binding. The publisher also proves that the PR base is the merge
-base of its exact protected-main workflow SHA and adds that workflow SHA to the
-strict check summary. The same workflow SHA must remain live `main` after the
-remote run; any intervening main advance fails closed and requires a fresh
-publisher dispatch.
+base of its immutable protected-main workflow SHA and adds that workflow SHA to
+the strict check summary. Before and after the remote run, it proves that a
+candidate live `main` is identical to or descended from that workflow SHA, then
+rereads the ref and requires the candidate to remain unchanged. A descendant
+advance during the long remote run is allowed; movement inside either
+comparison-and-reread window fails closed.
 Retained broker logs are validated when non-empty but are optional because
 released Crabbox v0.46 can report zero retained log bytes after a successful
 run. Only after the publisher and exact-head check succeed does the local
@@ -913,7 +915,7 @@ The fallback never replaces or republishes `openclaw/ci-gate`. Native merge
 verification still rejects draft PRs and permits the server ruleset bypass only
 when the Crabbox check is
 completed successfully by GitHub Actions on the prepared SHA, its bound workflow
-SHA equals a final live protected-main read, the authenticated
+SHA is an ancestor of a stable final live protected-main snapshot, the authenticated
 actor is still an active organization admin, and the sole unsatisfied required
 check is the normal CI gate with a recognized hosted-runner infrastructure
 failure represented by GitHub-owned job metadata with no executed workflow
@@ -927,10 +929,11 @@ flow repeats the full bypass verification immediately before the admin squash
 request and pins the prepared head with `--match-head-commit`. GitHub exposes
 no expected-base-OID merge precondition, so the final main read minimizes but
 cannot atomically eliminate a base movement race. Landing proof must compare
-the squash parent with that last observed main SHA. The Crabbox merge path
-stores this comparison in `.local/merge-crabbox-parent-audit.json`, includes it
-in the completion comment, and reports any intervening authorized main advance
-after the already-completed merge without claiming atomic prevention.
+the squash parent with that final main snapshot, not the older workflow SHA.
+The Crabbox merge path stores this comparison in
+`.local/merge-crabbox-parent-audit.json`, includes it in the completion comment,
+and reports any intervening main movement after the already-completed merge
+without claiming atomic prevention.
 
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id

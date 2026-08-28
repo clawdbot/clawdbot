@@ -740,28 +740,62 @@ describe("resolveBuildAllSteps", () => {
     expect(labels).not.toContain("check-plugin-sdk-exports");
   });
 
-  it("selects the runtime-only graph from the runner environment", () => {
-    const selectedLabels: string[] = [];
-    const result = runBuildAllSteps("full", {
-      cacheEnabled: false,
-      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      logger: { error: vi.fn(), warn: vi.fn() },
-      memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
-      now: () => 0,
-      resolveCacheState(step) {
-        selectedLabels.push(step.label);
-        return { cacheable: false, fresh: false, reason: "no-cache" };
+  describe.each(["full", "package"])("%s runner build environment", (profile) => {
+    it.each([
+      { name: "ordinary build", env: {}, runtimeOnly: false, skipDts: undefined },
+      {
+        name: "runtime override",
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+        runtimeOnly: true,
+        skipDts: "1",
       },
-      runStep: () => ({ status: 0 }),
-    });
+      {
+        name: "legacy updater marker",
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+        runtimeOnly: true,
+        skipDts: "1",
+      },
+      {
+        name: "explicit declarations during update",
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+        runtimeOnly: false,
+        skipDts: "0",
+      },
+    ])("honors $name in selected steps and compiler children", ({ env, runtimeOnly, skipDts }) => {
+      const originalEnv = { ...env };
+      const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+      const result = runBuildAllSteps(profile, {
+        cacheEnabled: false,
+        env,
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        now: () => 0,
+        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        runStep(invocation) {
+          invocations.push(invocation);
+          return { status: 0 };
+        },
+      });
 
-    expect(result.exitCode).toBe(0);
-    expect(selectedLabels).toEqual(
-      resolveBuildAllSteps("full", { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }).map(
-        (step) => step.label,
-      ),
-    );
-    expect(selectedLabels).not.toContain("write-plugin-sdk-entry-dts");
+      expect(result.exitCode).toBe(0);
+      const labels = result.timings.map((timing) => timing.label);
+      expect(labels).toEqual(
+        resolveBuildAllSteps(profile, {
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
+        }).map((step) => step.label),
+      );
+      expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(!runtimeOnly);
+      expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
+      expect(labels.includes("clean:dist")).toBe(profile === "package");
+      const compilers = invocations.filter((call) =>
+        call.args.includes("scripts/tsdown-build.mts"),
+      );
+      expect(compilers).toHaveLength(runtimeOnly ? 1 : 3);
+      for (const compiler of compilers) {
+        expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
+      }
+      expect(env).toEqual(originalEnv);
+    });
   });
 
   it("uses a source performance profile with QA assets and immutable build provenance", () => {

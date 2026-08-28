@@ -199,6 +199,23 @@ describe("resumeManagedLobsterFlow", () => {
     expect(runner.run).not.toHaveBeenCalled();
   });
 
+  it("fails the resumed flow when the runner throws", async () => {
+    const taskFlow = createFakeTaskFlow();
+    const runner: LobsterRunner = {
+      run: vi.fn().mockRejectedValue(new Error("crashed")),
+    };
+
+    const result = expectManagedFlowFailure(
+      await resumeManagedLobsterFlow(createResumeFlowParams(taskFlow, runner)),
+    );
+
+    expect(result.error.message).toBe("crashed");
+    expect(taskFlow.fail).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 5,
+    });
+  });
+
   it("returns to waiting when the resumed Lobster run needs approval again", async () => {
     const taskFlow = createFakeTaskFlow();
     const runner = createRunner({

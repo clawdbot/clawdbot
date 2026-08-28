@@ -340,6 +340,11 @@ default `messages.queue.mode: "steer"`, OpenClaw batches steer-mode chat
 messages for the configured quiet window and sends them as one `turn/steer`
 request in arrival order.
 
+When Codex confirms consumption, OpenClaw saves completed visible assistant
+items before the steered user message, including items before a tool or sleep
+handoff. Each item keeps its own identity so later steers do not duplicate it.
+This history prefix is separate from the turn's final-answer selection.
+
 Codex review and manual compaction turns can reject same-turn steering. In
 that case, OpenClaw waits for the active run to finish before starting the
 prompt. Use `/queue followup` or `/queue collect` when messages should queue

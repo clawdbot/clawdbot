@@ -87,6 +87,8 @@ const CURRENT_TRAIN_METHODS = [
   "exec.approval.grants.list",
   "exec.approval.grants.revoke",
   "sessions.patchMany",
+  "sessions.goal.update",
+  "sessions.goal.clear",
   "sessions.groups.update",
   "sessions.groups.defaults",
   "sessions.recover",

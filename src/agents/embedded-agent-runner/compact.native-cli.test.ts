@@ -117,6 +117,7 @@ describe("native CLI manual compaction", () => {
         sessionEntry: { execHost: "node", execNode: "paired-node" },
         controlOperation: "compact",
         disableCliLiveSession: true,
+        cleanupCliLiveSessionOnRunEnd: true,
         allowEmptyAssistantReplyAsSilent: true,
       }),
     );

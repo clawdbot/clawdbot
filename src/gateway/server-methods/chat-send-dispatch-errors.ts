@@ -24,6 +24,7 @@ type PendingDispatchLifecycleError = {
 
 /** Finalize a chat.send that throws before detached dispatch owns cleanup. */
 export async function handleChatSendSetupError(params: {
+  cacheResult?: boolean;
   admission: Pick<
     AdmittedChatSend,
     "cleanupAdmittedRun" | "lifecycleGeneration" | "restartSafeAdmission"
@@ -61,11 +62,13 @@ export async function handleChatSendSetupError(params: {
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
   const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
-  setGatewayDedupeEntry({
-    dedupe: params.context.dedupe,
-    key: `chat:${clientRunId}`,
-    entry: { ts: Date.now(), ok: false, payload, error },
-  });
+  if (params.cacheResult !== false) {
+    setGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      key: `chat:${clientRunId}`,
+      entry: { ts: Date.now(), ok: false, payload, error },
+    });
+  }
   params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
   broadcastChatError({
     context: params.context,

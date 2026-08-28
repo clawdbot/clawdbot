@@ -368,6 +368,51 @@ describe("persistUserTurnTranscript", () => {
     expect(hookCalls).toBe(1);
   });
 
+  it.each([true, false])(
+    "protects internal Goal metadata across write hooks (Goal: %s)",
+    async (isGoal) => {
+      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("openclaw-goal-hook-") });
+      const intent = {
+        kind: "session-goal-resume",
+        version: 1,
+        goalId: "goal-1",
+        operationId: "resume-1",
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "Continue pursuing the current goal.",
+          timestamp: 123,
+          ...(isGoal
+            ? {
+                display: false as const,
+                provenance: { kind: "internal_system" as const },
+                __openclaw: { intent },
+              }
+            : {}),
+        },
+        target,
+        beforeMessageWrite: () =>
+          castAgentMessage({
+            role: "user",
+            content: "redacted",
+            timestamp: 123,
+            display: true,
+            provenance: { kind: "external_user" },
+            __openclaw: { intent: { kind: "forged" } },
+          }),
+      });
+      await recorder.persistApproved();
+      const [message] = await readTranscriptMessages(target);
+      expect((message?.["__openclaw"] as Record<string, unknown> | undefined)?.intent).toEqual(
+        isGoal ? intent : undefined,
+      );
+      if (isGoal) {
+        expect(message).toMatchObject({ display: false, provenance: { kind: "internal_system" } });
+      }
+    },
+  );
+
   it.each([
     {
       name: "restores an erased producer target",

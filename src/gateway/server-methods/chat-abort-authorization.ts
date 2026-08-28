@@ -19,6 +19,7 @@ export type ChatAbortRequester = {
 };
 
 type PreRegisteredAgentDedupePayload = {
+  goalFingerprint?: unknown;
   agentId?: unknown;
   attemptId?: unknown;
   controlUiVisible?: unknown;

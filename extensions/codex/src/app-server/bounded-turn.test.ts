@@ -511,6 +511,51 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     },
   );
 
+  it("carries attached provider overrides into private turns without importing tool policy", async () => {
+    const fake = createClientFactory();
+    await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      options: {
+        clientFactory: fake.factory,
+        pluginConfig: {
+          appServer: {
+            args: [
+              '-copenai_base_url="http://127.0.0.1:9/first"',
+              "app-server",
+              '--config=openai_base_url="http://127.0.0.1:9/last"',
+              '-c=model_catalog_json="/tmp/synthetic-models.json"',
+              "-csandbox_workspace_write.exclude_slash_tmp=false",
+              "--config",
+              "features.hooks=true",
+              "--",
+              '-copenai_base_url="http://127.0.0.1:9/ignored"',
+            ],
+          },
+        },
+      },
+      taskLabel: "isolated completion",
+      developerInstructions: "Answer only.",
+      input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "private-stdio",
+    });
+    expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.args).toEqual([
+      "app-server",
+      "-c",
+      'openai_base_url="http://127.0.0.1:9/first"',
+      "-c",
+      'openai_base_url="http://127.0.0.1:9/last"',
+      "-c",
+      'model_catalog_json="/tmp/synthetic-models.json"',
+      "--listen",
+      "stdio://",
+    ]);
+    expect(
+      fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
+    ).toMatchObject({ sandbox: "read-only", approvalPolicy: "on-request" });
+  });
+
   it("preserves the configured native model provider when no override is supplied", async () => {
     const fake = createClientFactory();
 
