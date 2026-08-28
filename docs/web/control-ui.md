@@ -530,6 +530,11 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
 ## Chat behavior
 
+Automatic session titles describe the topic or intended task in your first message.
+They are generated separately from the agent's work, so a title is not a completion
+status or a report of tool access. Existing titles and manual names are left
+unchanged; click a title to rename it.
+
 Chat error banners, including cloud runner failures, keep a compact preview. Open **Error details** to read and select the complete diagnostic received by the UI, then use **Copy error** to copy it. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Expanding or copying an error does not retry the failed operation.
 
 <AccordionGroup>
