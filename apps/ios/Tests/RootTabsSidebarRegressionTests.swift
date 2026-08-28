@@ -16,7 +16,7 @@ struct RootTabsSidebarRegressionTests {
         #expect(layoutUpdate.contains("guard force || !self.sidebarVisibilityUserOverridden else { return }"))
     }
 
-    @Test func `sidebar controls keep glass inside their hit target`() throws {
+    @Test func `sidebar controls keep a background-free icon inside their hit target`() throws {
         let source = try String(contentsOf: Self.openClawProComponentsSourceURL(), encoding: .utf8)
         let revealButton = try Self.extract(
             source,
@@ -30,7 +30,7 @@ struct RootTabsSidebarRegressionTests {
         let button = try Self.extract(
             revealButton,
             from: "private var button: some View",
-            to: "@ViewBuilder\n    private var icon")
+            to: "private var icon: some View")
         let icon = try Self.extract(
             revealButton,
             from: "private var icon: some View",
@@ -39,8 +39,9 @@ struct RootTabsSidebarRegressionTests {
         #expect(revealButton.contains("self.identified(self.button.buttonStyle(.plain))"))
         #expect(button.contains(".frame(width: 44, height: 44)"))
         #expect(button.contains(".contentShape(Rectangle())"))
-        #expect(icon.contains(".regular.interactive()"))
-        #expect(icon.contains("in: Circle()"))
+        #expect(icon.contains(".foregroundStyle(OpenClawBrand.accent)"))
+        #expect(!icon.contains(".glassEffect("))
+        #expect(!icon.contains("Circle()"))
         #expect(icon.contains("width: OpenClawProMetric.compactControlSize"))
         #expect(toolbarItem.contains(".sharedBackgroundVisibility(.hidden)"))
     }
