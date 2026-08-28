@@ -139,6 +139,10 @@ struct RootTabsSidebarRegressionTests {
             source,
             from: "private var agentsSection: some View",
             to: "static func agentModelLabel")
+        let agentSelector = try Self.extract(
+            source,
+            from: "private func agentSelectorLabel(",
+            to: "private var newChatButton:")
         let pages = try Self.extract(
             source,
             from: "private func pagesSection(",
@@ -164,6 +168,8 @@ struct RootTabsSidebarRegressionTests {
         #expect(agents.contains("self.appModel.setSelectedAgentId"))
         #expect(agents.contains("self.newChatButton"))
         #expect(agents.contains("RootTabs.Sidebar.AgentSelector"))
+        #expect(!agents.contains(".background(.ultraThinMaterial"))
+        #expect(!agentSelector.contains(".background(OpenClawSidebarPalette.selection"))
         #expect(!settings.contains("settings-appearance-sidebar-agents"))
 
         #expect(!brandHeader.contains("self.selectSidebarDestination(.settings)"))
@@ -177,7 +183,10 @@ struct RootTabsSidebarRegressionTests {
 
         let pin = try #require(sessionButton.range(of: "Image(systemName: \"pin.fill\")"))
         let detail = try #require(sessionButton.range(of: "CommandCenterTab.sessionDetail(session)"))
+        let openChat = try #require(sessionButton.range(of: "self.appModel.openChat(sessionKey: session.key)"))
+        let contextActions = try #require(sessionButton.range(of: ".commandSessionActions("))
         #expect(pin.lowerBound < detail.lowerBound)
+        #expect(openChat.lowerBound < contextActions.lowerBound)
         #expect(sessionButton.contains("sessionAccessibilityValue"))
     }
 

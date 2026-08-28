@@ -166,10 +166,6 @@ struct RootSidebar: View {
 
                 self.newChatButton
             }
-            .padding(4)
-            .background(.ultraThinMaterial, in: RoundedRectangle(
-                cornerRadius: OpenClawProMetric.cardRadius,
-                style: .continuous))
         }
     }
 
@@ -213,9 +209,6 @@ struct RootSidebar: View {
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .padding(.horizontal, 10)
         .contentShape(Rectangle())
-        .background(OpenClawSidebarPalette.selection, in: RoundedRectangle(
-            cornerRadius: OpenClawProMetric.controlRadius,
-            style: .continuous))
     }
 
     private var newChatButton: some View {
