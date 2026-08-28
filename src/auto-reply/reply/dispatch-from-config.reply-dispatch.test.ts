@@ -53,6 +53,7 @@ function firstReplyDispatchCall() {
         },
         {
           cfg?: unknown;
+          dispatchKind?: "agent" | "acp";
         },
       ]
     | undefined;
@@ -231,11 +232,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(replyDispatchEvent?.sendPolicy).toBe("allow");
     expect(replyDispatchEvent?.inboundAudio).toBe(false);
     expect(replyDispatchRuntime?.cfg).toBe(emptyConfig);
+    expect(replyDispatchRuntime?.dispatchKind).toBe("agent");
     expect(result).toEqual({
       queuedFinal: true,
       counts: { tool: 1, block: 2, final: 3 },
     });
   });
+
   it("still applies send-policy deny after an unhandled plugin dispatch", async () => {
     hookMocks.runner.runReplyDispatch.mockResolvedValue({
       handled: false,

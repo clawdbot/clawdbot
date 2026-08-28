@@ -257,19 +257,6 @@ function visibleAssistantStreamText(
   return stream;
 }
 
-export function assistantMessageReplacesCurrentStream(
-  state: StreamReconciliationState,
-  message: unknown,
-): boolean {
-  const currentPart = visibleAssistantStreamParts(state, {
-    includeCurrent: true,
-    isHiddenStreamText: () => false,
-  }).findLast((part) => part.source === "current");
-  return Boolean(
-    currentPart && hasAssistantStreamPartReplacement([message], currentPart, () => false, 0),
-  );
-}
-
 function streamFallbackItemId(message: unknown): string | null {
   if (!message || typeof message !== "object") {
     return null;

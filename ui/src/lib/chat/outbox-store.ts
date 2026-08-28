@@ -300,6 +300,7 @@ function mergeStoredComposerSessions(
     .slice(0, MAX_RETAINED_QUEUE_ITEMS);
   return {
     ...(draftOwner.draft ? { draft: draftOwner.draft } : {}),
+    ...(draftOwner.goalMode ? { goalMode: draftOwner.goalMode } : {}),
     ...(draftOwner.draftRevision !== undefined ? { draftRevision: draftOwner.draftRevision } : {}),
     ...(queue.length ? { queue } : {}),
     updatedAt: Math.max(current.updatedAt, incoming.updatedAt),

@@ -382,6 +382,20 @@ CREATE TABLE IF NOT EXISTS message_tool_run_outcomes (
 CREATE INDEX IF NOT EXISTS idx_agent_message_tool_run_outcomes_occurred
   ON message_tool_run_outcomes(occurred_at DESC, id DESC);
 
+-- Receipts outlive Goal clear and session reset so a delayed retry cannot recreate a Goal.
+-- They intentionally have no session FK; bounded retention belongs to the operation owner.
+CREATE TABLE IF NOT EXISTS session_goal_operations (
+  session_key TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, operation_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_agent_session_goal_operations_expiry
+  ON session_goal_operations(expires_at);
+
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,

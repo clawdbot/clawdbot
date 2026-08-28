@@ -1,11 +1,24 @@
 // chat.send owns admission, ACK timing, and detached dispatch handoff.
 import { performance } from "node:perf_hooks";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  lookupSessionGoalOperation,
+  type SessionGoalOperation,
+  type SessionGoalOperationResult,
+} from "../../config/sessions/goals-operations.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import {
+  recordSessionCreated,
+  recordSessionGoalChanged,
+} from "../../sessions/session-state-events.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { loadSessionEntry } from "../session-utils.js";
 import {
   terminalizeRestartSafeChatAdmission,
   type RestartSafeChatTerminalState,
@@ -27,16 +40,27 @@ import {
   shouldIncludeChatSendAckServerTiming,
 } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type ChatSendInternalOptions = {
+  goalResume?: SessionGoalOperation & { action: "resume" };
   trustedSystemInput?: boolean;
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 async function handleChatSendWithOptions(
-  { params, respond, context, client }: GatewayRequestHandlerOptions,
+  {
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+    sessionMutationCommitGuard,
+  }: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
   options?: ChatSendInternalOptions,
@@ -146,6 +170,44 @@ async function handleChatSendWithOptions(
       session: preparedSession.value,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
+      assertGoalCurrent: () => {
+        sessionMutationCommitGuard?.();
+        sessionMutationAuthorization?.assertCurrent();
+        const currentConfig = context.getRuntimeConfig();
+        const initialEntry = admitted.value.initialSessionEntry;
+        if (initialEntry) {
+          // Missing targets have no sharing owner yet; revalidate their creator before SQL commit.
+          const currentTarget = loadSessionEntry(
+            preparedSession.value.sessionLoadKey,
+            preparedSession.value.sessionLoadOptions,
+          );
+          if (currentTarget.storePath !== storePath || currentTarget.canonicalKey !== sessionKey) {
+            throw new Error("Session routing changed before Goal admission; refresh and retry.");
+          }
+          const creationError = authorizeGatewaySessionCreation({
+            cfg: currentConfig,
+            client,
+            agentId: preparedSession.value.agentId,
+          });
+          if (creationError) {
+            throw new SessionMutationAuthorizationChangedError(creationError);
+          }
+          const creation = resolveOperatorSessionCreation(client);
+          if (
+            creation.actor?.id !== initialEntry.createdActor?.id ||
+            resolveCreatorSandbox(currentConfig, creation) !== initialEntry.sandbox
+          ) {
+            throw new Error("Session creation policy changed before Goal admission; retry.");
+          }
+        }
+        if (
+          activeRunAbort.controller.signal.aborted ||
+          lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+          sessionRoutingChanged(currentConfig)
+        ) {
+          throw new Error("Goal admission changed before commit; refresh and retry.");
+        }
+      },
     });
     const {
       persist: persistGatewayUserTurnTranscript,
@@ -153,8 +215,62 @@ async function handleChatSendWithOptions(
       replyContextFieldsPromise,
     } = userTurn;
     preparedMediaRecorder = userTurnRecorder;
+    const preparedUserTurn = prepareChatSendUserTurn({
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      admission: admitted.value,
+      attachments: preparedAttachments.value,
+      client,
+      logGateway: context.logGateway,
+      userTurn,
+    });
+    let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
+      const goalOperation = normalizedRequest.value.goalOperation;
+      if (goalOperation) {
+        const mutation = persistedUserTurn?.sessionTurnMutationResult;
+        goalResult =
+          mutation?.result ??
+          lookupSessionGoalOperation({
+            sessionKey,
+            storePath,
+            agentId: preparedSession.value.agentId,
+            expectedSessionId: admittedSessionId,
+            operation: goalOperation,
+          });
+        if (goalResult && (!persistedUserTurn || mutation?.replayed)) {
+          admitted.value.cleanupAdmittedRun({ force: true });
+          clearAgentRunContext(clientRunId, lifecycleGeneration);
+          respond(true, { ...goalResult, replayed: true }, undefined, {
+            cached: true,
+            runId: clientRunId,
+          });
+          return;
+        }
+        if (!goalResult || !persistedUserTurn?.sessionEntry) {
+          throw new Error("Goal and its input were not durably admitted.");
+        }
+        if (admitted.value.initialSessionEntry) {
+          recordSessionCreated({
+            sessionKey,
+            agentId: preparedSession.value.agentId,
+            entry: persistedUserTurn.sessionEntry,
+          });
+        }
+        recordSessionGoalChanged({
+          sessionKey,
+          agentId: preparedSession.value.agentId,
+          entry: persistedUserTurn.sessionEntry,
+          actor: gatewayClientSessionCreator(client),
+          summary: `goal ${goalOperation.action}`,
+        });
+        emitSessionsChanged(context, {
+          sessionKey,
+          agentId: preparedSession.value.agentId,
+          reason: "goal",
+        });
+      }
       // A matching idempotency row and lifecycle claim commit atomically, so
       // retries adopt the durable turn without submitting it twice.
       if (
@@ -191,15 +307,6 @@ async function handleChatSendWithOptions(
       }
     }
 
-    const preparedUserTurn = prepareChatSendUserTurn({
-      request: normalizedRequest.value,
-      session: preparedSession.value,
-      admission: admitted.value,
-      attachments: preparedAttachments.value,
-      client,
-      logGateway: context.logGateway,
-      userTurn,
-    });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
@@ -257,6 +364,7 @@ async function handleChatSendWithOptions(
       ...(chatSendTiming ? { chatSendTiming } : {}),
     });
     const ackPayload = {
+      ...goalResult,
       runId: clientRunId,
       status: "started" as const,
       ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
@@ -311,6 +419,9 @@ async function handleChatSendWithOptions(
     });
   } catch (err) {
     await handleChatSendSetupError({
+      // Uncommitted Goal admissions may retry with their original identity. Committed
+      // outcomes replay from the durable receipt instead of this transient error cache.
+      cacheResult: normalizedRequest.value.goalOperation === undefined,
       admission: admitted.value,
       context,
       error: err,
@@ -328,6 +439,14 @@ export async function handleChatSend(
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, externalAuthorityAdmission);
+}
+
+/** Operator Resume admits one hidden internal continuation with the Goal transition. */
+export async function handleSessionGoalResumeChat(
+  options: GatewayRequestHandlerOptions,
+  operation: SessionGoalOperation & { action: "resume" },
+): Promise<void> {
+  await handleChatSendWithOptions(options, undefined, undefined, { goalResume: operation });
 }
 
 /** Dispatches an internally delegated turn within its caller-owned tool boundary. */

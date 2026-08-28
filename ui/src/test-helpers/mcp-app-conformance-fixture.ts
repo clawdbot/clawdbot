@@ -1,11 +1,34 @@
 // Real official App and stdio MCP fixtures shared by conformance scenarios.
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { Browser, BrowserContext, ConsoleMessage, Frame, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 const require = createRequire(import.meta.url);
+
+export function observeMcpAppHttpResponses(gatewayPort: number) {
+  const responses: ServerResponse[] = [];
+  const requests = channel("http.server.request.start");
+  const onRequest = (message: unknown) => {
+    // SAFETY: Node publishes these exact objects before the real HTTP request handler runs.
+    const { request, response } = message as {
+      request: IncomingMessage;
+      response: ServerResponse;
+    };
+    if (
+      request.socket.localPort === gatewayPort &&
+      request.method === "POST" &&
+      request.url === "/__openclaw__/mcp-app/view"
+    ) {
+      responses.push(response);
+    }
+  };
+  requests.subscribe(onRequest);
+  return { responses, stop: () => requests.unsubscribe(onRequest) };
+}
 
 export function observeMcpAppNetwork(
   page: Page,

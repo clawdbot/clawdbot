@@ -3,7 +3,10 @@
  */
 
 import type { MediaKind } from "@openclaw/media-core/constants";
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatSendIntent,
+  QueueMode,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
@@ -31,7 +34,20 @@ export type ChatComposerDraftRetry = {
   draftRevision: number;
 };
 
+export type ChatGoalDraftMode = { sessionId?: string } & (
+  | { action: "start" }
+  | { action: "edit"; goalId: string; previousDraft: string }
+);
+
+export type ChatGoalDraft = { sessionId?: string } & (
+  | { action: "start"; objective: string }
+  | { action: "edit"; goalId: string; objective: string }
+);
+
+export type ChatGoalAction = "pause" | "resume" | "clear";
+
 export type ChatComposerMemoryFallback = {
+  goalMode?: ChatGoalDraftMode;
   message: string;
   attachments: ChatAttachment[];
   storageFailed: boolean;
@@ -78,6 +94,11 @@ export type ChatQueueItem = {
   sendRunId?: string;
   /** One-send override retained with the durable row for reconnect and retry. */
   queueMode?: QueueMode;
+  /** Admission intent and its original issue time survive transport retries together. */
+  intent?: ChatSendIntent;
+  /** For structured admissions, preserve the originally selected session incarnation. */
+  sessionId?: string;
+  expectedLeafEntryId?: string | null;
   sendState?:
     | "waiting-model"
     | "waiting-idle"

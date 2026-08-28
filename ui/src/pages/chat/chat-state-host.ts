@@ -142,7 +142,7 @@ export type ChatPageHost = ChatHost &
       messageOverride?: string,
       options?: unknown,
       submissionAction?: Event,
-    ) => Promise<void>;
+    ) => Promise<boolean | void>;
     handleAbortChat: (options?: unknown) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;

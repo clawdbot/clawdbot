@@ -11,6 +11,7 @@ import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sess
 import { SessionOwnerSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
+export * from "./sessions-goal.js";
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export {
   PreservedSessionWorktreeSchema,

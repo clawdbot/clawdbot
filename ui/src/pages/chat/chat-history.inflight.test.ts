@@ -413,13 +413,23 @@ describe("chat history in-flight assistant recovery", () => {
   });
 
   it.each(
-    ["fresh adoption", "retained boundary"].flatMap((mode) =>
-      ["single row", "split rows", "split rows with commentary"].map((rows) => ({ mode, rows })),
+    ["idempotency", "Codex mirror"].flatMap((identity) =>
+      ["fresh adoption", "retained boundary"].flatMap((mode) =>
+        ["single row", "split rows", "split rows with commentary"].map((rows) => ({
+          identity,
+          mode,
+          rows,
+        })),
+      ),
     ),
   )(
-    "keeps the cumulative prefix after persisted history replacement: $mode, $rows",
-    async ({ mode, rows }) => {
+    "keeps the cumulative prefix after persisted history replacement: $identity, $mode, $rows",
+    async ({ identity, mode, rows }) => {
       const history = activeHistory("active-run");
+      const assistantIdentity = (seq: number) =>
+        identity === "Codex mirror"
+          ? { runId: "active-run", mirrorIdentity: `turn-1:assistant:answer-${seq}`, seq }
+          : { idempotencyKey: "active-run", seq };
       const prefix = rows === "single row" ? "Before steer." : "Before tool.Before steer.";
       const original = {
         role: "user",
@@ -447,7 +457,7 @@ describe("chat history in-flight assistant recovery", () => {
                 role: "assistant",
                 content: "Before tool.",
                 timestamp: 2,
-                __openclaw: { idempotencyKey: "active-run", seq: 2 },
+                __openclaw: assistantIdentity(2),
               },
             ]),
         ...(rows === "split rows with commentary"
@@ -470,7 +480,7 @@ describe("chat history in-flight assistant recovery", () => {
           role: "assistant",
           content: "Before steer.",
           timestamp: 4,
-          __openclaw: { idempotencyKey: "active-run", seq: 4 },
+          __openclaw: assistantIdentity(4),
         },
         steer,
       ];

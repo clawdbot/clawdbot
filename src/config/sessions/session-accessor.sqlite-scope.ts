@@ -39,6 +39,7 @@ type SessionSqliteDatabase = Pick<
   | "conversations"
   | "heartbeat_outcomes"
   | "session_conversations"
+  | "session_goal_operations"
   | "session_members"
   | "session_nodes"
   | "session_participants"

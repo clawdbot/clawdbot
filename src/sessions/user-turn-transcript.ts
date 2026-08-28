@@ -96,6 +96,7 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   };
   const message = {
     role: "user",
+    ...(params.display === false ? { display: false } : {}),
     content: text,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
@@ -184,10 +185,12 @@ async function persistUserTurnTranscript(
         ? { config: params.config as SessionTranscriptTurnPersistOptions["config"] }
         : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+      ...(params.initialSessionEntry ? { initialSessionEntry: params.initialSessionEntry } : {}),
       ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
       ...(params.sessionLifecyclePatch
         ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
         : {}),
+      ...(params.sessionTurnMutation ? { sessionTurnMutation: params.sessionTurnMutation } : {}),
       updateMode: params.updateMode ?? "inline",
       messages: [
         {
@@ -227,6 +230,9 @@ async function persistUserTurnTranscript(
       role: "user",
     },
     sessionEntry: turn.sessionEntry,
+    ...(turn.sessionTurnMutationResult
+      ? { sessionTurnMutationResult: turn.sessionTurnMutationResult }
+      : {}),
     sessionFile: params.sessionKey,
   };
 }
@@ -470,6 +476,9 @@ export function createUserTurnTranscriptRecorder(
           ...resolvedTarget,
           logicalTurnId,
           message: candidate,
+          ...(params.sessionTurnMutation
+            ? { sessionTurnMutation: params.sessionTurnMutation }
+            : {}),
           ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
           ...((options.sessionLifecyclePatch ?? params.sessionLifecyclePatch)
             ? {

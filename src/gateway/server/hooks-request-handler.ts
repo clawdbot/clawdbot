@@ -1,7 +1,7 @@
 // Hook request handler validates hook tokens, applies mappings, dedupes requests, and dispatches wake or agent work.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { closeRequestAfterResponse } from "../../infra/http-body.js";
+import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
@@ -374,16 +374,18 @@ export function createHooksRequestHandler(
     // every other path keeps the shared default cap.
     const body = await readJsonBody(req, resolveHookPathBodyLimit(hooksConfig, subPath));
     if (!body.ok) {
-      const status =
-        body.error === "payload too large"
-          ? 413
-          : body.error === "request body timeout"
-            ? 408
-            : 400;
-      if (status === 413 || status === 408) {
-        closeRequestAfterResponse(req, res);
+      const error = { ok: false, error: body.error };
+      if (body.error === "payload too large" || body.error === "request body timeout") {
+        await sendHttpRequestRejection(
+          req,
+          res,
+          body.error === "payload too large" ? 413 : 408,
+          JSON.stringify(error),
+          "application/json; charset=utf-8",
+        );
+      } else {
+        sendJson(res, 400, error);
       }
-      sendJson(res, status, { ok: false, error: body.error });
       return true;
     }
 

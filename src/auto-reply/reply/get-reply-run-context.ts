@@ -302,13 +302,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   const commandTurn = resolveCommandTurnContext(ctx);
+  const canInterpretCommands = ctx.CommandInterpretationSuppressed !== true;
   const isRegisteredWholeMessageCommand =
     isWholeMessageCommand && (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand);
   const isActiveCommandTurn =
-    isNativeCommandTurn(commandTurn) ||
-    (allowTextCommands &&
-      ctx.CommandInterpretationSuppressed !== true &&
-      (isTextSlashCommandTurn(commandTurn) || isRegisteredWholeMessageCommand));
+    canInterpretCommands &&
+    (isNativeCommandTurn(commandTurn) ||
+      (allowTextCommands &&
+        (isTextSlashCommandTurn(commandTurn) || isRegisteredWholeMessageCommand)));
   if (
     isActiveCommandTurn &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
@@ -320,12 +321,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   }
   const isBareNewOrReset = /^\/(new|reset)$/i.test(normalizedCommandBody);
   const isBareSessionReset =
-    softResetTriggered ||
-    (isNewSession &&
-      (isBareNewOrReset ||
-        (!hasCurrentReplyTargetContext &&
-          baseBodyTrimmedRaw.length === 0 &&
-          rawBodyTrimmed.length > 0)));
+    canInterpretCommands &&
+    (softResetTriggered ||
+      (isNewSession &&
+        (isBareNewOrReset ||
+          (!hasCurrentReplyTargetContext &&
+            baseBodyTrimmedRaw.length === 0 &&
+            rawBodyTrimmed.length > 0))));
   const startupAction =
     softResetTriggered || /^\/reset(?:\s|$)/i.test(normalizedCommandBody) ? "reset" : "new";
   const sessionWorkspaceOverride = resolveIngressWorkspaceOverrideForSessionRun({
@@ -360,7 +362,9 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       : null;
   const baseBodyFinal = isBareSessionReset
     ? (bareResetPromptState?.prompt ?? "")
-    : stripPromptThinkingDirectives(baseBody);
+    : canInterpretCommands
+      ? stripPromptThinkingDirectives(baseBody)
+      : baseBody;
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||

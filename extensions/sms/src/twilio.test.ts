@@ -1,7 +1,6 @@
 // Sms tests cover twilio plugin behavior.
 import { createHmac } from "node:crypto";
-import type { IncomingMessage } from "node:http";
-import { Readable } from "node:stream";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
@@ -70,7 +69,7 @@ function computeTestTwilioSignature(params: {
 }
 
 async function readTestTwilioForm(body: string): Promise<Record<string, string>> {
-  const req = Readable.from([body]) as IncomingMessage;
+  const req = createMockIncomingRequest([body]);
   req.headers = { "content-length": String(Buffer.byteLength(body)) };
   return await readTwilioWebhookForm(req);
 }

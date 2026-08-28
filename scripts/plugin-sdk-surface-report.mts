@@ -325,7 +325,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
       // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
-      4367,
+      // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
+      4368,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -427,7 +428,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
       // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
-      2591,
+      // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
+      2592,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

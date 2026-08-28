@@ -64,7 +64,6 @@ export {
 } from "./context-overflow.js";
 export {
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
@@ -72,13 +71,7 @@ export {
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-  matchesFormatErrorPattern,
 } from "./message-patterns.js";
-export {
-  classifyProviderPluginError,
-  classifyProviderSpecificError,
-  matchesProviderContextOverflow,
-} from "./provider-patterns.js";
 export { extractFailoverSignalDetails } from "./signal-details.js";
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;

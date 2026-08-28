@@ -52,6 +52,17 @@ safely.
 
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
+Structured [Goal controls](/tools/goal#gateway-requests-and-retries) use a lazy
+per-agent `session_goal_operations` table without changing the schema version.
+Goal start/resume commits the Goal transition, input turn, run lifecycle, and
+operation receipt in one transaction. Management operations commit the Goal
+transition and receipt together. Older readers ignore the added table.
+Receipts survive Goal clear and session reset/deletion until their 24-hour
+validity expires; later Goal writes prune expired rows. They retain the
+original result and a keyed request fingerprint, not a second raw request.
+There is no backfill or configuration switch. Downgrading preserves the table
+but disables the new structured controls; upgrading can read retained receipts.
+
 ## Review checkpoint for material changes
 
 Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.

@@ -1,5 +1,5 @@
 name: PR Crabbox Gate Publisher
-run-name: PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.head_sha }}
+run-name: "PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.head_sha }}"
 
 on:
   workflow_dispatch:

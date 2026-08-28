@@ -1,12 +1,16 @@
 // Session goal state tracks objective progress and token budgets in the session store.
-import crypto from "node:crypto";
 import {
   recordSessionGoalChanged,
   type SessionStateActorType,
 } from "../../sessions/session-state-events.js";
 import { formatTokenCount } from "../../utils/token-format.js";
+import {
+  accountSessionGoalUsage,
+  buildCreatedSessionGoal,
+  buildUpdatedSessionGoalObjective,
+  buildUpdatedSessionGoalStatus,
+} from "./goals-transitions.js";
 import { loadSessionEntryReadOnly, patchSessionEntryCore } from "./session-accessor.js";
-import { resolveFreshSessionTotalTokens } from "./session-entry-runtime.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 type SessionGoalSnapshot = {
@@ -36,33 +40,8 @@ type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
 
 export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
 
-const TERMINAL_GOAL_STATUSES = new Set<SessionGoalStatus>(["complete"]);
-
 function nowMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
-}
-
-function normalizeTokenCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.floor(value)
-    : undefined;
-}
-
-function resolveEntryFreshTotalTokens(
-  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
-): number | undefined {
-  return normalizeTokenCount(resolveFreshSessionTotalTokens(entry));
-}
-
-function resolveEntryGoalStartTokens(
-  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
-): number {
-  return resolveEntryFreshTotalTokens(entry) ?? 0;
-}
-
-function normalizeTokenBudget(value: number | undefined): number | undefined {
-  const normalized = normalizeTokenCount(value);
-  return normalized && normalized > 0 ? normalized : undefined;
 }
 
 function cloneGoal(goal: SessionGoal): SessionGoal {
@@ -88,50 +67,7 @@ export function resolveSessionGoalDisplayState(
   now?: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
-  return accountGoalUsage(entry, nowMs(now), options);
-}
-
-function accountGoalUsage(
-  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
-  now: number,
-  options?: { adoptFreshBaseline?: boolean },
-): SessionGoal | undefined {
-  // `goal` is introduced here as a core-owned slot; no shipped plugin-owned
-  // goal state exists to migrate, and plugin slot registration now reserves it.
-  const goal = entry.goal;
-  if (!goal) {
-    return undefined;
-  }
-  const totalTokens = resolveEntryFreshTotalTokens(entry);
-  const hasFreshStart = goal.tokenStartFresh !== false;
-  // Old entries may have a stale token baseline; display-only reads can hold it, while persisted
-  // reads adopt the fresh total so future budget checks use current accounting.
-  const shouldHoldStaleStart = !hasFreshStart && options?.adoptFreshBaseline === false;
-  const shouldAdoptFreshStart =
-    !shouldHoldStaleStart && totalTokens !== undefined && !hasFreshStart;
-  const tokenStart = shouldAdoptFreshStart
-    ? totalTokens
-    : (normalizeTokenCount(goal.tokenStart) ?? totalTokens ?? 0);
-  const tokensUsed =
-    totalTokens === undefined || shouldAdoptFreshStart || shouldHoldStaleStart
-      ? goal.tokensUsed
-      : Math.max(goal.tokensUsed, Math.max(0, totalTokens - tokenStart));
-  const next: SessionGoal = {
-    ...goal,
-    tokenStart,
-    tokenStartFresh: hasFreshStart || shouldAdoptFreshStart,
-    tokensUsed,
-  };
-  if (
-    next.status === "active" &&
-    next.tokenBudget !== undefined &&
-    tokensUsed >= next.tokenBudget
-  ) {
-    next.status = "budget_limited";
-    next.budgetLimitedAt = now;
-    next.updatedAt = now;
-  }
-  return next;
+  return accountSessionGoalUsage(entry, nowMs(now), options);
 }
 
 function goalsEqual(a: SessionGoal | undefined, b: SessionGoal | undefined): boolean {
@@ -193,7 +129,7 @@ export async function getSessionGoal(
   const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
-      const accounted = accountGoalUsage(entry, now);
+      const accounted = accountSessionGoalUsage(entry, now);
       goal = accounted ? cloneGoal(accounted) : undefined;
       if (!accounted || goalsEqual(accounted, entry.goal)) {
         return null;
@@ -218,24 +154,11 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
   const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
-      if (entry.goal) {
-        throw new Error("goal already exists");
-      }
-      const tokenBudget = normalizeTokenBudget(options.tokenBudget);
-      const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
-      created = {
-        schemaVersion: 1,
-        id: crypto.randomUUID(),
-        objective,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-        tokenStart: resolveEntryGoalStartTokens(entry),
-        tokenStartFresh,
-        tokensUsed: 0,
-        ...(tokenBudget ? { tokenBudget } : {}),
-        continuationTurns: 0,
-      };
+      created = buildCreatedSessionGoal(
+        entry,
+        { objective, tokenBudget: options.tokenBudget },
+        now,
+      );
       return { goal: created };
     },
     { fallbackEntry: options.fallbackEntry },
@@ -257,45 +180,7 @@ export async function updateSessionGoalStatus(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       foundSession = true;
-      const accounted = accountGoalUsage(entry, now);
-      if (!accounted) {
-        throw new Error("goal not found");
-      }
-      if (TERMINAL_GOAL_STATUSES.has(accounted.status) && accounted.status !== options.status) {
-        throw new Error(`goal is already ${accounted.status}`);
-      }
-      const resetsBudgetWindow =
-        options.status === "active" &&
-        (accounted.status === "budget_limited" ||
-          accounted.status === "usage_limited" ||
-          (accounted.tokenBudget !== undefined && accounted.tokensUsed >= accounted.tokenBudget));
-      // Resuming from a limited state starts a new budget window at the current fresh token count.
-      const freshTokenStart = resetsBudgetWindow ? resolveEntryFreshTotalTokens(entry) : undefined;
-      const next: SessionGoal = {
-        ...accounted,
-        status: options.status,
-        updatedAt: now,
-        ...(options.note ? { lastStatusNote: options.note } : {}),
-        ...(options.status === "paused" ? { pausedAt: now } : {}),
-        ...(options.status === "blocked" ? { blockedAt: now } : {}),
-        ...(options.status === "complete" ? { completedAt: now } : {}),
-      };
-      if (resetsBudgetWindow) {
-        next.tokenStart = freshTokenStart ?? 0;
-        next.tokenStartFresh = freshTokenStart !== undefined;
-        next.tokensUsed = 0;
-        delete next.budgetLimitedAt;
-        delete next.usageLimitedAt;
-      }
-      if (
-        next.status === "active" &&
-        next.tokenBudget !== undefined &&
-        next.tokensUsed >= next.tokenBudget
-      ) {
-        next.status = "budget_limited";
-        next.budgetLimitedAt = now;
-      }
-      updated = next;
+      updated = buildUpdatedSessionGoalStatus(entry, options, now);
       return { goal: updated };
     },
   );
@@ -320,15 +205,7 @@ export async function updateSessionGoalObjective(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       foundSession = true;
-      const accounted = accountGoalUsage(entry, now);
-      if (!accounted) {
-        throw new Error("goal not found");
-      }
-      if (TERMINAL_GOAL_STATUSES.has(accounted.status)) {
-        throw new Error(`goal is already ${accounted.status}`);
-      }
-      // Rewording keeps status and token accounting; only the target moves.
-      updated = { ...accounted, objective, updatedAt: now };
+      updated = buildUpdatedSessionGoalObjective(entry, objective, now);
       return { goal: updated };
     },
   );

@@ -289,6 +289,206 @@ describe("canonical session message recovery", () => {
     ]);
   });
 
+  it.each([
+    { persistence: "before-stream", terminal: "final" },
+    { persistence: "between-deltas", terminal: "final" },
+    { persistence: "after-stream", terminal: "final" },
+    { persistence: "after-tool", terminal: "final" },
+    { persistence: "before-stream", terminal: "error" },
+  ])(
+    "renders one durable answer while finishing with persistence $persistence and $terminal",
+    ({ persistence, terminal }) => {
+      const runId = "finishing-run";
+      const text = "The workspace changes are ready.";
+      const partial = "The workspace";
+      const { state, request } = createSessionEventState({
+        chatRunId: runId,
+        chatStream: null,
+        chatStreamSegments: [],
+        chatToolMessages: [],
+      });
+      let agentSeq = 0;
+      const delta = (snapshot: string, deltaText: string) => {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq: ++agentSeq,
+            ts: 1,
+            stream: "assistant",
+            data: { text: snapshot, delta: deltaText },
+          },
+        });
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            state: "delta",
+            deltaText,
+            message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
+          },
+        });
+      };
+      const persist = () =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            hasActiveRun: true,
+            messageId: "durable-answer",
+            messageSeq: 2,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              __openclaw: { id: "durable-answer", seq: 2, runId },
+            },
+          },
+        });
+      if (persistence === "before-stream") {
+        persist();
+      }
+      delta(partial, partial);
+      if (persistence === "between-deltas") {
+        persist();
+      }
+      delta(text, text.slice(partial.length));
+      if (persistence === "after-stream") {
+        persist();
+      }
+      if (persistence === "after-tool") {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq: ++agentSeq,
+            ts: 2,
+            stream: "tool",
+            data: { phase: "result", toolCallId: "workspace-tool", name: "read" },
+          },
+        });
+        persist();
+      }
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: ++agentSeq,
+          ts: 3,
+          stream: "lifecycle",
+          data: { phase: "finishing" },
+        },
+      });
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      expect(state.chatRunId).toBe(runId);
+      expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+
+      // Replayed cumulative deltas must not revive the retired projection.
+      delta(text, text.slice(partial.length));
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: terminal,
+          ...(terminal === "error" ? { errorMessage: "Workspace reconciliation failed." } : {}),
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        },
+      });
+      delta(text, text);
+      expect(state.chatRunId).toBeNull();
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      expect(state.chatMessages.filter((message) => extractText(message) === text)).toHaveLength(1);
+      if (terminal === "error") {
+        expect(state.chatRunError?.summary).toContain("Workspace reconciliation failed.");
+      }
+    },
+  );
+
+  it("preserves repeated commentary and distinct answers within the same active run", () => {
+    const runId = "repeated-run";
+    const text = "Checking the workspace.";
+    const { state } = createSessionEventState({
+      connected: false,
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+    for (const itemId of ["commentary-one", "commentary-two"]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: 1,
+          ts: 1,
+          stream: "item",
+          data: { kind: "preamble", itemId, progressText: text },
+        },
+      });
+    }
+    const stream = (snapshot: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "delta",
+          message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
+        },
+      });
+    const persist = (id: string, seq: number, itemId?: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          hasActiveRun: true,
+          messageId: id,
+          messageSeq: seq,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            ...(itemId
+              ? { openclawStreamFallback: { itemId, source: "segment", replacementText: text } }
+              : {}),
+          },
+        },
+      });
+    persist("durable-commentary", 1, "commentary-one");
+    stream(text);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text]);
+    persist("first-answer", 2);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text]);
+    stream(`${text} ${text}`);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text, text]);
+    persist("second-answer", 3);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text, text]);
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatStreamSegments.filter((segment) => segment.itemId)).toHaveLength(1);
+  });
+
   it("keeps cumulative assistant output split across an authoritative steer", () => {
     const activeRunId = "active-run";
     const steerRunId = "steer-request";
@@ -526,15 +726,14 @@ describe("canonical session message recovery", () => {
 
     // Rendering collapses consecutive identical messages behind a count badge,
     // so the transcript itself has to hold exactly one copy of the reply.
-    const canonicalReply = scenario.aborted
-      ? {
-          ...persistedReply,
-          __openclaw: {
-            ...persistedReplyIdentity,
-            idempotencyKey: `${activeRunId}:assistant`,
-          },
-        }
-      : persistedReply;
+    const canonicalReply = {
+      ...persistedReply,
+      __openclaw: {
+        ...persistedReplyIdentity,
+        ...(scenario.producerOwned ? { runId: activeRunId } : {}),
+        ...(scenario.aborted ? { idempotencyKey: `${activeRunId}:assistant` } : {}),
+      },
+    };
     expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
       canonicalReply,
     ]);

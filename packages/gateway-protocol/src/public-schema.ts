@@ -1,4 +1,5 @@
 // Explicit schema exports keep public protocol changes reviewable.
+export * from "./schema/sessions-goal.js";
 export {
   isCloudWorkerPlacementState,
   ConnectParamsSchema,

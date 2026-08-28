@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -10,6 +11,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { retryQueuedChatMessage } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 
@@ -112,6 +114,126 @@ function createImmediateCommandHost(
   } satisfies Partial<ChatHost>;
   return host as ChatHost;
 }
+
+describe("structured Goal admission", () => {
+  const intent = { kind: "session-goal-start", version: 1, issuedAtMs: 1_788_000_000_000 } as const;
+
+  it.each(["pause the rollout", "/stop", "  /goal clear\nkeep   this literal  "])(
+    "sends %j as an objective without command interpretation",
+    async (objective) => {
+      const host = makeChatHost({
+        chatMessage: objective,
+        currentSessionId: "incarnation-a",
+        chatDisplayedLeafEntryId: "leaf-a",
+        requestHandlers: { "chat.send": { status: "started" } },
+      });
+      await handleSendChat(host, undefined, { intent });
+      expect(findChatSendPayload(host)).toMatchObject({
+        message: objective,
+        intent,
+        sessionId: "incarnation-a",
+        expectedLeafEntryId: "leaf-a",
+      });
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      expect(host.request.mock.calls.some(([method]) => method === "chat.abort")).toBe(false);
+      expect(host.chatMessage).toBe("");
+    },
+  );
+
+  it.each(["busy", "offline", "annotation"])(
+    "preserves the complete draft when %s prevents Goal admission",
+    async (reason) => {
+      const attachment =
+        reason === "annotation"
+          ? createBrowserAnnotationAttachment(
+              "goal-annotation",
+              "Do not append this to the objective",
+            )
+          : createStagedAttachment(`goal-${reason}`);
+      const host = makeChatHost({
+        chatMessage: "Keep this objective",
+        chatAttachments: [attachment],
+        connected: reason !== "offline",
+        chatRunId: reason === "busy" ? "existing-run" : null,
+        requestHandlers: {},
+      });
+      await handleSendChat(host, undefined, { intent });
+      expect(host.chatMessage).toBe("Keep this objective");
+      expect(host.chatAttachments).toEqual([attachment]);
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.lastError).toBeTruthy();
+    },
+  );
+
+  it("keeps attachments and transcript replies separate from the objective", async () => {
+    const attachment = createStagedAttachment("goal-document");
+    const host = makeChatHost({
+      chatMessage: "Review the attached brief",
+      chatAttachments: [attachment],
+      chatReplyTarget: {
+        messageId: "message-a",
+        sourceMessageId: "entry-a",
+        text: "Earlier question",
+      },
+      requestHandlers: { "chat.send": { status: "started" } },
+    });
+    await handleSendChat(host, undefined, { intent });
+    expect(findChatSendPayload(host)).toMatchObject({
+      message: "Review the attached brief",
+      replyToId: "entry-a",
+      intent,
+      attachments: [expect.objectContaining({ mimeType: "application/pdf" })],
+    });
+  });
+
+  it("restores a rejected objective and retains the original run identity on a stored Retry", async () => {
+    let reject = true;
+    const host = makeChatHost({
+      chatMessage: "Start this exactly once",
+      currentSessionId: "incarnation-a",
+      chatDisplayedLeafEntryId: "leaf-a",
+      requestHandlers: {
+        "chat.send": () => {
+          if (reject) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "Goal admission rejected",
+            });
+          }
+          return { status: "started" };
+        },
+      },
+    });
+    await handleSendChat(host, undefined, { intent });
+    expect(host.chatMessage).toBe("Start this exactly once");
+
+    // Restored outboxes retry an already minted request; they must not mint another run.
+    reject = false;
+    host.chatMessage = "A separate conversation draft";
+    const original = findChatSendPayload(host);
+    const queued = {
+      id: "goal-retry",
+      text: "Start this exactly once",
+      createdAt: Date.now(),
+      intent,
+      sessionId: "incarnation-a",
+      expectedLeafEntryId: "leaf-a",
+      sendRunId: String(original.idempotencyKey),
+      sendState: "failed" as const,
+      sessionKey: host.sessionKey,
+    };
+    // The same browser persistence owner used on reconnect restores this immutable row.
+    const { admitQueuedMessageForSession } = await import("./chat-queue.ts");
+    expect(admitQueuedMessageForSession(host, host.sessionKey, queued)).toBe(true);
+    host.currentSessionId = "incarnation-b";
+    host.chatDisplayedLeafEntryId = "leaf-b";
+    await retryQueuedChatMessage(host, queued.id);
+    const requests = host.request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.[1]).toEqual(original);
+    expect(host.chatMessage).toBe("A separate conversation draft");
+  });
+});
 
 describe("composeBrowserAnnotationContext", () => {
   it("materializes an annotation-only message", () => {

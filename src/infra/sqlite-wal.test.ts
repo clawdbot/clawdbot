@@ -751,8 +751,8 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(FULL);");
     expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
 
-    expect(maintenance.close()).toBe(true);
-    expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(FULL);");
+    expect(maintenance.close({ checkpointMode: "PASSIVE" })).toBe(true);
+    expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
   });
 
   it("reports a busy checkpoint result as incomplete", () => {

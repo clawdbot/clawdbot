@@ -1,4 +1,4 @@
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import type {
   DurableComposerDraftAttachment,
   DurableComposerDraftScope,
@@ -17,6 +17,7 @@ export type DurableChatComposerSnapshot = {
   expectedWriteIds?: readonly string[];
   revision: number;
   text: string;
+  goalMode?: ChatGoalDraftMode;
   attachments: ChatAttachment[];
   storedAttachments: DurableComposerDraftAttachment[] | null;
   writeId: string;
@@ -32,6 +33,7 @@ type RestoreBaseline = {
 type RestoredDraft = {
   revision: number;
   text: string;
+  goalMode?: ChatGoalDraftMode;
   attachments: ChatAttachment[];
 };
 
@@ -63,9 +65,11 @@ export function reportDurableComposerStorageError(
 export function chatAttachmentDraftSignature(
   text: string,
   attachments: readonly ChatAttachment[],
+  goalMode?: ChatGoalDraftMode | null,
 ): string {
   return JSON.stringify([
     text,
+    goalMode ?? null,
     attachments.map((attachment) => [
       attachment.id,
       attachment.mimeType,
@@ -135,6 +139,7 @@ export async function writeDurableComposerSnapshot(snapshot: {
   expectedWriteIds?: readonly string[];
   revision: number;
   text: string;
+  goalMode?: ChatGoalDraftMode;
   storedAttachments: DurableComposerDraftAttachment[] | null;
   writeId: string;
 }) {
@@ -145,6 +150,7 @@ export async function writeDurableComposerSnapshot(snapshot: {
     {
       revision: snapshot.revision,
       text: payloadUnavailable ? "" : snapshot.text,
+      ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
       attachments: snapshot.storedAttachments ?? [],
     },
     {
@@ -291,6 +297,9 @@ export class DurableChatComposerPersistence {
     apply({
       revision,
       text: result.status === "found" ? result.draft.text : "",
+      ...(result.status === "found" && result.draft.goalMode
+        ? { goalMode: result.draft.goalMode }
+        : {}),
       attachments,
     });
   }
