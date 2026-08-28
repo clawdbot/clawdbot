@@ -591,7 +591,6 @@ export async function runCommand(command, args, options) {
   });
   const completion = new Promise((resolveRun) => {
     child.on("exit", (status) => {
-      ownedChildren.delete(child);
       resolveRun({ status, stdout, stderr, timedOut: false });
     });
   });
@@ -891,7 +890,7 @@ async function main() {
     credential.assertLeaseHealthy();
   } finally {
     try {
-      await credential.release();
+      await cleanupOwnedRuntime(credential);
     } finally {
       if (activeCredential === credential) activeCredential = undefined;
     }

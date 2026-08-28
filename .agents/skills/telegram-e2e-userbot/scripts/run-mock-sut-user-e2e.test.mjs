@@ -298,6 +298,33 @@ test("lease loss during a credential command stops every owned child before its 
   assert.equal(fs.existsSync(sideEffect), false);
 });
 
+test("successful command parents keep descendants lease-owned until cleanup", async (context) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-cleanup-fence-"));
+  const sideEffect = path.join(temp, "sent");
+  const childScript = path.join(temp, "child.cjs");
+  const wrapperScript = path.join(temp, "wrapper.cjs");
+  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  fs.writeFileSync(
+    childScript,
+    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.SIDE_EFFECT,"sent"),200); setInterval(()=>{},1000);',
+  );
+  fs.writeFileSync(
+    wrapperScript,
+    'const {spawn}=require("node:child_process"); const child=spawn(process.execPath,[process.env.CHILD_SCRIPT],{env:process.env,stdio:"ignore"}); child.unref();',
+  );
+
+  const result = await runCommand(process.execPath, [wrapperScript], {
+    cwd: process.cwd(),
+    env: { ...process.env, CHILD_SCRIPT: childScript, SIDE_EFFECT: sideEffect },
+    timeoutMs: 1_000,
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.timedOut, false);
+  await cleanupOwnedRuntime();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(fs.existsSync(sideEffect), false);
+});
+
 test("credential command timeout stops a nested wrapper before its side effect", async (context) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-timeout-fence-"));
   const sideEffect = path.join(temp, "sent");
