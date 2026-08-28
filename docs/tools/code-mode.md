@@ -665,6 +665,12 @@ type ToolCatalog = {
 };
 ```
 
+`catalog.search(...)` returns a frozen array of callable handles, or an empty
+array when no tools match. If the matching callable names exceed the output
+budget, search rejects with guidance to narrow the query or lower `limit`.
+It never silently substitutes an empty or partial match list. A narrower search
+remains available after the error.
+
 Paired Gateway nodes are available through the `nodes` global:
 
 ```typescript
@@ -897,7 +903,9 @@ type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: un
 
 Rules: output order matches guest calls. Nested tool results, cumulative guest
 output, and the final value share the `maxOutputBytes` serialized UTF-8 budget.
-When a successful result exceeds the budget, OpenClaw returns a bounded value
+Catalog search rejects when its callable-name array cannot fit this budget;
+narrow the query or lower `limit` and retry. For other successful results that
+exceed the budget, OpenClaw returns a bounded value
 with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
 rerun with narrower arguments. Treat that marker as a successful partial result:
 reduce the search scope, paginate, select fewer files, or return a smaller
