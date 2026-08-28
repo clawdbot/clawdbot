@@ -9,20 +9,22 @@ describe("status cold imports", () => {
     vi.resetModules();
   });
 
-  it("collects default runtime status without loading usage credentials", async () => {
+  it("isolates failed usage imports from default runtime status", async () => {
+    const usageImportFailure = new Error("usage credential resolution failed to load");
     vi.doMock("../agents/model-auth-label.js", () => {
-      throw new Error("default status must not import usage credential resolution");
+      throw usageImportFailure;
     });
     vi.doMock("./status.daemon.js", () => ({
       getDaemonStatusSummary: async () => ({ label: "gateway" }),
       getNodeDaemonStatusSummary: async () => ({ label: "node" }),
     }));
 
-    const { resolveStatusRuntimeSnapshot } = await import("./status-runtime-shared.js");
+    const { loadStatusProviderUsageModule, resolveStatusRuntimeSnapshot } =
+      await import("./status-runtime-shared.js");
+    const params = { config: {}, sourceConfig: {}, gatewayReachable: false };
+    const snapshot = await resolveStatusRuntimeSnapshot(params);
 
-    await expect(
-      resolveStatusRuntimeSnapshot({ config: {}, sourceConfig: {}, gatewayReachable: false }),
-    ).resolves.toEqual({
+    expect(snapshot).toEqual({
       securityAudit: undefined,
       usage: undefined,
       health: undefined,
@@ -30,6 +32,15 @@ describe("status cold imports", () => {
       gatewayService: { label: "gateway" },
       nodeService: { label: "node" },
     });
+
+    // Vitest wraps a failed module factory; both callers must preserve its cause.
+    await expect(resolveStatusRuntimeSnapshot({ ...params, usage: true })).rejects.toMatchObject({
+      cause: usageImportFailure,
+    });
+    await expect(loadStatusProviderUsageModule()).rejects.toMatchObject({
+      cause: usageImportFailure,
+    });
+    await expect(resolveStatusRuntimeSnapshot(params)).resolves.toEqual(snapshot);
   });
 
   it("keeps broad plugin status code behind the detailed status boundary", async () => {
