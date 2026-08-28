@@ -824,7 +824,7 @@ openclaw-chat-pane {
 }
 
 .chat-header-session-menu--compact-sharing::part(menu) {
-  max-height: min(420px, 60vh);
+  height: min(420px, 60vh);
 }
 
 .continue-in-terminal-dialog__card {
