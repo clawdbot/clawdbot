@@ -67,6 +67,7 @@ import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
 } from "./bash-tools.exec-types.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 type SendExecApprovalFollowupResult =
   typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
@@ -198,7 +199,7 @@ const defaultExecAutoReviewerMock = vi.hoisted(() =>
     rationale: "allowed",
   })),
 );
-const commitExecAuthorizationMock = vi.hoisted(() => vi.fn(async () => undefined));
+const commitExecAuthorizationMock = vi.hoisted(() => vi.fn(async (_input?: unknown) => undefined));
 const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
   vi.fn(
     async (_params?: {
@@ -399,6 +400,7 @@ const resolveApprovalCommandAuthorizationMock = vi.hoisted(() =>
 const resolveRegisteredExecApprovalDecisionMock = vi.hoisted(() =>
   vi.fn<() => Promise<string | null | undefined>>(),
 );
+const registerExecApprovalRequestForHostOrThrowMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
@@ -422,7 +424,7 @@ vi.mock("../infra/exec-auto-review.js", async (importOriginal) => ({
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
-  registerExecApprovalRequestForHostOrThrow: vi.fn(async () => undefined),
+  registerExecApprovalRequestForHostOrThrow: registerExecApprovalRequestForHostOrThrowMock,
   resolveRegisteredExecApprovalDecision: resolveRegisteredExecApprovalDecisionMock,
   isExecApprovalRunAbortedError: (error: unknown) => error === runAbortedApprovalError,
 }));
@@ -608,6 +610,7 @@ describe("processGatewayAllowlist", () => {
       const outcome = await resolveExecApprovalWaitOutcomeMock.mock.results.at(-1)?.value;
       return outcome?.kind === "resolved" ? outcome.decision : undefined;
     });
+    registerExecApprovalRequestForHostOrThrowMock.mockReset();
     resolveExecApprovalUnavailableDecisionsMock.mockClear();
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
@@ -673,6 +676,34 @@ describe("processGatewayAllowlist", () => {
       promise: Promise.resolve(params.outcome),
     });
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+  }
+
+  function useApprovalRegistrationBoundary() {
+    registerExecApprovalRequestForHostOrThrowMock.mockImplementation(
+      async (params: { approvalId: string; detached?: boolean }) => ({
+        id: params.approvalId,
+        expiresAtMs: Date.now() + 60_000,
+        ...(params.detached ? { gatewayGeneration: "gateway-generation-1" } : {}),
+      }),
+    );
+    createAndRegisterDefaultExecApprovalRequestMock.mockImplementation(async (params) => {
+      const registration = await (
+        params as { register: (approvalId: string) => Promise<{ gatewayGeneration?: string }> }
+      ).register("req-1");
+      return {
+        approvalId: "req-1",
+        approvalSlug: "slug-1",
+        warningText: "",
+        expiresAtMs: Date.now() + 60_000,
+        preResolvedDecision: null,
+        initiatingSurface: "origin",
+        sentApproverDms: false,
+        unavailableReason: null,
+        ...(registration.gatewayGeneration
+          ? { gatewayGeneration: registration.gatewayGeneration }
+          : {}),
+      };
+    });
   }
 
   function useRealUnavailableApprovalGate() {
@@ -2564,6 +2595,53 @@ EOF`,
     expect(approvalInput?.trigger).toBe("diagnostics");
     expect(approvalInput?.outcome?.status).toBe("completed");
     expect(approvalInput?.outcome?.exitCode).toBe(0);
+  });
+
+  it.each([
+    { trigger: "diagnostics", approvalFollowupMode: "direct" as const },
+    { trigger: "export-trajectory", approvalFollowupMode: "agent" as const },
+  ])("keeps $trigger command approvals outside detached agent ownership", async (params) => {
+    useApprovalRegistrationBoundary();
+
+    const result = await runGatewayAllowlist({
+      command: "openclaw gateway diagnostics export --json",
+      trigger: params.trigger,
+      approvalFollowupMode: params.approvalFollowupMode,
+      turnSourceChannel: "webchat",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
+      expect.objectContaining({ detached: false }),
+    );
+  });
+
+  it("moves deferred agent approval ownership to the Gateway generation", async () => {
+    useApprovalRegistrationBoundary();
+    resolveApprovalCommandAuthorizationMock.mockReturnValue({
+      authorized: false,
+      explicit: false,
+      reason: "sender-not-authorized",
+    });
+
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:user",
+        signedAgentRuntimeIdentityToken: "trusted-runtime-token",
+      },
+      async () =>
+        await runGatewayAllowlist({
+          command: "echo ok",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:user",
+        }),
+    );
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
+      expect.objectContaining({ detached: true }),
+    );
   });
 
   it("uses async agent followups for explicit webchat approval mode", async () => {
