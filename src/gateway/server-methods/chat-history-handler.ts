@@ -266,6 +266,7 @@ async function handleChatHistoryRequest({
           return await context.readChatStartupProjection?.({
             agentId: sessionAgentId,
             sessionEntry: entry,
+            readPolicy: method === "chat.history" ? "ready" : "current",
           });
         } catch (error) {
           context.logGateway.debug(

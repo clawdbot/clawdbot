@@ -1626,17 +1626,49 @@ describe("gateway server chat", () => {
     }
   });
 
-  test.each(["chat.startup", "chat.history"] as const)(
-    "%s returns a profile-neutral transcript while metadata replacement is pending",
-    async (method) => {
-      openDirectChatSession();
+  test.each([
+    { method: "chat.startup", profile: false, delta: false, thinkingLevel: undefined },
+    { method: "chat.history", profile: false, delta: false, thinkingLevel: undefined },
+    { method: "chat.history", profile: true, delta: false, thinkingLevel: undefined },
+    { method: "chat.history", profile: true, delta: true, thinkingLevel: undefined },
+    { method: "chat.history", profile: true, delta: false, thinkingLevel: "off" },
+    { method: "chat.history", profile: true, delta: true, thinkingLevel: "off" },
+  ] as const)(
+    "$method returns transcript while metadata replacement is pending (profile=$profile delta=$delta thinking=$thinkingLevel)",
+    async ({ method, profile, delta, thinkingLevel }) => {
+      const { storePath } = openDirectChatSession();
+      testState.agentConfig = { thinkingDefault: "medium" };
       try {
-        await writeStoredMainSession();
+        await writeStoredMainSession({
+          thinkingLevel,
+          ...(profile
+            ? {
+                authProfileOverride: "test:session",
+                authProfileOverrideSource: "user",
+              }
+            : {}),
+        });
         await writeMainSessionTranscript([
           createTextTranscriptEvent("user", "paint without metadata"),
         ]);
         const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
         const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+        let cursor: string | undefined;
+        if (delta) {
+          const initial: CapturedChatResponse[] = [];
+          await callDirectChat("chat.history", {
+            id: "history-before-metadata-replacement",
+            params: makeMainSessionParams(),
+            respond: captureChatResponse(initial),
+            context,
+          });
+          expect(initial[0]?.ok).toBe(true);
+          const initialPayload = expectDefined(initial[0]?.payload, "initial history page") as {
+            deltaCursor?: string;
+          };
+          cursor = initialPayload.deltaCursor;
+          expect(cursor).toEqual(expect.any(String));
+        }
         const metadataRuntime = createGatewayChatMetadataRuntime({
           getConfig: () => ({}),
           getContext: () => context,
@@ -1647,31 +1679,51 @@ describe("gateway server chat", () => {
 
         const startup = callDirectChat(method, {
           id: "startup-neutral-pending-metadata",
-          params: makeMainSessionParams(),
+          params: makeMainSessionParams(delta ? { cursor } : {}),
           respond: captureChatResponse(responses),
           context,
         });
 
         try {
           await vi.waitFor(() => expect(responses).toHaveLength(1), FAST_WAIT_OPTS);
-          expect(responses[0]).toMatchObject({
-            ok: true,
-            payload: {
-              messages: [
-                expect.objectContaining({
-                  role: "user",
-                  content: [{ type: "text", text: "paint without metadata" }],
-                }),
-              ],
-            },
-          });
+          if (delta) {
+            expect(responses[0]).toMatchObject({
+              ok: true,
+              payload: { kind: "delta", messages: [] },
+            });
+          } else {
+            expect(responses[0]).toMatchObject({
+              ok: true,
+              payload: {
+                messages: [
+                  expect.objectContaining({
+                    role: "user",
+                    content: [{ type: "text", text: "paint without metadata" }],
+                  }),
+                ],
+              },
+            });
+          }
           expect(responses[0]?.payload).not.toHaveProperty("metadata");
+          const payload = responses[0]?.payload as {
+            sessionInfo: {
+              thinkingLevel?: string | null;
+              thinkingDefault?: string;
+            };
+          };
+          expect(payload.sessionInfo.thinkingDefault).toBe("medium");
+          expect(payload.sessionInfo.thinkingLevel ?? null).toBe(thinkingLevel ?? null);
+          const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+          expect(stored?.thinkingLevel).toBe(thinkingLevel);
+          expect(stored?.authProfileOverride).toBe(profile ? "test:session" : undefined);
         } finally {
           metadataRuntime.fail(new Error("test metadata replacement stopped"));
           await startup;
         }
       } finally {
+        testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
+        clearConfigCache();
       }
     },
   );
