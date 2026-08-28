@@ -185,7 +185,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(agentSelector.frame.height, 44)
         XCTAssertEqual(agentSelector.value as? String, "Molty")
 
-        let newChat = try XCTUnwrap(self.app?.buttons["New chat"])
+        let newChat = try XCTUnwrap(self.app?.buttons["New Chat"])
         XCTAssertTrue(newChat.exists)
         XCTAssertGreaterThanOrEqual(newChat.frame.height, 44)
         XCTAssertGreaterThan(newChat.frame.minY, agentSelector.frame.maxY)

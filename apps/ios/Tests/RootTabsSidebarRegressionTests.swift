@@ -168,6 +168,10 @@ struct RootTabsSidebarRegressionTests {
         #expect(agents.contains("self.appModel.setSelectedAgentId"))
         #expect(agents.contains("self.newChatButton"))
         #expect(agents.contains("RootTabs.Sidebar.AgentSelector"))
+        let selectorValue = try #require(
+            agents.range(of: ".accessibilityValue(Self.agentDisplayName(selectedAgent))"))
+        let newChat = try #require(agents.range(of: "self.newChatButton"))
+        #expect(agents[selectorValue.upperBound..<newChat.lowerBound].contains("\n            }"))
         #expect(!agents.contains(".background(.ultraThinMaterial"))
         #expect(!agentSelector.contains(".background(OpenClawSidebarPalette.selection"))
         #expect(!settings.contains("settings-appearance-sidebar-agents"))

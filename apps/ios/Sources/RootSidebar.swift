@@ -132,10 +132,9 @@ struct RootSidebar: View {
 
     /// The current agent is the single roster entry. Opening it shows every
     /// selectable agent and native Picker selection state.
-    @ViewBuilder
     private var agentsSection: some View {
-        if let selectedAgent = self.selectedAgent {
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 2) {
+            if let selectedAgent = self.selectedAgent {
                 Menu {
                     Picker(selection: Binding(
                         get: { selectedAgent.id },
@@ -163,9 +162,9 @@ struct RootSidebar: View {
                 .accessibilityIdentifier("RootTabs.Sidebar.AgentSelector")
                 .accessibilityLabel(String(localized: "Agent"))
                 .accessibilityValue(Self.agentDisplayName(selectedAgent))
-
-                self.newChatButton
             }
+
+            self.newChatButton
         }
     }
 
@@ -217,7 +216,7 @@ struct RootSidebar: View {
             self.selectSidebarDestination(.chat)
         } label: {
             Label {
-                Text(String(localized: "New chat"))
+                Text(String(localized: "New Chat"))
                     .font(OpenClawType.subheadSemiBold)
             } icon: {
                 Image(systemName: "plus.bubble")
@@ -230,7 +229,7 @@ struct RootSidebar: View {
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawSidebarPalette.accent)
         .disabled(!self.appModel.isOperatorGatewayConnected)
-        .accessibilityLabel(String(localized: "New chat"))
+        .accessibilityLabel(String(localized: "New Chat"))
     }
 
     /// Same key order the Agents roster uses for its model subtitles.
