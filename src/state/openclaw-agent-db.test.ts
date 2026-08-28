@@ -4522,6 +4522,39 @@ describe("openclaw agent database", () => {
     );
   });
 
+  it("converges same-version divergence after a validated handle is physically reopened", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = database.path;
+    const versionBefore = readSqliteNumberPragma(database.db, "user_version");
+    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const divergent = new DatabaseSync(databasePath);
+    try {
+      divergent.exec("ALTER TABLE session_nodes DROP COLUMN project_id;");
+      expect(readSqliteNumberPragma(divergent, "user_version")).toBe(versionBefore);
+      expect(
+        divergent
+          .prepare("PRAGMA table_info(session_nodes)")
+          .all()
+          .some((row) => (row as { name?: unknown }).name === "project_id"),
+      ).toBe(false);
+    } finally {
+      divergent.close();
+    }
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(versionBefore);
+    expect(
+      reopened.db
+        .prepare("PRAGMA table_info(session_nodes)")
+        .all()
+        .some((row) => (row as { name?: unknown }).name === "project_id"),
+    ).toBe(true);
+  });
+
   it("reopens a validated current-schema database promptly while a WAL writer is active", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
