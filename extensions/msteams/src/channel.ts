@@ -1127,9 +1127,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           hasRepliedRef,
         };
       },
-      resolveAutoThreadId: ({ cfg, to, toolContext }) =>
+      resolveAutoThreadId: ({ cfg, accountId, to, toolContext }) =>
         resolveMSTeamsAutoThreadId({
-          cfg: cfg.channels?.msteams,
+          cfg: resolveMSTeamsAccountConfig(cfg, accountId),
           to,
           toolContext,
         }),

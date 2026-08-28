@@ -1895,6 +1895,7 @@ describe("msteamsPlugin.actions.extractToolSendResult", () => {
 describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
   function resolveAutoThreadId(params: {
     cfg?: OpenClawConfig;
+    accountId?: string;
     to?: string;
     currentGraphChannelId?: string;
   }) {
@@ -1904,6 +1905,7 @@ describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
     }
     return resolve({
       cfg: params.cfg ?? ({} as OpenClawConfig),
+      accountId: params.accountId,
       to: params.to ?? "conversation:19:channel@thread.tacv2",
       toolContext: {
         currentChannelId: "conversation:19:channel@thread.tacv2",
@@ -1926,6 +1928,26 @@ describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
           channels: {
             msteams: {
               replyStyle: "top-level",
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("honors a named account top-level reply style", () => {
+    expect(
+      resolveAutoThreadId({
+        accountId: "ops",
+        cfg: {
+          channels: {
+            msteams: {
+              replyStyle: "thread",
+              accounts: {
+                ops: {
+                  replyStyle: "top-level",
+                },
+              },
             },
           },
         } as OpenClawConfig,
