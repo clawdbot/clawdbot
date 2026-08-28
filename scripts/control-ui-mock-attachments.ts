@@ -305,10 +305,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           type: "text",
           text: "Current WebChat delivery removes inline playback from every media file.",
         },
-        documentAttachment(
-          "voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3",
-          "audio/mpeg",
-        ),
+        documentAttachment("voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3", "audio/mpeg"),
         documentAttachment("reply.ogg", "audio/ogg"),
         documentAttachment("reply.m4a", "audio/x-m4a"),
         documentAttachment("reply.flac", "audio/flac"),

@@ -93,9 +93,7 @@ async function createSharedAppPage(): Promise<Page> {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
     await page.route("https://cdn.example/**", async (route) => {
       const request = route.request();
-      const fileName = decodeURIComponent(
-        new URL(request.url()).pathname.split("/").at(-1) ?? "",
-      );
+      const fileName = decodeURIComponent(new URL(request.url()).pathname.split("/").at(-1) ?? "");
       const media = SHARED_APP_PLAYBACK_MEDIA.find(([candidate]) => candidate === fileName);
       if (!media) {
         await route.abort();
@@ -2784,48 +2782,44 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it(
-    "renders delivered playback media inline",
-    FULL_APP_TEST_OPTIONS,
-    async () => {
-      const page = await getSharedAppPage();
-      const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
-      await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
-      expect(await page.getByText(SHARED_APP_TTS_TEXT, { exact: true }).count()).toBe(1);
-      expect(await page.getByText(/MEDIA:/u).count()).toBe(0);
-      for (const [fileName, type, , playback] of SHARED_APP_PLAYBACK_MEDIA) {
-        const player = page
-          .locator(type === "audio" ? "openclaw-chat-audio-player" : "openclaw-chat-video-player")
-          .filter({ hasText: fileName });
-        await player.waitFor({ state: "attached", timeout: 10_000 });
-        expect(
-          await player.evaluate((element) => (element as { playback?: unknown }).playback),
-        ).toBe(playback);
-        const card = player.locator(".chat-assistant-attachment-card");
-        await card.waitFor({ state: "visible", timeout: 10_000 });
-        await card.scrollIntoViewIfNeeded();
-        if (fileName !== "reply.m4a" && fileName !== "reply.mp4") {
-          expect(await player.locator(".chat-assistant-attachment-card--compact").count()).toBe(0);
-          const media = player.locator(type);
-          await expect
-            .poll(() => media.evaluate((element) => (element as HTMLMediaElement).readyState), {
-              timeout: 10_000,
-            })
-            .toBeGreaterThanOrEqual(1);
-        }
-        expect(
-          sharedAppPlaybackRequests.some((url) => {
-            if (!url.includes(fileName)) {
-              return false;
-            }
-            return playback === "native" || new URL(url).searchParams.get("playback") === "1";
-          }),
-        ).toBe(true);
+  it("renders delivered playback media inline", FULL_APP_TEST_OPTIONS, async () => {
+    const page = await getSharedAppPage();
+    const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
+    await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+    expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
+    expect(await page.getByText(SHARED_APP_TTS_TEXT, { exact: true }).count()).toBe(1);
+    expect(await page.getByText(/MEDIA:/u).count()).toBe(0);
+    for (const [fileName, type, , playback] of SHARED_APP_PLAYBACK_MEDIA) {
+      const player = page
+        .locator(type === "audio" ? "openclaw-chat-audio-player" : "openclaw-chat-video-player")
+        .filter({ hasText: fileName });
+      await player.waitFor({ state: "attached", timeout: 10_000 });
+      expect(await player.evaluate((element) => (element as { playback?: unknown }).playback)).toBe(
+        playback,
+      );
+      const card = player.locator(".chat-assistant-attachment-card");
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+      await card.scrollIntoViewIfNeeded();
+      if (fileName !== "reply.m4a" && fileName !== "reply.mp4") {
+        expect(await player.locator(".chat-assistant-attachment-card--compact").count()).toBe(0);
+        const media = player.locator(type);
+        await expect
+          .poll(() => media.evaluate((element) => (element as HTMLMediaElement).readyState), {
+            timeout: 10_000,
+          })
+          .toBeGreaterThanOrEqual(1);
       }
-      expect(await page.getByText(/can't play this format/iu).count()).toBe(0);
-    },
-  );
+      expect(
+        sharedAppPlaybackRequests.some((url) => {
+          if (!url.includes(fileName)) {
+            return false;
+          }
+          return playback === "native" || new URL(url).searchParams.get("playback") === "1";
+        }),
+      ).toBe(true);
+    }
+    expect(await page.getByText(/can't play this format/iu).count()).toBe(0);
+  });
 
   it(
     "renders one named card for every success and failure in a mixed attachment batch",

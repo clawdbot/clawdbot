@@ -137,9 +137,7 @@ describe("ChatVideoPlayer", () => {
     await player.updateComplete;
     expect(player.querySelector("video")?.hasAttribute("src")).toBe(false);
     await vi.waitFor(() =>
-      expect(
-        player.querySelector(".chat-assistant-attachment-card--compact"),
-      ).not.toBeNull(),
+      expect(player.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
     );
     expect(player.querySelector(".chat-assistant-attachment-card__reason")).toBeNull();
     expect(player.querySelector("video")).toBeNull();

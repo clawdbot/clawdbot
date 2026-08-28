@@ -3490,7 +3490,7 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("renders assistant MEDIA attachments, voice-note semantics, and reply preview", async () => {
+  it("renders assistant MEDIA attachments and reply preview", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenImage = vi.fn();
     renderAssistantMessage(
@@ -3499,7 +3499,7 @@ describe("grouped chat rendering", () => {
         "Here is the image.\nMEDIA:https://example.com/photo.png\nMEDIA:https://example.com/voice.ogg",
         {
           id: "assistant-media-inline",
-          openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
+          openclawDelivery: { replyToCurrent: true },
         },
       ),
       { showToolCalls: false, onOpenImage },
@@ -3525,9 +3525,6 @@ describe("grouped chat rendering", () => {
     await audioPlayer.updateComplete;
     expect(container.querySelector(".chat-assistant-attachment-card__title")?.textContent).toBe(
       "voice.ogg",
-    );
-    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent).toContain(
-      "Voice note",
     );
   });
 
@@ -4092,86 +4089,72 @@ describe("grouped chat rendering", () => {
   it.each([
     ["audio", "recording.mp3", "audio/mpeg", "openclaw-chat-audio-player"],
     ["video", "clip.mp4", "video/mp4", "openclaw-chat-video-player"],
-  ] as const)(
-    "renders %s attachment %s with inline playback",
-    (kind, label, mimeType, tag) => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-      const container = document.createElement("div");
-      const onOpenSidebar = vi.fn();
-      const source = `https://example.com/${label}`;
+  ] as const)("renders %s attachment %s with inline playback", (kind, label, mimeType, tag) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    const source = `https://example.com/${label}`;
 
-      renderAssistantMessage(
-        container,
-        createAssistantMessage([createAttachmentBlock(source, kind, label, mimeType)], {
-          id: `assistant-${kind}-${label}-player`,
-        }),
-        { showToolCalls: false, onOpenSidebar },
-      );
+    renderAssistantMessage(
+      container,
+      createAssistantMessage([createAttachmentBlock(source, kind, label, mimeType)], {
+        id: `assistant-${kind}-${label}-player`,
+      }),
+      { showToolCalls: false, onOpenSidebar },
+    );
 
-      const player = expectElement(container, tag, HTMLElement) as HTMLElement & {
-        label: string;
-        mimeType: string;
-        onExpand: () => void;
-        sourceIdentity: string;
-        src: string;
-      };
-      expect(player).toMatchObject({ label, mimeType, sourceIdentity: source, src: source });
-      expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
-      player.onExpand();
-      expect(onOpenSidebar).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "attachment", attachmentKind: kind, title: label }),
-      );
-      expect(fetchMock).not.toHaveBeenCalled();
-    },
-  );
+    const player = expectElement(container, tag, HTMLElement) as HTMLElement & {
+      label: string;
+      mimeType: string;
+      onExpand: () => void;
+      sourceIdentity: string;
+      src: string;
+    };
+    expect(player).toMatchObject({ label, mimeType, sourceIdentity: source, src: source });
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    player.onExpand();
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "attachment", attachmentKind: kind, title: label }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["document", "preview.html", "text/html"],
     ["document", "report.pdf", "application/pdf"],
     ["document", "rows.csv", "text/csv"],
     ["document", "notes.txt", "text/plain"],
-  ] as const)(
-    "renders %s attachment %s as a compact card",
-    (kind, label, mimeType) => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-      const container = document.createElement("div");
-      const onOpenSidebar = vi.fn();
-      const source = `https://example.com/${label}`;
+  ] as const)("renders %s attachment %s as a compact card", (kind, label, mimeType) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    const source = `https://example.com/${label}`;
 
-      renderAssistantMessage(
-        container,
-        createAssistantMessage([createAttachmentBlock(source, kind, label, mimeType)], {
-          id: `assistant-${kind}-${label}-card`,
-        }),
-        { showToolCalls: false, onOpenSidebar },
-      );
+    renderAssistantMessage(
+      container,
+      createAssistantMessage([createAttachmentBlock(source, kind, label, mimeType)], {
+        id: `assistant-${kind}-${label}-card`,
+      }),
+      { showToolCalls: false, onOpenSidebar },
+    );
 
-      const card = expectElement(
-        container,
-        ".chat-assistant-attachment-card--compact",
-        HTMLElement,
-      );
-      expect(card.querySelector("iframe, table, audio, video")).toBeNull();
-      const open = expectElement(
-        card,
-        ".chat-assistant-attachment-card__expand",
-        HTMLButtonElement,
-      );
-      expect(open.textContent?.trim()).toBe("Open");
-      expect(
-        card
-          .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
-          ?.getAttribute("download"),
-      ).toBe(label);
-      open.click();
-      expect(onOpenSidebar).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "attachment", attachmentKind: kind, title: label }),
-      );
-      expect(fetchMock).not.toHaveBeenCalled();
-    },
-  );
+    const card = expectElement(container, ".chat-assistant-attachment-card--compact", HTMLElement);
+    expect(card.querySelector("iframe, table, audio, video")).toBeNull();
+    const open = expectElement(card, ".chat-assistant-attachment-card__expand", HTMLButtonElement);
+    expect(open.textContent?.trim()).toBe("Open");
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe(label);
+    open.click();
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "attachment", attachmentKind: kind, title: label }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it("omits attachment anchors for unsafe transcript URLs", () => {
     const container = document.body.appendChild(document.createElement("div"));
