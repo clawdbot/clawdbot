@@ -314,7 +314,13 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
       : undefined;
   const stateOnly = !quarantine && opts?.stateOnly === true;
   try {
-    const saveOptions = quarantine ? { quarantine } : stateOnly ? { stateOnly: true } : undefined;
+    const saveOptions = quarantine
+      ? { quarantine }
+      : stateOnly
+        ? { stateOnly: true }
+        : state.deps.cronEnabled
+          ? undefined
+          : { preserveNewerRuntime: true };
     if (opts?.transactionHooks) {
       await saveCronJobsStoreWithTransactionHooks(
         state.deps.storePath,

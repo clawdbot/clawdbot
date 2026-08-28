@@ -6,9 +6,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { CronService } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
@@ -75,6 +77,68 @@ describe("cron service store seam coverage", () => {
     vi.restoreAllMocks();
   });
 
+  it("reloads scheduler-disabled mutations and preserves newer runtime rows", async () => {
+    const { storePath } = await makeStorePath();
+    const jobA = createReloadCronJob({
+      id: "runtime-owner",
+      name: "runtime owner",
+      state: { nextRunAtMs: STORE_TEST_NOW + 60_000 },
+    });
+    const jobB = createReloadCronJob({ id: "manager-edit", name: "manager edit" });
+    await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
+
+    const manager = new CronService({
+      storePath,
+      cronEnabled: false,
+      log: logger,
+      nowMs: () => STORE_TEST_NOW + 10_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    await manager.list({ includeDisabled: true });
+
+    const externalNextRunAtMs = STORE_TEST_NOW + 900_000;
+    const externalUpdatedAtMs = STORE_TEST_NOW + 8_000;
+    const database = openOpenClawStateDatabase().db;
+    const storeKey = cronStoreKey(storePath);
+    database
+      .prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.description', ?), updated_at = ? WHERE store_key = ? AND job_id = ?",
+      )
+      .run("external description", externalUpdatedAtMs, storeKey, jobB.id);
+
+    await manager.updateWithPrecondition(jobB.id, { name: "manager renamed" }, () => {
+      // Runs after the disabled-service force reload but before its full save,
+      // matching a scheduler process that advances runtime concurrently.
+      database
+        .prepare(
+          "UPDATE cron_jobs SET state_json = ?, runtime_updated_at_ms = ? WHERE store_key = ? AND job_id = ?",
+        )
+        .run(
+          JSON.stringify({
+            nextRunAtMs: externalNextRunAtMs,
+            lastRunAtMs: STORE_TEST_NOW + 7_000,
+          }),
+          externalUpdatedAtMs,
+          storeKey,
+          jobA.id,
+        );
+    });
+
+    const persisted = await loadCronStore(storePath);
+    const persistedA = persisted.jobs.find((job) => job.id === jobA.id);
+    const persistedB = persisted.jobs.find((job) => job.id === jobB.id);
+    expect(persistedA?.state).toMatchObject({
+      nextRunAtMs: externalNextRunAtMs,
+      lastRunAtMs: STORE_TEST_NOW + 7_000,
+    });
+    expect(persistedA?.updatedAtMs).toBe(externalUpdatedAtMs);
+    expect(persistedB).toMatchObject({
+      name: "manager renamed",
+      description: "external description",
+    });
+  });
   it("does not drain post-persist notifications when there is no store to write", async () => {
     const { storePath } = await makeStorePath();
     const state = createStoreTestState(storePath);

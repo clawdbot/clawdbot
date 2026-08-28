@@ -69,6 +69,8 @@ import {
 import { armTimer } from "./timer.js";
 
 const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session cleanup");
+const ensureLoadedForMutation = (state: CronServiceState) =>
+  ensureLoaded(state, { skipRecompute: true, forceReload: !state.deps.cronEnabled });
 
 async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
@@ -312,7 +314,7 @@ export async function add(
         `cron declarationKey namespace "${systemOwnedDeclarationNamespace}" is system-owned; jobs cannot be created with it`,
       );
     }
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForMutation(state);
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
@@ -462,7 +464,7 @@ export async function removeStaleJobFamily(
   family: { declarationKey: string; name: string; ownerPluginTag: string },
 ): Promise<number> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForMutation(state);
     return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }
@@ -481,7 +483,7 @@ async function updateLoadedJob(params: {
   if (patch.payload && isSystemOwnedCronPayloadKind(patch.payload.kind)) {
     throw new Error("system-owned payloads cannot be patched by cron clients");
   }
-  await ensureLoaded(state, { skipRecompute: true });
+  await ensureLoadedForMutation(state);
   const job = findJobOrThrow(state, id);
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
@@ -577,7 +579,7 @@ export async function remove(
   const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
     const previousStore = state.store;
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForMutation(state);
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
@@ -641,7 +643,7 @@ export async function remove(
   const cleanup = async () => {
     try {
       const shouldRemove = await locked(state, async () => {
-        await ensureLoaded(state, { skipRecompute: true });
+        await ensureLoadedForMutation(state);
         return !state.store?.jobs.some((job) => job.id === id);
       });
       if (shouldRemove) {
@@ -674,7 +676,7 @@ export async function removeAgentJobsTransactional<T>(
 ): Promise<T> {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove agent jobs");
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForMutation(state);
     const id = normalizeOptionalAgentId(agentId);
     if (!id || !state.store) {
       return await commit();

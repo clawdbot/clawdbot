@@ -238,6 +238,7 @@ type SaveCronStoreOptions = {
 };
 
 type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
+  preserveNewerRuntime?: boolean;
   quarantine?: {
     entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
     nowMs: number;
@@ -282,7 +283,9 @@ export async function saveCronJobsStore(
       opts?.transactionHooks?.afterWrite?.(database.db);
       return;
     }
-    const normalizedJobs = replaceCronRows(database.db, storeKey, store);
+    const normalizedJobs = replaceCronRows(database.db, storeKey, store, {
+      preserveNewerRuntime: opts?.preserveNewerRuntime,
+    });
     replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
     opts?.transactionHooks?.afterWrite?.(database.db);
   });
