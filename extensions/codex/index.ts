@@ -33,7 +33,7 @@ import {
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding-store.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client.js";
-import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
+import type { CodexPluginsConfigBlock } from "./src/command-plugin-config.js";
 import { createCodexCommand } from "./src/commands.js";
 import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";

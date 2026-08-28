@@ -2,11 +2,8 @@
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import type { v2 } from "./app-server/protocol.js";
-import {
-  handleCodexPluginsSubcommand,
-  type CodexPluginsConfigBlock,
-  type CodexPluginsManagementIO,
-} from "./command-plugins-management.js";
+import type { CodexPluginsConfigBlock, CodexPluginsManagementIO } from "./command-plugin-config.js";
+import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 
 type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
 type CodexPluginsManagementRuntime = NonNullable<

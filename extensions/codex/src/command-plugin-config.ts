@@ -18,6 +18,15 @@ export type CodexPluginsConfigBlock = {
   plugins?: Record<string, CodexPluginConfigEntry>;
 };
 
+/** Config IO shared by command handlers and their scoped runtime. */
+export type CodexPluginsManagementIO = {
+  readConfig: () => Promise<{
+    enabled?: boolean;
+    plugins?: Record<string, CodexPluginConfigEntry>;
+  }>;
+  mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
+};
+
 type ConfiguredPluginKeyResolution =
   | { status: "matched"; configKey: string }
   | { status: "missing" }
