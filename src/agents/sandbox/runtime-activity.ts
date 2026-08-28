@@ -306,7 +306,9 @@ export function coordinateSandboxBackendHandle(handle: SandboxBackendHandle): Sa
           token.released = true;
           token.lease.release();
         }
-        coordinatedExecs.delete(params.token as object);
+        if (params.token && typeof params.token === "object") {
+          coordinatedExecs.delete(params.token);
+        }
       }
     },
     terminateExec: async (token: unknown) => {
