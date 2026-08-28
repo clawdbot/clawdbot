@@ -462,10 +462,8 @@ jobs:
             release_package_spec="$RELEASE_PACKAGE_SPEC_INPUT"
           [[ "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT" =~ [^[:space:]] ]] &&
             package_acceptance_package_spec="$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
-          if [[ -n "$candidate_artifact_json" ]] &&
-            { [[ -n "$release_package_spec" ]] ||
-              [[ -n "$package_acceptance_package_spec" ]]; }; then
-            echo "candidate_artifact_json cannot be combined with release package specs." >&2
+          if [[ -n "$candidate_artifact_json" && -n "$release_package_spec" ]]; then
+            echo "candidate_artifact_json cannot be combined with release_package_spec." >&2
             exit 1
           fi
           package_mode=source
