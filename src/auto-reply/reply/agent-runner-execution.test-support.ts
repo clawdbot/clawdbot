@@ -287,6 +287,7 @@ vi.mock("./agent-runner-utils.js", () => ({
           },
           senderContext: {},
           runBaseParams: {
+            runId: params.runId,
             provider: params.provider,
             model: params.model,
             thinkLevel: params.run.thinkLevel,
