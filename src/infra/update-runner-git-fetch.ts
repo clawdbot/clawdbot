@@ -13,8 +13,10 @@ function parseRemoteFetchConfig(stdout: string): RemoteFetchConfig {
   const config: RemoteFetchConfig = new Map();
   for (const line of stdout.split("\n")) {
     const match = /^remote\.(.+)\.fetch\s+(.+)$/u.exec(line.trim());
-    if (match) {
-      config.set(match[1], [...(config.get(match[1]) ?? []), match[2]]);
+    const remote = match?.[1];
+    const refspec = match?.[2];
+    if (remote && refspec) {
+      config.set(remote, [...(config.get(remote) ?? []), refspec]);
     }
   }
   return config;
