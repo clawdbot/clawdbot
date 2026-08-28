@@ -83,13 +83,13 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func persistSessionsToCache(_ sessions: [OpenClawChatSessionEntry]) {
+    func persistSessionsToCache(_ sessions: [OpenClawChatSessionEntry], agentID: String?) {
         guard let transcriptCache else { return }
         let durableSessions = sessions.map(Self.durableSessionCacheProjection)
         let previous = pendingCacheWriteTask
         pendingCacheWriteTask = Task.detached {
             await previous?.value
-            await transcriptCache.storeSessions(durableSessions)
+            await transcriptCache.storeSessions(durableSessions, agentID: agentID)
         }
     }
 
@@ -101,7 +101,7 @@ extension OpenClawChatViewModel {
         guard let transcriptCache else { return }
         if sessions.isEmpty, !hasAppliedLiveSessions {
             Task { [weak self] in
-                let cached = await transcriptCache.loadSessions()
+                let cached = await transcriptCache.loadSessions(agentID: session.deliveryAgentID)
                 guard let self, !cached.isEmpty else { return }
                 // A live sessions response (even an empty one) is authoritative;
                 // a slow cache read must never repaint over it.

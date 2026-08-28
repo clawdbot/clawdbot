@@ -94,17 +94,19 @@ extension NodeAppModel {
         archived: Bool = false,
         allowCachedFallback: Bool = true) async throws -> ChatSessionRosterSnapshot
     {
+        let sourceGatewayID = self.chatTranscriptCacheGatewayID
+        let sourceAgentID = self.chatDeliveryAgentId
         guard self.isLocalChatFixtureEnabled || self.isOperatorGatewayConnected else {
             guard allowCachedFallback else { throw URLError(.notConnectedToInternet) }
             return await ChatSessionRosterSnapshot(
-                sessions: archived ? [] : self.loadCachedChatSessions(),
+                sessions: archived ? [] : self.loadCachedChatSessions(
+                    gatewayID: sourceGatewayID,
+                    agentID: sourceAgentID),
                 isCached: true,
                 isComplete: false)
         }
 
         do {
-            let sourceGatewayID = self.chatTranscriptCacheGatewayID
-            let sourceAgentID = self.chatDeliveryAgentId
             let snapshot: ChatSessionRosterSnapshot
             if self.isLocalChatFixtureEnabled {
                 let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
@@ -140,7 +142,10 @@ extension NodeAppModel {
             if !archived {
                 // An interrupted page must not replace a more complete offline roster.
                 if snapshot.isComplete {
-                    await self.storeCachedChatSessions(snapshot.sessions)
+                    await self.storeCachedChatSessions(
+                        snapshot.sessions,
+                        gatewayID: sourceGatewayID,
+                        agentID: sourceAgentID)
                     if let sourceGatewayID,
                        !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
                        self.chatDeliveryAgentId != sourceAgentID
@@ -154,7 +159,9 @@ extension NodeAppModel {
             throw CancellationError()
         } catch {
             guard allowCachedFallback, !archived else { throw error }
-            let cached = await self.loadCachedChatSessions()
+            let cached = await self.loadCachedChatSessions(
+                gatewayID: sourceGatewayID,
+                agentID: sourceAgentID)
             guard !cached.isEmpty else { throw error }
             return ChatSessionRosterSnapshot(sessions: cached, isCached: true, isComplete: false)
         }

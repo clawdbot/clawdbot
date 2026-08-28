@@ -2025,7 +2025,7 @@ private func waitUntil(
             token: nil,
             password: nil,
             sessionKey: "main")
-        defaults.set(try JSONEncoder().encode(otherRelay), forKey: "share.gatewayRelay.config.v1")
+        try defaults.set(JSONEncoder().encode(otherRelay), forKey: "share.gatewayRelay.config.v1")
         let mismatched = try #require(ShareGatewayRelaySettings.loadConfig())
         #expect(mismatched.token == nil)
         #expect(mismatched.password == nil)
@@ -2643,19 +2643,31 @@ private func waitUntil(
         session.agentId = "main"
         var matchingBare = session
         matchingBare.key = "shared-tool"
-        var foreignGlobal = session
-        foreignGlobal.key = "global"
-        foreignGlobal.agentId = "work"
         var ownerlessPrefixed = session
         ownerlessPrefixed.key = "agent:main:legacy"
         ownerlessPrefixed.agentId = nil
         appModel.gatewayDefaultAgentId = "main"
 
-        await appModel.storeCachedChatSessions([session, matchingBare, foreignGlobal, ownerlessPrefixed])
+        await appModel.storeCachedChatSessions(
+            [session, matchingBare, ownerlessPrefixed],
+            gatewayID: gatewayA,
+            agentID: "main")
+        var workGlobal = session
+        workGlobal.key = "global"
+        workGlobal.agentId = "work"
+        appModel.selectedAgentId = "work"
+        await appModel.storeCachedChatSessions([workGlobal], gatewayID: gatewayA, agentID: "work")
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayB)
-        #expect(await appModel.loadCachedChatSessions().isEmpty)
+        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayB, agentID: "work").isEmpty)
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayA)
-        #expect(await appModel.loadCachedChatSessions() == [session, matchingBare, ownerlessPrefixed])
+        appModel.selectedAgentId = "main"
+        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "main") == [
+            session,
+            matchingBare,
+            ownerlessPrefixed,
+        ])
+        appModel.selectedAgentId = "work"
+        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }
 
     private static func makeNodeOptions(

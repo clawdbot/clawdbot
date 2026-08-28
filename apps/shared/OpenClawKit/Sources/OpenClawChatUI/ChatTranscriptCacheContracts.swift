@@ -4,13 +4,15 @@ import Foundation
 ///
 /// The cache only pre-paints cold opens and covers offline browsing; connected
 /// reads always come from the gateway and replace cached content wholesale.
-/// Implementations must scope every row by gateway identity so one shared
-/// installation database can safely serve all paired gateways.
+/// Implementations must scope every row by gateway and agent identity so one
+/// shared installation database can safely serve all paired gateways.
 public protocol OpenClawChatTranscriptCache: Sendable {
     func loadSessions() async -> [OpenClawChatSessionEntry]
+    func loadSessions(agentID: String?) async -> [OpenClawChatSessionEntry]
     func loadTranscript(sessionKey: String) async -> [OpenClawChatMessage]
     func loadTranscript(sessionKey: String, agentID: String?) async -> [OpenClawChatMessage]
     func storeSessions(_ sessions: [OpenClawChatSessionEntry]) async
+    func storeSessions(_ sessions: [OpenClawChatSessionEntry], agentID: String?) async
     /// Canonical gateway rows can prove that an ambiguously delivered local
     /// command landed after cancellation and must override local suppression.
     func storeCanonicalTranscript(
@@ -24,6 +26,14 @@ public protocol OpenClawChatTranscriptCache: Sendable {
 }
 
 extension OpenClawChatTranscriptCache {
+    public func loadSessions(agentID _: String?) async -> [OpenClawChatSessionEntry] {
+        await self.loadSessions()
+    }
+
+    public func storeSessions(_ sessions: [OpenClawChatSessionEntry], agentID _: String?) async {
+        await self.storeSessions(sessions)
+    }
+
     public func loadTranscript(sessionKey: String, agentID: String?) async -> [OpenClawChatMessage] {
         guard agentID == nil else { return [] }
         return await self.loadTranscript(sessionKey: sessionKey)
