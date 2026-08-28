@@ -57,19 +57,14 @@ const CARD_RECEIPT_SEPARATORS: ReadonlySet<string> = new Set([",", ":"]);
 const CARD_PAIR_SEPARATORS: ReadonlySet<string> = new Set(["|"]);
 
 /**
- * A backslash is meaningful only before a separator the current grammar splits
- * on, or before another backslash. Anything else keeps its backslash as data,
- * so a value like `C:\temp` survives every option that does not split on `:`.
- */
-function isCardValueEscapable(char: string, separators: ReadonlySet<string>): boolean {
-  return char === "\\" || separators.has(char);
-}
-
-/**
  * Split a card option value on its unescaped separators.
  *
- * Escapes stay inside the returned parts so a later split on a different
- * separator still sees them; `unescapeCardValue` removes them at the leaf.
+ * A backslash is meaningful only before a separator this option splits on.
+ * Every other backslash, including one before another backslash, is literal
+ * data, so `C:\temp`, `C\:\temp` and `\\server\share` all survive
+ * unchanged. Escapes stay inside the returned parts so a later split on a
+ * different separator still sees them; `unescapeCardValue` removes them at
+ * the leaf.
  */
 function splitCardValue(
   value: string,
@@ -82,7 +77,7 @@ function splitCardValue(
   for (const char of value) {
     if (pendingEscape) {
       pendingEscape = false;
-      if (isCardValueEscapable(char, separators)) {
+      if (separators.has(char)) {
         current += `\\${char}`;
         continue;
       }
@@ -113,7 +108,7 @@ function unescapeCardValue(value: string, separators: ReadonlySet<string>): stri
   for (const char of value) {
     if (pendingEscape) {
       pendingEscape = false;
-      result += isCardValueEscapable(char, separators) ? char : `\\${char}`;
+      result += separators.has(char) ? char : `\\${char}`;
       continue;
     }
     if (char === "\\") {

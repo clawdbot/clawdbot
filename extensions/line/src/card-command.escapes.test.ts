@@ -70,6 +70,11 @@ describe("line card option separators", () => {
       expected: [{ type: "message", label: "Path", text: String.raw`C:\temp` }],
     },
     {
+      kind: "a literal backslash pair, which no option splits on",
+      actions: String.raw`Path|\\server\share`,
+      expected: [{ type: "message", label: "Path", text: String.raw`\\server\share` }],
+    },
+    {
       kind: "a backslash before a colon, which actions do not split on",
       actions: String.raw`Path|C\:\temp`,
       expected: [{ type: "message", label: "Path", text: String.raw`C\:\temp` }],
