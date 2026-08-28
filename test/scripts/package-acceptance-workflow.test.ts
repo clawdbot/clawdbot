@@ -1060,6 +1060,48 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
   });
 }
 
+function runReleasePublishChildWorkflowRef(overrides: Record<string, string> = {}) {
+  const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+  const script = workflowStep(job, "Resolve ClawHub release plan").run;
+  if (!script) {
+    throw new Error("Expected ClawHub release plan script");
+  }
+  const workdir = tempDirs.make("release-publish-child-ref-");
+  const ghPath = resolve(workdir, "gh");
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+case "$2" in
+  */git/matching-refs/*)
+    printf '%s\n' "$MOCK_MATCHING_REFS"
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const resolveChildRef = shellFunctionSource(script, "resolve_child_workflow_ref");
+  return spawnSync(
+    "bash",
+    ["-c", `${resolveChildRef}\nresolve_child_workflow_ref "$WORKFLOW_FULL_REF" "$WORKFLOW_SHA"`],
+    {
+      cwd: workdir,
+      encoding: "utf8",
+      env: {
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        MOCK_MATCHING_REFS: "[]",
+        PATH: `${workdir}:${process.env.PATH}`,
+        WORKFLOW_FULL_REF: "refs/heads/main",
+        WORKFLOW_SHA: "a".repeat(40),
+        ...overrides,
+      },
+    },
+  );
+}
+
 function runOpenClawNpmTrustedRefGuard(overrides: Record<string, string>) {
   const job = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "validate_publish_request");
   const script = workflowStep(job, "Require trusted workflow ref for publish").run;
@@ -1696,6 +1738,91 @@ describe("package acceptance workflow", () => {
     );
   });
 
+  it("binds trusted-main publish children to an exact lightweight protected tag", () => {
+    const workflowSha = "a".repeat(40);
+    const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+    const validRef = {
+      object: { sha: workflowSha, type: "commit" },
+      ref: `refs/tags/${workflowRef}`,
+    };
+
+    const main = runReleasePublishChildWorkflowRef({
+      MOCK_MATCHING_REFS: JSON.stringify([validRef]),
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(main.status, main.stderr).toBe(0);
+    expect(main.stdout.trim()).toBe(workflowRef);
+
+    const protectedTag = runReleasePublishChildWorkflowRef({
+      WORKFLOW_FULL_REF: `refs/tags/${workflowRef}`,
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(protectedTag.status, protectedTag.stderr).toBe(0);
+    expect(protectedTag.stdout.trim()).toBe(workflowRef);
+
+    const alphaRef = "tideclaw/alpha/2026-08-28-1400Z";
+    const alpha = runReleasePublishChildWorkflowRef({
+      WORKFLOW_FULL_REF: `refs/heads/${alphaRef}`,
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(alpha.status, alpha.stderr).toBe(0);
+    expect(alpha.stdout.trim()).toBe(alphaRef);
+
+    const plan = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
+      "Resolve ClawHub release plan",
+    ).run;
+    expectTextToIncludeAll(plan, [
+      'if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]',
+      'BOOTSTRAP_WORKFLOW_REF="main"',
+      'gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
+      'BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"',
+    ]);
+  });
+
+  it.each([
+    {
+      name: "missing tag",
+      refs: [],
+    },
+    {
+      name: "malformed tag",
+      refs: [
+        {
+          object: { sha: "a".repeat(40), type: "commit" },
+          ref: `refs/tags/release-publish/${"a".repeat(12)}-latest`,
+        },
+      ],
+    },
+    {
+      name: "annotated tag",
+      refs: [
+        {
+          object: { sha: "a".repeat(40), type: "tag" },
+          ref: `refs/tags/release-publish/${"a".repeat(12)}-123`,
+        },
+      ],
+    },
+    {
+      name: "moved tag",
+      refs: [
+        {
+          object: { sha: "b".repeat(40), type: "commit" },
+          ref: `refs/tags/release-publish/${"a".repeat(12)}-123`,
+        },
+      ],
+    },
+  ])("rejects $name as a trusted-main child workflow ref", ({ refs }) => {
+    const result = runReleasePublishChildWorkflowRef({
+      MOCK_MATCHING_REFS: JSON.stringify(refs),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Trusted main publication requires a direct protected release-publish tag",
+    );
+  });
+
   it("allows protected SHA-pinned tooling tags through the core npm publish guard", () => {
     const workflowSha = "a".repeat(40);
     const protectedRef = `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`;
@@ -2082,7 +2209,9 @@ describe("package acceptance workflow", () => {
     }
 
     expect(publishOrchestration.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
-    expect(publishOrchestration.env?.CHILD_WORKFLOW_REF).toBe("${{ github.ref_name }}");
+    expect(publishOrchestration.env?.CHILD_WORKFLOW_REF).toBe(
+      "${{ steps.clawhub_plan.outputs.child_workflow_ref }}",
+    );
     expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
       "otherwise approve and monitor the detached runs separately",
     );
