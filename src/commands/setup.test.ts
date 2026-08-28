@@ -542,4 +542,36 @@ describe("setupCommand", () => {
       });
     },
   );
+
+  it("uses systemAgent.agentId in multi-agent explicit mode", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const deps = createSetupDeps(home);
+      const preexisting: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            "agent-a": {},
+            "agent-b": {},
+          },
+          defaults: { systemAgent: { agentId: "agent-a" } },
+        },
+        gateway: { mode: "local" },
+      };
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(preexisting), "utf-8");
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(runtime.exit).not.toHaveBeenCalledWith(1);
+      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("agent-a");
+    });
+  });
 });
