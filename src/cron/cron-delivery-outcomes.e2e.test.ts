@@ -271,11 +271,28 @@ describe.sequential("cron delivery outcomes", () => {
                 expect.objectContaining({ status: "error", error: "monitor failed" }),
               ]),
             );
+            await vi.waitFor(() => {
+              const settledHistory = readCronTaskRunHistoryPage({
+                storeKey: cronStoreKey(storePath),
+                jobId: job.id,
+                limit: 25,
+              });
+              expect(
+                settledHistory.entries.filter(
+                  (entry) => entry.failureNotificationDelivery?.status === "delivered",
+                ),
+              ).toHaveLength(1);
+              expect(
+                settledHistory.entries.find(
+                  (entry) => entry.failureNotificationDelivery?.status === "delivered",
+                )?.failureNotificationDelivery?.delivered,
+              ).toBe(true);
+            });
             expect(
               history.entries.filter(
                 (entry) => entry.failureNotificationDelivery?.status === "unknown",
               ),
-            ).toHaveLength(1);
+            ).toHaveLength(0);
           } finally {
             cron.stop();
             resetTaskRegistryForTests({ persist: false });
@@ -343,14 +360,17 @@ describe.sequential("cron delivery outcomes", () => {
                   'Automation "required completion delivery" delivery failed\nLast error: primary route rejected',
               },
             });
-            expect(await persistedJob(storePath, job.id)).toMatchObject({
-              state: {
-                lastRunStatus: "ok",
-                lastDeliveryStatus: "not-delivered",
-                lastDeliveryError: "primary route rejected",
-                consecutiveErrors: 0,
-                lastFailureNotificationDeliveryStatus: "unknown",
-              },
+            await vi.waitFor(async () => {
+              expect(await persistedJob(storePath, job.id)).toMatchObject({
+                state: {
+                  lastRunStatus: "ok",
+                  lastDeliveryStatus: "not-delivered",
+                  lastDeliveryError: "primary route rejected",
+                  consecutiveErrors: 0,
+                  lastFailureNotificationDeliveryStatus: "delivered",
+                  lastFailureNotificationDelivered: true,
+                },
+              });
             });
 
             const disabled = await cron.add({
