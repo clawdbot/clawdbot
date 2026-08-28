@@ -549,7 +549,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           : undefined,
       spawnedCwd: p.worktree === true ? undefined : sessionCwd,
       sessionRoot: p.worktree === true ? undefined : sessionRoot,
-      permissionMode: p.permissionMode ?? (p.worktree === true ? "workspace" : undefined),
+      permissionMode: p.permissionMode,
       ...(p.toolOverrides !== undefined ? { toolOverrides: p.toolOverrides } : {}),
       prepareLifecycle,
       onLifecycleCleanupError: (error) => {

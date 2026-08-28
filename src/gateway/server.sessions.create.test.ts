@@ -1753,7 +1753,8 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     const worktree = created.payload?.worktree;
     expect(worktree?.branch).toBe("openclaw/release-planning");
     expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
-    expect(created.payload?.entry.permissionMode).toBe("workspace");
+    expect(created.payload?.entry.permissionMode).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: key, storePath })?.permissionMode).toBeUndefined();
     expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
     worktreeId = worktree?.id;
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
@@ -2387,6 +2388,7 @@ test("sessions.create maps worktree options and preserves a nested workspace cwd
         worktree: true,
         worktreeName: "target-task",
         worktreeBaseRef: "base-branch",
+        permissionMode: "workspace",
       },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
@@ -3013,6 +3015,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
         parentSessionKey: "main",
         emitCommandHooks: true,
         worktree: true,
+        permissionMode: "workspace",
       },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );

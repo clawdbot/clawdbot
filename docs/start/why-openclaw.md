@@ -253,7 +253,7 @@ Since the comparison snapshot, Hermes has added [optional persistent local Pytho
 Each enterprise configuration item links to its reference:
 
 - Sandbox on: `agents.defaults.sandbox.mode: "all"` with the [`openshell`](/gateway/openshell) or [`docker`](/gateway/sandboxing) backend; `workspaceAccess: "ro"` unless the agent owns the workspace.
-- Select [`guarded` or `workspace`](/gateway/permission-modes) per session; `full` requires `operator.admin`. Managed worktree sessions default to `workspace`; other sessions without a mode use configured tool/exec policy.
+- Select [`guarded` or `workspace`](/gateway/permission-modes) per session; `full` requires `operator.admin`. Sessions without a mode, including managed worktree sessions, use configured tool/exec policy.
 - Front the gateway with [Tailscale](/gateway/tailscale) or an [identity-aware proxy](/gateway/trusted-proxy-auth); define [`gateway.roles`](/gateway/operator-scopes) with a deny-all default; leave DM policy on [pairing](/channels/pairing).
 - Everything behind [SecretRefs](/gateway/secrets); run `openclaw secrets audit --check` against your config in CI.
 - Enable [message auditing](/gateway/audit); export [OpenTelemetry](/gateway/opentelemetry) to your SIEM with operator-owned retention and monitoring for dropped data.
