@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import OpenClawKit
 import OSLog
+import WebKit
 
 private let dashboardManagerLogger = Logger(subsystem: "ai.openclaw", category: "DashboardManager")
 
@@ -10,6 +11,7 @@ private let dashboardManagerLogger = Logger(subsystem: "ai.openclaw", category: 
 @Observable
 final class DashboardManager {
     static let shared = DashboardManager(
+        websiteDataStore: .default(),
         automaticGatewayProfileRefreshEnabled:
         AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
 
@@ -47,6 +49,7 @@ final class DashboardManager {
     @ObservationIgnored private let routeProbe: @Sendable () async -> Void
     @ObservationIgnored private let endpointStateProvider: @Sendable () async -> GatewayEndpointState
     @ObservationIgnored private let mainWindowAutosaveName: String
+    @ObservationIgnored private let websiteDataStore: WKWebsiteDataStore
     @ObservationIgnored private let observesGatewayChanges: Bool
     @ObservationIgnored private let automaticGatewayProfileRefreshEnabled: Bool
     private(set) var gatewayEntries: [DashboardGatewayEntry] = []
@@ -62,6 +65,7 @@ final class DashboardManager {
     private static let failureURL = URL(string: "about:blank")!
 
     private init(
+        websiteDataStore: WKWebsiteDataStore,
         authTokenProvider: @escaping @Sendable (GatewayConnection.Config) async -> String? = { config in
             await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
         },
@@ -79,6 +83,7 @@ final class DashboardManager {
         automaticGatewayProfileRefreshEnabled: Bool = true,
         mainWindowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName)
     {
+        self.websiteDataStore = websiteDataStore
         self.authTokenProvider = authTokenProvider
         self.routeProbe = routeProbe
         self.endpointStateProvider = endpointStateProvider
@@ -237,13 +242,11 @@ final class DashboardManager {
         guard self.controller === current else { return }
         self.switchGenerations[ObjectIdentifier(current)] = nil
         let window = current.detachWindowForReplacement()
-        let replacement = DashboardWindowController(
+        let replacement = self.makePrimaryController(
             url: url,
             auth: auth,
-            updater: self.updater,
-            updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode),
+            mode: mode,
             tlsParams: tlsParams,
-            gatewaySnapshot: self.snapshot(for: .primary),
             reusingWindow: window)
         self.controller = replacement
         replacement.loadInBackground(url: url, auth: auth)
@@ -256,12 +259,10 @@ final class DashboardManager {
         guard self.controller === current else { return }
         self.switchGenerations[ObjectIdentifier(current)] = nil
         let window = current.detachWindowForReplacement()
-        let replacement = DashboardWindowController(
+        let replacement = self.makePrimaryController(
             url: Self.failureURL,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            updater: self.updater,
-            updateBridgeEnabled: false,
-            gatewaySnapshot: self.snapshot(for: .primary),
+            mode: .unconfigured,
             reusingWindow: window)
         self.controller = replacement
         replacement.showFailure(
@@ -319,11 +320,10 @@ final class DashboardManager {
         } else if let controller {
             controller.show(url: url, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
         } else {
-            let controller = DashboardWindowController(
+            let controller = self.makePrimaryController(
                 url: url,
                 auth: auth,
-                updater: self.updater,
-                updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode),
+                mode: mode,
                 tlsParams: endpoint.tls?.params)
             self.controller = controller
             controller.show(url: url, auth: auth)
@@ -344,13 +344,11 @@ final class DashboardManager {
               AppStateStore.shared.onboardingSeen,
               let (mode, url, auth, tlsParams) = self.immediateWindowConfiguration()
         else { return }
-        let controller = DashboardWindowController(
+        let controller = self.makePrimaryController(
             url: url,
             auth: auth,
-            updater: self.updater,
-            updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode),
-            tlsParams: tlsParams,
-            gatewaySnapshot: self.snapshot(for: .primary))
+            mode: mode,
+            tlsParams: tlsParams)
         self.controller = controller
         controller.loadInBackground(url: url, auth: auth)
     }
@@ -407,13 +405,11 @@ final class DashboardManager {
         }
 
         dashboardManagerLogger.info("dashboard create window url=\(dashboardLogString(for: url), privacy: .public)")
-        let controller = DashboardWindowController(
+        let controller = self.makePrimaryController(
             url: url,
             auth: auth,
-            updater: self.updater,
-            updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode),
-            tlsParams: endpoint.tls?.params,
-            gatewaySnapshot: self.snapshot(for: .primary))
+            mode: mode,
+            tlsParams: endpoint.tls?.params)
         self.controller = controller
         controller.show(url: url, auth: auth)
         self.rememberPresentedEndpoint(endpoint)
@@ -449,11 +445,10 @@ final class DashboardManager {
     func showFailure(_ error: Error) {
         let message = (error as NSError).localizedDescription
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
-        let controller = self.controller ?? DashboardWindowController(
+        let controller = self.controller ?? self.makePrimaryController(
             url: Self.failureURL,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            updater: self.updater,
-            updateBridgeEnabled: Self.updateBridgeEnabled(mode: AppStateStore.shared.connectionMode))
+            mode: .unconfigured)
         self.controller = controller
         // Keep observing while the failure page is up so a recovered tunnel
         // swaps the window back to the live dashboard.
@@ -711,6 +706,22 @@ final class DashboardManager {
         }
     }
 
+    private func makePrimaryController(
+        url: URL,
+        auth: DashboardWindowAuth,
+        mode: AppState.ConnectionMode,
+        tlsParams: GatewayTLSParams? = nil,
+        reusingWindow: NSWindow? = nil) -> DashboardWindowController
+    {
+        self.makeController(
+            configuration: WindowConfiguration(
+                url: url, auth: auth, tlsParams: tlsParams, mode: mode, displayName: "OpenClaw"),
+            target: .primary,
+            windowAutosaveName: self.mainWindowAutosaveName,
+            auxiliary: false,
+            reusingWindow: reusingWindow)
+    }
+
     private func makeController(
         configuration: WindowConfiguration,
         target: DashboardGatewayTarget,
@@ -719,29 +730,21 @@ final class DashboardManager {
         reusingWindow: NSWindow? = nil) -> DashboardWindowController
     {
         let primaryLocal = !auxiliary && target == .primary && configuration.mode == .local
-        if primaryLocal {
-            return DashboardWindowController(
-                url: configuration.url,
-                auth: configuration.auth,
-                updater: self.updater,
-                updateBridgeEnabled: Self.updateBridgeEnabled(mode: configuration.mode),
-                tlsParams: configuration.tlsParams,
-                gatewaySnapshot: self.snapshot(for: target),
-                windowTitle: configuration.displayName,
-                windowAutosaveName: windowAutosaveName,
-                reusingWindow: reusingWindow)
-        }
         return DashboardWindowController(
             url: configuration.url,
             auth: configuration.auth,
+            websiteDataStore: self.websiteDataStore,
             updater: self.updater,
-            updateBridgeEnabled: false,
+            updateBridgeEnabled: primaryLocal && Self.updateBridgeEnabled(mode: configuration.mode),
             tlsParams: configuration.tlsParams,
             gatewaySnapshot: self.snapshot(for: target),
             windowTitle: configuration.displayName,
             windowAutosaveName: windowAutosaveName,
             reusingWindow: reusingWindow,
-            requestBrowserProfileImportOffer: { _ in false })
+            requestBrowserProfileImportOffer: { shouldApply in
+                guard primaryLocal else { return false }
+                return await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible(while: shouldApply)
+            })
     }
 
     private func installAuxiliaryWindowCloseHandler(_ controller: DashboardWindowController, windowID: UUID) {
@@ -763,7 +766,7 @@ final class DashboardManager {
         case .primary:
             self.mainWindowAutosaveName
         case let .profile(profileID):
-            "OpenClawDashboardWindow-\(profileID)"
+            "\(self.mainWindowAutosaveName)-\(profileID)"
         }
     }
 
@@ -1176,6 +1179,7 @@ extension DashboardManager {
     /// Test instances skip `observeEndpointChanges()` so the shared endpoint
     /// store cannot race test-driven `handleEndpointState` calls.
     static func _testMake(
+        websiteDataStore: WKWebsiteDataStore = .nonPersistent(),
         authTokenProvider: @escaping @Sendable (GatewayConnection.Config) async -> String? = { $0.token },
         routeProbe: @escaping @Sendable () async -> Void = {},
         endpointStateProvider: @escaping @Sendable () async -> GatewayEndpointState = {
@@ -1191,6 +1195,7 @@ extension DashboardManager {
         -> DashboardManager
     {
         let manager = DashboardManager(
+            websiteDataStore: websiteDataStore,
             authTokenProvider: authTokenProvider,
             routeProbe: routeProbe,
             endpointStateProvider: endpointStateProvider,
@@ -1248,15 +1253,6 @@ extension DashboardManager {
         if target != .primary {
             self.displayedRouteRevision = nil
             self.displayedRouteAuthority = nil
-        }
-    }
-
-    static func _testAutosaveName(for target: DashboardGatewayTarget) -> String {
-        switch target {
-        case .primary:
-            DashboardWindowLayout.windowFrameAutosaveName
-        case let .profile(profileID):
-            "OpenClawDashboardWindow-\(profileID)"
         }
     }
 
