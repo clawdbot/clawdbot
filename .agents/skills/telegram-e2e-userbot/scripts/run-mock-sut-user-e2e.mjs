@@ -472,29 +472,51 @@ export function writeConfig(params) {
   return { root, stateDir, workspace, configPath };
 }
 
-async function telegram(token, method, body = {}) {
-  const response = await fetch(`https://api.telegram.org/bot${token}/test/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
+  lease.assertHealthy();
+  const controller = new AbortController();
+  const outcome = await Promise.race([
+    fetchImpl(`https://api.telegram.org/bot${token}/test/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    }).then((response) => ({ type: "response", response })),
+    lease.whenUnhealthy,
+  ]);
+  if (outcome.type === "lease-failure") {
+    controller.abort(outcome.error);
+    throw outcome.error;
+  }
+  lease.assertHealthy();
+  const response = outcome.response;
   const payload = await response.json();
+  lease.assertHealthy();
   if (!response.ok || !payload.ok) {
     throw new Error(payload.description || `${method} failed with status ${response.status}`);
   }
   return payload.result;
 }
 
-async function drainSutUpdates(sutToken) {
-  const before = await telegram(sutToken, "getWebhookInfo");
-  const updates = await telegram(sutToken, "getUpdates", {
-    timeout: 0,
-    allowed_updates: ["message", "edited_message"],
-  });
+export async function drainSutUpdates(sutToken, lease, fetchImpl = fetch) {
+  const before = await telegram(sutToken, "getWebhookInfo", {}, lease, fetchImpl);
+  const updates = await telegram(
+    sutToken,
+    "getUpdates",
+    { timeout: 0, allowed_updates: ["message", "edited_message"] },
+    lease,
+    fetchImpl,
+  );
   if (updates.length) {
-    await telegram(sutToken, "getUpdates", { timeout: 0, offset: updates.at(-1).update_id + 1 });
+    await telegram(
+      sutToken,
+      "getUpdates",
+      { timeout: 0, offset: updates.at(-1).update_id + 1 },
+      lease,
+      fetchImpl,
+    );
   }
-  const after = await telegram(sutToken, "getWebhookInfo");
+  const after = await telegram(sutToken, "getWebhookInfo", {}, lease, fetchImpl);
   return {
     webhookUrlSet: Boolean(before.url),
     pendingBefore: before.pending_update_count,
@@ -503,8 +525,8 @@ async function drainSutUpdates(sutToken) {
   };
 }
 
-async function sutIdentity(sutToken) {
-  const me = await telegram(sutToken, "getMe");
+async function sutIdentity(sutToken, lease) {
+  const me = await telegram(sutToken, "getMe", {}, lease);
   if (!me.username) {
     throw new Error("SUT bot has no username; DM mode and mention targeting need a bot username.");
   }
@@ -902,8 +924,9 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
   let gateway;
   try {
     creds.assertLeaseHealthy();
-    const drained = await drainSutUpdates(creds.sutToken);
-    const sut = await sutIdentity(creds.sutToken);
+    const lease = { assertHealthy: creds.assertLeaseHealthy, whenUnhealthy: leaseFailure };
+    const drained = await drainSutUpdates(creds.sutToken, lease);
+    const sut = await sutIdentity(creds.sutToken, lease);
     let selectedChatTarget = selectChatTarget({
       dm: args.dm,
       explicitChat: args.chat,

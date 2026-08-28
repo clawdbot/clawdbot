@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   cleanupOwnedRuntime,
+  drainSutUpdates,
   fenceLeaseFailure,
   ownChild,
   sanitizeChildEnvironment,
@@ -101,6 +102,42 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
   );
   await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(fs.existsSync(pollMarker), false);
+});
+
+test("lease revocation between startup Bot API calls prevents update polling", async () => {
+  const leaseError = new Error("lease revoked between Bot API calls");
+  let healthy = true;
+  let revoke;
+  const whenUnhealthy = new Promise((resolve) => {
+    revoke = () => {
+      healthy = false;
+      resolve({ type: "lease-failure", error: leaseError });
+    };
+  });
+  const methods = [];
+  const fetchImpl = async (url) => {
+    methods.push(new URL(url).pathname.split("/").at(-1));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => {
+        revoke();
+        return { ok: true, result: { url: "", pending_update_count: 0 } };
+      },
+    };
+  };
+  const lease = {
+    assertHealthy: () => {
+      if (!healthy) throw leaseError;
+    },
+    whenUnhealthy,
+  };
+
+  await assert.rejects(
+    drainSutUpdates("sut-token", lease, fetchImpl),
+    (error) => error === leaseError,
+  );
+  assert.deepEqual(methods, ["getWebhookInfo"]);
 });
 
 test("credential-bearing child processes receive no parent control secrets", () => {
