@@ -731,6 +731,59 @@ describe("canonical session message recovery", () => {
     }
   });
 
+  it("does not retry terminal recovery after the selected global agent changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-before-global-agent-switch";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish before I switch global agents" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "global",
+          kind: "global",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        sessionKey: "global",
+        assistantAgentId: "main",
+        agentsSelectedId: "main",
+        agentsList: { defaultId: "main", scope: "global" },
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, agentId: "main", runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenLastCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey: "global", agentId: "main" }),
+      );
+      state.assistantAgentId = "work";
+      state.agentsSelectedId = "work";
+      await vi.advanceTimersByTimeAsync(100);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry terminal recovery after a replacement foreground run starts", async () => {
     vi.useFakeTimers();
     try {

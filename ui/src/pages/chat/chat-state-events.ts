@@ -260,6 +260,7 @@ function hasRecoveredTerminalReply(state: ChatPageHost, runId: string): boolean 
 
 type TerminalRecoveryOwnership = {
   sessionKey: string;
+  agentId: string;
   runId: string;
   client: ChatPageHost["client"];
   connectionEpoch: number;
@@ -275,6 +276,7 @@ function terminalRecoveryStillOwned(
     state.client === ownership.client &&
     state.connectionEpoch === ownership.connectionEpoch &&
     areUiSessionKeysEquivalent(state.sessionKey, ownership.sessionKey) &&
+    resolveChatAgentId(state) === ownership.agentId &&
     (state.chatRunId === null || state.chatRunId === ownership.runId) &&
     (state.chatRunLifecycleGeneration ?? 0) === ownership.runLifecycleGeneration &&
     !hasRecoveredTerminalReply(state, ownership.runId)
@@ -293,6 +295,7 @@ async function recoverMissingTerminalReply(
   }
   const ownership: TerminalRecoveryOwnership = {
     sessionKey,
+    agentId: resolveChatAgentId(state),
     runId,
     client: state.client,
     connectionEpoch: state.connectionEpoch,
