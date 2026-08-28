@@ -637,6 +637,100 @@ describe("canonical session message recovery", () => {
     },
   );
 
+  it("stops terminal recovery after a media-only reply becomes durable", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-with-media-only-terminal";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Show the generated image" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const persistedReply = {
+        role: "assistant",
+        content: [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }],
+        stopReason: "stop",
+        __openclaw: { id: "reply-1", runId, seq: 2 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt, persistedReply],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(state.chatMessages).toContainEqual(persistedReply);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry terminal recovery after the selected session changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-before-session-switch";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish before I switch sessions" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      state.sessionKey = "agent:main:replacement";
+      await vi.advanceTimersByTimeAsync(100);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { name: "without a pending session-message reload", pendingReload: false },
     { name: "after a pending session-message reload", pendingReload: true },

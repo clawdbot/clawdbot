@@ -1,5 +1,10 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import {
+  isToolCallContentType,
+  isToolResultContentType,
+} from "../../../../src/chat/tool-content.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { isGitHubPullRequestLink } from "../../components/github-link-target.ts";
@@ -40,6 +45,8 @@ import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { transcriptRunId } from "./chat-thread-run-identity.ts";
+import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
 import {
   refreshSessionWorkspace,
@@ -225,13 +232,45 @@ function replayPendingSessionMessageReload(
 
 function hasRecoveredTerminalReply(state: ChatPageHost, runId: string): boolean {
   const scope = readChatSessionProjectionScope(state);
-  const message = getChatSessionProjection(state, state.chatMessages, scope).runs[runId]?.message;
+  const projection = getChatSessionProjection(state, state.chatMessages, scope);
+  const message =
+    projection.runs[runId]?.message ??
+    projection.messages.findLast(
+      (candidate) =>
+        readSessionMessageIdentity(candidate)?.role === "assistant" &&
+        transcriptRunId(candidate) === runId,
+    );
   const text = extractText(message);
-  return Boolean(
+  if (
     typeof text === "string" &&
     text.trim().length > 0 &&
     !isHiddenAssistantStreamText(text) &&
-    !shouldHideAssistantChatMessage(message),
+    !shouldHideAssistantChatMessage(message)
+  ) {
+    return true;
+  }
+  if (shouldHideAssistantChatMessage(message)) {
+    return false;
+  }
+  return (safeNormalizeMessage(message)?.content ?? []).some((block) => {
+    const type = block.type;
+    return type !== "text" && !isToolCallContentType(type) && !isToolResultContentType(type);
+  });
+}
+
+function terminalRecoveryStillOwned(
+  state: ChatPageHost,
+  sessionKey: string,
+  runId: string,
+  client: ChatPageHost["client"],
+  connectionEpoch: number,
+): boolean {
+  return (
+    state.connected &&
+    state.client === client &&
+    state.connectionEpoch === connectionEpoch &&
+    areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
+    !hasRecoveredTerminalReply(state, runId)
   );
 }
 
@@ -245,16 +284,18 @@ async function recoverMissingTerminalReply(
   if (!runId) {
     return;
   }
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
   for (let attempt = 0; ; attempt += 1) {
+    if (!terminalRecoveryStillOwned(state, sessionKey, runId, client, connectionEpoch)) {
+      return;
+    }
     await loadChatHistory(state, {
       deferBranches: !presentation(),
       supersedeInFlight: true,
     });
     state.requestUpdate?.();
-    if (
-      !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-      hasRecoveredTerminalReply(state, runId)
-    ) {
+    if (!terminalRecoveryStillOwned(state, sessionKey, runId, client, connectionEpoch)) {
       return;
     }
     const delayMs = MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS[attempt];

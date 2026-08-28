@@ -87,22 +87,31 @@ suite.define(() => {
         },
       ];
       const historyCount = (await gateway.getRequests("chat.history")).length;
+      await gateway.deferNext("chat.history");
       await gateway.emitGatewayEvent("chat", {
         runId,
         sessionKey,
         state: "final",
       });
 
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(historyCount);
+      const staleRequest = await gateway.waitForRequest("chat.history", { after: historyCount });
+      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 100 });
       // The real Gateway can publish the terminal event before the durable row
       // is visible to chat.history. The first recovery snapshot is therefore
       // stale; a bounded retry must pick up the later commit without reconnect.
       await gateway.setHistoryMessages(persistedHistory);
+      await gateway.resolveDeferred("chat.history", {
+        messages: [],
+        sessionId: "control-ui-e2e-session",
+        thinkingLevel: null,
+      });
+      await gateway.waitForRequest("chat.history", { after: historyCount + 1 });
       const visibleFinal = page.locator(".chat-thread-inner .chat-text", { hasText: finalText });
       await visibleFinal.waitFor({ timeout: 10_000 });
       await expect.poll(() => visibleFinal.count()).toBe(1);
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBe(historyCount + 2);
       if (recordProof) {
         await page.screenshot({
           fullPage: true,
