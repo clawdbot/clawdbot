@@ -45,6 +45,25 @@ The whole point of an audit lane is exercising config the default path never use
 | `--source-gateway`          | the exact TypeScript checkout without a build step                                                                              |
 | `--pre-send '<text>'`       | posts as the QA user before the driven turn, for history-scoped rows                                                            |
 
+Scenario action `command` runs argv without an implicit shell in the leased
+test environment. It receives the leased TDLib state, SUT bot token,
+`TELEGRAM_E2E_TEST_API_ROOT`, Gateway config, and Gateway state. Set `cwd` to
+`repo`, `workspace`, `state`, or `root`. The summary keeps bounded stdout and
+stderr. Invoke a shell explicitly when the test needs shell syntax.
+
+Call any Test Bot API method at
+`$TELEGRAM_E2E_TEST_API_ROOT/bot$TELEGRAM_E2E_SUT_BOT_TOKEN/<method>`.
+The local proxy forwards the method, query, headers, and body to Telegram's
+Test Server.
+
+```json
+{
+  "actions": [
+    { "type": "command", "argv": ["pnpm", "openclaw", "status", "--json"], "cwd": "repo" }
+  ]
+}
+```
+
 Bot API response controls reproduce a send that Telegram accepted while the
 fresh test Gateway callback stays unresolved. Arm one method, wait until it is
 held, then release it after the behavior checkpoint:

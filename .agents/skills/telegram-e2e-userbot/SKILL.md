@@ -22,6 +22,10 @@ from splitting Telegram updates between observers.
 Pool creation, session repair, and credential publication remain owner-only
 operations outside this repository skill.
 
+Convex controls allocation only. During a lease, the worker may change the
+test config, edit this harness, run arbitrary argv commands, and use the leased
+TDLib session or any Telegram Test Bot API method.
+
 ## 1. Prepare
 
 Run from the OpenClaw checkout and ref under test. Point to the repository skill:
@@ -73,6 +77,10 @@ diff is not channel-visible, state that boundary and use the generic turn.
 
 For a non-default backend or timed scenario, read the matching section of the
 [runtime reference](features/runtime-reference.md).
+
+Use the scenario `command` action when the proof needs custom setup, inspection,
+or a Telegram API call. It receives the leased test bot, TDLib session, local
+Test Bot API proxy, Gateway config, and Gateway state.
 
 Done when the prompt, chat type, config patch, and expected event sequence each
 map to the behavior being proved.

@@ -6,10 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import {
   assertSutMatchesLease,
-  assertTelegramConfigPatchesSafe,
   assertTesterMatchesLease,
   cleanupOwnedRuntime,
   createGatewayEnvironment,
+  createScenarioCommandEnvironment,
   drainSutUpdates,
   fenceLeaseFailure,
   ownChild,
@@ -54,22 +54,27 @@ test("runner rejects a live SUT identity that differs from the lease", () => {
   assert.doesNotThrow(() => assertSutMatchesLease({ id: "42", username: "sut_bot" }, credential));
 });
 
-test("config patches cannot replace the leased Telegram credential boundary", () => {
-  assert.doesNotThrow(() =>
-    assertTelegramConfigPatchesSafe({ streaming: "partial" }, { messages: {} }),
-  );
-  assert.throws(
-    () => assertTelegramConfigPatchesSafe({ apiRoot: "https://example.invalid" }, {}),
-    /cannot override channels\.telegram\.apiRoot/u,
-  );
-  assert.throws(
-    () => assertTelegramConfigPatchesSafe({}, { channels: { telegram: { botToken: "other" } } }),
-    /cannot override channels\.telegram\.botToken/u,
-  );
-  assert.throws(
-    () => assertTelegramConfigPatchesSafe({}, { channels: null }),
-    /cannot replace channels/u,
-  );
+test("scenario commands receive the leased test harness without broker authority", () => {
+  const commandEnv = createScenarioCommandEnvironment({
+    gatewayEnv: {
+      OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
+      OPENCLAW_STATE_DIR: "/tmp/state",
+      TELEGRAM_BOT_TOKEN: "sut-token",
+    },
+    driverEnv: {
+      TELEGRAM_E2E_SUT_BOT_TOKEN: "sut-token",
+      TELEGRAM_USER_DRIVER_STATE_DIR: "/tmp/user-driver",
+    },
+    telegramApiRoot: "http://127.0.0.1:19881",
+  });
+  assert.deepEqual(commandEnv, {
+    OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
+    OPENCLAW_STATE_DIR: "/tmp/state",
+    TELEGRAM_BOT_TOKEN: "sut-token",
+    TELEGRAM_E2E_SUT_BOT_TOKEN: "sut-token",
+    TELEGRAM_USER_DRIVER_STATE_DIR: "/tmp/user-driver",
+    TELEGRAM_E2E_TEST_API_ROOT: "http://127.0.0.1:19881",
+  });
 });
 
 test("successful probe cleanup removes private runner scratch without an output directory", () => {

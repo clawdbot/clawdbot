@@ -63,6 +63,14 @@ function createControlEnvironment({ baseEnv = process.env, configPath, stateDir 
   };
 }
 
+export function createScenarioCommandEnvironment({ gatewayEnv, driverEnv, telegramApiRoot }) {
+  return {
+    ...gatewayEnv,
+    ...driverEnv,
+    TELEGRAM_E2E_TEST_API_ROOT: telegramApiRoot,
+  };
+}
+
 export function createGatewayEnvironment({
   baseEnv = process.env,
   configPath,
@@ -304,27 +312,6 @@ function readConfigPatch(name) {
   return patch;
 }
 
-function assertNoTelegramCredentialOverride(patch, label) {
-  for (const key of ["botToken", "apiRoot"]) {
-    if (Object.hasOwn(patch, key)) {
-      throw new Error(`${label} cannot override channels.telegram.${key}.`);
-    }
-  }
-}
-
-export function assertTelegramConfigPatchesSafe(telegramPatch, rootPatch) {
-  assertNoTelegramCredentialOverride(telegramPatch, "E2E_TELEGRAM_CONFIG_PATCH");
-  if (!Object.hasOwn(rootPatch, "channels")) return;
-  if (!isPlainObject(rootPatch.channels)) {
-    throw new Error("E2E_ROOT_CONFIG_PATCH cannot replace channels.");
-  }
-  if (!Object.hasOwn(rootPatch.channels, "telegram")) return;
-  if (!isPlainObject(rootPatch.channels.telegram)) {
-    throw new Error("E2E_ROOT_CONFIG_PATCH cannot replace channels.telegram.");
-  }
-  assertNoTelegramCredentialOverride(rootPatch.channels.telegram, "E2E_ROOT_CONFIG_PATCH");
-}
-
 function writePrivateJson(pathname, data) {
   fs.mkdirSync(dirname(pathname), { recursive: true });
   fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`);
@@ -472,11 +459,11 @@ function writeConfig(params) {
     },
     messages: { groupChat: { visibleReplies: "automatic" } },
   };
-  const telegramPatch = readConfigPatch("E2E_TELEGRAM_CONFIG_PATCH");
-  const rootPatch = readConfigPatch("E2E_ROOT_CONFIG_PATCH");
-  assertTelegramConfigPatchesSafe(telegramPatch, rootPatch);
-  config.channels.telegram = mergeConfig(config.channels.telegram, telegramPatch);
-  config = mergeConfig(config, rootPatch);
+  config.channels.telegram = mergeConfig(
+    config.channels.telegram,
+    readConfigPatch("E2E_TELEGRAM_CONFIG_PATCH"),
+  );
+  config = mergeConfig(config, readConfigPatch("E2E_ROOT_CONFIG_PATCH"));
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   return { root, stateDir, workspace, configPath };
 }
@@ -1045,6 +1032,11 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       configPath: temp.configPath,
       stateDir: temp.stateDir,
     });
+    const commandEnv = createScenarioCommandEnvironment({
+      gatewayEnv,
+      driverEnv: creds.driverEnv,
+      telegramApiRoot: creds.telegramApiRoot,
+    });
     const startGateway = async () => {
       const command = "node";
       const gatewayArgs = args.sourceGateway
@@ -1203,6 +1195,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             "patchConfig",
             "systemEvent",
             "cron",
+            "command",
             "telegramApiHold",
             "telegramApiWaitHeld",
             "telegramApiRelease",
@@ -1269,6 +1262,32 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             if (result.status !== 0 || result.timedOut) {
               throw new Error(result.stderr || result.stdout || "system event failed");
             }
+          } else if (action.type === "command") {
+            const cwd = {
+              repo: repoRoot,
+              workspace: temp.workspace,
+              state: temp.stateDir,
+              root: temp.root,
+            }[action.cwd];
+            const result = await runCommand(action.argv[0], action.argv.slice(1), {
+              cwd,
+              env: commandEnv,
+              leaseFailure,
+              timeoutMs: action.timeoutMs,
+            });
+            gatewayActions.push({
+              type: action.type,
+              elapsedMs: beganAt - scenarioStartedAt,
+              durationMs: Date.now() - beganAt,
+              status: result.status === 0 && !result.timedOut ? "completed" : "failed",
+              cwd: action.cwd,
+              argv: action.argv,
+              exitCode: result.status,
+              timedOut: result.timedOut,
+              stdout: result.stdout.slice(-16_384),
+              stderr: result.stderr.slice(-16_384),
+            });
+            continue;
           } else if (action.type === "telegramApiHold") {
             creds.telegramProxy.holdNextResponse({ method: action.method, skip: action.skip });
             telegramApi = { method: action.method, skip: action.skip };
