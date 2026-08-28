@@ -2817,6 +2817,8 @@ describe("openclaw agent database", () => {
             process.chdir(previousCwd);
             closeOpenClawAgentDatabasesForTest();
             closeOpenClawStateDatabaseForTest();
+            fs.rmSync(root, { recursive: true, force: true });
+            fs.rmSync(stateDir, { recursive: true, force: true });
           }
         `,
       ],
