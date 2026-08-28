@@ -87,10 +87,20 @@ function withDialect(thinkingFormat: string) {
 }
 
 const DIALECTS = [
-  { name: "openai", overrides: {}, disabled: { reasoning_effort: "none" } },
+  {
+    name: "openai",
+    overrides: { thinkingLevelMap: { off: "none" } },
+    disabled: { reasoning_effort: "none" },
+  },
   {
     name: "openrouter",
-    overrides: withDialect("openrouter"),
+    overrides: {
+      compat: {
+        supportsReasoningEffort: true,
+        thinkingFormat: "openrouter",
+        supportedReasoningEfforts: ["none", "low", "high"],
+      },
+    },
     disabled: { reasoning: { effort: "none" } },
   },
   { name: "zai", overrides: withDialect("zai"), disabled: { thinking: { type: "disabled" } } },
@@ -128,9 +138,11 @@ describe("openai completions disabled reasoning", () => {
     },
   );
 
-  it("carries an off session level through the simple stream entry point", async () => {
+  it("omits reasoning entirely when the model declares no disabled wire value", async () => {
+    // Endpoints disagree: some accept `none`, others require the field to be absent. With no
+    // declared metadata OpenClaw must not guess, so it sends nothing.
     const payload = await captureSimplePayload(reasoningModel({}), "off");
-    expect(payload.reasoning_effort).toBe("none");
+    expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
   it("leaves endpoint reasoning defaults alone when the caller requests no level", async () => {
@@ -187,9 +199,24 @@ describe("boundary-aware completions transport disabled reasoning", () => {
     return seen.payload as Payload;
   }
 
-  it("sends the canonical disabled value when the model declares no effort vocabulary", async () => {
-    const payload = await captureTransportPayload(reasoningModel({}), "off");
+  it("sends the declared disabled value when the model declares one", async () => {
+    const payload = await captureTransportPayload(
+      reasoningModel({
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["none", "low", "high"],
+        },
+      }),
+      "off",
+    );
     expect(payload.reasoning_effort).toBe("none");
+  });
+
+  it("omits reasoning for a model that declares no disabled wire value", async () => {
+    // Groq's OpenAI-completions rows ship without this metadata and its endpoint expects the
+    // field to be absent for a disabled level.
+    const payload = await captureTransportPayload(reasoningModel({}), "off");
+    expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
   it("keeps an enabled level untouched", async () => {
@@ -198,7 +225,16 @@ describe("boundary-aware completions transport disabled reasoning", () => {
   });
 
   it("disables openrouter reasoning through its own dialect", async () => {
-    const payload = await captureTransportPayload(reasoningModel(withDialect("openrouter")), "off");
+    const payload = await captureTransportPayload(
+      reasoningModel({
+        compat: {
+          supportsReasoningEffort: true,
+          thinkingFormat: "openrouter",
+          supportedReasoningEfforts: ["none", "low", "high"],
+        },
+      }),
+      "off",
+    );
     expect(payload.reasoning).toEqual({ effort: "none" });
   });
 
@@ -215,7 +251,7 @@ describe("boundary-aware completions transport disabled reasoning", () => {
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
-  it("uses the model's off mapping rather than the canonical disabled value", async () => {
+  it("uses the model's declared off mapping", async () => {
     const payload = await captureTransportPayload(
       reasoningModel({ thinkingLevelMap: { off: "low" } }),
       "off",

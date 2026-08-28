@@ -40,8 +40,7 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true,
-              "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+              "requiresStringContent": true
             }
           },
           {
@@ -75,8 +74,7 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true,
-              "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+              "requiresStringContent": true
             }
           },
           {

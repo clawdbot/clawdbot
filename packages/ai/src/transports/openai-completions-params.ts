@@ -3,7 +3,6 @@ import { convertMessages, hasToolCallHistory } from "../openai-completions-messa
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
-  declaresOpenAIReasoningEfforts,
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
   isOpenAIGpt56Model,
@@ -480,20 +479,20 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
-  // `off` is an OpenClaw session level, not a wire value, and the effort resolver drops it
-  // when a model declares no effort vocabulary. Fall back to the canonical `none` spelling so
-  // a disabled level still reaches the endpoint. Models that declare their vocabulary, a null
-  // off mapping, or a dialect that already carries its own disable signal are left alone.
+  // An explicit off mapping is declared metadata, so honor it when the effort resolver has no
+  // answer. Never invent a disabled wire value: endpoints disagree on `none` versus omission,
+  // so a model that declares neither keeps the field absent.
   const offCompletionsReasoningEffort =
     compat.reasoningEffortMap?.off ?? model.thinkingLevelMap?.off;
-  const needsCanonicalDisabledEffort =
+  const declaredDisabledEffort =
     !isOpenAICompletionsThinkingEnabled(completionsReasoningEffort) &&
-    !declaresOpenAIReasoningEfforts(model) &&
+    !handledQwenThinkingFormat &&
     !handledTogetherThinkingFormat &&
-    offCompletionsReasoningEffort !== null;
+    typeof offCompletionsReasoningEffort === "string"
+      ? offCompletionsReasoningEffort
+      : undefined;
   const completionsReasoningEffortToSend =
-    resolvedCompletionsReasoningEffort ??
-    (needsCanonicalDisabledEffort ? (offCompletionsReasoningEffort ?? "none") : undefined);
+    resolvedCompletionsReasoningEffort ?? declaredDisabledEffort;
 
   if (disableChatCompletionsToolReasoning) {
     // GPT-5.6 Chat Completions defaults reasoning on, but rejects function

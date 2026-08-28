@@ -361,19 +361,6 @@ describe("nvidia provider catalog", () => {
     });
   });
 
-  it("declares the reasoning efforts NVIDIA's endpoint accepts for Nemotron rows", () => {
-    // The endpoint enumerates this set itself when rejecting an unknown value. Without it
-    // OpenClaw clamps to a generic low/medium/high set and silently downgrades minimal,
-    // xhigh and max.
-    const provider = buildSelectableNvidiaProvider();
-    for (const id of ["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3-super-120b-a12b"]) {
-      const model = provider.models.find((entry) => entry.id === id);
-      expect(model?.compat).toMatchObject({
-        supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-      });
-    }
-  });
-
   it("keeps deprecated exact-reference rows out of the selectable catalog", () => {
     const provider = buildSelectableNvidiaProvider();
 

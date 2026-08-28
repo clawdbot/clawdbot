@@ -276,7 +276,11 @@ export const streamSimpleOpenAICompletions: StreamFunction<
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
   const reasoningEffort =
-    clampedReasoning === "off" ? "none" : clampedReasoning === "max" ? "xhigh" : clampedReasoning;
+    clampedReasoning === "off"
+      ? undefined
+      : clampedReasoning === "max"
+        ? "xhigh"
+        : clampedReasoning;
   const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
   return streamOpenAICompletions(model, context, {
@@ -523,13 +527,10 @@ function buildParams(
     // OpenAI-style reasoning_effort
     params.reasoning_effort = reasoningEffort;
   } else if (model.reasoning && compat.supportsReasoningEffort && offReasoningEffort !== null) {
-    // `off` is an OpenClaw session level, not a wire value; OpenAI-compatible endpoints spell
-    // disabled reasoning `none`. A null map entry means the endpoint has no disable switch.
-    // Only substitute `none` for a level the caller actually asked to disable.
+    // Send only a wire value the model actually declares. Endpoints differ on whether a
+    // disabled level is spelled `none` or omitted entirely, so inventing one is not safe.
     if (offReasoningEffort !== undefined) {
       params.reasoning_effort = offReasoningEffort;
-    } else if (options?.reasoningEffort !== undefined) {
-      params.reasoning_effort = "none";
     }
   }
 
