@@ -162,6 +162,30 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let gitWorkspaceTemplateRoot: string;
 let gitWorkspaceTemplate: string;
 
+async function waitForCreatedSessionRun(
+  context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
+  storePath: string,
+  sessionKey: string | undefined,
+) {
+  const released = getSessionWorkAdmissionRelease({
+    scope: storePath,
+    identities: [sessionKey],
+  });
+  const removed = await waitForChatAbortControllerRemoval({
+    entries: context.chatAbortControllers,
+    targets: [...context.chatAbortControllers].map(([runId, entry]) => ({ runId, entry })),
+    timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+  });
+  if (released) {
+    await withTimeout(
+      released,
+      SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      "worktree title run cleanup",
+    );
+  }
+  return removed;
+}
+
 beforeAll(async () => {
   gitWorkspaceTemplateRoot = await fs.realpath(
     await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-session-git-template-")),
@@ -2139,25 +2163,6 @@ test.each([
     let sessionKey: string | undefined;
     const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
     const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
-    const waitForDispatchSettlement = async () => {
-      const released = getSessionWorkAdmissionRelease({
-        scope: storePath,
-        identities: [sessionKey],
-      });
-      const removed = await waitForChatAbortControllerRemoval({
-        entries: context.chatAbortControllers,
-        targets: [...context.chatAbortControllers].map(([runId, entry]) => ({ runId, entry })),
-        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-      });
-      if (released) {
-        await withTimeout(
-          released,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          "worktree title run cleanup",
-        );
-      }
-      return removed;
-    };
     const message = "Review this rollout [[reply_to_current]]";
     const attachment = {
       type: "file",
@@ -2197,7 +2202,7 @@ test.each([
       expect(created.payload?.entry).toMatchObject(expectedEntry);
       expect(created.payload, JSON.stringify(created.payload)).toMatchObject({ runStarted: true });
       sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
-      expect(await waitForDispatchSettlement()).toBe(true);
+      expect(await waitForCreatedSessionRun(context, storePath, sessionKey)).toBe(true);
       expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
         displayName: "Attachment Repair",
         worktree: { branch: "openclaw/attachment-repair" },
@@ -2212,7 +2217,7 @@ test.each([
       for (const entry of context.chatAbortControllers.values()) {
         entry.controller.abort();
       }
-      expect(await waitForDispatchSettlement()).toBe(true);
+      expect(await waitForCreatedSessionRun(context, storePath, sessionKey)).toBe(true);
       if (worktreeId) {
         await managedWorktrees.remove({
           id: worktreeId,
@@ -2294,13 +2299,12 @@ test.each([
     const workspace = await initializeGitWorkspace(openClawState.root);
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = { workspace };
-    await createSessionStoreDir();
-    const { ws } = await openClient({ scopes: ["operator.admin"] });
+    const { storePath } = await createSessionStoreDir();
+    const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
     let worktreeId: string | undefined;
     arrange();
     try {
-      const created = await rpcReq<{ worktree: { id: string; branch: string } }>(
-        ws,
+      const created = await directSessionReq<{ runStarted: boolean }>(
         "sessions.create",
         {
           agentId: "main",
@@ -2308,13 +2312,21 @@ test.each([
           worktree: true,
           message: "Investigate the raw fallback title",
         },
+        { client: { connect: { scopes: ["operator.admin"] } } as never, context },
       );
 
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      worktreeId = created.payload?.worktree.id;
-      expect(created.payload?.worktree.branch).toBe("openclaw/investigate-the-raw-fallback-title");
+      expect(created.payload?.runStarted).toBe(true);
+      expect(await waitForCreatedSessionRun(context, storePath, key)).toBe(true);
+      const worktree = loadSessionEntry({ sessionKey: key, storePath })?.worktree;
+      worktreeId = worktree?.id;
+      expect(worktree?.branch).toBe("openclaw/investigate-the-raw-fallback-title");
       expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
     } finally {
+      for (const entry of context.chatAbortControllers.values()) {
+        entry.controller.abort();
+      }
+      expect(await waitForCreatedSessionRun(context, storePath, key)).toBe(true);
       if (worktreeId) {
         await managedWorktrees.remove({
           id: worktreeId,
@@ -2324,7 +2336,6 @@ test.each([
       }
       closeOpenClawStateDatabaseForTest();
       testState.agentConfig = undefined;
-      ws.close();
       await openClawState.cleanup();
     }
   },
