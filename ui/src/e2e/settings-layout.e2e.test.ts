@@ -157,7 +157,7 @@ suite.define(() => {
         const pathname = pathForRoute(route);
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
-        await page.locator(".settings-workspace").last().waitFor();
+        await page.locator(".settings-workspace").last().waitFor({ state: "attached" });
         layouts.push({ route, ...(await readShellInsets(route)) });
       }
       for (const layout of layouts) {
@@ -171,7 +171,7 @@ suite.define(() => {
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
         const settingsPage = page.locator(".settings-page").last();
-        await settingsPage.waitFor();
+        await settingsPage.waitFor({ state: "attached" });
         expect(
           await settingsPage.evaluate((element) =>
             Math.round(Number.parseFloat(getComputedStyle(element).paddingLeft)),
