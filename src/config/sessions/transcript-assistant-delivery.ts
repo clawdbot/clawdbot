@@ -70,10 +70,10 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
   if (facts) {
     const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;
     const mergedFacts = { ...currentFacts, ...facts };
-    if (facts.replyToCurrent) {
-      delete mergedFacts.replyToId;
-    } else if (facts.replyToId) {
+    if (facts.replyToId) {
       delete mergedFacts.replyToCurrent;
+    } else if (facts.replyToCurrent) {
+      delete mergedFacts.replyToId;
     }
     Object.assign(message, { openclawDelivery: mergedFacts });
   }
