@@ -11,7 +11,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = parse(
   readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
 ) as { jobs: Record<string, { steps: { name?: string; run?: string }[] }> };
-const step = workflow.jobs.prepare_docker_e2e_image.steps.find(
+const step = workflow.jobs.prepare_docker_e2e_image?.steps.find(
   (entry) => entry.name === "Plan Docker E2E images",
 );
 if (!step?.run) {
