@@ -288,7 +288,6 @@ function sessionsSendDetails(details: unknown): SessionsSendDetails {
 }
 
 registerAgentSessionLoopTestLifecycle();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sessions tools", () => {
   beforeEach(() => {
