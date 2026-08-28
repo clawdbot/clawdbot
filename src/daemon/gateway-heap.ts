@@ -2,6 +2,7 @@
 import os from "node:os";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
+import { resolveServiceEntrypointIndex } from "./service-layout.js";
 import {
   hasGatewayServiceEnvironmentOverride,
   resolveManagedGatewayServiceCommand,
@@ -131,10 +132,8 @@ export function resolveGatewayHeapNodeOptions(
 }
 
 function readServiceHeapExecArgv(programArguments: readonly string[]): string[] {
-  // Managed commands put the entrypoint immediately before "gateway". Never
-  // promote application arguments after that entrypoint into Node authority.
-  const gatewayIndex = programArguments.indexOf("gateway");
-  return gatewayIndex > 1 ? parseHeapControls(programArguments.slice(1, gatewayIndex - 1)) : [];
+  const entrypointIndex = resolveServiceEntrypointIndex(programArguments);
+  return parseHeapControls(programArguments.slice(1, entrypointIndex ?? 1));
 }
 
 export function resolveGatewayHeapExecArgv(

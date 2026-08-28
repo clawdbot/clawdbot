@@ -89,29 +89,32 @@ describe("Gateway service heap controls", () => {
     expect(resolveGatewayHeapNodeOptions(input)).toBe("");
   });
 
-  it("preserves argv and environment controls separately and ignores application flags", () => {
-    const command = [
-      "node",
-      "--require",
-      "/tmp/preload.js",
-      "--max_old_space_size=24576",
-      "--max-heap-size=32768",
-      "cli.js",
-      "gateway",
-      "--max-old-space-size=1024",
-    ];
-    const nodeOptions = "--max-old-space-size-percentage=25 --max-old-space-size=4096";
-    expect(
-      resolveGatewayHeapExecArgv({
-        programArguments: command,
-        environment: { NODE_OPTIONS: nodeOptions },
-      }),
-    ).toEqual(["--max-old-space-size=24576", "--max-heap-size=32768"]);
-    expect(inspectGatewayHeapLimit(nodeOptions, {}, command)).toMatchObject({
-      nodeOptions,
-      execArgv: ["--max-old-space-size=24576", "--max-heap-size=32768"],
-    });
-  });
+  it.each(["/tmp/preload.js", "gateway"])(
+    "preserves argv controls after preload %s and ignores application flags",
+    (preload) => {
+      const command = [
+        "node",
+        "--require",
+        preload,
+        "--max_old_space_size=24576",
+        "--max-heap-size=32768",
+        "cli.js",
+        "gateway",
+        "--max-old-space-size=1024",
+      ];
+      const nodeOptions = "--max-old-space-size-percentage=25 --max-old-space-size=4096";
+      expect(
+        resolveGatewayHeapExecArgv({
+          programArguments: command,
+          environment: { NODE_OPTIONS: nodeOptions },
+        }),
+      ).toEqual(["--max-old-space-size=24576", "--max-heap-size=32768"]);
+      expect(inspectGatewayHeapLimit(nodeOptions, {}, command)).toMatchObject({
+        nodeOptions,
+        execArgv: ["--max-old-space-size=24576", "--max-heap-size=32768"],
+      });
+    },
+  );
 
   it.each([4096, 6144])(
     "reports configured %s without guessing automatic provenance",

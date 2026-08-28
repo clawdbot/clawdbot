@@ -530,6 +530,10 @@ describe("startGatewayService", () => {
         { layout: "ordinary entrypoint", args: [process.execPath, program] },
         { layout: "entrypoint after heap flag", args: [process.execPath, heapFlag, program] },
         {
+          layout: "entrypoint after a preload named gateway",
+          args: [process.execPath, "--require", "gateway", heapFlag, program],
+        },
+        {
           layout: "entrypoint after separate heap flag values",
           args: [
             process.execPath,

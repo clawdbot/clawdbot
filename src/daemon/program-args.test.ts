@@ -101,6 +101,11 @@ describe("resolveGatewayProgramArguments", () => {
       expected: ["--max-old-space-size=24576"],
     },
     {
+      nodeOptions: "",
+      existing: ["--require", "gateway", "--max-old-space-size=24576"],
+      expected: ["--max-old-space-size=24576"],
+    },
+    {
       nodeOptions: "--max-old-space-size-percentage=25",
       existing: ["--max-old-space-size=24576", "--require=/tmp/preload.js"],
       expected: ["--max-old-space-size=24576"],

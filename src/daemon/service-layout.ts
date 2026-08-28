@@ -47,17 +47,26 @@ function resolveSystemdScopeFromServicePath(
   return "user";
 }
 
-export function resolveServiceEntrypoint(command: GatewayServiceCommandConfig): string | undefined {
-  // Gateway and node-host services share start inspection; native flags precede
-  // the entrypoint, while application arguments follow the subcommand.
-  const commandIndex = command.programArguments.findIndex(
+export function resolveServiceEntrypointIndex(
+  programArguments: readonly string[],
+): number | undefined {
+  // Managed commands put the entrypoint immediately before the subcommand.
+  // A subcommand name following a native option is its value, not this boundary.
+  const commandIndex = programArguments.findIndex(
     (arg, index, args) =>
-      index > 0 && (arg === "gateway" || (arg === "node" && args[index + 1] === "run")),
+      index > 0 &&
+      !args[index - 1]?.startsWith("-") &&
+      (arg === "gateway" || (arg === "node" && args[index + 1] === "run")),
   );
-  if (commandIndex <= 0) {
+  return commandIndex > 0 ? commandIndex - 1 : undefined;
+}
+
+export function resolveServiceEntrypoint(command: GatewayServiceCommandConfig): string | undefined {
+  const entrypointIndex = resolveServiceEntrypointIndex(command.programArguments);
+  if (entrypointIndex === undefined) {
     return undefined;
   }
-  const entrypoint = command.programArguments[commandIndex - 1];
+  const entrypoint = command.programArguments[entrypointIndex];
   if (!entrypoint) {
     return undefined;
   }
