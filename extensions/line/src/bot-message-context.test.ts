@@ -205,7 +205,7 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: amaze, Congratulations, :o]");
   });
 
-  it("falls back to the sender's own text for a message sticker", async () => {
+  it("uses the sender's own text for a message sticker", async () => {
     const context = await buildLineMessageContext({
       event: stickerEvent({ text: "See you tomorrow" }),
       allMedia: [],
@@ -215,6 +215,27 @@ describe("buildLineMessageContext", () => {
     });
 
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: See you tomorrow]");
+  });
+
+  it("prefers message-sticker text over experimental keywords", async () => {
+    // LINE's official message-sticker webhook example carries both properties.
+    const context = await buildLineMessageContext({
+      event: stickerEvent({
+        stickerId: "738839",
+        packageId: "12287",
+        stickerResourceType: "MESSAGE",
+        keywords: ["Anticipation", "Sparkle", "Straight face", "Staring", "Thinking"],
+        text: "Let's\nhang out\nthis weekend!",
+      }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe(
+      "[Sent a sticker: Let's\nhang out\nthis weekend!]",
+    );
   });
 
   it("still reports a sticker that carries neither keywords nor text", async () => {

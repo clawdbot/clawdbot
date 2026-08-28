@@ -188,14 +188,12 @@ async function resolveLineInboundRoute(params: {
  * from the package id, so it is not part of the description.
  */
 function describeLineSticker(sticker: StickerEventMessage): string {
-  // LINE returns a random selection of the keywords on each event, so a few are
-  // enough to say what the sticker shows without flooding the turn.
-  const keywords = normalizeStringEntries(sticker.keywords ?? []).slice(0, 3);
-  if (keywords.length > 0) {
-    return `[Sent a sticker: ${keywords.join(", ")}]`;
-  }
-  const senderText = normalizeOptionalString(sticker.text);
-  return senderText ? `[Sent a sticker: ${senderText}]` : "[Sent a sticker]";
+  // Sender-authored text is authoritative; LINE's experimental keywords are a
+  // random selection and only describe stickers that carry no sender text.
+  const description =
+    normalizeOptionalString(sticker.text) ??
+    normalizeStringEntries(sticker.keywords ?? []).slice(0, 3).join(", ");
+  return description ? `[Sent a sticker: ${description}]` : "[Sent a sticker]";
 }
 
 function extractMessageText(message: MessageEvent["message"]): string {
