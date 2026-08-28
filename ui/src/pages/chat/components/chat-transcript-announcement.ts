@@ -15,8 +15,7 @@ export type TranscriptAnnouncement = {
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 const ANNOUNCEMENT_MAX_CHARS = 500;
 
-function assistantMessageAnnouncementText(message: unknown): string | null {
-  const text = extractTextCached(message)?.trim();
+function assistantMessageAttachmentFailureText(message: unknown): string | null {
   const rawContent = asOptionalRecord(message)?.content;
   const content: unknown[] = Array.isArray(rawContent) ? rawContent : [];
   const failures = content.flatMap((item) =>
@@ -30,18 +29,25 @@ function assistantMessageAnnouncementText(message: unknown): string | null {
         `${attachment.label}: ${t("chat.attachments.notSent")}. ${attachmentFailureReason(attachment.code)}`,
     )
     .join(" ");
+  return failureText || null;
+}
+
+function assistantMessageAnnouncementText(message: unknown): string | null {
+  const text = extractTextCached(message)?.trim();
+  const failureText = assistantMessageAttachmentFailureText(message);
   return [text, failureText].filter(Boolean).join(" ") || null;
 }
 
 function assistantGroupAnnouncementSource(
   group: MessageGroup,
+  messageText: (message: unknown) => string | null = assistantMessageAnnouncementText,
 ): { key: string; text: string } | null {
   if (group.role.toLowerCase() !== "assistant") {
     return null;
   }
   for (let index = group.messages.length - 1; index >= 0; index -= 1) {
     const source = group.messages[index];
-    const text = assistantMessageAnnouncementText(source?.message);
+    const text = messageText(source?.message);
     if (text) {
       return { key: source?.key ?? group.key, text };
     }
@@ -64,9 +70,24 @@ export function latestTranscriptAnnouncement(
     if (item.kind === "agent-run-frame") {
       if (item.outcome.kind === "completed") {
         const owner = item.outcome.actionOwner;
-        const text = owner ? extractTextCached(owner.message)?.trim() : null;
+        const text = owner ? assistantMessageAnnouncementText(owner.message) : null;
         if (owner && text) {
           return announcement(owner.key, text);
+        }
+        for (const part of item.parts.toReversed()) {
+          if (part.kind === "stream-run") {
+            continue;
+          }
+          const groups = part.kind === "group" ? [part] : part.groups.toReversed();
+          for (const group of groups) {
+            const source = assistantGroupAnnouncementSource(
+              group,
+              assistantMessageAttachmentFailureText,
+            );
+            if (source) {
+              return announcement(source.key, source.text);
+            }
+          }
         }
         continue;
       }

@@ -1658,7 +1658,7 @@ describe("chat transcript rendering", () => {
     );
   });
 
-  it("announces named attachment failures in attachment-only and mixed assistant rows", () => {
+  it("announces named attachment failures in ordinary and completed-run assistant rows", () => {
     const transcript = createTestTranscript();
     const container = document.createElement("div");
     const existing = {
@@ -1709,6 +1709,56 @@ describe("chat transcript rendering", () => {
     renderMessages([existing, attachmentOnly, mixed]);
     expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
       "Partial result settings.toml: Not sent. Rejected by the local attachment allowlist. Send a supported file type.",
+    );
+
+    const runBoundary = {
+      kind: "group" as const,
+      key: "group:user:attachment-run",
+      role: "user" as const,
+      messages: [
+        {
+          key: "user:attachment-run",
+          message: {
+            role: "user",
+            content: "Send the attachment",
+            __openclaw: {
+              id: "user:attachment-run",
+              idempotencyKey: "attachment-run:user",
+            },
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const completedFailure = {
+      kind: "group" as const,
+      key: "group:assistant:attachment-run",
+      role: "assistant" as const,
+      messages: [
+        {
+          key: "assistant:attachment-run",
+          message: {
+            role: "assistant",
+            content: attachmentOnly.content,
+            runId: "attachment-run",
+          },
+        },
+      ],
+      timestamp: 2,
+      isStreaming: false,
+      runId: "attachment-run",
+    };
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      runBoundary,
+      completedFailure,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    renderChatInto(container, {
+      transcript,
+      messages: [runBoundary, completedFailure],
+    });
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "missing.pdf: Not sent. File not found. Check the path and try again.",
     );
   });
 

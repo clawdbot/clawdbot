@@ -1342,6 +1342,7 @@ async function expectUnpersistedAgentRunFinal(params: {
   idempotencyKey: string;
   payload: (typeof mockState.dispatchedReplies)[number]["payload"];
   staleAudio?: boolean;
+  expectedMediaFailure?: { code: string; kind: string; label: string; mimeType?: string };
 }) {
   const transcriptDir = await createTranscriptFixture(params.transcriptPrefix);
   const staleAudioPath = path.join(transcriptDir, "stale.mp3");
@@ -1365,15 +1366,29 @@ async function expectUnpersistedAgentRunFinal(params: {
   const { send } = createChatRequestFixture();
   await send({ idempotencyKey: params.idempotencyKey, expectBroadcast: false, waitFor: "dedupe" });
 
+  const assistantUpdates = findAssistantTranscriptUpdates();
+  const assistantEntries = readTranscriptJsonLines(mockState.transcriptPath).filter(
+    (entry) =>
+      (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+      (entry as { role?: string }).role === "assistant",
+  );
+  if (params.expectedMediaFailure) {
+    expect(assistantUpdates).toHaveLength(1);
+    expect(assistantUpdates[0]?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: params.payload.text },
+        { type: "attachment_error", attachment: params.expectedMediaFailure },
+      ],
+    });
+    expect(assistantEntries).toHaveLength(1);
+    expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
+    return;
+  }
+
   // Agent-run delivery is a live projection; message_end alone owns persisted assistant turns.
-  expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
-  expect(
-    readTranscriptJsonLines(mockState.transcriptPath).filter(
-      (entry) =>
-        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-        (entry as { role?: string }).role === "assistant",
-    ),
-  ).toStrictEqual([]);
+  expect(assistantUpdates).toStrictEqual([]);
+  expect(assistantEntries).toStrictEqual([]);
 }
 
 async function expectImageOnlyFinal(params: {
@@ -1392,7 +1407,7 @@ async function expectImageOnlyFinal(params: {
   }
   const image = content.find((block) => block.type === "image");
   expect(getMessage(payload)?.role).toBe("assistant");
-  expect(content[0]).toEqual({ type: "text", text: "Image reply" });
+  expect(content).toHaveLength(1);
   expect(image).toMatchObject({
     type: "image",
     artifactId: expect.stringMatching(/^artifact_managed_image_/u),
@@ -3513,7 +3528,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("does not mirror agent-run stale media final text from live delivery", async () => {
+  it("persists a named failure when agent-run media disappears before delivery", async () => {
     await expectUnpersistedAgentRunFinal({
       transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
@@ -3521,6 +3536,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
       },
       staleAudio: true,
+      expectedMediaFailure: {
+        code: "delivery-failed",
+        kind: "audio",
+        label: "stale.mp3",
+        mimeType: "audio/mpeg",
+      },
     });
   });
 
