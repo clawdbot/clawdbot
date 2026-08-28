@@ -52,7 +52,14 @@ class OpenClawImageLightbox extends OpenClawLitElement {
 
   static override styles = css`
     :host {
+      --image-lightbox-control-background: rgba(12, 16, 24, 0.64);
+      --image-lightbox-control-background-hover: rgba(12, 16, 24, 0.78);
       display: contents;
+    }
+
+    :host-context([data-theme-mode="dark"]) {
+      --image-lightbox-control-background: rgba(255, 255, 255, 0.16);
+      --image-lightbox-control-background-hover: rgba(255, 255, 255, 0.22);
     }
 
     openclaw-modal-dialog {
@@ -84,16 +91,23 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       gap: 4px;
     }
 
+    .actions .action,
+    .zoom-control {
+      color: #fff;
+      background-color: var(--image-lightbox-control-background);
+      -webkit-backdrop-filter: blur(16px) saturate(140%);
+      backdrop-filter: blur(16px) saturate(140%);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+    }
+
     .actions .action {
       border-radius: 999px;
-      background-color: color-mix(in srgb, var(--text) 10%, transparent);
-      -webkit-backdrop-filter: blur(12px);
-      backdrop-filter: blur(12px);
       transition: background-color 180ms ease;
     }
 
-    .actions .action:hover {
-      background-color: color-mix(in srgb, var(--text) 16%, transparent);
+    .actions .action:hover,
+    .zoom-control:hover:not(:disabled) {
+      background-color: var(--image-lightbox-control-background-hover);
     }
 
     .title {
@@ -201,14 +215,11 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       min-height: 40px;
       padding: 0 10px;
       border: 0;
-      background: color-mix(in srgb, var(--text) 10%, transparent);
-      -webkit-backdrop-filter: blur(12px);
-      backdrop-filter: blur(12px);
       font-size: 15px;
     }
 
     .zoom-control:disabled {
-      color: rgba(255, 255, 255, 0.35);
+      color: rgba(255, 255, 255, 0.8);
     }
 
     .zoom-level {

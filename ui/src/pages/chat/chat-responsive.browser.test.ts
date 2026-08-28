@@ -2239,6 +2239,144 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps managed image actions anchored around tiny rendered images", async () => {
+    const page = await openBrowserPage(1280, 900);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-message-images">
+            <span class="chat-image-frame chat-image-frame--managed">
+            <button class="chat-message-image-button" type="button">
+              <img
+                class="chat-message-image chat-message-image--small"
+                width="16"
+                height="16"
+                alt="Tiny generated image"
+                src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='16' height='16' fill='%23dc4f92'/%3E%3C/svg%3E"
+              />
+            </button>
+            <span class="chat-image-actions">
+              <button class="chat-image-action" type="button">1</button>
+              <button class="chat-image-action" type="button">2</button>
+            </span>
+            </span>
+            <span class="chat-image-frame chat-image-frame--managed">
+            <button class="chat-message-image-button" type="button">
+              <img
+                class="chat-message-image"
+                width="420"
+                height="1800"
+                alt="Tall generated image"
+                src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='1800'%3E%3Crect width='420' height='1800' fill='%235c86ff'/%3E%3C/svg%3E"
+              />
+            </button>
+            <span class="chat-image-actions">
+              <button class="chat-image-action" type="button">1</button>
+              <button class="chat-image-action" type="button">2</button>
+            </span>
+            </span>
+          </div>
+        </body></html>`,
+      );
+      const frames = page.locator(".chat-image-frame--managed");
+      await expect.poll(() => frames.count()).toBe(2);
+      const frameRows = await frames.evaluateAll((elements) =>
+        elements.map((element) => {
+          const box = element.getBoundingClientRect();
+          return { bottom: box.bottom, top: box.top };
+        }),
+      );
+      expect(frameRows[1]!.top).toBeGreaterThan(frameRows[0]!.bottom);
+      for (const [index, expectedWidth] of [160, 84].entries()) {
+        const frame = frames.nth(index);
+        await frame.hover();
+        const geometry = await frame.evaluate((element) => {
+          const actions = element.querySelector<HTMLElement>(".chat-image-actions")!;
+          const frameRect = element.getBoundingClientRect();
+          const actionsRect = actions.getBoundingClientRect();
+          return {
+            actionsInsideFrame:
+              actionsRect.left >= frameRect.left &&
+              actionsRect.right <= frameRect.right &&
+              actionsRect.top >= frameRect.top &&
+              actionsRect.bottom <= frameRect.bottom,
+            actionsNearBottom: frameRect.bottom - actionsRect.bottom <= 9,
+            fadeOpacity: getComputedStyle(element, "::after").opacity,
+            fadeWidth: Number.parseFloat(getComputedStyle(element, "::after").width),
+            frameWidth: frameRect.width,
+            overflow: getComputedStyle(element).overflow,
+          };
+        });
+        expect(geometry.actionsInsideFrame).toBe(true);
+        expect(geometry.actionsNearBottom).toBe(true);
+        expect(geometry.fadeOpacity).toBe("1");
+        expect(geometry.fadeWidth).toBeCloseTo(geometry.frameWidth, 0);
+        expect(geometry.frameWidth).toBeCloseTo(expectedWidth, 0);
+        expect(geometry.overflow).toBe("hidden");
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("places a five-image sent gallery above its separate text bubble", async () => {
+    const page = await openBrowserPage(1280, 900);
+    try {
+      const tile = (index: number) => `
+        <span class="chat-image-frame" data-tile="${index}">
+          <button class="chat-message-image-button" type="button">
+            <img class="chat-message-image" width="640" height="640" alt="Image ${index}"
+              src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='640'%3E%3Crect width='640' height='640' fill='%23865cff'/%3E%3C/svg%3E" />
+          </button>
+        </span>`;
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-group user">
+            <div class="chat-bubble chat-bubble--with-images">
+              <div
+                class="chat-message-images chat-message-images--gallery chat-message-images--five"
+              >
+                ${Array.from({ length: 5 }, (_, index) => tile(index + 1)).join("")}
+              </div>
+              <div class="chat-text">oi</div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      await page.locator(".chat-message-image").first().waitFor();
+      const geometry = await page.locator(".chat-bubble").evaluate((bubble) => {
+        const gallery = bubble.querySelector<HTMLElement>(".chat-message-images")!;
+        const text = bubble.querySelector<HTMLElement>(".chat-text")!;
+        const frames = [...gallery.querySelectorAll<HTMLElement>(".chat-image-frame")];
+        const boxes = frames.map((frame) => frame.getBoundingClientRect());
+        const galleryBox = gallery.getBoundingClientRect();
+        const textBox = text.getBoundingClientRect();
+        return {
+          background: getComputedStyle(bubble).backgroundColor,
+          firstRow: boxes.filter(
+            (box) => Math.round(box.top) === Math.round(boxes[0]!.top),
+          ).length,
+          fourthAlignedWithSecond: Math.abs(boxes[3]!.left - boxes[1]!.left) <= 1,
+          lastRowRightAligned: Math.abs(boxes[4]!.right - galleryBox.right) <= 1,
+          textBelow: textBox.top >= galleryBox.bottom + 7,
+          textRightAligned: Math.abs(textBox.right - galleryBox.right) <= 1,
+          tileSize: boxes[0]!.width,
+        };
+      });
+      expect(geometry).toMatchObject({
+        background: "rgba(0, 0, 0, 0)",
+        firstRow: 3,
+        fourthAlignedWithSecond: true,
+        lastRowRightAligned: true,
+        textBelow: true,
+        textRightAligned: true,
+      });
+      expect(geometry.tileSize).toBeCloseTo(128, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("wraps long question and approval metadata inside narrow cards", async () => {
     const page = await openBrowserPage(320, 568);
     try {

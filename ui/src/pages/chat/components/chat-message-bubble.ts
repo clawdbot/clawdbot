@@ -320,6 +320,7 @@ export function renderGroupedMessage(
 
   const bubbleClasses = [
     "chat-bubble",
+    hasImages ? "chat-bubble--with-images" : "",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",

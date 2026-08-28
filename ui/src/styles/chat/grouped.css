@@ -1031,6 +1031,42 @@ img.chat-avatar.chat-avatar--logo {
   color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
+/* Keep sent media outside the text surface: the image gallery remains bare,
+   while the following text retains the normal right-aligned user bubble. */
+.chat-group.user:not(.chat-group--peer) .chat-bubble--with-images {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.chat-group.user:not(.chat-group--peer) .chat-bubble--with-images:hover {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-group.user:not(.chat-group--peer)
+  .chat-bubble--with-images
+  > .chat-text {
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+}
+
+:root[data-theme-mode="light"]
+  .chat-group.user:not(.chat-group--peer)
+  .chat-bubble--with-images
+  > .chat-text {
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  color: var(--text-strong);
+}
+
 /* ── Message metadata (tokens, cost, model, context %) ── */
 .msg-meta {
   --openclaw-tooltip-max-width: min(36rem, calc(100vw - 32px));
