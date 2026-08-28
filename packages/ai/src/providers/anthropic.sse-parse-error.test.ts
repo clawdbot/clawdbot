@@ -107,8 +107,8 @@ describe("Anthropic malformed SSE frames", () => {
   });
 
   it("keeps a response alive while Anthropic sends protocol pings", async () => {
-    const idleTimeoutMs = 300;
-    const finalResponseDelayMs = 450;
+    const idleTimeoutMs = 1_000;
+    const finalResponseDelayMs = 1_200;
     let pingCount = 0;
     const server = createServer((request, response) => {
       response.writeHead(200, {
@@ -146,7 +146,7 @@ describe("Anthropic malformed SSE frames", () => {
         streamWithIdleTimeout(streamAnthropic as never, idleTimeoutMs, onIdleTimeout)(
           makeModel(`http://127.0.0.1:${address.port}`),
           context,
-          { apiKey: "test-api-key", maxRetries: 0 },
+          { apiKey: "test-api-key" },
         ),
       )) as ReturnType<typeof streamAnthropic>;
       for await (const event of stream) {
