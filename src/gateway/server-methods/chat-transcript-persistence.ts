@@ -417,7 +417,9 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
         message: applyAssistantDeliveryDirectives({
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
-          content: replacement.request.state.persistedContent.map((block) => ({ ...block })),
+          content: replacement.request.state.persistedContent.map((block) =>
+            Object.assign({}, block),
+          ),
         }),
       });
     });
@@ -449,7 +451,7 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
         ? Object.assign({}, event as Record<string, unknown>, {
             message: applyAssistantDeliveryDirectives({
               ...target.message,
-              content: params.content.map((block) => ({ ...block })),
+              content: params.content.map((block) => Object.assign({}, block)),
             }),
           })
         : event,
