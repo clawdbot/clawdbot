@@ -19,7 +19,12 @@ import {
   replaceAssistantContentTextBlocks,
   stripManagedOutgoingAssistantContentBlocks,
 } from "./chat-assistant-content.js";
-import { broadcastChatFinal, broadcastSideResult, isBtwReplyPayload } from "./chat-broadcast.js";
+import {
+  broadcastChatFinal,
+  broadcastChatTerminal,
+  broadcastSideResult,
+  isBtwReplyPayload,
+} from "./chat-broadcast.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import { selectChatSendFinalReplyPayloads } from "./chat-send-command-replies.js";
 import { buildTranscriptReplyText } from "./chat-send-reply-dispatch.js";
@@ -129,8 +134,8 @@ function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[])
   };
 }
 
-/** Persist and broadcast replies produced without a runtime-owned agent assistant turn. */
-export async function finalizeChatSendNonAgentReplies(params: {
+/** Finalize settled reply payloads, retaining a runtime's successful transcript ownership. */
+export async function finalizeChatSendDispatchedReplies(params: {
   accountId: string | undefined;
   context: GatewayRequestContext;
   deliveredReplies: readonly DeliveredReply[];
@@ -142,6 +147,9 @@ export async function finalizeChatSendNonAgentReplies(params: {
     "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
   >;
   suppressReplies: boolean;
+  runtimeOwnsTranscript?: boolean;
+  state: "final" | "aborted";
+  stopReason?: string;
 }): Promise<void> {
   const {
     accountId,
@@ -304,7 +312,9 @@ export async function finalizeChatSendNonAgentReplies(params: {
     transcriptDisplayReply;
   let message: Record<string, unknown> | undefined;
   const shouldAppendAssistantTranscript = Boolean(
-    canAppendAssistantTranscript && (transcriptReply || persistedContentForAppend?.length),
+    (!params.runtimeOwnsTranscript || useTranscriptMirrorOwner) &&
+    canAppendAssistantTranscript &&
+    (transcriptReply || persistedContentForAppend?.length),
   );
   await persistUserTurnTranscript();
   if (shouldAppendAssistantTranscript) {
@@ -369,11 +379,13 @@ export async function finalizeChatSendNonAgentReplies(params: {
   if (hasVisibleAssistantFinalMessage(message)) {
     emitFirstAssistantServerTiming();
   }
-  broadcastChatFinal({
+  broadcastChatTerminal({
     context,
     runId: clientRunId,
     sessionKey,
     agentId,
     message,
+    state: params.state,
+    stopReason: params.stopReason,
   });
 }

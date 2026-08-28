@@ -1,7 +1,12 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type {
+  SessionTranscriptRuntimeTarget,
+  TranscriptMessageAppendResult,
+} from "../config/sessions/session-accessor.types.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -11,6 +16,18 @@ import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+
+/** A successful runtime append, independent of optional active-path projection anchors. */
+export type ReplyDispatchAssistantTranscript = SessionTranscriptRuntimeTarget &
+  Pick<TranscriptMessageAppendResult<unknown>, "messageId" | "anchor"> & { idempotencyKey: string };
+
+export type ReplyDispatchRun = {
+  completionSource: "reply-dispatch";
+  getResult: () => {
+    assistantTranscript?: ReplyDispatchAssistantTranscript;
+    terminalOutcome?: AgentRunTerminalOutcome;
+  };
+};
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
@@ -131,6 +148,7 @@ export type GetReplyOptions = {
   onAgentRunStart?: (
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
+    options?: ReplyDispatchRun,
   ) => void;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;

@@ -104,6 +104,8 @@ export async function tryDispatchAcpReplyHook(
     shouldSendFullToolDetails: event.shouldSendFullToolDetails,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
+    onAgentRunStart: ctx.onAgentRunStart,
+    userTurnTranscriptRecorder: ctx.userTurnTranscriptRecorder,
     recordProcessed: ctx.recordProcessed,
     markIdle: ctx.markIdle,
   });
