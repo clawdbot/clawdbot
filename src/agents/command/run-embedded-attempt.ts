@@ -29,7 +29,6 @@ import {
 } from "../embedded-agent-runner/run-entry.js";
 import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
-import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import { prepareModelRunCapabilities } from "../model-catalog-lookup.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
@@ -59,7 +58,7 @@ import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
-import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
+import { resolveAttemptSessionTargets } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
 const log = createSubsystemLogger("agents/agent-command");
@@ -126,33 +125,19 @@ export async function runEmbeddedAgentAttempt(params: {
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
-  const sessionEffectsSource = resolveInternalSessionEffectsSource({
-    agentId: sessionAgentId,
-    sessionId,
-    sessionKey,
-    storePath,
-  });
-  const internalSessionTarget = params.suppressVisibleSessionEffects
-    ? await prepareInternalSessionEffectsSession({
-        agentId: sessionAgentId,
-        cwd: cwd ?? workspaceDir,
-        runId,
-        source: sessionEffectsSource,
-        storePath,
-      })
-    : undefined;
+  const { internalSessionTarget, attemptSessionTarget, attemptSessionFile } =
+    await resolveAttemptSessionTargets({
+      agentId: sessionAgentId,
+      cwd,
+      runId,
+      sessionFile,
+      sessionId,
+      sessionKey,
+      storePath,
+      suppressVisibleSessionEffects: params.suppressVisibleSessionEffects === true,
+      workspaceDir,
+    });
   params.trackInternalModelRunTarget(internalSessionTarget);
-  const attemptSessionTarget =
-    internalSessionTarget ??
-    (sessionKey && storePath
-      ? {
-          agentId: sessionAgentId,
-          sessionId,
-          sessionKey,
-          storePath,
-        }
-      : undefined);
-  const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
   const startedAt = Date.now();
   const attemptLifecycleState: AgentAttemptLifecycleState = {
@@ -163,6 +148,7 @@ export async function runEmbeddedAgentAttempt(params: {
   const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(
     attemptLifecycleState,
     params.preparedRunAdmission.onRuntimeTurnStarted,
+    params.replyOperation,
   );
   const transcriptMedia = params.opts.transcriptMedia ?? [];
   const hasTranscriptMedia = transcriptMedia.length > 0;
@@ -522,12 +508,7 @@ export async function runEmbeddedAgentAttempt(params: {
               lifecycleGeneration = nextLifecycleGeneration;
               params.onLifecycleGenerationChanged(nextLifecycleGeneration);
             },
-            onAgentEvent: (evt) => {
-              // Real agent events keep the reply lane fresh so long turns are
-              // not reclaimed as stale by concurrent-arrival recovery.
-              params.replyOperation?.recordActivity();
-              attemptLifecycleCallbacks.onAgentEvent(evt);
-            },
+            onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
             deferTerminalLifecycle: true,
           });
         },

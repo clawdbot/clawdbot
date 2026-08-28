@@ -455,6 +455,16 @@ vi.mock("./internal-session-effects.js", () => ({
     state.prepareInternalSessionEffectsSessionMock(...args),
   removeInternalSessionEffectsSession: (...args: unknown[]) =>
     state.removeInternalSessionEffectsSessionMock(...args),
+  // Mirrors the real sweep: best-effort, so a failed delete cannot replace a
+  // completed model-run result. The swallow itself is covered by
+  // internal-session-effects.test.ts.
+  removeInternalSessionEffectsSessions: async (targets: Iterable<unknown> | undefined) => {
+    for (const target of targets ?? []) {
+      try {
+        await state.removeInternalSessionEffectsSessionMock(target);
+      } catch {}
+    }
+  },
   resolveInternalSessionEffectsTarget: ({ agentId, runId, storePath }: Record<string, string>) => ({
     agentId,
     sessionId: `internal-${runId}`,

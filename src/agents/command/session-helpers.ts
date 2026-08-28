@@ -18,6 +18,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
 } from "../../utils/message-channel.js";
+import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -155,5 +156,50 @@ export function resolveInternalSessionEffectsSource(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+  };
+}
+
+/**
+ * Resolves the session identity an attempt writes to. A model run that must
+ * leave no visible trace gets a private hidden session; every other run writes
+ * to the caller's own session.
+ */
+export async function resolveAttemptSessionTargets(params: {
+  agentId: string;
+  cwd?: string;
+  runId: string;
+  sessionFile?: string;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+  suppressVisibleSessionEffects: boolean;
+  workspaceDir: string;
+}): Promise<{
+  internalSessionTarget: AgentRunSessionTarget | undefined;
+  attemptSessionTarget: AgentRunSessionTarget | undefined;
+  attemptSessionFile: string | undefined;
+}> {
+  const internalSessionTarget = params.suppressVisibleSessionEffects
+    ? await prepareInternalSessionEffectsSession({
+        agentId: params.agentId,
+        cwd: params.cwd ?? params.workspaceDir,
+        runId: params.runId,
+        source: resolveInternalSessionEffectsSource(params),
+        storePath: params.storePath,
+      })
+    : undefined;
+  return {
+    internalSessionTarget,
+    attemptSessionTarget:
+      internalSessionTarget ??
+      (params.sessionKey && params.storePath
+        ? {
+            agentId: params.agentId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          }
+        : undefined),
+    attemptSessionFile: internalSessionTarget?.sessionFile ?? params.sessionFile,
   };
 }

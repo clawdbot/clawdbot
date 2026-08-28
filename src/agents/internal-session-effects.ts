@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 /** Manages hidden SQLite sessions used for suppressed agent side effects. */
 import {
@@ -10,8 +11,11 @@ import {
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
+
+const log = createSubsystemLogger("agents/agent-command");
 
 type InternalSessionEffectsTarget = Required<
   Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">
@@ -136,4 +140,21 @@ export async function removeInternalSessionEffectsSession(
     ],
     skipMaintenance: true,
   });
+}
+
+/**
+ * Best-effort cleanup of every run-owned hidden session after delivery. A
+ * terminal SQLite write failure must not replace a completed model-run result,
+ * so failures are logged and the sweep continues.
+ */
+export async function removeInternalSessionEffectsSessions(
+  targets: Iterable<AgentRunSessionTarget> | undefined,
+): Promise<void> {
+  for (const target of targets ?? []) {
+    try {
+      await removeInternalSessionEffectsSession(target);
+    } catch (error) {
+      log.warn(`failed to remove model-run SQLite session: ${coerceErrorMessage(error)}`);
+    }
+  }
 }

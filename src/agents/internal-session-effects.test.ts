@@ -18,6 +18,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
+  removeInternalSessionEffectsSessions,
   resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 
@@ -195,6 +196,29 @@ describe("internal session effects", () => {
 
       expect(loadExactSessionEntry(target)).toBeUndefined();
       await expect(loadTranscriptEvents(target)).resolves.toEqual([]);
+    });
+  });
+
+  it("sweeps every target and keeps a failed delete from ending the sweep", async () => {
+    await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const targets = [];
+      for (const runId of ["run-sweep-1", "run-sweep-2"]) {
+        targets.push(
+          await prepareInternalSessionEffectsSession({ agentId: "main", runId, storePath }),
+        );
+      }
+      // A terminal delete failure must not replace a completed model-run
+      // result, nor stop the remaining rows from being removed.
+      const failing = { ...targets[0], storePath: path.join(dir, "missing", "sessions.json") };
+
+      await expect(
+        removeInternalSessionEffectsSessions([failing, ...targets]),
+      ).resolves.toBeUndefined();
+
+      for (const target of targets) {
+        expect(loadExactSessionEntry(target)).toBeUndefined();
+      }
     });
   });
 });

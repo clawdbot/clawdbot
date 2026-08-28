@@ -1,6 +1,7 @@
 /**
  * Lifecycle callback state helpers for a single agent attempt.
  */
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 /** Mutable lifecycle flags observed while a single agent attempt runs. */
@@ -22,6 +23,7 @@ type AgentAttemptLifecycleEvent = {
 export function createAgentAttemptLifecycleCallbacks(
   state: AgentAttemptLifecycleState,
   onRuntimeTurnStarted?: () => void | Promise<void>,
+  replyOperation?: ReplyOperation,
 ): {
   onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
@@ -31,6 +33,10 @@ export function createAgentAttemptLifecycleCallbacks(
       state.currentTurnUserMessagePersisted = true;
     },
     onAgentEvent: (evt) => {
+      // Real agent events keep the reply lane fresh, so a long turn is not
+      // reclaimed as stale by concurrent-arrival recovery. Timers must not do
+      // this; only evidence that the runtime is still producing work.
+      replyOperation?.recordActivity();
       if (evt.stream !== "lifecycle" || typeof evt.data?.phase !== "string") {
         return;
       }

@@ -65,7 +65,7 @@ import type {
   AgentCommandOpts,
 } from "./command/types.js";
 import {
-  removeInternalSessionEffectsSession,
+  removeInternalSessionEffectsSessions,
   resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
@@ -199,8 +199,7 @@ async function agentCommandInternal(
     if (sessionKey && !isRawModelRun && !suppressVisibleSessionEffects) {
       const laneOptions = { abortSignal: opts.abortSignal, routeThreadId: opts.threadId };
       sessionReplyLane = await acquireSessionReplyLane(sessionKey, sessionId, laneOptions);
-      sessionId = sessionReplyLane.sessionId;
-      runOwnedSessionId = sessionId;
+      runOwnedSessionId = sessionId = sessionReplyLane.sessionId;
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     }
     sessionWorkAdmission = await beginSessionWorkAdmission({
@@ -563,19 +562,9 @@ async function agentCommandInternal(
     sessionReplyLane?.complete();
     await preparedRunAdmission?.finish();
     sessionWorkAdmission?.release();
-    if (internalModelRunTargets) {
-      // Compaction may rotate a private session identity. Remove every owned
-      // SQLite row only after delivery; transcript and trajectory rows cascade.
-      for (const target of internalModelRunTargets.values()) {
-        try {
-          await removeInternalSessionEffectsSession(target);
-        } catch (error) {
-          // Cleanup remains best-effort so a terminal SQLite write failure does
-          // not replace the completed model-run result; the DB layer warns too.
-          log.warn(`failed to remove model-run SQLite session: ${coerceErrorMessage(error)}`);
-        }
-      }
-    }
+    // Compaction may rotate a private session identity. Remove every owned
+    // SQLite row only after delivery; transcript and trajectory rows cascade.
+    await removeInternalSessionEffectsSessions(internalModelRunTargets?.values());
     if (
       !sessionReboundDuringRun &&
       trackedRestartRecoveryDeliveryClaim &&
