@@ -256,6 +256,26 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+async function stopUpgradeSurvivorSupervisor(supervisor: ChildProcess, pidPath: string) {
+  try {
+    if (supervisor.exitCode === null && supervisor.signalCode === null) {
+      supervisor.kill("SIGTERM");
+      await waitForProcessExit(supervisor).catch(() => undefined);
+    }
+  } finally {
+    // Read the owned fixture's publication during cleanup even if readiness failed
+    // before the test learned the descendant PID.
+    if (existsSync(pidPath)) {
+      const pid = Number(readFileSync(pidPath, "utf8").trim());
+      if (Number.isSafeInteger(pid) && pid > 1 && isProcessRunning(pid)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+    }
+  }
+}
+
 function writeTermIgnoringDescendant(workDir: string): string {
   const descendantPath = join(workDir, "descendant.mjs");
   writeFileSync(
@@ -3631,13 +3651,15 @@ setInterval(() => {}, 1_000);
           },
           stdio: "ignore",
         });
-        let descendantPid: number | undefined;
         try {
           for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt += 1) {
             await delay(10);
           }
-          expect(existsSync(statePath)).toBe(true);
-          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          expect(
+            existsSync(statePath),
+            `${supervisorPath}: readiness missing (exit=${supervisor.exitCode}, signal=${supervisor.signalCode})`,
+          ).toBe(true);
+          const descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
           expect(descendantPid).toBeGreaterThan(1);
           expect(isProcessRunning(descendantPid)).toBe(true);
 
@@ -3649,15 +3671,7 @@ setInterval(() => {}, 1_000);
           }
           expect(isProcessRunning(descendantPid)).toBe(false);
         } finally {
-          if (supervisor.exitCode === null && supervisor.signalCode === null) {
-            supervisor.kill("SIGTERM");
-            await waitForProcessExit(supervisor).catch(() => undefined);
-          }
-          if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
-            try {
-              process.kill(descendantPid, "SIGKILL");
-            } catch {}
-          }
+          await stopUpgradeSurvivorSupervisor(supervisor, descendantPidPath);
         }
       }
     },
@@ -3725,23 +3739,14 @@ if (starts === 1) {
           },
           stdio: "ignore",
         });
-        let descendantPid: number | undefined;
         try {
           expect(await waitForProcessExit(supervisor)).toBe(0);
-          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          const descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
           expect(descendantPid).toBeGreaterThan(1);
           expect(readFileSync(startsPath, "utf8")).toBe("xx");
           expect(readFileSync(replacementPath, "utf8")).toBe("drained");
         } finally {
-          if (supervisor.exitCode === null && supervisor.signalCode === null) {
-            supervisor.kill("SIGTERM");
-            await waitForProcessExit(supervisor).catch(() => undefined);
-          }
-          if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
-            try {
-              process.kill(descendantPid, "SIGKILL");
-            } catch {}
-          }
+          await stopUpgradeSurvivorSupervisor(supervisor, descendantPidPath);
         }
       }
     },
