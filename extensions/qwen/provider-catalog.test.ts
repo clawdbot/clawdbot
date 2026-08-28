@@ -1,3 +1,4 @@
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 // Qwen tests cover provider catalog plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -72,6 +73,16 @@ describe("qwen provider catalog", () => {
       contextWindow: 1_000_000,
       maxTokens: 65_536,
     });
+    for (const id of ["qwen3.8-max", "qwen3.8-flash"]) {
+      expect(getQwenModelIds(coding)).not.toContain(id);
+      expect(getQwenModelIds(codingTrailingDot)).not.toContain(id);
+      expect(standard.models.find((model) => model.id === id)).toMatchObject({
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        maxTokens: 131_072,
+      });
+    }
   });
 
   it("opts native Qwen baseUrls into streaming usage only inside the extension", () => {
@@ -99,7 +110,7 @@ describe("qwen provider catalog", () => {
 });
 
 describe("qwen token plan provider catalog", () => {
-  it("ships the curated six-row Global catalog through manifest and runtime", () => {
+  it("advertises current plan models while retaining the deprecated compatibility row", () => {
     const provider = buildQwenTokenPlanProvider();
     const models = provider.models;
     const modelIds = models.map((model) => model.id);
@@ -108,6 +119,8 @@ describe("qwen token plan provider catalog", () => {
     expect(provider.api).toBe("openai-completions");
     expect(modelIds).toEqual([
       QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
+      "qwen3.8-max",
+      "qwen3.8-flash",
       "qwen3.6-plus",
       "qwen3-coder-next",
       "kimi-k2.5",
@@ -158,10 +171,60 @@ describe("qwen token plan provider catalog", () => {
     "opts Token Plan endpoint %s into native streaming usage",
     (baseUrl) => {
       const provider = applyQwenNativeStreamingUsageCompat(buildQwenTokenPlanProvider({ baseUrl }));
-      expect(provider.models).toHaveLength(6);
+      expect(provider.models.map((model) => model.id)).toEqual(
+        expect.arrayContaining(["qwen3.8-max", "qwen3.8-flash"]),
+      );
       expect(
         provider.models.every((model) => model.compat?.supportsUsageInStreaming === true),
       ).toBe(true);
     },
   );
 });
+
+it.each(["qwen", "qwen-token-plan"])(
+  "keeps %s flagship metadata while discovering uncurated models",
+  async (providerId) => {
+    const providerConfig =
+      providerId === "qwen"
+        ? buildQwenProvider({ baseUrl: QWEN_STANDARD_GLOBAL_BASE_URL })
+        : buildQwenTokenPlanProvider();
+    const provider = await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId,
+      providerConfig,
+      apiKey: `discovery-${providerId}`,
+      fetchGuard: async ({ url }) => ({
+        response: new Response(
+          JSON.stringify({
+            data: [
+              { id: "qwen3.8-max" },
+              { id: "qwen3.8-flash" },
+              {
+                id: "qwen3.8-27b",
+                reasoning: true,
+                input: ["text", "image"],
+                context_window: 1_000_000,
+                max_output_tokens: 131_072,
+              },
+            ],
+          }),
+        ),
+        finalUrl: url,
+        release: async () => {},
+      }),
+    });
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "qwen3.8-27b",
+      "qwen3.8-flash",
+      "qwen3.8-max",
+    ]);
+    for (const model of provider.models) {
+      expect(model).toMatchObject({
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        maxTokens: 131_072,
+      });
+    }
+    expect(providerConfig.models.some((model) => model.id === "qwen3.8-27b")).toBe(false);
+  },
+);

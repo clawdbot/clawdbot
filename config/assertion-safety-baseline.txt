@@ -1106,7 +1106,7 @@ extensions/qa-lab/web/src/ui-render-capture-controls.ts	1
 extensions/qa-lab/web/src/ui-render-utils.ts	1
 extensions/qianfan/onboard.ts	2
 extensions/qwen/models.ts	1
-extensions/qwen/stream.ts	4
+extensions/qwen/stream.ts	3
 extensions/raft/src/accounts.ts	1
 extensions/raft/src/gateway.ts	2
 extensions/raft/src/inbound.ts	1
