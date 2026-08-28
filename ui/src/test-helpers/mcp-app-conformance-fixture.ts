@@ -198,14 +198,16 @@ export async function recordMcpAppHost(
   for (const frame of page.frames()) {
     frames.push({
       url: frame.url().split("#")[0],
-      state: await frame
-        .evaluate(() => ({
-          // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Proof captures rendered text, not scripts or hidden DOM.
-          text: document.body?.innerText.slice(0, 4000) ?? "",
+      state: await Promise.all([
+        // Snapshot rendered text without waiting for an initializing frame's body.
+        frame.locator("body").allInnerTexts(),
+        frame.evaluate(() => ({
           html: document.body?.innerHTML.slice(0, 4000) ?? "",
           initialized: document.querySelector("#initialized")?.textContent ?? null,
           appTool: document.querySelector("#app-tool")?.textContent ?? null,
-        }))
+        })),
+      ])
+        .then(([texts, state]) => ({ text: texts[0]?.slice(0, 4000) ?? "", ...state }))
         .catch((error: unknown) => ({ detached: String(error) })),
     });
   }
