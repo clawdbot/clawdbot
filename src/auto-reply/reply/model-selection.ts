@@ -665,40 +665,21 @@ export async function createModelSelectionState(params: {
     if (defaultReasoningLevel) {
       return defaultReasoningLevel;
     }
-    let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
-    let selectedReasoningEntry = findSelectedCatalogEntry({
-      catalog: catalogForReasoning,
+    const visibleCapabilityCatalog = await resolveThinkingCatalog();
+    const visibleSelectedEntry = findSelectedCatalogEntry({
+      catalog: visibleCapabilityCatalog,
       provider,
       model,
     });
-    if (!modelCatalog && selectedReasoningEntry?.reasoning === undefined) {
-      const manifestCatalog = await loadManifestCatalog();
-      const manifestReasoningCatalog =
-        hasAllowlist || hasConfiguredModels
-          ? buildThinkingCatalog(manifestCatalog)
-          : manifestCatalog;
-      const manifestSelectedEntry = findSelectedCatalogEntry({
-        catalog: manifestReasoningCatalog,
-        provider,
-        model,
-      });
-      if (manifestSelectedEntry?.reasoning !== undefined) {
-        catalogForReasoning = manifestReasoningCatalog;
-        selectedReasoningEntry = manifestSelectedEntry;
-      }
-    }
-    if (
-      (!catalogForReasoning || catalogForReasoning.length === 0) &&
-      selectedReasoningEntry?.reasoning === undefined
-    ) {
-      modelCatalog = (await loadRuntimeCatalogSnapshot()).entries;
-      logStage("catalog-loaded-for-reasoning", `entries=${modelCatalog.length}`);
-      catalogForReasoning = modelCatalog;
-    }
+    // A locked session owns its selected model even when picker visibility excludes it.
+    const lockedSelectedEntry =
+      modelSelectionLocked && modelCatalog && !visibleSelectedEntry
+        ? findSelectedCatalogEntry({ catalog: modelCatalog, provider, model })
+        : undefined;
     defaultReasoningLevel = resolveReasoningDefault({
       provider,
       model,
-      catalog: catalogForReasoning,
+      catalog: lockedSelectedEntry ? [lockedSelectedEntry] : visibleCapabilityCatalog,
     });
     return defaultReasoningLevel;
   };

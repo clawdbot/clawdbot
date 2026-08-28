@@ -2307,6 +2307,169 @@ describe("createModelSelectionState auth-profile override flapping regression", 
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
+  const createConfiguredReasoningState = async (params?: {
+    configuredReasoning?: boolean;
+    usePreparedCatalog?: boolean;
+  }) => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "local/fast-reasoner": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          local: {
+            baseUrl: "http://localhost:9000/v1",
+            models: [
+              makeConfiguredModel({
+                id: "fast-reasoner",
+                name: "Fast Reasoner",
+                reasoning: params?.configuredReasoning,
+              }),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const preparedModelCatalog = params?.usePreparedCatalog
+      ? {
+          entries: [
+            { provider: "local", id: "fast-reasoner", name: "Fast Reasoner", reasoning: true },
+          ],
+          routeVariants: [],
+          authoritative: true,
+        }
+      : undefined;
+
+    return createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "local",
+      defaultModel: "fast-reasoner",
+      provider: "local",
+      model: "fast-reasoner",
+      hasModelDirective: false,
+      ...(preparedModelCatalog ? { preparedModelCatalog } : {}),
+    });
+  };
+
+  it.each(["reasoning-first", "thinking-first"] as const)(
+    "shares discovered capability metadata across %s default resolution",
+    async (resolutionOrder) => {
+      vi.mocked(loadModelCatalogLocal).mockClear();
+      catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+      vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
+        { provider: "local", id: "fast-reasoner", name: "Fast Reasoner", reasoning: true },
+      ]);
+      const state = await createConfiguredReasoningState();
+      const expectedCatalog = [
+        expect.objectContaining({ provider: "local", id: "fast-reasoner", reasoning: true }),
+      ];
+
+      if (resolutionOrder === "reasoning-first") {
+        await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+        await expect(state.resolveThinkingCatalog()).resolves.toEqual(expectedCatalog);
+      } else {
+        await expect(state.resolveThinkingCatalog()).resolves.toEqual(expectedCatalog);
+        await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+      }
+
+      await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+      expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
+      expect(catalogRuntimeMocks.loadModelCatalogSnapshot).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("reuses the prepared owner for incomplete configured reasoning metadata", async () => {
+    vi.mocked(loadModelCatalogLocal).mockClear();
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+    const state = await createConfiguredReasoningState({ usePreparedCatalog: true });
+
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({ provider: "local", id: "fast-reasoner", reasoning: true }),
+    ]);
+    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps locked model reasoning without exposing it through the allowed catalog", async () => {
+    vi.mocked(loadModelCatalogLocal).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockClear();
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "local/allowed-model" },
+          models: {
+            "local/allowed-model": {},
+            "other/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:direct:locked-local-reasoner";
+    const sessionEntry = makeEntry({
+      providerOverride: "local",
+      modelOverride: "locked-reasoner",
+      modelOverrideSource: "user",
+      modelSelectionLocked: true,
+    });
+    const preparedModelCatalog = {
+      entries: [
+        { provider: "local", id: "allowed-model", name: "Allowed Model", reasoning: false },
+        { provider: "local", id: "locked-reasoner", name: "Locked Reasoner", reasoning: true },
+      ],
+      routeVariants: [],
+      authoritative: true,
+    };
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultProvider: "local",
+      defaultModel: "allowed-model",
+      provider: "local",
+      model: "allowed-model",
+      hasModelDirective: false,
+      preparedModelCatalog,
+    });
+
+    expect(state.provider).toBe("local");
+    expect(state.model).toBe("locked-reasoner");
+    expect(state.allowedModelKeys.has("local/locked-reasoner")).toBe(false);
+    expect(state.allowedModelCatalog).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "locked-reasoner" })]),
+    );
+    await expect(state.resolveThinkingCatalog()).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "locked-reasoner" })]),
+    );
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    expect(loadManifestModelCatalog).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicitly non-reasoning configured models discovery-free", async () => {
+    vi.mocked(loadModelCatalogLocal).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockClear();
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+    const state = await createConfiguredReasoningState({ configuredReasoning: false });
+
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({ provider: "local", id: "fast-reasoner", reasoning: false }),
+    ]);
+    expect(loadManifestModelCatalog).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
   it("uses manifest metadata before hydrating the runtime reasoning catalog", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadManifestModelCatalog).mockClear();
