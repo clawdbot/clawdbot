@@ -251,7 +251,17 @@ export function projectSessionSnapshotChanges(params: {
       continue;
     }
     if (field === "updatedAt") {
-      patch.updatedAt = Math.max(params.current.updatedAt, params.next.updatedAt);
+      // Same pending-reset contract as resolveMergedUpdatedAt: a legacy
+      // updatedAt=0 tombstone survives same-identity snapshot writes (command
+      // bookkeeping like /send while an active run is deferred); only a write
+      // that changes the lifecycle identity mints a fresh updatedAt.
+      const keepsPendingResetMarker =
+        params.current.updatedAt === 0 &&
+        params.next.sessionId === params.current.sessionId &&
+        params.next.lifecycleRevision === params.current.lifecycleRevision;
+      patch.updatedAt = keepsPendingResetMarker
+        ? 0
+        : Math.max(params.current.updatedAt, params.next.updatedAt);
       continue;
     }
     if (

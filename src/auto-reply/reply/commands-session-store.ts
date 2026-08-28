@@ -42,7 +42,10 @@ export async function persistCommandSession(params: PersistSessionEntryParams): 
   const sessionEntry = params.sessionEntry;
   const creatingSession = params.allowCreateSessionEntry === true;
   const initialEntry = params.initialSessionEntry ?? { ...sessionEntry };
-  sessionEntry.updatedAt = Date.now();
+  // Keep the legacy updatedAt=0 pending-reset marker on the in-memory entry;
+  // projectSessionSnapshotChanges applies the same rule to the persisted row,
+  // so command bookkeeping (e.g. /send during a deferred run) cannot consume it.
+  sessionEntry.updatedAt = !creatingSession && initialEntry.updatedAt === 0 ? 0 : Date.now();
   params.sessionStore[params.sessionKey] = sessionEntry;
   if (params.storePath) {
     // Slash commands mutate one known session entry; skipping global session
@@ -95,7 +98,9 @@ export async function persistAbortTargetEntry(params: {
 
   entry.abortedLastRun = true;
   applyAbortCutoffToSessionEntry(entry, abortCutoff);
-  entry.updatedAt = Date.now();
+  // A /stop during a deferred pending-reset must not consume the marker either;
+  // abort bookkeeping never changes the session's lifecycle identity.
+  entry.updatedAt = entry.updatedAt === 0 ? 0 : Date.now();
   sessionStore[key] = entry;
 
   if (storePath) {
@@ -104,7 +109,7 @@ export async function persistAbortTargetEntry(params: {
       (nextEntry) => {
         nextEntry.abortedLastRun = true;
         applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-        nextEntry.updatedAt = Date.now();
+        nextEntry.updatedAt = nextEntry.updatedAt === 0 ? 0 : Date.now();
         return nextEntry;
       },
       {

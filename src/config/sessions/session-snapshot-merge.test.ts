@@ -382,6 +382,42 @@ describe("session snapshot merge", () => {
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
   });
 
+  it("keeps the legacy pending-reset marker on same-identity snapshot writes", () => {
+    const tombstonedInitial: SessionEntry = { ...initial, updatedAt: 0 };
+    const next: SessionEntry = { ...tombstonedInitial, sendPolicy: "allow", updatedAt: 500 };
+    const current = { ...tombstonedInitial };
+
+    expect(
+      mergeSessionSnapshotChanges({ initial: tombstonedInitial, next, current }),
+    ).toMatchObject({
+      sendPolicy: "allow",
+      updatedAt: 0,
+    });
+  });
+
+  it("mints a fresh updatedAt when the snapshot changes the lifecycle identity", () => {
+    const tombstonedInitial: SessionEntry = { ...initial, updatedAt: 0 };
+    const next = { ...tombstonedInitial, sessionId: "session-2", updatedAt: 500 };
+    const current = { ...tombstonedInitial };
+
+    expect(
+      mergeSessionSnapshotChanges({ initial: tombstonedInitial, next, current }),
+    ).toMatchObject({
+      sessionId: "session-2",
+      updatedAt: 500,
+    });
+  });
+
+  it("stamps a fresh updatedAt for ordinary entries on snapshot writes", () => {
+    const next: SessionEntry = { ...initial, sendPolicy: "allow", updatedAt: 500 };
+    const current = { ...initial, updatedAt: 300 };
+
+    expect(mergeSessionSnapshotChanges({ initial, next, current })).toMatchObject({
+      sendPolicy: "allow",
+      updatedAt: 500,
+    });
+  });
+
   it("preserves the recovery aggregate when a restart marker wins a stale healthy clear", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
