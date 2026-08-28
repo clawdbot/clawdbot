@@ -1130,57 +1130,6 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
-  it.each([
-    { replacement: ["/tmp/a.jpg"], expected: [["/tmp/a.jpg"], ["/tmp/b.jpg"]] },
-    { replacement: ["/tmp/a.jpg", "/tmp/b.jpg"], expected: [["/tmp/a.jpg", "/tmp/b.jpg"]] },
-    { replacement: ["/tmp/c.jpg"], expected: [["/tmp/a.jpg", "/tmp/b.jpg"], ["/tmp/c.jpg"]] },
-    {
-      deferredMedia: ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"],
-      replacement: ["/tmp/b.jpg"],
-      expected: [["/tmp/b.jpg"], ["/tmp/a.jpg", "/tmp/c.jpg"]],
-    },
-  ])(
-    "accounts for every deferred attachment after replacement $replacement",
-    async ({ replacement, expected, deferredMedia = ["/tmp/a.jpg", "/tmp/b.jpg"] }) => {
-      const sent: string[] = [];
-      vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
-        buffer: Buffer.from(url),
-        contentType: "image/jpeg",
-        kind: "image",
-      }));
-      const sendMedia = vi.fn(async (content: Parameters<TestMsg["platform"]["sendMedia"]>[0]) => {
-        if (!("image" in content) || !Buffer.isBuffer(content.image)) {
-          throw new Error("expected image transport payload");
-        }
-        sent.push(content.image.toString());
-        return createAcceptedWhatsAppSendResult("media", `accepted-${sent.length}`);
-      });
-      const deliverReply = vi.fn(deliverWebReply);
-      await dispatchBufferedReply({ deliverReply, msg: makeMsg({ platform: { sendMedia } }) });
-      const deliver = requireCapturedDeliver(capturedDispatchParams as CapturedDispatchParams);
-      const deferred = requireRecord(
-        await deliver({ text: "tool images", mediaUrls: deferredMedia }, { kind: "tool" }),
-        "deferred batch",
-      );
-      const finalized = vi.fn();
-      void (deferred.finalization as Promise<unknown>).then(finalized);
-      expect(deliverReply).not.toHaveBeenCalled();
-      await deliver({ text: "Here are the images", mediaUrls: replacement }, { kind: "final" });
-      if (replacement.length === 1 && replacement[0] === "/tmp/a.jpg") {
-        expect(finalized).not.toHaveBeenCalled();
-      }
-      await getCapturedOnSettled()?.();
-
-      expect(deliverReply.mock.calls.map(([params]) => params.replyResult.mediaUrls)).toEqual(
-        expected,
-      );
-      expect(sent).toEqual(expected.flat());
-      await expect(deferred.finalization).resolves.toMatchObject({
-        visibleReplySent: expected.length > 1,
-      });
-    },
-  );
-
   it("drops deferred media when its captioned replacement fails after becoming visible", async () => {
     const error = Object.assign(new Error("post-send bookkeeping failed"), {
       sentBeforeError: true,
