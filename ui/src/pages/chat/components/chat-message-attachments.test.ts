@@ -755,11 +755,11 @@ describe("attachment sidebar source ownership", () => {
   });
 
   it.each([
-    ["audio", "recording.mp3", "audio/mpeg", "openclaw-chat-audio-player"],
+    ["audio", "recording.mp3", "audio/mpeg", "openclaw-chat-audio-player", undefined],
     ["audio", "recording.ogg", "audio/ogg", "openclaw-chat-audio-player", "transcode"],
-    ["audio", "recording.m4a", "audio/x-m4a", "openclaw-chat-audio-player"],
+    ["audio", "recording.m4a", "audio/x-m4a", "openclaw-chat-audio-player", undefined],
     ["audio", "recording.flac", "audio/flac", "openclaw-chat-audio-player", "transcode"],
-    ["video", "demo.mp4", "video/mp4", "openclaw-chat-video-player"],
+    ["video", "demo.mp4", "video/mp4", "openclaw-chat-video-player", undefined],
     ["video", "demo.webm", "video/webm", "openclaw-chat-video-player", "transcode"],
   ] as const)(
     "renders %s attachment %s with inline playback",
