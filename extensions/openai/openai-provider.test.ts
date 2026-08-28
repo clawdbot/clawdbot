@@ -702,7 +702,7 @@ describe("buildOpenAIProvider", () => {
       "denies account access",
       () => new Response("forbidden", { status: 403 }),
       "sk-openai-unavailable",
-      false,
+      true,
     ],
   ])(
     "does not invent available OpenAI models when discovery %s",
