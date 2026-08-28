@@ -68,6 +68,7 @@
  "node_modules/@awesome.me/webawesome/dist/components/dialog/dialog.js",
  "node_modules/@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
  "node_modules/@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
+ "node_modules/@awesome.me/webawesome/dist/components/popup/popup.js",
  "node_modules/@awesome.me/webawesome/dist/components/radio-group/radio-group.js",
  "node_modules/@awesome.me/webawesome/dist/components/radio/radio.js",
  "node_modules/@awesome.me/webawesome/dist/components/switch/switch.js",
@@ -1431,6 +1432,7 @@
  "ui/src/lib/sessions/session-group-catalog.ts",
  "ui/src/lib/sessions/session-key.ts",
  "ui/src/lib/sessions/session-mutations.ts",
+ "ui/src/lib/sessions/session-placement-recovery-migration.runtime.ts",
  "ui/src/lib/sessions/session-placement-recovery-storage-key.ts",
  "ui/src/lib/sessions/session-placement-recovery.ts",
  "ui/src/lib/sessions/session-placement-startup.ts",
@@ -1783,5 +1785,6 @@
  "ui/src/pages/workboard/route-location.ts",
  "ui/src/pages/workboard/route.ts",
  "ui/src/pages/worktrees/route.ts",
+ "ui/src/styles/chat.css",
  "ui/src/styles/lobster-pet.css"
 ]
