@@ -118,6 +118,7 @@ describe("browser tool schema", () => {
     const schema = createBrowserToolSchema(resolveBrowserToolCapabilities({ tabBound }));
     for (const args of [
       { action: "requests", targetId: "t1", filter: "fetch", clear: true, limit: 10 },
+      { action: "errors", targetId: "t1", clear: true, limit: 10 },
       { action: "text", targetId: "t1", selector: "article", maxChars: 1000 },
       {
         action: "emulate",
@@ -133,6 +134,8 @@ describe("browser tool schema", () => {
     }
     expect(Value.Check(schema, { action: "emulate", colorScheme: "invalid" })).toBe(false);
     expect(Value.Check(schema, { action: "requests", clear: "true" })).toBe(false);
+    expect(Value.Check(schema, { action: "errors", clear: "true" })).toBe(false);
+    expect(Value.Check(schema, { action: "errors", limit: 0 })).toBe(false);
   });
 
   it("hides Playwright-only actions for an existing-session binding", () => {
@@ -143,11 +146,20 @@ describe("browser tool schema", () => {
         supportsDownloads: false,
         supportsPdf: false,
         supportsRequests: false,
+        supportsErrors: false,
         supportsPageText: false,
         supportsEmulation: false,
       },
     });
-    for (const action of ["requests", "text", "emulate", "pdf", "download", "waitfordownload"]) {
+    for (const action of [
+      "requests",
+      "errors",
+      "text",
+      "emulate",
+      "pdf",
+      "download",
+      "waitfordownload",
+    ]) {
       expect(capabilities.actions).not.toContain(action);
     }
     expect(capabilities.actions).toContain("snapshot");

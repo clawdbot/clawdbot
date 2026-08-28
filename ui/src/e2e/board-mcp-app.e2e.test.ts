@@ -243,9 +243,16 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await openDashboard(page);
     await expect
       .poll(async () => (await gateway.getRequests("board.widget.appView")).length, {
-        timeout: 10_000,
+        timeout: 15_000,
       })
-      .toBeGreaterThan(0);
+      .toBe(2);
+    // Renewal replaces the iframe. The new-binding request follows teardown,
+    // so wait for it before sampling the replacement's rendered background.
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("mcp.app.view")).map((request) => request.params),
+      )
+      .toContainEqual({ sessionKey, viewId: "renewed-view" });
     await waitForMountedApp(page);
     const widgetBackgrounds = await page.evaluate(() => {
       const widgetElement = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
@@ -262,11 +269,6 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     });
     expect(widgetBackgrounds.frame).toBe(widgetBackgrounds.widget);
     expect(widgetBackgrounds.frame).not.toBe("rgba(0, 0, 0, 0)");
-    await expect
-      .poll(async () => (await gateway.getRequests("board.widget.appView")).length, {
-        timeout: 15_000,
-      })
-      .toBe(2);
     expect((await gateway.getRequests("board.widget.appView"))[0]?.params).toEqual({
       sessionKey,
       name: "app-0",

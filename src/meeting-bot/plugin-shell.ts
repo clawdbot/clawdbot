@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
+import type { OpenClawPluginCliRootCommandDescriptor } from "../plugins/plugin-registration.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import {
@@ -151,6 +151,7 @@ type MeetingPluginShellEntryOptions<
   | "unknownActionMessage"
 > & {
   cli: {
+    descriptor: OpenClawPluginCliRootCommandDescriptor;
     load(): Promise<(params: { program: Command; config: Config }) => void>;
   };
   browserGuestLabel: string;
@@ -197,16 +198,9 @@ export function createMeetingPluginShellEntry<
       }),
     registerCli: (api, config) => {
       api.registerCli(async ({ program }) => (await loadCli())({ program, config }), {
-        commands: [methodPrefix],
-        descriptors: [
-          {
-            name: methodPrefix,
-            description: `Join and manage ${options.browserGuestLabel} guests`,
-            hasSubcommands: true,
-            machineOutput: ({ argv }: { argv: readonly string[] }) =>
-              getRootOptionAwareCommandPath(argv, 2).length === 2,
-          },
-        ],
+        commands: [options.cli.descriptor.name],
+        // Share the metadata descriptor so help and runtime output policy cannot drift.
+        descriptors: [options.cli.descriptor],
       });
     },
   });

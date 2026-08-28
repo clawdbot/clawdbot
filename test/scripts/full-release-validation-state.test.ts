@@ -78,6 +78,7 @@ function evidenceManifest() {
 
 function generatedManifest(planArtifact: Record<string, any>): Record<string, any> {
   return {
+    candidateBinding: planArtifact.candidate ?? null,
     childRuns: {
       normalCi: "101",
       npmTelegram: "",
@@ -1039,6 +1040,34 @@ describe("release state artifacts", () => {
     };
   }
 
+  function compositeArtifact(status = "completed"): Record<string, any> {
+    const composite = composeReleaseAttemptJobs(
+      [
+        {
+          jobs: ["qa smoke ci", "QA Smoke CI"].map((name) => ({
+            conclusion: "success",
+            name,
+            status: "completed",
+          })),
+          runAttempt: 1,
+        },
+      ],
+      { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+    );
+    return artifact("decision", 2, executionPlan({ rerunGroup: "ci" }), {
+      compositeJobsSha256: composite.sha256,
+      conclusion: status === "completed" ? "success" : "",
+      dispatchActor: "github-actions[bot]",
+      jobs: composite.jobs,
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      status,
+      triggeringActor: "github-actions[bot]",
+    });
+  }
+
   function selectPair(
     sealedPlan: Record<string, any>,
     decision: Record<string, any>,
@@ -1061,6 +1090,43 @@ describe("release state artifacts", () => {
         { ...stateExpected(), parentRunAttempt: 2 },
       ),
     ).toMatchObject({ decision: { state: "passed" }, drain: { state: "passed" } });
+  });
+
+  it("round-trips mixed-case composite jobs through state validation", () => {
+    const payload = compositeArtifact();
+    expect(payload.children.normalCi.timing.jobs.map((job: { name: string }) => job.name)).toEqual([
+      "QA Smoke CI",
+      "qa smoke ci",
+    ]);
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).not.toThrow();
+  });
+
+  it("rejects noncanonical composite job ordering", () => {
+    const payload = compositeArtifact();
+    payload.children.normalCi.timing.jobs.reverse();
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).toThrow(
+      "release state child composite jobs are invalid: normalCi",
+    );
+  });
+
+  it("accepts a queued run snapshot after its jobs have progressed", () => {
+    expect(
+      validateReleaseStateArtifact(compositeArtifact("queued"), stateExpected(), "decision"),
+    ).toMatchObject({
+      activeRunIds: ["101"],
+      children: {
+        normalCi: {
+          status: "queued",
+          timing: {
+            jobs: [
+              { name: "QA Smoke CI", status: "completed" },
+              { name: "qa smoke ci", status: "completed" },
+            ],
+          },
+        },
+      },
+      state: "qualifying",
+    });
   });
 
   it("requires Decision and Drain to carry identical accepted attempt evidence", () => {
@@ -2008,6 +2074,150 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     expect(invalid.stderr).toContain(
       "release validation manifest differs from the immutable execution plan",
     );
+  });
+
+  it("binds the generated manifest to the candidate sealed by attempt one", () => {
+    const root = mkdtempSync(join(tmpdir(), "frv-generated-candidate-manifest-"));
+    const decisionPath = join(root, "decision.json");
+    const drainPath = join(root, "drain.json");
+    const executionPlanPath = join(root, "plan.json");
+    const manifestPath = join(root, "manifest.json");
+    const candidate = candidateBinding();
+    const sealedPlan = executionPlan(
+      { rerunGroup: "ci" },
+      { attemptEvidenceVersion: 2, candidate, candidateRequest: candidate.request },
+    );
+    const plannedChild = sealedPlan.children.find(
+      (entry: Record<string, any>) => entry.key === "normalCi",
+    );
+    const composite = composeReleaseAttemptJobs(
+      [
+        {
+          jobs: [
+            {
+              completed_at: "2026-08-21T00:01:00Z",
+              conclusion: "success",
+              html_url: "https://example.invalid/jobs/test",
+              name: "test",
+              started_at: "2026-08-21T00:00:00Z",
+              status: "completed",
+            },
+          ],
+          runAttempt: 1,
+        },
+      ],
+      { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+    );
+    const children = [
+      child("normalCi", {
+        ...plannedChild,
+        compositeJobsSha256: composite.sha256,
+        conclusion: "success",
+        createdAt: "2026-08-21T00:00:00Z",
+        dispatchActor: "github-actions[bot]",
+        jobs: composite.jobs,
+        observedRunAttempts: [1],
+        plannedRunAttempt: 1,
+        repository: "openclaw/openclaw",
+        status: "completed",
+        triggeringActor: "github-actions[bot]",
+        updatedAt: "2026-08-21T00:01:00Z",
+      }),
+    ];
+    const decision = classifyReleaseSnapshot({
+      cancelled: false,
+      children,
+      releaseProfile: "stable",
+      workflowRef: "release-ci/tooling",
+    });
+    const stateArtifact = (mode: "decision" | "drain") =>
+      buildReleaseStateArtifact({
+        cancellation: {},
+        children,
+        decision,
+        executionPlan: sealedPlan,
+        expected: {
+          parentRunAttempt: 2,
+          parentRunId: "77",
+          targetSha: TARGET_SHA,
+          workflowRef: "release-ci/tooling",
+          workflowSha: SHA,
+        },
+        mode,
+        releaseProfile: "stable",
+        rerunGroup: "ci",
+      });
+    const decisionArtifact = stateArtifact("decision");
+    const drainArtifact = stateArtifact("drain");
+    const childEvidence = Object.fromEntries(
+      Object.entries(drainArtifact.children).map(([key, stateChild]: [string, any]) => [
+        key,
+        {
+          compositeJobsSha256: stateChild.compositeJobsSha256,
+          dispatchActor: stateChild.dispatchActor,
+          effectiveRunAttempt: stateChild.runAttempt,
+          jobs: stateChild.timing.jobs.map((job: Record<string, unknown>) => ({
+            acceptedRunAttempt: job.acceptedRunAttempt,
+            completedAt: job.completedAt,
+            conclusion: job.conclusion,
+            name: job.name,
+            startedAt: job.startedAt,
+            status: job.status,
+            url: job.url,
+          })),
+          observedRunAttempts: stateChild.observedRunAttempts,
+          plannedRunAttempt: stateChild.plannedRunAttempt,
+          repository: stateChild.repository,
+          runId: stateChild.runId,
+          triggeringActor: stateChild.triggeringActor,
+        },
+      ]),
+    );
+    writeFileSync(executionPlanPath, JSON.stringify(sealedPlan));
+    writeFileSync(decisionPath, JSON.stringify(decisionArtifact));
+    writeFileSync(drainPath, JSON.stringify(drainArtifact));
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...generatedManifest(sealedPlan), childEvidence }),
+    );
+    const env = {
+      ...process.env,
+      DIAGNOSTIC_DRAIN_PATH: drainPath,
+      GITHUB_REF_NAME: "release-ci/tooling",
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ATTEMPT: "2",
+      GITHUB_RUN_ID: "77",
+      GITHUB_SHA: SHA,
+      RELEASE_DECISION_PATH: decisionPath,
+      RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+      RELEASE_PROFILE: "stable",
+      RELEASE_VALIDATION_MANIFEST_PATH: manifestPath,
+      RERUN_GROUP: "ci",
+      TARGET_SHA,
+    };
+    const valid = spawnSync(process.execPath, [SCRIPT, "validate-manifest"], {
+      encoding: "utf8",
+      env,
+      timeout: 10_000,
+    });
+    expect(valid.status, valid.stderr).toBe(0);
+
+    const changed = {
+      ...generatedManifest(sealedPlan),
+      candidateBinding: {
+        ...candidate,
+        evidenceArtifact: { ...candidate.evidenceArtifact, id: "999" },
+      },
+      childEvidence,
+    };
+    writeFileSync(manifestPath, JSON.stringify(changed));
+    const invalid = spawnSync(process.execPath, [SCRIPT, "validate-manifest"], {
+      encoding: "utf8",
+      env,
+      timeout: 10_000,
+    });
+    expect(invalid.status).toBe(2);
+    expect(invalid.stderr).toContain("candidate");
   });
 
   it.each([

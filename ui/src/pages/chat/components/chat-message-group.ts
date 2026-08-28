@@ -112,6 +112,7 @@ type RenderMessageGroupOptions = {
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
   onRetryQueuedMessage?: (id: string) => void;
+  queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
   resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
   onResolveReply?: (replyToId: string) => void;
   onOpenReply?: (replyToId: string) => void;
@@ -122,6 +123,7 @@ type RenderMessageGroupOptions = {
   turnRecap?: TurnRecap;
   frameContent?: unknown;
   frameActionOwner?: MessageGroup["messages"][number] | null;
+  latestAssistant?: boolean;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -530,15 +532,19 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const senderHue =
     normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
   const sendFailure = readPendingSendFailure(group.messages.at(-1)?.message);
+  const sendAction =
+    opts.queuedMessageAction?.id === sendFailure?.id ? opts.queuedMessageAction : undefined;
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
-        ? " chat-group--peer"
-        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
+      class="chat-group ${roleClass} chat-group--with-footer${opts.latestAssistant
+        ? " chat-group--latest-assistant"
+        : ""}${isPeerGroup ? " chat-group--peer" : ""}${senderHue === null
+        ? ""
+        : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
@@ -635,16 +641,19 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                           : "chat.queue.notSent",
                       )}</span
                     >
-                    ${opts.onRetryQueuedMessage
+                    ${sendAction?.onAction || opts.onRetryQueuedMessage
                       ? html`
                           <span aria-hidden="true">·</span>
                           <button
                             class="chat-send-status__retry"
                             type="button"
-                            aria-label=${t("chat.queue.retryQueuedMessage")}
-                            @click=${() => opts.onRetryQueuedMessage?.(sendFailure.id)}
+                            aria-label=${sendAction?.label ?? t("chat.queue.retryQueuedMessage")}
+                            @click=${() =>
+                              sendAction?.onAction
+                                ? sendAction.onAction()
+                                : opts.onRetryQueuedMessage?.(sendFailure.id)}
                           >
-                            ${t("chat.queue.retry")}
+                            ${sendAction?.label ?? t("chat.queue.retry")}
                           </button>
                         `
                       : nothing}

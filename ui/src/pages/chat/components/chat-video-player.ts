@@ -4,8 +4,12 @@ import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
-import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
-import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import {
+  openAttachmentCardFromClick,
+  renderAttachmentCardHeader,
+  renderCompactAttachmentCard,
+} from "./chat-attachment-card.ts";
+import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
@@ -43,6 +47,18 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       this.sourceController.reset(this.media);
     }
     super.disconnectedCallback();
+  }
+
+  protected override willUpdate(changedProperties: PropertyValues<this>): void {
+    if (
+      this.sourceController.readiness === "unavailable" &&
+      (changedProperties.has("src") ||
+        changedProperties.has("sourceIdentity") ||
+        changedProperties.has("playback") ||
+        changedProperties.has("authToken"))
+    ) {
+      this.sourceController.cancel();
+    }
   }
 
   override updated(changedProperties: PropertyValues<this>): void {
@@ -107,9 +123,19 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    const downloadHref = safeAttachmentHref(this.src);
+    const downloadHref = safeMediaAttachmentHref(this.src);
     const preparing = this.sourceController.readiness === "preparing";
     const unavailable = this.sourceController.readiness === "unavailable";
+    if (unavailable) {
+      return renderCompactAttachmentCard({
+        kind: "video",
+        label: this.label,
+        mimeType: this.mimeType,
+        sizeBytes: this.sizeBytes,
+        downloadHref,
+        onExpand: this.onExpand,
+      });
+    }
     const dimensions =
       this.mediaWidth && this.mediaHeight
         ? { "aspect-ratio": `${this.mediaWidth} / ${this.mediaHeight}` }
@@ -118,7 +144,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
         ${ref(this.setViewportElement)}
-        ?data-unplayable=${this.sourceController.readiness === "unavailable"}
         ?data-openable=${Boolean(this.onExpand)}
         @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
       >
@@ -129,7 +154,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           sizeBytes: this.sizeBytes,
           downloadHref,
           onExpand: this.onExpand,
-          visualMode: unavailable ? "large-placeholder" : "preview-with-favicon",
+          visualMode: "preview-with-favicon",
         })}
         ${preparing
           ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
@@ -171,11 +196,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
               }
             }}
           ></video>
-        </div>
-        <div class="chat-assistant-video-fallback">
-          <div class="chat-assistant-attachment-card__reason">
-            ${t("chat.mediaPlayer.videoUnavailable")}
-          </div>
         </div>
       </div>
     `;

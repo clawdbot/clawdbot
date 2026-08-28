@@ -3225,6 +3225,7 @@ jobs:
           name: full-release-candidate-v1-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
           path: ${{ runner.temp }}/full-release-candidate/full-release-candidate.json
           if-no-files-found: error
+          overwrite: false
           retention-days: 7
 
       - name: Bind full release candidate evidence

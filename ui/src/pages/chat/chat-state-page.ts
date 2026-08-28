@@ -143,6 +143,8 @@ export function createPageState(
   const appConfig = context.config.current;
   const state = {
     sessions: context.sessions,
+    hasPendingInitialTurn: (sessionKey: string) =>
+      context.placementStartup.hasPendingTurn(sessionKey),
     initialUserMessage: context.initialUserMessage,
     settings,
     password: "",

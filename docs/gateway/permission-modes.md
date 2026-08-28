@@ -9,12 +9,14 @@ title: Session permission modes
 
 Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded canonical `sessionRoot`, or the selected agent's canonical workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
 
-| Mode        | Filesystem access                                 | Exec escalation reviewer              |
-| ----------- | ------------------------------------------------- | ------------------------------------- |
-| `read-only` | Reads under `sessionRoot`; mutation tools omitted | None; exec is denied                  |
-| `guarded`   | Reads and writes under `sessionRoot`              | A human after the allowlist fast path |
-| `workspace` | Reads and writes under `sessionRoot`              | LLM review, with human fallback       |
-| `full`      | Unrestricted filesystem access                    | None                                  |
+| Mode        | Filesystem access                                         | Exec escalation reviewer              |
+| ----------- | --------------------------------------------------------- | ------------------------------------- |
+| `read-only` | Reads under `sessionRoot`; managed mutation tools omitted | None; exec is denied                  |
+| `guarded`   | Reads and writes under `sessionRoot`                      | A human after the allowlist fast path |
+| `workspace` | Reads and writes under `sessionRoot`                      | LLM review, with human fallback       |
+| `full`      | Unrestricted filesystem access                            | None                                  |
+
+These tool-visibility and exec rules describe OpenClaw-managed tools. Native harnesses can retain their own tool surface under their permission controls; see [Codex runtime policy](/plugins/codex-harness-runtime).
 
 `full` requires `operator.admin`. The other modes require `operator.write`.
 
@@ -24,7 +26,7 @@ A permission mode can be set on any session. When a session has a recorded `sess
 
 Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested working directory remains the runtime `cwd`, so relative paths start there while filesystem containment covers the whole checkout.
 
-File tools recognize aliases of the session's trusted root and working directory, including absolute paths using those aliases. This does not expand the boundary: unrelated external symlinks pointing inward remain denied, as do symlinks and raw `symlink/..` traversal that escape the root. `read-only` sessions still omit mutation tools.
+File tools recognize aliases of the session's trusted root and working directory, including absolute paths using those aliases. This does not expand the boundary: unrelated external symlinks pointing inward remain denied, as do symlinks and raw `symlink/..` traversal that escape the root. In `read-only` mode, OpenClaw-managed mutation tools remain omitted.
 
 New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 

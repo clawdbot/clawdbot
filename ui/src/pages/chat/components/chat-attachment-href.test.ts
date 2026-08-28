@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { safeAttachmentHref, safeAudioAttachmentHref } from "./chat-attachment-href.ts";
+import { safeAttachmentHref, safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 
 describe("safeAttachmentHref", () => {
   it.each([
@@ -27,23 +27,25 @@ describe("safeAttachmentHref", () => {
   });
 });
 
-describe("safeAudioAttachmentHref", () => {
-  it("allows only a well-formed base64 audio data URL", () => {
-    const href = "data:audio/wav;base64,UklGRg==";
-    expect(safeAudioAttachmentHref(href)).toBe(href);
-  });
+describe("safeMediaAttachmentHref", () => {
+  it.each(["data:audio/wav;base64,UklGRg==", "data:video/mp4;base64,AAAA"])(
+    "allows a well-formed base64 media data URL: %s",
+    (href) => {
+      expect(safeMediaAttachmentHref(href)).toBe(href);
+    },
+  );
 
   it.each([
     "data:text/html;base64,PHNjcmlwdD4=",
     "data:audio/wav,<script>alert(1)</script>",
     "data:audio/wav;base64,not_base64",
     "data:audio/wav;base64,UklGRg=",
-  ])("rejects an unsafe inline audio href: %s", (href) => {
-    expect(safeAudioAttachmentHref(href)).toBeUndefined();
+  ])("rejects an unsafe inline media href: %s", (href) => {
+    expect(safeMediaAttachmentHref(href)).toBeUndefined();
   });
 
   it("retains the shared safe attachment protocols", () => {
-    expect(safeAudioAttachmentHref("https://cdn.example/audio.mp3")).toBe(
+    expect(safeMediaAttachmentHref("https://cdn.example/audio.mp3")).toBe(
       "https://cdn.example/audio.mp3",
     );
   });

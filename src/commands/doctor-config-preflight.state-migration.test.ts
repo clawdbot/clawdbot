@@ -138,6 +138,7 @@ type ConfigSnapshotWithPluginMetadataFixture = {
   pluginMetadataSnapshot?: {
     configFingerprint?: string;
     index?: unknown;
+    registryIndex?: unknown;
     registrySource?: "derived" | "persisted";
   };
 };
@@ -401,6 +402,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         pluginMetadataSnapshot: {
           configFingerprint: "plugin-migrations",
           index,
+          registryIndex: index,
           registrySource: "derived",
         },
       })
@@ -409,6 +411,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         pluginMetadataSnapshot: {
           configFingerprint: "plugin-migrations",
           index,
+          registryIndex: index,
           registrySource: "derived",
         },
       })
@@ -417,6 +420,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         pluginMetadataSnapshot: {
           configFingerprint: "plugin-migrations",
           index,
+          registryIndex: index,
           registrySource: "derived",
         },
       })
@@ -425,6 +429,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         pluginMetadataSnapshot: {
           configFingerprint: "plugin-migrations",
           index,
+          registryIndex: index,
           registrySource: "persisted",
         },
       });

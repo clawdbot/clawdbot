@@ -961,6 +961,8 @@ async function validateManifestMode() {
   const rawManifest = readArtifact(manifestPath, "release validation manifest");
   const { validateParentManifest } = await import("./release-ci-summary.mjs");
   const manifest = validateParentManifest(rawManifest, {
+    candidateBinding: executionPlan.candidate ?? null,
+    repository: expected.repository,
     runAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
     runId: executionPlan.parentRunId,
     workflowRef: executionPlan.workflowRef,

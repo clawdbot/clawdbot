@@ -179,10 +179,17 @@ function expectSuccess(lane: Lane): void {
 
 describe("update orchestration lifecycle ownership", () => {
   it.each(["resume", "current-process", "repair"] as const)(
-    "%s releases ownership for fresh doctor and strict validation",
+    "%s keeps plugin mutation exclusive and releases ownership for fresh doctor and strict validation",
     async (lane) => {
       await writeScenario(lane, {
         hostVersion: lane === "repair" ? undefined : "1.0.0",
+      });
+      mocks.plugins.mockImplementationOnce(async () => {
+        const result = await runExec(process.execPath, [entrypoint, "probe"], {
+          timeoutMs: 15_000,
+        });
+        expect(result.stdout).toBe("excluded");
+        return pluginResult;
       });
       await invoke(lane);
       expectSuccess(lane);
@@ -198,22 +205,6 @@ describe("update orchestration lifecycle ownership", () => {
           expect.objectContaining({ shouldRestart: false }),
         );
       }
-    },
-  );
-
-  it.each(["resume", "current-process", "repair"] as const)(
-    "%s keeps plugin mutation exclusive to its parent",
-    async (lane) => {
-      await writeScenario(lane);
-      mocks.plugins.mockImplementationOnce(async () => {
-        const result = await runExec(process.execPath, [entrypoint, "probe"], {
-          timeoutMs: 15_000,
-        });
-        expect(result.stdout).toBe("excluded");
-        return pluginResult;
-      });
-      await invoke(lane);
-      expectSuccess(lane);
       expect(mocks.plugins).toHaveBeenCalledOnce();
       const after = await runExec(process.execPath, [entrypoint, "probe"], { timeoutMs: 15_000 });
       expect(after.stdout).toBe("acquired");

@@ -892,6 +892,15 @@ function Ensure-Git {
     return $false
 }
 
+function Test-GitFilterSupport {
+    try {
+        $help = (& git clone -h 2>&1 | Out-String)
+        return $help -match '(?m)\s--(?:\[no-\])?filter(?:[ =]|$)'
+    } catch {
+        return $false
+    }
+}
+
 function Get-OpenClawCommandPath {
     $openclawCmd = Get-Command openclaw.cmd -ErrorAction SilentlyContinue
     if ($openclawCmd -and $openclawCmd.Source) {
@@ -1657,7 +1666,15 @@ function New-TransactionalGitCheckout {
     $retainStaging = $false
 
     try {
-        git clone $RepoUrl $stagingDir
+        # Keep ref metadata for later updates while avoiding file blobs when
+        # the local Git client supports partial clones. Git warns and falls
+        # back to a full clone when the server cannot filter.
+        $cloneArgs = @("clone")
+        if (Test-GitFilterSupport) {
+            $cloneArgs += "--filter=blob:none"
+        }
+        $cloneArgs += @($RepoUrl, $stagingDir)
+        & git @cloneArgs
         if ($LASTEXITCODE -ne 0) {
             throw "git clone failed with exit code $LASTEXITCODE"
         }

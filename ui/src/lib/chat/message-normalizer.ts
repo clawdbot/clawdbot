@@ -17,6 +17,7 @@ import {
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
+import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
 
 // Older gateways baked sender labels as "name (<profile uuid>)" into transcript
@@ -53,6 +54,8 @@ const rawCanvasPreviewSchema = z
   .catch(undefined);
 const rawAttachmentSchema = z
   .looseObject({
+    code: optionalMessageStringSchema,
+    kind: optionalMessageStringSchema,
     url: optionalMessageStringSchema,
     label: optionalMessageStringSchema,
     mimeType: optionalMessageStringSchema,
@@ -301,6 +304,7 @@ const MIME_BY_EXT: Record<string, string> = {
   m4a: "audio/mp4",
   m2a: "audio/mpeg",
   mp4: "video/mp4",
+  webm: "video/webm",
   mov: "video/quicktime",
   pdf: "application/pdf",
   txt: "text/plain",
@@ -595,46 +599,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       } else if (item.type === "audio") {
         return [];
       }
-      if (item.type === "attachment" && item.attachment) {
-        const attachment = item.attachment;
-        if (
-          attachment.url === undefined ||
-          (attachment.kind !== "image" &&
-            attachment.kind !== "audio" &&
-            attachment.kind !== "video" &&
-            attachment.kind !== "document") ||
-          attachment.label === undefined
-        ) {
-          return [];
-        }
-        return [
-          {
-            type: "attachment" as const,
-            attachment: {
-              url: attachment.url,
-              kind: attachment.kind,
-              label: attachment.label,
-              ...(attachment.mimeType !== undefined ? { mimeType: attachment.mimeType } : {}),
-              ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
-              ...(attachment.artifactId !== undefined ? { artifactId: attachment.artifactId } : {}),
-              ...(attachment.playback === "native" || attachment.playback === "transcode"
-                ? { playback: attachment.playback }
-                : {}),
-              ...(attachment.sizeBytes !== undefined && attachment.sizeBytes >= 0
-                ? { sizeBytes: attachment.sizeBytes }
-                : {}),
-              ...(attachment.durationMs !== undefined && attachment.durationMs >= 0
-                ? { durationMs: attachment.durationMs }
-                : {}),
-              ...(attachment.width !== undefined && attachment.width > 0
-                ? { width: attachment.width }
-                : {}),
-              ...(attachment.height !== undefined && attachment.height > 0
-                ? { height: attachment.height }
-                : {}),
-            },
-          },
-        ];
+      const attachmentContent = normalizeAttachmentContentBlock(item);
+      if (attachmentContent) {
+        return attachmentContent;
       }
       if (item.type === "canvas" && item.preview) {
         const preview = coerceCanvasPreview(item.preview);

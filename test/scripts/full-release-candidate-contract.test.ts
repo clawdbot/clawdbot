@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateRequest,
+  fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
@@ -55,6 +56,13 @@ function replaceBindingRequest(
 }
 
 describe("full release candidate contract", () => {
+  it("uses the canonical request digest directly in the evidence artifact name", () => {
+    const requestSha256 = "a".repeat(64);
+    expect(fullReleaseCandidateArtifactName(requestSha256)).toBe(
+      `full-release-candidate-v1-${requestSha256}`,
+    );
+  });
+
   it("canonicalizes equivalent request inputs and expands effective policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
     const reordered = Object.fromEntries(

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import {
   buildLocalWebchatAudioMessage,
   captureUiProofEnabled,
@@ -132,7 +133,7 @@ suite.define(() => {
               }
             : {
                 contentType: "audio/mpeg",
-                body: Buffer.from("ID3\u0003\u0000\u0000\u0000\u0000\u0000\u0000"),
+                body: createPlaybackMediaFixture("mp3"),
               },
         );
       });
@@ -163,22 +164,29 @@ suite.define(() => {
         const media =
           kind === "image"
             ? page.getByAltText("Local bootstrap image")
-            : page.locator(".chat-assistant-attachment-card--compact");
+            : page.locator("openclaw-chat-audio-player");
         await media.waitFor({
-          state: kind === "image" ? "visible" : "attached",
+          state: "visible",
           timeout: 10_000,
         });
         await expect
           .poll(() => requestedMediaUrls.length, { timeout: 10_000 })
-          .toBe(kind === "image" ? 2 : 1);
+          .toBeGreaterThanOrEqual(2);
         expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
-        if (kind === "image") {
-          expect(requestedMediaUrls[1]?.searchParams.get("mediaTicket")).toBe(ticket);
-        } else {
+        expect(
+          requestedMediaUrls.slice(1).some((url) => url.searchParams.get("mediaTicket") === ticket),
+        ).toBe(true);
+        if (kind === "audio") {
           expect(
             await media.locator(".chat-assistant-attachment-card__download").getAttribute("href"),
           ).toContain(`mediaTicket=${ticket}`);
-          expect(await media.locator("audio, video").count()).toBe(0);
+          await expect
+            .poll(() =>
+              media
+                .locator("audio")
+                .evaluate((element) => (element as HTMLMediaElement).readyState),
+            )
+            .toBeGreaterThanOrEqual(1);
         }
         expect(await page.getByText("Outside allowed folders").count()).toBe(0);
 

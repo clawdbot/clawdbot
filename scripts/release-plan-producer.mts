@@ -228,7 +228,15 @@ function verifyRemoteTooling(params: ReleasePlanSource, runGh: RunGh) {
     args = ["api", `repos/${REPOSITORY}/git/ref/tags/${tagRef}`, "--method", "GET"];
     failure = "protected release tooling tag is missing or unreadable";
   } else if (params.toolingFullRef === "refs/heads/main") {
-    args = ["api", `repos/${REPOSITORY}/compare/${sha}...main`, "--method", "GET"];
+    // Keep this bounded query identical to the verified child's cached identity request.
+    args = [
+      "api",
+      `repos/${REPOSITORY}/compare/${sha}...main`,
+      "--method",
+      "GET",
+      "--jq",
+      "{status}",
+    ];
     failure = "main release tooling ancestry could not be verified";
   } else {
     throw new Error("release tooling identity must be trusted main or an exact protected tag");

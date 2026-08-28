@@ -183,7 +183,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toBeUndefined();
     expect(requireString(payload?.text, "suppressed media text")).toBe(
-      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      "⚠️ chart.png: Delivery failed. Try sending this file again.",
     );
   });
 
@@ -227,7 +227,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       });
 
       expect(payload).toMatchObject({
-        text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+        text: "Artifacts ready\n⚠️ vector.svg: Rejected by the local attachment allowlist. Send a supported file type.",
         attachments: [
           expect.objectContaining({ name: "artifact.json", mimeType: "application/json" }),
           {},
@@ -242,10 +242,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
       });
       expect(content).toEqual([
-        {
-          type: "text",
-          text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
-        },
+        { type: "text", text: "Artifacts ready" },
         expect.objectContaining({
           type: "attachment",
           attachment: expect.objectContaining({
@@ -255,10 +252,19 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         }),
         expect.objectContaining({ type: "image", alt: "remote.png", mimeType: "image/png" }),
         expect.objectContaining({ type: "image", alt: "local.png", mimeType: "image/png" }),
+        {
+          type: "attachment_error",
+          attachment: {
+            code: "unsupported-format",
+            kind: "image",
+            label: "vector.svg",
+            mimeType: "image/svg+xml",
+          },
+        },
       ]);
       const serialized = JSON.stringify(content);
-      expect(serialized).not.toContain("vector.svg");
-      expect(serialized.match(/Media failed/gu)).toHaveLength(1);
+      expect(serialized).toContain("vector.svg");
+      expect(serialized).not.toContain("Media failed");
       expect(serialized).not.toContain("sig=secret");
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -267,7 +273,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     }
   });
 
-  it("preserves rejection warnings and metadata beside trusted local audio", async () => {
+  it("preserves named rejection outcomes and metadata beside trusted local audio", async () => {
     const { workspaceDir, cfg } = createMediaTestContext({ allowRead: true });
     const documentPath = path.join(workspaceDir, "report.json");
     const unsupportedPath = path.join(workspaceDir, "script.js");
@@ -294,7 +300,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     });
 
     expect(payload).toMatchObject({
-      text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      text: "Artifacts ready\n⚠️ script.js: Rejected by the local attachment allowlist. Send a supported file type.",
       mediaUrls: [expect.stringMatching(/\.json$/u), audioPath],
       attachments: [
         expect.objectContaining({ name: "report.json", mimeType: "application/json" }),
@@ -341,8 +347,12 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
     expect(content).toEqual([
       {
-        type: "text",
-        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+        type: "attachment_error",
+        attachment: {
+          code: "delivery-failed",
+          kind: "audio",
+          label: "Generated audio 1",
+        },
       },
     ]);
     expect(errors).toEqual(["Invalid image data URL"]);
@@ -350,7 +360,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(Buffer.byteLength(JSON.stringify(content))).toBeLessThan(256);
   });
 
-  it("keeps an explicit warning when one media item cannot become an attachment", async () => {
+  it("keeps a named failure when one media item cannot become an attachment", async () => {
     const { workspaceDir } = createMediaTestContext({ allowRead: true });
     const sourcePath = path.join(workspaceDir, "mystery.blob");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -372,44 +382,42 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(content).toEqual([
       { type: "text", text: "Artifact result" },
       {
-        type: "text",
-        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+        type: "attachment_error",
+        attachment: {
+          code: "delivery-failed",
+          kind: "document",
+          label: "mystery.blob",
+        },
       },
     ]);
   });
 
-  it("preserves a media failure warning beside synthetic media-only text", () => {
-    const warning = "⚠️ Media failed. Try sending a smaller supported file or a different format.";
-
+  it("preserves a structured media failure beside replaced transcript text", () => {
     expect(
       replaceAssistantContentTextBlocks(
         [
-          { type: "image", url: "/managed/image" },
-          { type: "text", text: warning },
+          { type: "text", text: "Artifact result" },
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "delivery-failed",
+              kind: "document",
+              label: "report.7z",
+            },
+          },
         ],
-        { content: [{ type: "text", text: "Image reply" }] },
+        { content: [{ type: "text", text: "Canonical transcript text" }] },
       ),
     ).toEqual([
-      { type: "text", text: "Image reply" },
-      { type: "image", url: "/managed/image" },
-      { type: "text", text: warning },
-    ]);
-  });
-
-  it("preserves a media failure warning appended to replaced transcript text", () => {
-    const warning = "⚠️ Media failed. Try sending a smaller supported file or a different format.";
-
-    expect(
-      replaceAssistantContentTextBlocks(
-        [
-          { type: "text", text: `Artifact result\n${warning}` },
-          { type: "attachment", attachment: { label: "report.pdf" } },
-        ],
-        { content: [{ type: "text", text: "Artifact result" }] },
-      ),
-    ).toEqual([
-      { type: "text", text: `Artifact result\n${warning}` },
-      { type: "attachment", attachment: { label: "report.pdf" } },
+      { type: "text", text: "Canonical transcript text" },
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "delivery-failed",
+          kind: "document",
+          label: "report.7z",
+        },
+      },
     ]);
   });
 
@@ -556,8 +564,13 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(content).toEqual([
       expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" }),
       {
-        type: "text",
-        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+        type: "attachment_error",
+        attachment: {
+          code: "delivery-failed",
+          kind: "audio",
+          label: "untrusted.mp3",
+          mimeType: "audio/mpeg",
+        },
       },
     ]);
   });
@@ -602,7 +615,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toBeUndefined();
     expect(requireString(payload?.text, "suppressed media text")).toBe(
-      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      "⚠️ voice.mp3: Delivery failed. Try sending this file again.",
     );
     await expectOutboundMediaMissing(stateDir);
   });
@@ -642,9 +655,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       payload: (imagePath) => ({ mediaUrls: mediaUrls(imagePath, dataUrl) }),
     });
 
-    expect(payload?.text).toBe(
-      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
-    );
+    expect(payload?.text).toBe("⚠️ chart.png: Delivery failed. Try sending this file again.");
     expect(payload?.text).not.toContain(sourcePath);
     expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(256);
     expect(payload?.mediaUrl).toBe(dataUrl);
@@ -678,7 +689,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         path.join(path.dirname(imagePath), "private customer report.png"),
       ],
     },
-  ])("keeps exactly one failure receipt for $label", async ({ mediaUrls }) => {
+  ])("keeps one named failure receipt per missing file for $label", async ({ mediaUrls }) => {
     const dataUrl = dataImageUrl();
     const { stateDir, sourcePath, payload } = await normalizeCodexHomeImage({
       allowRead: true,
@@ -689,12 +700,18 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     });
     const normalizedLocalPath = requireString(payload?.mediaUrls?.[0], "normalized local media");
 
-    expect(payload?.text).toBe(
-      "Here is the surviving attachment\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    expect(payload?.text).toContain(
+      "Here is the surviving attachment\n⚠️ missing.png: File not found. Check the path and try again.",
     );
     expect(payload?.text).not.toContain(sourcePath);
-    expect(payload?.text).not.toContain("private customer report.png");
-    expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(256);
+    if (
+      mediaUrls(path.join(path.dirname(sourcePath), "missing.png"), sourcePath, dataUrl).length > 3
+    ) {
+      expect(payload?.text).toContain(
+        "⚠️ private customer report.png: File not found. Check the path and try again.",
+      );
+    }
+    expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(512);
     expect(payload?.mediaUrl).toBe(normalizedLocalPath);
     expect(payload?.mediaUrls).toEqual([normalizedLocalPath, dataUrl]);
     expect(normalizedLocalPath).not.toBe(sourcePath);

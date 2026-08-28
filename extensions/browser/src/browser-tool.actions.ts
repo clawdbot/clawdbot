@@ -14,6 +14,7 @@ import {
   browserAct,
   browserConsoleMessages,
   browserRequests,
+  browserErrors,
   browserPageText,
   browserEmulateSetting,
   browserDownload,
@@ -28,6 +29,7 @@ import {
 } from "./browser-tool.runtime.js";
 import {
   appendNavigatedPageState,
+  formatBrowserDebugLogResult,
   wrapBrowserExternalJson,
   wrapBrowserExternalText,
 } from "./browser-tool.snapshot.js";
@@ -47,6 +49,7 @@ const browserToolActionDeps = {
   browserAct,
   browserConsoleMessages,
   browserRequests,
+  browserErrors,
   browserPageText,
   browserEmulateSetting,
   browserDownload,
@@ -364,44 +367,34 @@ export async function executeRequestsAction(
         profile,
         signal,
       });
-  const total = result.requests.length;
-  const requests = result.requests.slice(-limit);
-  const payload = () => ({
-    ok: result.ok,
-    targetId: result.targetId,
-    url: result.url,
-    total,
-    returned: requests.length,
-    truncated: requests.length < total,
-    requests,
-  });
-  let wrapped = wrapBrowserExternalJson({
-    kind: "requests",
-    payload: payload(),
-    includeWarning: false,
-  });
-  // Keep complete records: a large URL must not turn the log into partial JSON
-  // or make the reported returned count exceed what the model actually sees.
-  while (wrapped.truncated && requests.length > 0) {
-    requests.shift();
-    wrapped = wrapBrowserExternalJson({
-      kind: "requests",
-      payload: payload(),
-      includeWarning: false,
-    });
-  }
-  return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      ok: result.ok,
-      targetId: result.targetId,
-      url: result.url,
-      total,
-      returned: requests.length,
-      truncated: requests.length < total || wrapped.truncated,
-    },
-  };
+  return formatBrowserDebugLogResult("requests", result, result.requests, limit);
+}
+
+/** Read recent page errors, keeping counts aligned with the bounded payload. */
+export async function executeErrorsAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
+  const limit =
+    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
+    50;
+  const result = proxyRequest
+    ? ((await proxyRequest({
+        method: "GET",
+        path: "/errors",
+        profile,
+        query: { targetId, clear },
+        // SAFETY: The proxy dispatches the same /errors route as the typed local client.
+      })) as Awaited<ReturnType<typeof browserErrors>>)
+    : await browserToolActionDeps.browserErrors(baseUrl, {
+        targetId,
+        clear,
+        profile,
+        signal,
+      });
+  return formatBrowserDebugLogResult("errors", result, result.errors, limit);
 }
 
 /** Extract visible page prose with the same trust boundary as snapshots. */

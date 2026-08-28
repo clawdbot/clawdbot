@@ -125,6 +125,13 @@ do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend
 
 ## Shared test state and process helpers
 
+Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
+to finish before reporting success. On POSIX, each verifies its own managed
+process group: leftover children are terminated and the command fails instead of
+allowing artifact stamps or downstream checks to proceed. Windows retains normal
+joined-launcher completion because strict group verification is unsupported there.
+This does not detect descendants that deliberately leave the managed groups.
+
 On POSIX hosts, the Vitest wrapper gives each invocation an owned temporary
 namespace through `TMPDIR`, `TMP`, and `TEMP`. Fallback SQLite state stays available
 across shared-worker files and module resets, then the wrapper removes the namespace

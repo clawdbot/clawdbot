@@ -310,7 +310,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       if (controller.signal.aborted || this.focusDashboardAbort !== controller) {
         return;
       }
-      if (isRouteNotFound(result)) {
+      if (isRouteNotFound(result) || result.kind === "missing-session") {
         this.focusDashboardRoute = { kind: "not-found" };
         return;
       }

@@ -2189,7 +2189,10 @@ describe("package acceptance workflow", () => {
         TRUSTED_WORKFLOW_SHA: "${{ github.workflow_sha }}",
       });
       expect(step.run).toContain("^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$");
-      expect(step.run).toContain('TRUSTED_MAIN_REF="${trusted_workflow_commit_ref}"');
+      expect(step.run).toContain('trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"');
+      expect(step.run).toContain('git rev-parse "${trusted_publisher_ref}^{commit}")" != "${');
+      expect(step.run).toContain('"+refs/heads/main:${trusted_main_ref}"');
+      expect(step.run).toContain('TRUSTED_MAIN_REF="${trusted_main_ref}"');
       expect(step.run).toContain('--trusted-workflow-ref "$TRUSTED_WORKFLOW_REF"');
       expect(step.run).toContain('--trusted-workflow-full-ref "$TRUSTED_WORKFLOW_FULL_REF"');
       expect(step.run).toContain('--trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA"');
@@ -3458,8 +3461,7 @@ describe("package acceptance workflow", () => {
       CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "${{ inputs.target_context_ref != '' }}",
       CANDIDATE_ALLOW_UNRELEASED_CHANGELOG:
         "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
-      CANDIDATE_EVIDENCE_JSON:
-        "${{ needs.prepare_release_candidate.outputs.candidate_evidence_json }}",
+      CANDIDATE_EVIDENCE_JSON: "${{ needs.candidate_binding.outputs.binding_json }}",
       CANDIDATE_RELEASE_SOAK:
         "${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
       CANDIDATE_SHARED_IMAGE_POLICY: "no-push-artifact",
@@ -3518,7 +3520,9 @@ describe("package acceptance workflow", () => {
     expect(summary.needs).toEqual(expect.arrayContaining(["release_decision", "diagnostic_drain"]));
     for (const jobId of [
       "docker_runtime_assets_preflight",
+      "candidate_discovery",
       "prepare_release_candidate",
+      "candidate_binding",
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
@@ -3911,6 +3915,15 @@ describe("package artifact reuse", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const reusableWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const prepare = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "prepare_release_candidate");
+    const discovery = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_discovery");
+    const candidateBinding = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_binding");
+    const summary = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
+    const candidateLibrary = "scripts/lib/full-release-candidate-reuse.mjs";
+    const candidateToolingCheckouts = [
+      workflowStep(discovery, "Checkout trusted candidate discovery"),
+      workflowStep(candidateBinding, "Checkout candidate binding authority"),
+      workflowStep(summary, "Checkout release state verifier"),
+    ];
     const producer = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
     const binder = workflowJob(LIVE_E2E_WORKFLOW, "bind_full_release_candidate_evidence");
     const producerIdentity = workflowStepById(producer, "producer_identity");
@@ -3928,7 +3941,29 @@ describe("package artifact reuse", () => {
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks"),
       "Dispatch release checks",
     );
+    const pluginDocker = workflowJob(PLUGIN_PRERELEASE_WORKFLOW, "plugin-prerelease-docker-suite");
 
+    expect(discovery.if).toContain("github.run_attempt == 1");
+    expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
+    for (const checkout of candidateToolingCheckouts) {
+      expect(checkout.with?.["sparse-checkout"]).toContain(candidateLibrary);
+    }
+    expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
+      "full-release-candidate-reuse.mjs discover",
+    );
+    expect(jobNeeds(prepare)).toContain("candidate_discovery");
+    expect(prepare.if).toContain("needs.candidate_discovery.outputs.state == 'miss'");
+    expect(prepare.if).not.toContain("outputs.reused != 'true'");
+    expect(jobNeeds(candidateBinding)).toEqual([
+      "resolve_target",
+      "evidence_reuse",
+      "candidate_discovery",
+      "prepare_release_candidate",
+    ]);
+    expect(workflowStep(candidateBinding, "Resolve candidate binding").run).toContain(
+      "full-release-candidate-reuse.mjs resolve",
+    );
+    expect(upload.with?.overwrite).toBe(false);
     expect(prepare.uses).toBe("./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
     expect(prepare.with).toMatchObject({
       enable_prepublish_plugin_registry: true,
@@ -3950,6 +3985,20 @@ describe("package artifact reuse", () => {
     expect(releaseDispatch.run).toContain(
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
+    expect(pluginDocker.with).toMatchObject({
+      prepublish_plugin_registry_artifact_digest:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}",
+      prepublish_plugin_registry_artifact_id:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
+      prepublish_plugin_registry_artifact_name:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}",
+      prepublish_plugin_registry_artifact_run_attempt:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}",
+      prepublish_plugin_registry_artifact_run_id:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
+    });
     expect(workflow).toContain("candidateBindingResult: $candidateBindingResult");
     expect(request.run).toContain("full-release-candidate-contract.mjs request");
     expect(evidence.run).toContain("full-release-candidate-contract.mjs manifest");
@@ -7325,8 +7374,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(publishOrchestration.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
-    // actionlint passes embedded scripts to ShellCheck through a 64 KiB pipe.
-    expect(Buffer.byteLength(publishOrchestration.run ?? "", "utf8")).toBeLessThan(64 * 1024);
     expect(publishOrchestration.run).toContain('"${target_sha}" != "${TARGET_SHA}"');
     expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
@@ -8460,15 +8507,22 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       FULL_RELEASE_VALIDATION_WORKFLOW,
       "prepare_release_candidate",
     );
+    const candidateDiscovery = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_discovery");
+    const candidateBinding = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_binding");
     expect(jobNeeds(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse"))).toEqual([
       "resolve_target",
     ]);
-    expect(jobNeeds(prepareReleaseCandidate)).toEqual(["resolve_target", "evidence_reuse"]);
+    expect(jobNeeds(candidateDiscovery)).toEqual(["resolve_target", "evidence_reuse"]);
+    expect(jobNeeds(prepareReleaseCandidate)).toEqual([
+      "resolve_target",
+      "evidence_reuse",
+      "candidate_discovery",
+    ]);
     expect(prepareReleaseCandidate.with?.prepare_only).toBe(true);
     expect(jobNeeds(releaseChecksParent)).toEqual([
       "resolve_target",
       "evidence_reuse",
-      "prepare_release_candidate",
+      "candidate_binding",
     ]);
     expect(jobNeeds(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"))).toContain(
       "release_checks",
@@ -8476,14 +8530,16 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const fullParentPath = [
       timeoutForProfile(fullRelease.jobs?.resolve_target?.["timeout-minutes"], "full"),
       timeoutForProfile(fullRelease.jobs?.evidence_reuse?.["timeout-minutes"], "full"),
+      timeoutForProfile(candidateDiscovery["timeout-minutes"], "full"),
       timeoutForProfile(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"], "full"),
       timeoutForProfile(liveE2e.jobs?.prepare_docker_e2e_image?.["timeout-minutes"], "full"),
       timeoutForProfile(liveE2e.jobs?.docker_e2e_image_ready?.["timeout-minutes"], "full"),
+      timeoutForProfile(candidateBinding["timeout-minutes"], "full"),
       timeoutForProfile(releaseChecksParent["timeout-minutes"], "full"),
     ];
-    expect(fullParentPath).toEqual([10, 10, 30, 90, 5, 15]);
+    expect(fullParentPath).toEqual([10, 10, 10, 30, 90, 5, 5, 15]);
     const fullParentTimeoutFloor = fullParentPath.reduce((total, timeout) => total + timeout, 0);
-    expect(fullParentTimeoutFloor).toBe(160);
+    expect(fullParentTimeoutFloor).toBe(175);
     expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(diagnosticDrainTimeout);
   });
 

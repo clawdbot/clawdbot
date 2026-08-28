@@ -65,7 +65,6 @@ function settingsRow(page: Page, title: string): Locator {
 
 async function expectInherited(row: Locator, value: string) {
   await expect.poll(() => row.textContent()).toContain(`Using default: ${value}`);
-  await expect.poll(() => row.getByRole("button", { name: "Reset to default" }).count()).toBe(0);
 }
 
 suite.define(() => {
@@ -158,8 +157,8 @@ suite.define(() => {
         }
 
         const securitySavesBefore = (await gateway.getRequests("config.set")).length;
-        await browserRow.getByRole("button", { name: "Reset to default" }).click();
-        await profileRow.getByRole("button", { name: "Reset to default" }).click();
+        await browserRow.locator(".settings-row__title").click();
+        await profileRow.getByRole("radio", { name: "Full", exact: true }).click();
         await expectInherited(browserRow, "Enabled");
         await expectInherited(profileRow, "Full");
         await expect
@@ -215,8 +214,8 @@ suite.define(() => {
         }
 
         const modelSavesBefore = (await gateway.getRequests("config.set")).length;
-        await thinkingRow.getByRole("button", { name: "Reset to default" }).click();
-        await fastModeRow.getByRole("button", { name: "Reset to default" }).click();
+        await thinkingRow.getByRole("radio", { name: "Default", exact: true }).click();
+        await fastModeRow.getByRole("radio", { name: "Default", exact: true }).click();
         await expectInherited(thinkingRow, "Model policy");
         await expectInherited(fastModeRow, "Model policy");
         await expect
