@@ -115,6 +115,26 @@ describe("channels setup access", () => {
   });
 });
 
+describe("channels section order", () => {
+  it("places DM access requests after the channel management sections", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const container = document.createElement("div");
+    render(renderChannels(props), container);
+
+    const headings = Array.from(container.querySelectorAll(".settings-section__heading"), (node) =>
+      node.textContent?.trim(),
+    );
+    expect(headings).toEqual(["Your channels", "Add a channel", "DM access requests"]);
+  });
+});
+
 function createWhatsAppStatus(overrides: Partial<WhatsAppStatus> = {}): WhatsAppStatus {
   return {
     configured: true,

@@ -63,7 +63,6 @@ export function renderChannels(props: ChannelsProps) {
       ${props.setupBlockedByDirtyConfig && props.configFormDirty
         ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
         : nothing}
-      ${renderChannelPairingQueue(props)}
       ${renderSettingsSection(
         {
           title: t("channels.hub.connectedTitle"),
@@ -108,6 +107,7 @@ export function renderChannels(props: ChannelsProps) {
               ${renderBrowseAllRow(props)}`}
         `,
       )}
+      ${renderChannelPairingQueue(props)}
     `)}
     ${selected
       ? renderChannelDetail({
