@@ -36,7 +36,7 @@ function threadStartResult(params) {
       status: { type: "idle" },
       path: null,
       cwd,
-      cliVersion: "0.147.0",
+      cliVersion: "0.150.1",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -203,8 +203,8 @@ input.on("line", (line) => {
       id: message.id,
       result: {
         protocolVersion: "2",
-        serverInfo: { name: "openclaw-telegram-e2e", version: "0.147.0" },
-        userAgent: "openclaw-telegram-e2e/0.147.0 (test)",
+        serverInfo: { name: "openclaw-telegram-e2e", version: "0.150.1" },
+        userAgent: "openclaw-telegram-e2e/0.150.1 (test)",
       },
     });
     return;
