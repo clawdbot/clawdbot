@@ -21,9 +21,10 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - `suggestedTargetId` is the label when one exists, otherwise the stable `tabId` handle like `t1`.
    - Avoid relying on raw DevTools `targetId` except for immediate diagnostics; it can change under Chromium target replacement.
 3. Read before you click:
-   - For “read the page and answer X,” use a selector-scoped `action="snapshot"` or `act:evaluate` that returns only relevant text or structured data. Let the active agent model answer from that bounded result; use efficient snapshots for controls and action discovery because they omit most non-interactive prose.
+   - For “read the page and answer X,” use `action="text"` with optional `selector` and `maxChars` for bounded visible prose (first selector match, otherwise article/main/body). On existing-session profiles, use `snapshot` instead. Efficient snapshots omit most prose.
    - For virtualized lists, scroll through each segment, capture only the relevant rows, then merge the results.
    - Use `action="snapshot"` on the intended `targetId`.
+   - Add snapshot `query` to find lines containing all query tokens, ignoring case; matching lines keep their refs.
    - Use the same `targetId` for follow-up actions so refs stay on the same tab.
    - For durable Playwright refs, request `refs="aria"` when supported. If you receive `axN` refs from `snapshotFormat="aria"`, use them only after that same snapshot call; stale or unbound `axN` refs fail fast and need a fresh snapshot.
    - Use `urls=true` when link text is ambiguous or a direct navigation target would avoid brittle clicks.
@@ -33,7 +34,9 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - `navigate` returns the loaded page's compact snapshot inline, and batch `act` results that report a cross-document navigation include fresh page state; use those refs directly instead of a follow-up snapshot call.
    - After a single act that triggers navigation, and after modal changes or form submissions, snapshot again before the next action.
    - Avoid blind waits. Wait for visible UI state when possible.
+   - Use `action="emulate"` with `device`, `colorScheme`, `timezoneId`, or `locale` when testing those settings; snapshot again afterward. Existing-session profiles do not support emulation.
 5. Report real blockers:
+   - Debug network failures with `action="requests"`, optional URL/type `filter`, and `limit` (default 50 recent entries). `clear=true` clears the collected log after reading. Use a managed profile; existing-session profiles do not support this log.
    - If the page needs login, permission, captcha, 2FA, camera/microphone approval, or another manual step, stop and tell the user exactly what is needed.
    - Do not claim the browser is not logged in just because the current page shows a permission or onboarding dialog. Inspect the visible UI first.
 
