@@ -12,32 +12,38 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 describe("Docker E2E source and harness inputs", () => {
   posixIt.each<{
     script: string;
-    dockerfile?: string;
+    dockerfiles?: string[];
     harnessDockerfile?: boolean;
     reuse?: boolean;
   }>([
-    { script: "docker-selected-plugins.sh", dockerfile: "Dockerfile" },
+    {
+      script: "docker-selected-plugins.sh",
+      dockerfiles: ["Dockerfile", "Dockerfile", "Dockerfile"],
+    },
     {
       script: "plugin-binding-command-escape-docker.sh",
-      dockerfile: "scripts/e2e/plugin-binding-command-escape.Dockerfile",
+      dockerfiles: ["scripts/e2e/plugin-binding-command-escape.Dockerfile"],
       harnessDockerfile: true,
     },
     {
       script: "qr-import-docker.sh",
-      dockerfile: "scripts/e2e/Dockerfile.qr-import",
+      dockerfiles: ["scripts/e2e/Dockerfile.qr-import"],
       harnessDockerfile: true,
     },
-    { script: "agents-delete-shared-workspace-docker.sh", dockerfile: "Dockerfile" },
+    { script: "agents-delete-shared-workspace-docker.sh", dockerfiles: ["Dockerfile"] },
     {
       script: "sandbox-browser-sidecar-docker.sh",
-      dockerfile: "scripts/docker/sandbox/Dockerfile",
+      dockerfiles: [
+        "scripts/docker/sandbox/Dockerfile",
+        "scripts/docker/sandbox/Dockerfile.browser",
+      ],
       reuse: true,
     },
     { script: "compose-setup.sh", reuse: true },
     { script: "cli-installer-distribution-docker.sh", reuse: true },
   ])(
     "keeps candidate product inputs for $script",
-    async ({ script, dockerfile, harnessDockerfile, reuse }) => {
+    async ({ script, dockerfiles, harnessDockerfile, reuse }) => {
       const root = tempDirs.make("e2e-src-");
       const target = path.join(root, "candidate source");
       const bin = path.join(root, "bin");
@@ -60,7 +66,15 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command: ${JSON.stringify(command)}, args }) + '\\n');
 if (${JSON.stringify(command)} === 'git') {
   if (args.includes('rev-parse')) console.log('a'.repeat(40));
-} else if (args[0] === 'build' || args[0] === 'buildx' || args[0] === 'compose' || (args[0] === 'run' && args.includes('-d'))) {
+} else if (args[0] === 'build' || args[0] === 'buildx') {
+  if (args.some((arg) => arg.includes('OPENCLAW_EXTENSIONS=missing-plugin'))) {
+    console.error('unknown OPENCLAW_EXTENSIONS plugin id: missing-plugin');
+    process.exit(49);
+  }
+} else if (
+  args[0] === 'compose' ||
+  (args[0] === 'run' && !args.some((arg) => arg.endsWith('-dependency-only')))
+) {
   console.error('fixture-stop at product input boundary');
   process.exit(49);
 }
@@ -95,14 +109,17 @@ if (${JSON.stringify(command)} === 'git') {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line) as { command: string; args: string[] });
-        if (dockerfile) {
-          const build = calls.find(
-            (call) => call.command === "docker" && call.args.includes("build"),
+        if (dockerfiles) {
+          const builds = calls.filter(
+            (call) =>
+              call.command === "docker" &&
+              (call.args[0] === "build" || call.args[0] === "buildx") &&
+              call.args.at(-1) === target,
           );
-          expect(build).toBeDefined();
-          expect(build?.args.at(-1)).toBe(target);
-          expect(build?.args[build.args.indexOf("-f") + 1]).toBe(
-            path.join(harnessDockerfile ? harness : target, dockerfile),
+          expect(builds.map((build) => build.args[build.args.indexOf("-f") + 1])).toEqual(
+            dockerfiles.map((dockerfile) =>
+              path.join(harnessDockerfile ? harness : target, dockerfile),
+            ),
           );
         } else if (script === "compose-setup.sh") {
           expect(calls.find((call) => call.args[0] === "compose")?.args).toContain(
