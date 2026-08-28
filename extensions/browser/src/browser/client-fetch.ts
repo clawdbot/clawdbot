@@ -27,7 +27,7 @@ import {
   parseBrowserErrorPayload,
   type BrowserActErrorCode,
   type BrowserErrorPayload,
-  type BrowserNoDisplayErrorMetadata,
+  type BrowserErrorMetadata,
   type BrowserNoDisplayErrorDetails,
 } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
@@ -38,7 +38,7 @@ export class BrowserServiceError extends Error {
   readonly status?: number;
   readonly code?: BrowserActErrorCode;
   readonly unrecognizedCode?: true;
-  readonly reason?: BrowserNoDisplayErrorMetadata["reason"];
+  readonly reason?: BrowserErrorMetadata["reason"];
   readonly details?: BrowserNoDisplayErrorDetails;
 
   constructor(message: string, metadata?: BrowserErrorPayload, status?: number) {

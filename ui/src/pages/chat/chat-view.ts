@@ -121,6 +121,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
       onShowEarlier: () => void;
     };
     toolMessages: unknown[];
+    browserTabPreviewsActive?: boolean;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     stream: string | null;
@@ -337,6 +338,7 @@ export function renderChat(props: ChatProps) {
       historyLoading: props.historyPagination?.loading,
       messages: props.messages,
       toolMessages: props.toolMessages,
+      browserTabPreviewsActive: props.browserTabPreviewsActive,
       guardianNotices: props.guardianNotices,
       streamSegments: props.streamSegments,
       stream: props.stream,

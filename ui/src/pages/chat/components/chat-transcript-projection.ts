@@ -175,7 +175,10 @@ export function projectChatTranscript(
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
-  const latestBrowserTabs = latestBrowserTabCards(props.messages, props.toolMessages);
+  const latestBrowserTabs =
+    props.browserTabPreviewsActive === false
+      ? latestBrowserTabCards([], [])
+      : latestBrowserTabCards(props.messages, props.toolMessages);
   syncToolCardExpansionState(
     props.sessionKey,
     chatItems,

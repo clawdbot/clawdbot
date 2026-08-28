@@ -39,34 +39,40 @@ describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("keeps the latest browser tab visible when completed dashboard work collapses", async () => {
-    const messages = [
-      { role: "user", content: "Open the example", timestamp: 1_000 },
-      {
-        role: "toolResult",
-        toolCallId: "browser-call",
-        toolName: "browser",
-        timestamp: 2_000,
-        content: "Opened",
-        details: { browserTab: { targetId: "tab-1", title: "Example" } },
-      },
-      { role: "assistant", content: "Done.", timestamp: 3_000 },
-    ];
-    const props = {
-      ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),
-      showToolCalls: true,
-    };
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    render(renderChatThread(props, transcript), container);
-    transcript.hostUpdated();
-    transcript.hostConnected();
-    await flushDeferredRowPrune();
-    expect(container.querySelector(".chat-work-group")).not.toBeNull();
-    expect(container.querySelectorAll("openclaw-browser-tab-card")).toHaveLength(1);
-    expect(container.querySelector("openclaw-browser-tab-card")?.latest).toBe(true);
-    transcript.hostDisconnected();
-  });
+  it.each([true, false])(
+    "keeps browser cards visible with capture limited to the active pane (%s)",
+    async (active) => {
+      const messages = [
+        { role: "user", content: "Open the example", timestamp: 1_000 },
+        {
+          role: "toolResult",
+          toolCallId: "browser-call",
+          toolName: "browser",
+          timestamp: 2_000,
+          content: "Opened",
+          details: {
+            browserTab: { profile: "managed", target: "host", targetId: "tab-1", title: "Example" },
+          },
+        },
+        { role: "assistant", content: "Done.", timestamp: 3_000 },
+      ];
+      const props = {
+        ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),
+        browserTabPreviewsActive: active,
+        showToolCalls: true,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      expect(container.querySelector(".chat-work-group")).not.toBeNull();
+      expect(container.querySelectorAll("openclaw-browser-tab-card")).toHaveLength(1);
+      expect(container.querySelector("openclaw-browser-tab-card")?.latest).toBe(active);
+      transcript.hostDisconnected();
+    },
+  );
 
   it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
     const sessionKey = "agent:main:archived-notice";

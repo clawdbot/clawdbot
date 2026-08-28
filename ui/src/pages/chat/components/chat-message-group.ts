@@ -1,6 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import {
@@ -71,7 +72,7 @@ type ActiveContinuation = {
 type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
 
 type RenderMessageGroupOptions = {
-  latestBrowserTabs?: ReadonlyMap<string, string>;
+  latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;

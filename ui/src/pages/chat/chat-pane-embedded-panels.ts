@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -32,6 +33,7 @@ type SidebarPanelDefinitionParams = {
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
+  preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
@@ -130,6 +132,8 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
           .presented=${params?.browserPresented ?? false}
+          .sessionKey=${state.sessionKey}
+          .preferredTab=${params?.preferredBrowserTab}
           .resourceBasePath=${state.resourceBasePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`

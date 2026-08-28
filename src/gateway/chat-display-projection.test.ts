@@ -933,35 +933,79 @@ describe("chat display message-tool projection", () => {
 describe("chat display tool-result detail projection", () => {
   it.each([
     [
-      { targetId: "tab-1", url: "https://example.com", title: "Example", extra: "drop" },
-      { targetId: "tab-1", url: "https://example.com", title: "Example" },
+      {
+        targetId: "tab-1",
+        target: "host",
+        profile: "work",
+        url: "https://example.com",
+        title: "Example",
+        extra: "drop",
+      },
+      {
+        targetId: "tab-1",
+        target: "host",
+        profile: "work",
+        url: "https://example.com",
+        title: "Example",
+      },
     ],
     [
       {
-        targetId: "x".repeat(127) + "😀",
+        targetId: "x".repeat(128),
+        target: "node",
+        profile: "p".repeat(128),
+        node: "n".repeat(256),
         url: "u".repeat(2047) + "😀",
         title: "t".repeat(511) + "😀",
       },
-      { targetId: "x".repeat(127), url: "u".repeat(2047), title: "t".repeat(511) },
+      {
+        targetId: "x".repeat(128),
+        target: "node",
+        profile: "p".repeat(128),
+        node: "n".repeat(256),
+        url: "u".repeat(2047),
+        title: "t".repeat(511),
+      },
     ],
-    [{ targetId: "tab-1", url: 42, title: [] }, { targetId: "tab-1" }],
-    [null, undefined],
-    [[], undefined],
-    ["tab-1", undefined],
-    [{}, undefined],
-    [{ targetId: 1 }, undefined],
-    [{ targetId: "  " }, undefined],
-  ])("projects only bounded browser tab descriptor fields (%j)", (browserTab, expected) => {
-    const result = { type: "toolResult", toolName: "browser", details: { browserTab } };
-    const [standalone, nested] = sanitizeChatHistoryMessages([
-      { role: "toolResult", ...result },
-      { role: "assistant", content: [result] },
-    ]) as Array<Record<string, unknown>>;
-    const block = (nested?.content as Array<Record<string, unknown>> | undefined)?.[0];
-    for (const projected of [standalone, block]) {
-      expect(projected?.details).toEqual(expected ? { browserTab: expected } : undefined);
-    }
-  });
+    [
+      { targetId: "tab-1", target: "host", profile: "work", url: 42, title: [] },
+      { targetId: "tab-1", target: "host", profile: "work" },
+    ],
+    ...[
+      null,
+      [],
+      "tab-1",
+      {},
+      { targetId: "tab-1" },
+      { targetId: "tab-1", target: "sandbox", profile: "work" },
+      { targetId: "tab-1", target: "node", profile: "work" },
+      { targetId: "tab-1", target: "host", profile: "work", node: "node-1" },
+      ...["targetId", "profile", "node"].flatMap((key) =>
+        [undefined, 1, "", "  ", " padded ", "x".repeat(key === "node" ? 257 : 129)].map(
+          (value) => ({
+            targetId: "tab-1",
+            target: "node",
+            profile: "work",
+            node: "node-1",
+            [key]: value,
+          }),
+        ),
+      ),
+    ].map((invalid) => [invalid, undefined] as const),
+  ] as const)(
+    "projects only bounded browser tab descriptor fields (%j)",
+    (browserTab, expected) => {
+      const result = { type: "toolResult", toolName: "browser", details: { browserTab } };
+      const [standalone, nested] = sanitizeChatHistoryMessages([
+        { role: "toolResult", ...result },
+        { role: "assistant", content: [result] },
+      ]) as Array<Record<string, unknown>>;
+      const block = (nested?.content as Array<Record<string, unknown>> | undefined)?.[0];
+      for (const projected of [standalone, block]) {
+        expect(projected?.details).toEqual(expected ? { browserTab: expected } : undefined);
+      }
+    },
+  );
 
   it("omits opaque provider replay state from display history", () => {
     const [message] = sanitizeChatHistoryMessages([

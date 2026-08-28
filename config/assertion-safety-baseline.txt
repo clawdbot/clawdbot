@@ -54,7 +54,7 @@ extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	3
 extensions/browser/src/browser-tool.actions.ts	14
 extensions/browser/src/browser-tool.snapshot.ts	2
-extensions/browser/src/browser-tool.ts	14
+extensions/browser/src/browser-tool.ts	6
 extensions/browser/src/browser/bridge-server.ts	3
 extensions/browser/src/browser/cdp-page-session.ts	3
 extensions/browser/src/browser/cdp-proxy-bypass.ts	1

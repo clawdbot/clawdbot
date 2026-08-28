@@ -14,6 +14,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
 import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
@@ -210,12 +211,13 @@ function extractToolDetailsPreview(
     return { ...canvas, surface: "assistant_message" };
   }
   const tab = asNullableRecord(asNullableRecord(details)?.browserTab);
-  if (typeof tab?.targetId !== "string" || !tab.targetId.trim()) {
+  const target = readBrowserTabTarget(tab);
+  if (!tab || !target) {
     return undefined;
   }
   return {
     kind: "browser-tab",
-    targetId: truncateUtf16Safe(tab.targetId, 128),
+    ...target,
     ...(typeof tab.url === "string" ? { url: truncateUtf16Safe(tab.url, 2_048) } : {}),
     ...(typeof tab.title === "string" ? { title: truncateUtf16Safe(tab.title, 512) } : {}),
   };

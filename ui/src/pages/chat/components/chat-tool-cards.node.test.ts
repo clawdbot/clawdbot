@@ -38,6 +38,8 @@ describe("tool-card extraction", () => {
   it.each(["standalone", "block", "live"])("extracts browser tabs from %s results", (shape) => {
     const details = {
       browserTab: {
+        profile: "managed",
+        target: "host",
         targetId: "tab-1",
         url: "https://example.com",
         title: "Example",
@@ -65,6 +67,8 @@ describe("tool-card extraction", () => {
     const [card] = extractToolCards(message);
     expect(card?.preview).toEqual({
       kind: "browser-tab",
+      profile: "managed",
+      target: "host",
       targetId: "tab-1",
       url: "https://example.com",
       title: "Example",
@@ -72,19 +76,57 @@ describe("tool-card extraction", () => {
     expect(card?.completed).toBe(true);
   });
 
-  it.each([null, [], "tab", {}, { targetId: 3 }, { targetId: " " }])(
-    "ignores malformed browser tabs (%j)",
-    (browserTab) => {
-      expect(
-        extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview,
-      ).toBeUndefined();
-    },
-  );
+  it.each([
+    null,
+    [],
+    "tab",
+    {},
+    { targetId: 3 },
+    { targetId: " " },
+    { targetId: "t1" },
+    { targetId: "t1", profile: "managed" },
+    { targetId: "t1", profile: "managed", target: "node" },
+    { targetId: "t1", profile: "managed", target: "host", node: "node-a" },
+    { targetId: "t1", profile: "managed", target: "sandbox" },
+    { targetId: "t".repeat(129), profile: "managed", target: "host" },
+    { targetId: "t1", profile: "p".repeat(129), target: "host" },
+    { targetId: "t1", profile: "managed", target: "node", node: "n".repeat(257) },
+  ])("ignores malformed browser tabs (%j)", (browserTab) => {
+    expect(extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview).toBeUndefined();
+  });
+
+  it("retains exact bounded node identities without provider metadata", () => {
+    const browserTab = {
+      targetId: "t".repeat(128),
+      profile: "p".repeat(128),
+      target: "node",
+      node: "n".repeat(256),
+    };
+    const [card] = extractToolCards({
+      role: "toolResult",
+      details: {
+        browserTab: {
+          ...browserTab,
+          cdpUrl: "https://private.example/",
+          token: "not-a-real-token",
+        },
+      },
+    });
+    expect(card?.preview).toEqual({ kind: "browser-tab", ...browserTab });
+  });
 
   it("drops non-string browser metadata and gives canvas previews precedence", () => {
-    const browserTab = { targetId: "tab-1", url: 42, title: [] };
+    const browserTab = {
+      profile: "managed",
+      target: "host",
+      targetId: "tab-1",
+      url: 42,
+      title: [],
+    };
     expect(extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview).toEqual({
       kind: "browser-tab",
+      profile: "managed",
+      target: "host",
       targetId: "tab-1",
     });
     const canvas = {

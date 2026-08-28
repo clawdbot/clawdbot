@@ -22,6 +22,7 @@ describe("browser error mapping", () => {
     expect(toBrowserErrorResponse(err)).toEqual({
       status: 409,
       message: "Browser target is unavailable after SSRF policy blocked its navigation.",
+      reason: "navigation_blocked",
     });
   });
 
@@ -37,7 +38,11 @@ describe("browser error mapping", () => {
       toBrowserErrorResponse(
         new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
       ),
-    ).toEqual({ status: 400, message: "browser navigation blocked by policy" });
+    ).toEqual({
+      status: 400,
+      message: "browser navigation blocked by policy",
+      reason: "navigation_blocked",
+    });
   });
 
   it("maps CDP endpoint policy blocks to a distinct endpoint-scoped message", () => {

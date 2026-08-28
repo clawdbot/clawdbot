@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -76,6 +77,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     );
     const chat = renderChat({
       ...chatProps,
+      browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
       header: board.face === "dashboard" ? nothing : header,
     });
@@ -99,6 +101,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
+      preferredBrowserTab: [
+        ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
+      ].at(-1),
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,

@@ -71,6 +71,7 @@ export type ChatThreadProps = {
   historyLoading?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
+  browserTabPreviewsActive?: boolean;
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
