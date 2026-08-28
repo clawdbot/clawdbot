@@ -126,7 +126,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "update_goal",
     displaySummary: "Complete, block, pause, or resume a thread goal",
     description:
-      "Update the session goal status (complete | blocked | paused | active) with an optional note. complete only achieved. blocked only same blocker 3+ consecutive goal turns; never ordinary difficulty/polish. paused to defer a goal you still own while waiting on an external dependency; active to resume a paused goal. Updating a goal does not reply to the user; provide the requested final response afterward.",
+      "Update the session goal status (complete | blocked | paused | active) with an optional note. complete only achieved. blocked only same blocker 3+ consecutive goal turns; never ordinary difficulty/polish. paused to defer a goal you still own while waiting on an external dependency. active to resume a goal you previously paused; a budget-limited or blocked goal cannot be resumed by the model — surface the blocker to the user instead. Updating a goal does not reply to the user; provide the requested final response afterward.",
     parameters: UpdateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
