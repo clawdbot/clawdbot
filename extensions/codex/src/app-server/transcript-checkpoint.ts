@@ -5,7 +5,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { applyCodexTranscriptTaint } from "./event-projector-snapshot.js";
+import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 

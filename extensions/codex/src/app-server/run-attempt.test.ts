@@ -970,35 +970,6 @@ function fastProgressEventSummaries(onAgentEvent: ReturnType<typeof vi.fn>) {
     .map((event) => event.data?.summary);
 }
 
-type ElicitationRequestHandler = (request: {
-  id: string;
-  method: string;
-  params?: unknown;
-}) => Promise<unknown>;
-
-function installElicitationClient(request: ReturnType<typeof vi.fn>) {
-  const state: {
-    handleRequest?: ElicitationRequestHandler;
-    notify: (notification: CodexServerNotification) => Promise<void>;
-  } = { notify: async () => undefined };
-  setCodexAppServerClientFactoryForTest(
-    async () =>
-      ({
-        ...mockClientRuntimeMethods(),
-        request,
-        addNotificationHandler: (handler: typeof state.notify) => {
-          state.notify = handler;
-          return () => undefined;
-        },
-        addRequestHandler: (handler: ElicitationRequestHandler) => {
-          state.handleRequest = handler;
-          return () => undefined;
-        },
-      }) as never,
-  );
-  return state;
-}
-
 async function completeStartedRun(
   run: Promise<unknown>,
   waitForMethod: ReturnType<typeof createStartedThreadHarness>["waitForMethod"],
@@ -5629,7 +5600,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    const elicitation = installElicitationClient(request);
+    const elicitation = createAppServerHarness(request);
     const params = createRunParams();
     await attachSqliteSessionTarget(
       params,
@@ -5645,12 +5616,9 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await vi.waitFor(() => expect(elicitation.handleRequest).toBeTypeOf("function"));
     // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(() =>
-      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-    );
-    const result = await elicitation.handleRequest?.({
+    await elicitation.waitForMethod("turn/start");
+    const result = await elicitation.handleServerRequest({
       id: "request-elicitation-1",
       method: "mcpServer/elicitation/request",
       params: {
@@ -5711,16 +5679,13 @@ describe("runCodexAppServerAttempt", () => {
         response: { action: "decline", content: null, _meta: null },
       });
     const request = createGoogleCalendarRequest();
-    const elicitation = installElicitationClient(request);
+    const elicitation = createAppServerHarness(request);
     const params = createParams(sessionFile, workspaceDir);
     params.agentDir = agentDir;
     const run = runCodexAppServerAttempt(params, { pluginConfig });
-    await vi.waitFor(() => expect(elicitation.handleRequest).toBeTypeOf("function"));
     // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(() =>
-      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-    );
-    const result = await elicitation.handleRequest?.({
+    await elicitation.waitForMethod("turn/start");
+    const result = await elicitation.handleServerRequest({
       id: "request-elicitation-1",
       method: "mcpServer/elicitation/request",
       params: {

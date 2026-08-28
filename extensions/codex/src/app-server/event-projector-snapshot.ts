@@ -5,33 +5,10 @@ import type {
 import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAssistantProjection } from "./event-projector-assistant.js";
+import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 import { promptSnapshot } from "./user-prompt-message.js";
-
-type TurnTaintMetadata = { resultContentSource?: "network"; turnTainted?: true };
-const CODEX_META_KEY = "__openclaw";
-
-function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
-  const metadata = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  return asOptionalRecord(metadata) as TurnTaintMetadata | undefined;
-}
-
-export function applyCodexTranscriptTaint(
-  message: AgentMessage,
-  state: { tainted: boolean },
-): AgentMessage {
-  if (message.role === "user") {
-    state.tainted = false;
-    return message;
-  }
-  const metadata = readTurnTaintMetadata(message);
-  state.tainted ||= metadata?.turnTainted === true || metadata?.resultContentSource === "network";
-  return message.role === "assistant" && state.tainted
-    ? ({ ...message, __openclaw: { ...metadata, turnTainted: true } } as AgentMessage)
-    : message;
-}
 
 export function buildCodexMessagesSnapshot(params: {
   runParams: EmbeddedRunAttemptParams;
