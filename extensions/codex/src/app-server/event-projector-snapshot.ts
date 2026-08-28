@@ -18,19 +18,19 @@ function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undef
   return asOptionalRecord(metadata) as TurnTaintMetadata | undefined;
 }
 
-function applyStickyTurnTaint(messages: readonly AgentMessage[]): AgentMessage[] {
-  let tainted = false;
-  return messages.map((message) => {
-    if (message.role === "user") {
-      tainted = false;
-      return message;
-    }
-    const metadata = readTurnTaintMetadata(message);
-    tainted ||= metadata?.turnTainted === true || metadata?.resultContentSource === "network";
-    return message.role === "assistant" && tainted
-      ? ({ ...message, __openclaw: { ...metadata, turnTainted: true } } as AgentMessage)
-      : message;
-  });
+export function applyCodexTranscriptTaint(
+  message: AgentMessage,
+  state: { tainted: boolean },
+): AgentMessage {
+  if (message.role === "user") {
+    state.tainted = false;
+    return message;
+  }
+  const metadata = readTurnTaintMetadata(message);
+  state.tainted ||= metadata?.turnTainted === true || metadata?.resultContentSource === "network";
+  return message.role === "assistant" && state.tainted
+    ? ({ ...message, __openclaw: { ...metadata, turnTainted: true } } as AgentMessage)
+    : message;
 }
 
 export function buildCodexMessagesSnapshot(params: {
@@ -80,10 +80,11 @@ export function buildCodexMessagesSnapshot(params: {
       ),
     );
   }
-  return applyStickyTurnTaint(messages).map((message) =>
+  const taint = { tainted: false };
+  return messages.map((message) =>
     projectAgentHarnessTranscriptMessageForDisplay({
       hidden: params.runParams.trigger === "memory",
-      message,
+      message: applyCodexTranscriptTaint(message, taint),
     }),
   );
 }

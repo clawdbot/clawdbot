@@ -187,7 +187,7 @@ async function agentCommandInternal(
   }
 
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
-  let preparedRunAdmission: ReturnType<typeof executionIdentity.prepare> | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
   try {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     const sessionStoreRuntime =

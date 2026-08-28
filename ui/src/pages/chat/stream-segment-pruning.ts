@@ -1,4 +1,3 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   advanceAccumulatedStreamText,
@@ -7,6 +6,7 @@ import {
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
+import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import { streamCausalInterval, type StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 import {
   hasAssistantStreamPartReplacement,
@@ -74,14 +74,17 @@ export function prunePersistedAssistantStreamSegments(
   state: StreamCausalBoundaryState,
   message: unknown,
 ): void {
-  const fallback = asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
-  const itemId = normalizeOptionalString(fallback?.itemId);
-  if (!itemId || !state.chatStreamSegments) {
+  const identity = readAssistantStreamSegmentIdentity(message);
+  if (!identity || !state.chatStreamSegments) {
     return;
   }
-  const replacedIndexes = state.chatStreamSegments.flatMap((segment, index) =>
-    normalizeOptionalString(segment.itemId) === itemId ? [index] : [],
-  );
+  const replacedIndexes = state.chatStreamSegments.flatMap((segment, index) => {
+    const runId = normalizeOptionalString(segment.runId);
+    // Client-materialized commentary can be untagged; known run ownership
+    // must still prevent a reused item id from pruning a sibling run.
+    const sameRun = !identity.runId || !runId || identity.runId === runId;
+    return normalizeOptionalString(segment.itemId) === identity.itemId && sameRun ? [index] : [];
+  });
   discardStreamSegmentIndexes(state, replacedIndexes);
 }
 
