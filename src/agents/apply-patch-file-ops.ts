@@ -10,6 +10,7 @@ import {
   FsSafeError,
   root as fsRoot,
 } from "../infra/fs-safe.js";
+import { writeHostFile } from "./host-file-write.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -88,7 +89,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       operations: {
         readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
         writeFile: async (filePath, content) => {
-          await fs.writeFile(filePath, content, "utf8");
+          await writeHostFile(filePath, content);
         },
         createFileExclusive: async (filePath, content) => {
           try {
