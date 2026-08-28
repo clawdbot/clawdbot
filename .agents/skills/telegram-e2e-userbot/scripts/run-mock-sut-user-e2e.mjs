@@ -556,7 +556,7 @@ function spawnProcess(command, args, options) {
   return child;
 }
 
-async function runCommand(command, args, options) {
+export async function runCommand(command, args, options) {
   let child;
   const completion = new Promise((resolveRun) => {
     assertRunnerActive();
@@ -1052,12 +1052,17 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       const sent = await runCommand("uv", ["run", USER_DRIVER_PATH, "send", "--text", text], {
         cwd: repoRoot,
         env: driverEnv,
+        leaseFailure,
         timeoutMs: args.timeoutMs,
       });
       if (sent.status !== 0 || sent.timedOut) {
         throw new Error(`pre-send failed: ${sent.stderr || sent.stdout}`);
       }
-      await new Promise((settle) => setTimeout(settle, 1000));
+      await waitForGatewayLeaseReady({
+        child: gateway,
+        readiness: new Promise((settle) => setTimeout(settle, 1000)),
+        leaseFailure,
+      });
     }
 
     const recording = Boolean(args.record);

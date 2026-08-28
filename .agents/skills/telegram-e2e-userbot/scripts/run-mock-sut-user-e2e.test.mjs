@@ -9,6 +9,7 @@ import {
   drainSutUpdates,
   fenceLeaseFailure,
   ownChild,
+  runCommand,
   sanitizeChildEnvironment,
   waitForGatewayLeaseReady,
   writeConfig,
@@ -138,6 +139,37 @@ test("lease revocation between startup Bot API calls prevents update polling", a
     (error) => error === leaseError,
   );
   assert.deepEqual(methods, ["getWebhookInfo"]);
+});
+
+test("lease loss during a credential command stops every owned child before its side effect", async (context) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-lease-fence-"));
+  const sideEffect = path.join(temp, "sent");
+  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const gateway = startOwnedChild();
+  const leaseError = new Error("lease revoked during credential command");
+  const leaseFailure = new Promise((resolve) =>
+    setTimeout(() => resolve({ type: "lease-failure", error: leaseError }), 20),
+  );
+
+  await assert.rejects(
+    runCommand(
+      process.execPath,
+      [
+        "-e",
+        'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.SIDE_EFFECT,"sent"),200); setInterval(()=>{},1000);',
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, SIDE_EFFECT: sideEffect },
+        leaseFailure,
+        timeoutMs: 1_000,
+      },
+    ),
+    (error) => error === leaseError,
+  );
+  await exited(gateway);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(fs.existsSync(sideEffect), false);
 });
 
 test("credential-bearing child processes receive no parent control secrets", () => {
