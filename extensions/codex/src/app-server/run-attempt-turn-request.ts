@@ -1,9 +1,5 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  interruptCodexTurnAndWaitBestEffort,
-  retireUnsafeCodexTurnClientBestEffort,
-} from "./attempt-client-cleanup.js";
-import {
   createCodexModelCallDiagnosticEmitter,
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
@@ -42,7 +38,7 @@ export async function prepareCodexAttemptTurnRequest(
     appServer,
     runAbortController,
   } = connection;
-  const { state } = turnRuntime;
+  const { state, interruptTurn } = turnRuntime;
   const explicitSkillInputs = await resolveCodexExplicitSkillInputs({
     client: resourceState.client,
     cwd: resourceState.codexExecutionCwd,
@@ -155,13 +151,9 @@ export async function prepareCodexAttemptTurnRequest(
         // Codex serializes start/interrupt per thread; an empty id interrupts
         // the accepted native turn even when local cancellation hid its response.
         try {
-          resourceState.startupClientUnsafe = !(await interruptCodexTurnAndWaitBestEffort(
-            resourceState.client,
-            { threadId: resourceState.thread.threadId, turnId: acceptedTurnId ?? "" },
-          ));
-          if (resourceState.startupClientUnsafe) {
-            await retireUnsafeCodexTurnClientBestEffort(resourceState.client, "startup interrupt");
-          }
+          await interruptTurn(acceptedTurnId ?? "", {
+            operation: "startup interrupt",
+          });
         } finally {
           releaseCurrentRoute();
         }

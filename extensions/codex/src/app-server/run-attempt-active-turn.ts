@@ -59,7 +59,6 @@ export async function activateCodexAttemptTurn(
     runAbortController,
     terminalState,
     abortExplicitly,
-    abortFromUpstream,
     bindingStore,
     bindingIdentity,
     sessionAgentId,
@@ -70,9 +69,21 @@ export async function activateCodexAttemptTurn(
   const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
   const { state, userInputBridgeRef, steeringQueueRef, turnWatches, completeTurn, interruptTurn } =
     turnRuntime;
+  const { turnIdRef } = turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
+  const authoritySourceRef = attemptTools.scheduledAppAuthoritySourceRef;
+  if (resourceState.thread.pluginAppPolicyContext) {
+    authoritySourceRef.current = {
+      client: resourceState.client,
+      threadId: resourceState.thread.threadId,
+      policyContext: resourceState.thread.pluginAppPolicyContext,
+      configCwd: effectiveCwd,
+    };
+  }
+  turnIdRef.current = activeTurnId;
+  resourceState.nativeSubagentMonitor?.bindTurn(activeTurnId);
   const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
   let nativePlanUpdateOrdinal = 0;
   const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
@@ -411,15 +422,6 @@ export async function activateCodexAttemptTurn(
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };
-  params.replyOperation?.attachBackend(handle);
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-  const freezeRunTerminalOutcome = () => {
-    if (terminalState.terminalOutcomeFrozen) {
-      return;
-    }
-    terminalState.terminalOutcomeFrozen = true;
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-  };
   const abortListener = () => {
     if (state.timedOut) {
       void (async () => {
@@ -463,18 +465,21 @@ export async function activateCodexAttemptTurn(
       completeTurn();
     });
   };
-  runAbortController.signal.addEventListener("abort", abortListener, { once: true });
-  if (runAbortController.signal.aborted) {
-    abortListener();
-  }
   return {
     activeTurnId,
     activeProjector,
     streamState,
     handle,
-    freezeRunTerminalOutcome,
     notifyUserMessagePersisted,
     abortListener,
+    publishActiveOwnership: () => {
+      params.replyOperation?.attachBackend(handle);
+      setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+      runAbortController.signal.addEventListener("abort", abortListener, { once: true });
+      if (runAbortController.signal.aborted) {
+        abortListener();
+      }
+    },
   };
 }
 

@@ -2,7 +2,7 @@ import { clearActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtim
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-  closeCodexStartupClientBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
@@ -14,12 +14,16 @@ import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
+export type CodexAttemptOwnedTurn =
+  | { phase: "accepted"; turnId: string }
+  | { phase: "activated"; activeTurn: CodexAttemptActiveTurn };
+
 export async function cleanupCodexAttempt(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
-  activeTurn: CodexAttemptActiveTurn,
+  ownedTurn: CodexAttemptOwnedTurn,
 ) {
   const {
     prompt,
@@ -33,6 +37,7 @@ export async function cleanupCodexAttempt(
   const { connection } = prompt.context.runtime;
   const { params, options, runAbortController, terminalState, bindingStore, bindingIdentity } =
     connection;
+  const { freezeRunTerminalOutcome } = connection;
   const { state, steeringQueueRef, userInputBridgeRef, turnWatches } = turnRuntime;
   const {
     maybeEmitFastModeAutoResetBestEffort,
@@ -40,16 +45,32 @@ export async function cleanupCodexAttempt(
     buildLifecycleTerminalMeta,
   } = lifecycle;
   const { codexModelCallDiagnostics } = requestRuntime;
-  const { activeTurnId, abortListener, handle, freezeRunTerminalOutcome } = activeTurn;
+  const activeTurn = ownedTurn.phase === "accepted" ? undefined : ownedTurn.activeTurn;
+  const activeTurnId =
+    ownedTurn.phase === "accepted" ? ownedTurn.turnId : ownedTurn.activeTurn.activeTurnId;
+  const rollbackTurn = ownedTurn.phase === "accepted" || !state.completed;
+  let subscriptionDisposition: "pending" | "detached" | "resolved" =
+    resourceState.startupClientUnsafe ? "detached" : "pending";
   // Exact-thread cron authority exists only while this creator turn owns the
   // live client/thread. Retained model callbacks must fail after cleanup begins.
   prompt.context.attemptTools.scheduledAppAuthoritySourceRef.current = undefined;
   // Finalization can throw before freezing. Close cancellation admission before
   // any teardown await so it cannot replace the cleanup promise being joined.
   freezeRunTerminalOutcome();
-  // Join late cancellation before releasing the subscription, but do not let a
-  // failed terminal RPC skip resource cleanup. Surface that failure below.
+  // Join late cancellation, then close admission before rollback; otherwise
+  // queued work can replace cleanup or a failed terminal RPC can skip teardown.
   await state.abortCleanup.catch(() => undefined);
+  if (rollbackTurn) {
+    turnRuntime.completeTurn();
+    const interrupted = await turnRuntime.interruptTurn(activeTurnId, {
+      locallyCompleted: true,
+      operation: "activation interrupt",
+    });
+    if (interrupted) {
+      await resourceState.turnRoute?.drain();
+    }
+    subscriptionDisposition = interrupted ? "pending" : "detached";
+  }
   try {
     steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
@@ -123,19 +144,20 @@ export async function cleanupCodexAttempt(
             threadId: resourceState.thread.threadId,
           })
         : true;
-    // Only explicitly retained live threads may skip the next thread/resume.
-    if (!state.timedOut && !retainLiveThread) {
-      // Clear first: if a newer owner won the binding, its live subscription must remain intact.
-      if (bindingReleased) {
-        const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
-          threadId: resourceState.thread.threadId,
-          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        });
-        if (!released) {
-          // Never reuse a client whose previous thread may still publish notifications.
-          await closeCodexStartupClientBestEffort(resourceState.client);
-        }
+    const timedOutWithActiveAbortOwner = ownedTurn.phase === "activated" && state.timedOut;
+    if (timedOutWithActiveAbortOwner || retainLiveThread || !bindingReleased) {
+      subscriptionDisposition = "resolved";
+    } else if (subscriptionDisposition === "pending") {
+      const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
+        threadId: resourceState.thread.threadId,
+        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      });
+      if (!released) {
+        // Never reuse a client whose previous thread may still publish notifications.
+        resourceState.startupClientUnsafe = true;
+        await retireUnsafeCodexTurnClientBestEffort(resourceState.client, "thread unsubscribe");
       }
+      subscriptionDisposition = "resolved";
     }
   } finally {
     await runCleanupStep("codex-user-input-cancel", () =>
@@ -153,10 +175,21 @@ export async function cleanupCodexAttempt(
       const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
       await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
     });
+    if (rollbackTurn) {
+      await runCleanupStep("codex-transcript-checkpoint", () =>
+        resources.projectorRef.current?.transcriptCheckpoint.flush(true),
+      );
+    }
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
-    await runCleanupStep("codex-transcript-checkpoint", () =>
-      activeTurn.activeProjector.transcriptCheckpoint.flush(true),
-    );
+    if (activeTurn && !rollbackTurn) {
+      await runCleanupStep("codex-transcript-checkpoint", () =>
+        activeTurn.activeProjector.transcriptCheckpoint.flush(true),
+      );
+    }
+    if (subscriptionDisposition === "pending" && !resourceState.startupClientUnsafe) {
+      resourceState.startupClientUnsafe = true;
+      await retireUnsafeCodexTurnClientBestEffort(resourceState.client, "attempt cleanup");
+    }
     await runCleanupStep(
       "codex-shared-client-release",
       releaseSharedClientLeaseAndRetireOneShotClient,
@@ -184,16 +217,25 @@ export async function cleanupCodexAttempt(
     await runCleanupStep("codex-scheduled-mcp-dispose", () =>
       prompt.context.attemptTools.scheduledConfiguredMcp?.dispose(),
     );
-    await runCleanupStep("codex-abort-listener-remove", () => {
-      runAbortController.signal.removeEventListener("abort", abortListener);
-    });
+    if (activeTurn) {
+      await runCleanupStep("codex-abort-listener-remove", () => {
+        runAbortController.signal.removeEventListener("abort", activeTurn.abortListener);
+      });
+    }
     await runCleanupStep("codex-steering-cancel", () => steeringQueueRef.current?.cancel());
-    await runCleanupStep("codex-reply-backend-detach", () =>
-      params.replyOperation?.detachBackend(handle),
-    );
-    await runCleanupStep("codex-active-run-clear", () => {
-      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-    });
+    if (activeTurn) {
+      await runCleanupStep("codex-reply-backend-detach", () =>
+        params.replyOperation?.detachBackend(activeTurn.handle),
+      );
+      await runCleanupStep("codex-active-run-clear", () => {
+        clearActiveEmbeddedRun(
+          params.sessionId,
+          activeTurn.handle,
+          params.sessionKey,
+          params.sessionFile,
+        );
+      });
+    }
   }
   await state.abortCleanup;
 }
