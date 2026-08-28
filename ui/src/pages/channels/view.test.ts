@@ -89,6 +89,35 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
 }
 
 describe("channels setup access", () => {
+  it("keeps unconfigured recommended channels available after one channel is configured", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+      channelMeta: [{ id: "slack", label: "Slack", detailLabel: "Slack Bot" }],
+      channels: { slack: { configured: true } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    const availableLabels = Array.from(
+      container.querySelectorAll(".channels-item__detail .settings-row__title"),
+      (node) => node.textContent?.trim(),
+    );
+    expect(availableLabels).toEqual([
+      "whatsapp",
+      "telegram",
+      "discord",
+      "googlechat",
+      "signal",
+      "imessage",
+      "nostr",
+    ]);
+  });
+
   it("replaces setup actions with an admin-required notice for non-admin viewers", () => {
     const onStartSetup = vi.fn();
     const props = createProps({
