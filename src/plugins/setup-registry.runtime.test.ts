@@ -1,6 +1,6 @@
 // Verifies metadata-backed setup registry descriptor lookup.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";

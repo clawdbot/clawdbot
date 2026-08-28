@@ -14,26 +14,8 @@ vi.mock("../commands/doctor/shared/legacy-config-compat.js", () => ({
   },
 }));
 
-vi.mock("../plugins/gateway-startup-plugin-ids.js", () => ({
-  createConfigValidationMetadataPluginIdScope: (params: {
-    config: { plugins?: { entries?: Record<string, unknown> } };
-  }) => {
-    const configuredPluginIds = Object.keys(params.config.plugins?.entries ?? {}).toSorted();
-    const removedPluginIds = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
-    if (configuredPluginIds.some((pluginId) => !removedPluginIds.has(pluginId))) {
-      throw new Error("config IO compatibility tests require real metadata for active plugins");
-    }
-    return {
-      key: `io-compat:${configuredPluginIds.join(",")}`,
-      resolve: () => [],
-    };
-  },
-}));
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  rebasePluginMetadataSnapshotManifestRegistry: () => {
-    throw new Error("config IO compatibility tests must not materialize metadata snapshots");
-  },
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: () => ({
     manifestRegistry: { plugins: [], diagnostics: [] },
   }),

@@ -3,10 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBundledPluginSources } from "./bundled-sources.js";
+import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
+import { resolvePluginConfigContractsById } from "./config-contracts.js";
+import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { loadPluginManifest } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import {
+  completePluginMetadataSnapshot,
+  loadPluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 
 const { manifestScanWarn } = vi.hoisted(() => ({
   manifestScanWarn: vi.fn(),
@@ -82,6 +90,81 @@ describe("listOpenClawPluginManifestMetadata", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.each(["manifest", "channel", "source", "contract"] as const)(
+    "keeps %s readers on startup metadata after package files change",
+    (reader) => {
+      const root = createTempRoot();
+      const bundledRoot = path.join(root, "bundled");
+      const pluginDir = path.join(bundledRoot, "startup-owner");
+      const env = {
+        OPENCLAW_HOME: path.join(root, "home"),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      };
+      const writePackage = (generation: string, pluginId = "startup-owner") => {
+        const targetDir = path.join(bundledRoot, pluginId);
+        writeJson(path.join(targetDir, "package.json"), {
+          name: `@fixture/${pluginId}`,
+          version: generation,
+          openclaw: {
+            extensions: ["./index.cjs"],
+            channel: { id: "startup-channel", label: generation },
+          },
+        });
+        writeJson(path.join(targetDir, "openclaw.plugin.json"), {
+          id: pluginId,
+          version: generation,
+          configSchema: { type: "object" },
+          configContracts: {
+            secretInputs: { paths: [{ path: generation, expected: "string" }] },
+          },
+        });
+        fs.writeFileSync(path.join(targetDir, "index.cjs"), 'throw new Error("runtime imported");');
+      };
+      writePackage("1.0.0");
+      const config = {};
+      const snapshot = completePluginMetadataSnapshot({
+        snapshot: loadPluginMetadataSnapshot({ config, env, preferPersisted: false }),
+        config,
+        env,
+      });
+      assert(snapshot);
+      expect(snapshot.byPluginId.get("startup-owner")?.version).toBe("1.0.0");
+      setGatewayPluginMetadataSnapshot(snapshot, { config, env });
+      writePackage("2.0.0");
+      writePackage("2.0.0", "added-after-startup");
+
+      const readdirSpy = vi.spyOn(fs, "readdirSync");
+      const readFileSpy = vi.spyOn(fs, "readFileSync");
+      const readGeneration = (pluginId = "startup-owner") => {
+        switch (reader) {
+          case "manifest":
+            return listOpenClawPluginManifestMetadata(env).find(
+              (entry) => entry.manifest.id === pluginId,
+            )?.manifest.version;
+          case "channel":
+            return listChannelCatalogEntries({ env }).find((entry) => entry.pluginId === pluginId)
+              ?.channel.label;
+          case "source":
+            return resolveBundledPluginSources({ env }).get(pluginId)?.version;
+          case "contract":
+            return resolvePluginConfigContractsById({
+              env,
+              pluginIds: [pluginId],
+              fallbackToBundledMetadataForResolvedBundled: true,
+            }).get(pluginId)?.configContracts.secretInputs?.paths[0]?.path;
+        }
+        throw new Error("Unhandled metadata reader");
+      };
+      expect(readGeneration()).toBe("1.0.0");
+      expect(readGeneration()).toBe("1.0.0");
+      expect(readGeneration("added-after-startup")).toBeUndefined();
+      expect(readdirSpy).not.toHaveBeenCalled();
+      expect(readFileSpy.mock.calls.filter(([file]) => String(file).startsWith(pluginDir))).toEqual(
+        [],
+      );
+    },
+  );
 
   it("keeps manifest metadata stable until explicit lifecycle invalidation", () => {
     const root = createTempRoot();

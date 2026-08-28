@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
@@ -153,6 +154,10 @@ function resolveBundledStaticCatalogMetadataSnapshot(
   // Rediscovery here can mix generations and repeat manifest work for every model lookup.
   if (params.metadataSnapshot) {
     return params.metadataSnapshot;
+  }
+  const gatewaySnapshot = getGatewayPluginMetadataSnapshot();
+  if (gatewaySnapshot) {
+    return gatewaySnapshot;
   }
   if (params.env !== process.env) {
     return undefined;

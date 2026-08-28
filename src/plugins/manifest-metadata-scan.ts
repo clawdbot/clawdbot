@@ -11,6 +11,7 @@ import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
@@ -190,6 +191,15 @@ function uniqueCandidateDirs(candidates: CandidateDir[]): CandidateDir[] {
 export function listOpenClawPluginManifestMetadata(
   env: NodeJS.ProcessEnv = process.env,
 ): PluginManifestMetadataRecord[] {
+  const snapshot = getGatewayPluginMetadataSnapshot();
+  if (snapshot) {
+    return [
+      ...snapshot.plugins,
+      ...(snapshot.bundledManifestRegistry?.plugins ?? []).filter(
+        (plugin) => !snapshot.byPluginId.has(plugin.id),
+      ),
+    ].map((plugin) => ({ pluginDir: plugin.rootDir, manifest: plugin, origin: plugin.origin }));
+  }
   const cached = manifestMetadataCache.get(env);
   if (cached) {
     return cached.slice();

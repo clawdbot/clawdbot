@@ -14,6 +14,7 @@ import {
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -53,6 +54,7 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import {
@@ -90,6 +92,7 @@ import {
   withPluginInstallRecords,
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
+import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -126,6 +129,7 @@ import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import {
   buildPluginDependencyStatus,
   projectPluginDependencyHealth,
+  type PluginDependencyStatus,
 } from "./status-dependencies-core.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
@@ -294,39 +298,57 @@ type OfficialCatalogResult = Pick<HostedOfficialExternalPluginCatalogLoadResult,
 const officialCatalogLoader = createConfigScopedPromiseLoader(() =>
   loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
 );
-let pluginDependencyDiagnostics = new WeakMap<PluginMetadataSnapshot, PluginDiagnostic[]>();
+let pluginDependencyFacts = new WeakMap<
+  PluginMetadataSnapshot,
+  Map<string, PluginDependencyStatus>
+>();
+let managedPluginCandidate:
+  | { boot: PluginMetadataSnapshot; snapshot: PluginMetadataSnapshot }
+  | undefined;
 
 // Package dependency probes belong to one metadata generation, never each Gateway request.
 registerPluginMetadataProcessMemoLifecycleClear(() => {
-  pluginDependencyDiagnostics = new WeakMap();
+  pluginDependencyFacts = new WeakMap();
+  managedPluginCandidate = undefined;
 });
 
-function resolveManagedPluginDiagnostics(snapshot: PluginMetadataSnapshot): PluginDiagnostic[] {
-  const cached = pluginDependencyDiagnostics.get(snapshot);
-  if (cached) {
-    return cached;
+function resolveManagedPluginDiagnostics(
+  snapshot: PluginMetadataSnapshot,
+  config: OpenClawConfig,
+): PluginDiagnostic[] {
+  let dependencies = pluginDependencyFacts.get(snapshot);
+  if (!dependencies) {
+    dependencies = new Map();
+    for (const record of snapshot.index.plugins) {
+      if (record.origin === "bundled") {
+        continue;
+      }
+      const manifest = snapshot.byPluginId.get(record.pluginId);
+      dependencies.set(
+        record.pluginId,
+        buildPluginDependencyStatus({
+          rootDir: record.rootDir,
+          dependencies: manifest?.packageDependencies,
+          optionalDependencies: manifest?.packageOptionalDependencies,
+        }),
+      );
+    }
+    pluginDependencyFacts.set(snapshot, dependencies);
   }
   const { diagnostics } = projectPluginDependencyHealth({
     plugins: snapshot.index.plugins.map((record) => {
       const manifest = snapshot.byPluginId.get(record.pluginId);
+      const enabled = isInstalledPluginEnabled(snapshot.index, record.pluginId, config);
       return {
         id: record.pluginId,
         source: manifest?.source ?? record.source ?? record.manifestPath,
-        enabled: record.enabled,
-        status: record.enabled ? ("loaded" as const) : ("disabled" as const),
-        dependencyStatus:
-          record.origin === "bundled"
-            ? undefined
-            : buildPluginDependencyStatus({
-                rootDir: record.rootDir,
-                dependencies: manifest?.packageDependencies,
-                optionalDependencies: manifest?.packageOptionalDependencies,
-              }),
+        enabled,
+        status: enabled ? ("loaded" as const) : ("disabled" as const),
+        dependencyStatus: dependencies.get(record.pluginId),
       };
     }),
     diagnostics: [...snapshot.diagnostics],
   });
-  pluginDependencyDiagnostics.set(snapshot, diagnostics);
   return diagnostics;
 }
 
@@ -769,6 +791,37 @@ function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.
   };
 }
 
+function resolveManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  const boot = getGatewayPluginMetadataSnapshot();
+  return managedPluginCandidate && managedPluginCandidate.boot === boot
+    ? managedPluginCandidate.snapshot
+    : resolvePluginMetadataSnapshot(resolveManagedPluginMetadataParams(config, env));
+}
+
+function loadFreshManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  // Gateway actions must cover every workspace shown in its management inventory.
+  return getGatewayPluginMetadataSnapshot()
+    ? resolveConfigWidePluginMetadataSnapshot({ config, env, allowCurrent: false })
+    : loadPluginMetadataSnapshot({
+        ...resolveManagedPluginMetadataParams(config, env),
+        allowCurrent: false,
+      });
+}
+
+/** Publish desired install state for management without replacing the Gateway's boot facts. */
+export function refreshManagedPluginMetadata(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): PluginMetadataSnapshot {
+  const env = params.env ?? process.env;
+  const boot = getGatewayPluginMetadataSnapshot();
+  const snapshot = loadFreshManagedPluginMetadata(params.config, env);
+  if (boot) {
+    managedPluginCandidate = { boot, snapshot };
+  }
+  return snapshot;
+}
+
 /** Resolve the current manifest/catalog icon URL without accepting a caller-provided URL. */
 export async function resolveManagedPluginIconUrl(params: {
   config: OpenClawConfig;
@@ -777,9 +830,7 @@ export async function resolveManagedPluginIconUrl(params: {
   officialCatalog?: OfficialCatalogResult;
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
-  const metadata = resolvePluginMetadataSnapshot(
-    resolveManagedPluginMetadataParams(params.config, env),
-  );
+  const metadata = resolveManagedPluginMetadata(params.config, env);
   const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   return resolvePluginIconUrlFromCatalogFacts({
     metadata,
@@ -834,25 +885,23 @@ export async function listManagedPlugins(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   officialCatalog?: OfficialCatalogResult;
+  metadata?: PluginMetadataSnapshot;
 }): Promise<ManagedPluginCatalog> {
   const env = params.env ?? process.env;
   const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
-  const metadata = resolvePluginMetadataSnapshot({
-    config: params.config,
-    env,
-    ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
-  });
-  const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata);
+  const metadata = params.metadata ?? resolveManagedPluginMetadata(params.config, env);
+  const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata, params.config);
   const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
   const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
   const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
+    const enabled = isInstalledPluginEnabled(metadata.index, record.pluginId, params.config);
     const manifest = metadata.byPluginId.get(record.pluginId);
     const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
     const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
     const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
     const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
-    if (record.enabled && record.origin !== "bundled" && ownership.ok && installRecord) {
+    if (enabled && record.origin !== "bundled" && ownership.ok && installRecord) {
       const declared = resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId);
       if (!declared || !resolveAcceptedSurfaceCurrent(installRecord, declared)) {
         capabilityConsentDiagnostics.push({
@@ -906,8 +955,8 @@ export async function listManagedPlugins(params: {
       id: record.pluginId,
       name: presentation.name,
       installed: true,
-      enabled: record.enabled,
-      state: error ? "error" : record.enabled ? "enabled" : "disabled",
+      enabled,
+      state: error ? "error" : enabled ? "enabled" : "disabled",
       removable,
     };
     if (record.packageName) {
@@ -1005,10 +1054,12 @@ export async function listManagedPlugins(params: {
       ...(install ? { install } : {}),
     });
   }
-  const diagnostics: unknown[] = appendPluginControlPlaneWorkspaceDiagnostic(
-    [...pluginDiagnostics, ...capabilityConsentDiagnostics],
-    workspace,
-  );
+  const diagnostics: unknown[] = getGatewayPluginMetadataSnapshot()
+    ? [...pluginDiagnostics, ...capabilityConsentDiagnostics]
+    : appendPluginControlPlaneWorkspaceDiagnostic(
+        [...pluginDiagnostics, ...capabilityConsentDiagnostics],
+        workspace,
+      );
   if (officialCatalog.error) {
     diagnostics.push({
       level: "warn",
@@ -1029,11 +1080,10 @@ export async function inspectManagedPlugin(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<ManagedPluginInspection> {
   const env = params.env ?? process.env;
-  const metadata = resolvePluginMetadataSnapshot(
-    resolveManagedPluginMetadataParams(params.config, env),
-  );
+  const metadata = resolveManagedPluginMetadata(params.config, env);
   const pluginId = metadata.normalizePluginId(params.pluginId);
   const record = metadata.index.plugins.find((candidate) => candidate.pluginId === pluginId);
+  const enabled = isInstalledPluginEnabled(metadata.index, pluginId, params.config);
   const pendingReview = resolvePendingPluginCapabilityReview(pluginId);
   if (pendingReview) {
     return {
@@ -1044,7 +1094,7 @@ export async function inspectManagedPlugin(params: {
         ...(pendingReview.version ? { version: pendingReview.version } : {}),
         ...(record?.origin ? { origin: record.origin } : {}),
         installed: Boolean(record),
-        enabled: record?.enabled ?? false,
+        enabled,
       },
       declared: pendingReview.declared,
       grants: pendingReview.grants,
@@ -1106,7 +1156,7 @@ export async function inspectManagedPlugin(params: {
         }),
         origin: record.origin,
         installed: true,
-        enabled: record.enabled,
+        enabled,
       },
       ...(source ? { source } : {}),
       ...summary,
@@ -1825,17 +1875,17 @@ export async function installManagedPlugin(params: {
     }
     warnings.push(...(installed.warnings ?? []));
     const workspace = resolvePluginControlPlaneWorkspace({ config: installed.config, env });
-    if (workspace.diagnostic) {
+    if (workspace.diagnostic && !getGatewayPluginMetadataSnapshot()) {
       warnings.push(workspace.diagnostic.message);
     }
+    // Management inspects the committed candidate; the Gateway keeps its boot inventory.
+    const installedMetadata = refreshManagedPluginMetadata({ config: installed.config, env });
     const catalog = await listManagedPlugins({
       config: installed.config,
       env,
       officialCatalog,
+      metadata: installedMetadata,
     });
-    const installedMetadata = resolvePluginMetadataSnapshot(
-      resolveManagedPluginMetadataParams(installed.config, env),
-    );
     const installedOwnership = resolveInstalledPluginPackageOwnership(
       installedMetadata.index,
       installed.pluginId,
@@ -1884,9 +1934,7 @@ export async function setManagedPluginEnabled(params: {
   const env = params.env ?? process.env;
   return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
-    const metadata = loadPluginMetadataSnapshot(
-      resolveManagedPluginMetadataParams(snapshot.config, env),
-    );
+    const metadata = loadFreshManagedPluginMetadata(snapshot.config, env);
     const pluginId = metadata.normalizePluginId(params.pluginId.trim());
     const installedPlugin = metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId);
     if (!installedPlugin) {
@@ -1920,7 +1968,7 @@ export async function setManagedPluginEnabled(params: {
       }
       next = enableResult.config;
       policyPluginId = enableResult.pluginId;
-      const slotResult = applySlotSelectionForPlugin(next, pluginId);
+      const slotResult = applySlotSelectionForPlugin(next, pluginId, metadata);
       next = slotResult.config;
       warnings.push(...slotResult.warnings);
     } else {
@@ -1941,7 +1989,8 @@ export async function setManagedPluginEnabled(params: {
       policyPluginIds: [policyPluginId],
       logger: { warn: (message) => warnings.push(message) },
     });
-    const catalog = await listManagedPlugins({ config: next, env });
+    const updatedMetadata = refreshManagedPluginMetadata({ config: next, env });
+    const catalog = await listManagedPlugins({ config: next, env, metadata: updatedMetadata });
     const plugin = catalog.plugins.find((entry) => entry.id === pluginId);
     if (!plugin) {
       throw new ManagedPluginLifecycleError(
@@ -1968,9 +2017,7 @@ export async function uninstallManagedPlugin(params: {
     // Mirror the CLI uninstall flow: plan against config carrying install records
     // so managed npm/git directories resolve, then persist the stripped config.
     const configWithRecords = withPluginInstallRecords(snapshot.config, installRecords);
-    const metadata = loadPluginMetadataSnapshot(
-      resolveManagedPluginMetadataParams(configWithRecords, env),
-    );
+    const metadata = loadFreshManagedPluginMetadata(configWithRecords, env);
     const pluginId = metadata.normalizePluginId(params.pluginId.trim());
     const record = metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId);
     if (record?.origin === "bundled") {
@@ -2095,6 +2142,7 @@ export async function uninstallManagedPlugin(params: {
       invalidateRuntimeCache: false,
       logger: { warn: (message) => warnings.push(message) },
     });
+    refreshManagedPluginMetadata({ config: nextConfig, env });
     const removed = formatUninstallActionLabels({
       ...plan.actions,
       directory: directoryResult.directoryRemoved,

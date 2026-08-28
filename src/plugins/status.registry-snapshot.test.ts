@@ -5,10 +5,8 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";

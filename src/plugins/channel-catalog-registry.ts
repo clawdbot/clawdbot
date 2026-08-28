@@ -3,6 +3,7 @@ import { normalizeOptionalString as resolveOptionalString } from "@openclaw/norm
 import { resolveIsNixMode } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
@@ -66,8 +67,18 @@ export function listChannelCatalogEntries(
   if (params.discovery) {
     resolveInstallRecords(params);
   }
-  const discovery = params.discovery ?? resolveMemoizedChannelCatalogDiscovery(params);
-  return discovery.candidates.flatMap((candidate) => {
+  const snapshot =
+    !params.discovery && !params.installRecords ? getGatewayPluginMetadataSnapshot() : undefined;
+  // Keep bundled owners available to callers that exclude untrusted workspace shadows.
+  const candidates = snapshot
+    ? [
+        ...snapshot.plugins,
+        ...(snapshot.bundledManifestRegistry?.plugins ?? []).filter(
+          (bundled) => snapshot.byPluginId.get(bundled.id)?.rootDir !== bundled.rootDir,
+        ),
+      ]
+    : (params.discovery ?? resolveMemoizedChannelCatalogDiscovery(params)).candidates;
+  return candidates.flatMap((candidate) => {
     if (params.origin && candidate.origin !== params.origin) {
       return [];
     }
@@ -75,7 +86,7 @@ export function listChannelCatalogEntries(
     if (!channel?.id) {
       return [];
     }
-    const pluginId = resolveChannelCatalogPluginId(candidate);
+    const pluginId = "id" in candidate ? candidate.id : resolveChannelCatalogPluginId(candidate);
     if (!pluginId) {
       return [];
     }

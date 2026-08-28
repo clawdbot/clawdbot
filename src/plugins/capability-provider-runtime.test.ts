@@ -128,7 +128,7 @@ vi.mock("./bundled-compat.js", () => ({
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
 let prepareMediaCapabilityProviders: typeof import("./capability-provider-runtime.js").prepareMediaCapabilityProviders;
-let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 
 function expectResolvedCapabilityProviderIds(providers: Array<{ id: string }>, expected: string[]) {
@@ -361,7 +361,8 @@ describe("resolvePluginCapabilityProviders", () => {
       resolvePluginCapabilityProvider,
       resolvePluginCapabilityProviders,
     } = await import("./capability-provider-runtime.js"));
-    ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
+    ({ setCurrentPluginMetadataSnapshot } =
+      await import("./current-plugin-metadata.test-support.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
   });
 

@@ -5,7 +5,7 @@ import {
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 

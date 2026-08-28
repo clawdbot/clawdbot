@@ -1,6 +1,6 @@
 // Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveConfigWidePluginManifestRegistry } from "../../config/io.plugin-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "../../config/io.plugin-metadata.js";
 import {
   fingerprintPluginAutoEnableConfig,
   fingerprintPluginAutoEnableEnv,
@@ -16,8 +16,7 @@ import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugin-metadata-lifecycle.js";
 import {
-  isPluginMetadataSnapshotCompatible,
-  rebasePluginMetadataSnapshotManifestRegistry,
+  projectPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
@@ -214,6 +213,12 @@ export function resolvePluginRuntimeLoadContext(
     config: OpenClawConfig;
     index?: PluginMetadataSnapshot["index"];
   }): PluginMetadataSnapshot => {
+    if (options?.workspaceDir === undefined) {
+      return projectPluginMetadataSnapshot(
+        resolveConfigWidePluginMetadataSnapshot({ config: params.config, env }),
+        options?.onlyPluginIds,
+      );
+    }
     const snapshot = resolvePluginMetadataSnapshot({
       config: params.config,
       env,
@@ -222,17 +227,7 @@ export function resolvePluginRuntimeLoadContext(
       ...(params.index ? { index: params.index } : {}),
       ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
     });
-    if (options?.workspaceDir !== undefined) {
-      return snapshot;
-    }
-    return rebasePluginMetadataSnapshotManifestRegistry(
-      snapshot,
-      resolveConfigWidePluginManifestRegistry({
-        config: params.config,
-        env,
-        ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
-      }),
-    );
+    return snapshot;
   };
   const initialMetadataSnapshot =
     options?.metadataSnapshot ??
@@ -257,21 +252,7 @@ export function resolvePluginRuntimeLoadContext(
     env,
     workspaceDir: options?.workspaceDir,
   }).workspaceDir;
-  const metadataSnapshot =
-    options?.manifestRegistry !== undefined
-      ? undefined
-      : initialMetadataSnapshot &&
-          isPluginMetadataSnapshotCompatible({
-            snapshot: initialMetadataSnapshot,
-            config,
-            env,
-            workspaceDir,
-          })
-        ? initialMetadataSnapshot
-        : resolveMetadataSnapshot({
-            config,
-            ...(initialMetadataSnapshot ? { index: initialMetadataSnapshot.index } : {}),
-          });
+  const metadataSnapshot = initialMetadataSnapshot;
   const finalManifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)

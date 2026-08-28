@@ -54,6 +54,8 @@ export type PluginMetadataSnapshot = {
   index: InstalledPluginIndex;
   registryDiagnostics: readonly PluginMetadataSnapshotRegistryDiagnostic[];
   manifestRegistry: PluginManifestRegistry;
+  /** Independently validated bundled owners, including packages shadowed by active plugins. */
+  bundledManifestRegistry?: PluginManifestRegistry;
   plugins: readonly PluginManifestRecord[];
   diagnostics: readonly PluginDiagnostic[];
   byPluginId: ReadonlyMap<string, PluginManifestRecord>;

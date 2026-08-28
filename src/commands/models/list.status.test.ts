@@ -2,10 +2,8 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 

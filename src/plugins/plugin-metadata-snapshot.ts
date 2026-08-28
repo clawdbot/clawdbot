@@ -16,7 +16,11 @@ import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadBundledPluginManifestRegistry,
+  type PluginManifestRecord,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import {
@@ -158,6 +162,9 @@ export function isPluginMetadataSnapshotCompatible(params: {
   index?: InstalledPluginIndex;
 }): boolean {
   const env = params.env ?? process.env;
+  if (isCurrentPluginMetadataSnapshotRuntimeGeneration(params.snapshot)) {
+    return true;
+  }
   const requestedPluginIds = normalizePluginIdScope(params.pluginIds);
   const snapshotPluginIds = normalizePluginIdScope(params.snapshot.pluginIds);
   const scopeMatches =
@@ -301,9 +308,61 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
   };
 }
 
+// Keep one selection per inventory; request scopes are projections, not new discovery owners.
+const projectedSnapshots = new WeakMap<
+  PluginMetadataSnapshot,
+  { key: string; snapshot: PluginMetadataSnapshot }
+>();
+
+export function projectPluginMetadataSnapshot(
+  snapshot: PluginMetadataSnapshot,
+  pluginIds: readonly string[] | undefined,
+): PluginMetadataSnapshot {
+  const selectedIds = normalizePluginIdScope(pluginIds);
+  if (selectedIds === undefined) {
+    return snapshot;
+  }
+  const key = serializePluginIdScope(selectedIds);
+  if (key === serializePluginIdScope(snapshot.pluginIds)) {
+    return snapshot;
+  }
+  const cached = projectedSnapshots.get(snapshot);
+  if (cached?.key === key) {
+    return cached.snapshot;
+  }
+  const selected = new Set(selectedIds);
+  const projected = freezeSnapshotValue({
+    ...rebasePluginMetadataSnapshotManifestRegistry(snapshot, {
+      plugins: snapshot.plugins.filter((plugin) => selected.has(plugin.id)),
+      diagnostics: snapshot.manifestRegistry.diagnostics,
+    }),
+    pluginIds: selectedIds,
+  });
+  projectedSnapshots.set(snapshot, { key, snapshot: projected });
+  return projected;
+}
+
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
+  if (
+    params.allowCurrent !== false &&
+    params.stateDir === undefined &&
+    params.preferPersisted !== false
+  ) {
+    const current = getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      allowWorkspaceScopedSnapshot: true,
+    });
+    if (current && isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
+      return projectPluginMetadataSnapshot(
+        current,
+        params.pluginIds ?? params.pluginIdScope?.resolve({ index: current.index }),
+      );
+    }
+  }
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
   const snapshot = measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.scan",
@@ -340,23 +399,35 @@ export function completePluginMetadataSnapshot(params: {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
 }): PluginMetadataSnapshot | undefined {
-  if (!params.snapshot || params.snapshot.pluginIds === undefined) {
+  if (
+    !params.snapshot ||
+    (params.snapshot.pluginIds === undefined && params.snapshot.bundledManifestRegistry)
+  ) {
     return params.snapshot;
   }
   const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
   const manifestStartedAt = performance.now();
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index: params.snapshot.index,
-    config: params.config,
-    env: params.env ?? process.env,
-    ...(workspaceDir ? { workspaceDir } : {}),
-    includeDisabled: true,
-  });
+  const manifestRegistry =
+    params.snapshot.pluginIds === undefined
+      ? params.snapshot.manifestRegistry
+      : loadPluginManifestRegistryForInstalledIndex({
+          index: params.snapshot.index,
+          config: params.config,
+          env: params.env ?? process.env,
+          ...(workspaceDir ? { workspaceDir } : {}),
+          includeDisabled: true,
+        });
+  // Bundled fallback contracts cannot come from a same-id external winner.
+  // Capture their separately validated roots before runtime readers lose discovery access.
+  const bundledManifestRegistry =
+    params.snapshot.bundledManifestRegistry ??
+    loadBundledPluginManifestRegistry({ env: params.env });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
   const completed = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
   const { pluginIds: _pluginIds, ...unscoped } = completed;
   return freezeSnapshotValue({
     ...unscoped,
+    bundledManifestRegistry,
     configFingerprint: resolvePluginControlPlaneFingerprint({
       config: params.config,
       env: params.env,
@@ -406,7 +477,13 @@ export function resolvePluginMetadataSnapshot(
       }
       return snapshot;
     }
-    if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
+    if (isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
+      return projectPluginMetadataSnapshot(
+        current,
+        params.pluginIds ?? params.pluginIdScope?.resolve({ index: current.index }),
+      );
+    }
+    if (!params.index) {
       return current;
     }
     if (

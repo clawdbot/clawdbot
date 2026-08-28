@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";

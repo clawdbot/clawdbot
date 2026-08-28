@@ -568,7 +568,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       runtimePlan,
     });
 
-    expect(result).toMatchObject({ ok: true });
+    expect(result, result.reason).toMatchObject({ ok: true });
     expect(selectAgentHarnessForPreparedModelProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",

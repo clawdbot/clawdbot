@@ -18,6 +18,7 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
   discoverOpenClawPlugins,
@@ -1025,6 +1026,14 @@ export function loadPluginManifestRegistryCore(
     discovery?: PluginDiscoveryResult;
   } = {},
 ): PluginManifestRegistry {
+  // Explicit candidates belong to startup/install inspection. Ordinary runtime
+  // readers use the boot descriptors, including when config policy changes.
+  if (!params.candidates && !params.discovery && !params.installRecords) {
+    const gatewaySnapshot = getGatewayPluginMetadataSnapshot();
+    if (gatewaySnapshot) {
+      return gatewaySnapshot.manifestRegistry;
+    }
+  }
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;

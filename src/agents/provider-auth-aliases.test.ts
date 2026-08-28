@@ -49,7 +49,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
 }));
 
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";

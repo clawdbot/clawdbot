@@ -366,6 +366,7 @@ export async function resolvePluginCapabilityConsent(params: {
     const metadata =
       params.metadata ??
       resolvePluginMetadataSnapshot({
+        allowCurrent: false,
         config: params.config,
         env,
         ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
@@ -621,6 +622,7 @@ export async function prepareManagedPluginArtifactConsentHandler(
   const metadata =
     Object.keys(previousRecords).length > 0
       ? resolvePluginMetadataSnapshot({
+          allowCurrent: false,
           config: params.config,
           env,
           ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),

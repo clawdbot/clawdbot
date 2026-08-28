@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
+  setGatewayPluginMetadataSnapshot,
 } from "../current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "../current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
@@ -69,7 +70,7 @@ describe("plugin runtime load context current snapshot ownership", () => {
     clearPluginMetadataLifecycleCaches();
   });
 
-  it("keeps operation-local metadata from replacing the Gateway lifecycle snapshot", () => {
+  it("keeps explicit operation metadata from replacing the Gateway startup inventory", () => {
     const lifecycleConfig = { plugins: { allow: ["lifecycle"] } };
     const operationConfig = { plugins: { allow: ["operation"] } };
     const lifecycleWorkspace = "/workspace/lifecycle";
@@ -82,18 +83,19 @@ describe("plugin runtime load context current snapshot ownership", () => {
       config: operationConfig,
       workspaceDir: operationWorkspace,
     });
-    setCurrentPluginMetadataSnapshot(lifecycleSnapshot, {
+    setGatewayPluginMetadataSnapshot(lifecycleSnapshot, {
       config: lifecycleConfig,
       workspaceDir: lifecycleWorkspace,
     });
-    resolvePluginMetadataSnapshotMock.mockReturnValue(operationSnapshot);
-
     const context = resolvePluginRuntimeLoadContext({
       config: operationConfig,
       workspaceDir: operationWorkspace,
+      metadataSnapshot: operationSnapshot,
     });
 
     expect(context.metadataSnapshot).toBe(operationSnapshot);
+    expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getGatewayPluginMetadataSnapshot()).toBe(lifecycleSnapshot);
     expect(
       getCurrentPluginMetadataSnapshot({
         config: lifecycleConfig,
@@ -105,6 +107,6 @@ describe("plugin runtime load context current snapshot ownership", () => {
         config: operationConfig,
         workspaceDir: operationWorkspace,
       }),
-    ).toBeUndefined();
+    ).toBe(lifecycleSnapshot);
   });
 });

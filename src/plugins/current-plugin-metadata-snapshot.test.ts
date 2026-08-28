@@ -8,10 +8,11 @@ import {
   getCurrentPluginMetadataSnapshot,
   installTemporaryCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
-  setCurrentPluginMetadataSnapshot,
+  setGatewayPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
@@ -751,7 +752,7 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
 
     const replacedLease = installTemporaryCurrentPluginMetadataSnapshot(temporary);
-    setCurrentPluginMetadataSnapshot(newer);
+    setGatewayPluginMetadataSnapshot(newer);
     expect(replacedLease.release()).toBe(false);
     expect(getCurrentPluginMetadataSnapshot()).toBe(newer);
   });

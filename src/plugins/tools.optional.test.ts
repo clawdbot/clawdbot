@@ -61,7 +61,7 @@ let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegist
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
 
@@ -551,7 +551,8 @@ describe("resolvePluginTools optional tools", () => {
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("./runtime/gateway-request-scope.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
-    ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
+    ({ setCurrentPluginMetadataSnapshot } =
+      await import("./current-plugin-metadata.test-support.js"));
     ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
 

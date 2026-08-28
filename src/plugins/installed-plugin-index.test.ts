@@ -584,7 +584,7 @@ describe("installed plugin index", () => {
     },
   );
 
-  it("keeps an index-disabled plugin disabled when config only enables another plugin", () => {
+  it("evaluates current enablement without retaining removed startup policy", () => {
     const enabledFixture = createRichPluginFixture({ id: "enabled-demo" });
     const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
     const index = loadInstalledPluginIndex({
@@ -613,6 +613,12 @@ describe("installed plugin index", () => {
             },
           },
         },
+      }),
+    ).toBe(true);
+    expect(isInstalledPluginEnabled(index, "disabled-demo")).toBe(false);
+    expect(
+      isInstalledPluginEnabled(index, "disabled-demo", {
+        plugins: { deny: ["disabled-demo"] },
       }),
     ).toBe(false);
   });
