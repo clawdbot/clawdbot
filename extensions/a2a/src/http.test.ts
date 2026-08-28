@@ -43,7 +43,7 @@ async function startHttpHarness(options?: {
   const dispatchInbound =
     options?.onDispatch ??
     (async (message) => {
-      taskStore.completeNext(message.contextId, `echo: ${message.text}`, message.peerName);
+      taskStore.completeTask(message.taskId, `echo: ${message.text}`);
     });
   const handler = createA2aHttpHandler({
     config,

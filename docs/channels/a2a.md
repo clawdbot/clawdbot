@@ -92,7 +92,7 @@ By default, the request waits for the agent response. A completed response conta
 
 Include `message.contextId` on subsequent requests to continue the same conversation. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
 
-To return immediately while the agent continues working, add `"configuration": { "returnImmediately": true }` alongside `"message"` in `params`. The task initially reports `TASK_STATE_WORKING`. Requests that exceed `replyTimeoutMs` also return the current working task instead of canceling it.
+To return immediately while the agent continues working, add `"configuration": { "returnImmediately": true }` alongside `"message"` in `params`. The task initially reports `TASK_STATE_WORKING`. Requests that exceed `replyTimeoutMs` also return the current working task instead of canceling it. A task that stays non-terminal for one hour without a status change transitions to `TASK_STATE_FAILED` (terminal) to bound in-memory state; a final reply that arrives after that cutoff is discarded. Terminal tasks are cleaned up 24 hours after they settle.
 
 Older clients can use `message/send` as an alias for `SendMessage`.
 
@@ -175,7 +175,7 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
-Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries; restarting the gateway discards all tasks and task history.
+Tasks remain in memory only. Non-terminal tasks are failed after one hour without a status change; completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries; restarting the gateway discards all tasks and task history.
 
 ## Related
 

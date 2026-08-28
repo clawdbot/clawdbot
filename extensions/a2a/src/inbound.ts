@@ -104,9 +104,10 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
           if (info.kind !== "final") {
             return;
           }
-          // Conversation queues, rather than callback ownership, preserve FIFO
-          // correlation across concurrent sends and canceled-task tombstones.
-          params.store.completeNext(params.contextId, payload.text, params.peerName);
+          // Delivery settles the task that originated this turn: a late final
+          // from a turn the store already failed or reaped is dropped instead
+          // of completing a newer task in the same conversation.
+          params.store.completeTask(params.taskId, payload.text);
         },
         onError: (error) => {
           params.store.fail(params.taskId, error);

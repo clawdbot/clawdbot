@@ -3,6 +3,9 @@ import type { A2aMessageRecord, A2aTaskRecord } from "./protocol.js";
 
 const A2A_TERMINAL_MAX_TASKS = 500;
 const A2A_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
+// Backstop for turns that never settle (e.g. a hung model endpoint): far above
+// the maximum blocking reply wait (replyTimeoutMs caps at 10 minutes).
+const A2A_STALE_TASK_TTL_MS = 60 * 60 * 1000;
 const A2A_ERROR_MAX_LENGTH = 512;
 
 type A2aTaskWaiter = {
@@ -26,12 +29,14 @@ function createStatusMessage(contextId: string, text: string): A2aMessageRecord 
 export class A2aTaskStore {
   readonly #tasks = new Map<string, A2aTaskRecord>();
   readonly #taskOwners = new Map<string, string>();
-  readonly #pendingByContext = new Map<string, string[]>();
   readonly #terminalTasks = new Map<string, number>();
+  readonly #lastChangeAt = new Map<string, number>();
   readonly #waiters = new Map<string, Set<A2aTaskWaiter>>();
+  readonly #expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   create(contextId: string, ownerPeer?: string): A2aTaskRecord {
     this.#pruneTerminalTasks();
+    this.#sweepStaleTasks();
     const task: A2aTaskRecord = {
       id: randomUUID(),
       contextId,
@@ -40,18 +45,17 @@ export class A2aTaskStore {
       history: [],
     };
     this.#tasks.set(task.id, task);
+    this.#lastChangeAt.set(task.id, Date.now());
+    this.#scheduleExpiry(task.id);
     if (ownerPeer !== undefined) {
       this.#taskOwners.set(task.id, ownerPeer);
     }
-    const conversationKey = this.#conversationKey(contextId, ownerPeer);
-    const pending = this.#pendingByContext.get(conversationKey) ?? [];
-    pending.push(task.id);
-    this.#pendingByContext.set(conversationKey, pending);
     return task;
   }
 
   get(taskId: string, ownerPeer?: string): A2aTaskRecord | undefined {
     this.#pruneTerminalTasks();
+    this.#sweepStaleTasks();
     if (ownerPeer !== undefined && this.#taskOwners.get(taskId) !== ownerPeer) {
       return undefined;
     }
@@ -62,29 +66,20 @@ export class A2aTaskStore {
     const task = this.#tasks.get(taskId);
     if (task?.status.state === "TASK_STATE_SUBMITTED") {
       task.status = { state: "TASK_STATE_WORKING", timestamp: new Date().toISOString() };
+      this.#lastChangeAt.set(taskId, Date.now());
+      this.#scheduleExpiry(taskId);
     }
     return task;
   }
 
-  completeNext(
-    contextId: string,
-    text: string | undefined,
-    ownerPeer?: string,
-  ): A2aTaskRecord | undefined {
-    const conversationKey = this.#conversationKey(contextId, ownerPeer);
-    const queue = this.#pendingByContext.get(conversationKey);
-    if (!queue?.length) {
-      return undefined;
-    }
-    const nextTaskId = queue.shift();
-    if (queue.length === 0) {
-      this.#pendingByContext.delete(conversationKey);
-    }
-    if (!nextTaskId) {
-      return undefined;
-    }
-
-    const task = this.#tasks.get(nextTaskId);
+  // Final replies settle the task that originated the turn, never whatever
+  // happens to lead the conversation: a reply whose task is already terminal
+  // (swept, failed, or rejected) is dropped instead of completing a newer
+  // task in the same conversation. Sweeping first also enforces the stale
+  // deadline when this delivery is the first store operation to cross it.
+  completeTask(taskId: string, text: string | undefined): A2aTaskRecord | undefined {
+    this.#sweepStaleTasks();
+    const task = this.#tasks.get(taskId);
     if (!task || isTerminalTask(task)) {
       return undefined;
     }
@@ -95,7 +90,7 @@ export class A2aTaskStore {
       state: "TASK_STATE_COMPLETED",
       timestamp: new Date().toISOString(),
       ...(!text?.trim()
-        ? { message: createStatusMessage(contextId, "Agent completed without reply text") }
+        ? { message: createStatusMessage(task.contextId, "Agent completed without reply text") }
         : {}),
     };
     return this.#finishTask(task);
@@ -143,8 +138,12 @@ export class A2aTaskStore {
       }
     }
     this.#waiters.clear();
-    this.#pendingByContext.clear();
+    for (const timer of this.#expiryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.#expiryTimers.clear();
     this.#terminalTasks.clear();
+    this.#lastChangeAt.clear();
     this.#taskOwners.clear();
     this.#tasks.clear();
   }
@@ -158,17 +157,6 @@ export class A2aTaskStore {
     if (!task || isTerminalTask(task)) {
       return task;
     }
-    const conversationKey = this.#conversationKey(task.contextId, this.#taskOwners.get(task.id));
-    const queue = this.#pendingByContext.get(conversationKey);
-    if (queue) {
-      const position = queue.indexOf(taskId);
-      if (position !== -1) {
-        queue.splice(position, 1);
-      }
-      if (queue.length === 0) {
-        this.#pendingByContext.delete(conversationKey);
-      }
-    }
     task.status = {
       state,
       timestamp: new Date().toISOString(),
@@ -179,6 +167,12 @@ export class A2aTaskStore {
 
   #finishTask(task: A2aTaskRecord): A2aTaskRecord {
     this.#terminalTasks.set(task.id, Date.now());
+    this.#lastChangeAt.delete(task.id);
+    const expiryTimer = this.#expiryTimers.get(task.id);
+    if (expiryTimer) {
+      clearTimeout(expiryTimer);
+      this.#expiryTimers.delete(task.id);
+    }
     const waiters = this.#waiters.get(task.id);
     if (waiters) {
       this.#waiters.delete(task.id);
@@ -199,11 +193,36 @@ export class A2aTaskStore {
       }
       this.#terminalTasks.delete(taskId);
       this.#taskOwners.delete(taskId);
+      this.#lastChangeAt.delete(taskId);
       this.#tasks.delete(taskId);
     }
   }
 
-  #conversationKey(contextId: string, ownerPeer?: string): string {
-    return ownerPeer === undefined ? contextId : `${ownerPeer}\0${contextId}`;
+  // Terminal pruning alone cannot bound the store: a task whose turn never
+  // settles stays SUBMITTED/WORKING forever while every peer message adds a
+  // new row. Fail stale non-terminal tasks so they age out like any other.
+  #sweepStaleTasks(): void {
+    const staleBefore = Date.now() - A2A_STALE_TASK_TTL_MS;
+    for (const [taskId, changedAt] of this.#lastChangeAt) {
+      if (changedAt >= staleBefore) {
+        continue;
+      }
+      this.#finishWithMessage(taskId, "TASK_STATE_FAILED", "Task expired before the agent settled");
+    }
+  }
+
+  // Autonomous counterpart to the sweep: an otherwise idle store still fails
+  // the task at its deadline. Unref'd so the timer never holds the process.
+  #scheduleExpiry(taskId: string): void {
+    const existing = this.#expiryTimers.get(taskId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      this.#expiryTimers.delete(taskId);
+      this.#finishWithMessage(taskId, "TASK_STATE_FAILED", "Task expired before the agent settled");
+    }, A2A_STALE_TASK_TTL_MS);
+    timer.unref?.();
+    this.#expiryTimers.set(taskId, timer);
   }
 }
