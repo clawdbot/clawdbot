@@ -5241,6 +5241,10 @@ packages:
     resolution: {integrity: sha512-6iv9dLiDX4he0KLFr2vw2u98Q+lIEsF0G+1MZVy5kWjZRLYXvY6S4uJ+R3aC4xYBkjljAtCB3uG9Y8pBL3O3Ug==}
     engines: {node: '>=18.0.0'}
 
+  '@smithy/node-http-handler@4.11.2':
+    resolution: {integrity: sha512-avwAh9HM3h2lcfjvP3zYIZGf+XVgLQ91wOJ2qoFbNpW1UZeZb33aGlhTZvtkANHfcGhJroRY64525OjfgOg30g==}
+    engines: {node: '>=18.0.0'}
+
   '@smithy/node-http-handler@4.11.3':
     resolution: {integrity: sha512-2jY1tSpERfPfWqyBV2pH+iGFaghVsIJszJNsT7hxtQYhVJpWDyc0LqOWI+nXOxOAHaEfZ4PXXtp1wW1TGpHhkA==}
     engines: {node: '>=18.0.0'}
@@ -12504,6 +12508,12 @@ snapshots:
   '@smithy/node-config-provider@4.5.14':
     dependencies:
       '@smithy/core': 3.33.3
+      tslib: 2.8.1
+
+  '@smithy/node-http-handler@4.11.2':
+    dependencies:
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@smithy/node-http-handler@4.11.3':
