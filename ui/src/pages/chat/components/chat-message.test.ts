@@ -5094,6 +5094,19 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("shows a visible fallback for inline images omitted from stored history", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      createAssistantMessage([{ type: "input_image", omitted: true, bytes: 26 }]),
+    );
+
+    expect(container.querySelector(".chat-inline-media-omitted")).not.toBeNull();
+    expect(container.textContent).toContain("Image unavailable in history");
+    expect(container.textContent).toContain("Inline image data was omitted from stored chat history.");
+  });
+
   it("expires pairing QR images and requests a refresh at the expiry boundary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
