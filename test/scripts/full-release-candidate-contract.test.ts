@@ -42,6 +42,18 @@ function runManifestContract(value: unknown) {
   return runContract(["manifest", "--input", input, "--output", output]);
 }
 
+type CandidateBindingFixture = ReturnType<typeof fullReleaseCandidateBindingFixture>;
+
+function replaceBindingRequest(
+  binding: CandidateBindingFixture,
+  overrides: Record<string, unknown>,
+) {
+  const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput(overrides));
+  binding.request = request;
+  binding.requestSha256 = canonicalTestSha256(request);
+  binding.evidenceArtifact.name = `full-release-candidate-v1-${binding.requestSha256}`;
+}
+
 describe("full release candidate contract", () => {
   it("canonicalizes equivalent request inputs and expands effective policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
@@ -284,7 +296,63 @@ describe("full release candidate contract", () => {
       "producer workflow path",
       (binding) => void (binding.producer.workflowPath = ".github/workflows/ci.yml"),
     ],
+    [
+      "producer run id tuple",
+      (binding) => {
+        binding.producer.runId = "78";
+        binding.package.artifact.runId = "78";
+        binding.prepublishPluginRegistry.artifact.runId = "78";
+        binding.sharedImage.artifact.runId = "78";
+        binding.evidenceArtifact.runId = "78";
+      },
+    ],
+    [
+      "producer run attempt tuple",
+      (binding) => {
+        binding.producer.runAttempt = "2";
+        binding.package.artifact.runAttempt = "2";
+        binding.prepublishPluginRegistry.artifact.runAttempt = "2";
+        binding.sharedImage.artifact.runAttempt = "2";
+        binding.evidenceArtifact.runAttempt = "2";
+      },
+    ],
+    [
+      "repository identity tuple",
+      (binding) => {
+        replaceBindingRequest(binding, { repository: "openclaw/other" });
+        binding.producer.repository = binding.request.repository;
+      },
+    ],
+    [
+      "tooling identity tuple",
+      (binding) => {
+        replaceBindingRequest(binding, { toolingSha: "8".repeat(40) });
+        binding.producer.workflowSha = binding.request.toolingSha;
+      },
+    ],
+    [
+      "target source identity tuple",
+      (binding) => {
+        replaceBindingRequest(binding, { targetSha: "9".repeat(40) });
+        binding.package.sourceSha = binding.request.targetSha;
+        binding.prepublishPluginRegistry.sourceSha = binding.request.targetSha;
+      },
+    ],
+    [
+      "request policy tuple",
+      (binding) => {
+        replaceBindingRequest(binding, { releaseSoak: false });
+      },
+    ],
     ["preparation plan", (binding) => void (binding.preparation.planSha256 = "5".repeat(64))],
+    [
+      "required prerelease packages",
+      (binding) =>
+        void (binding.preparation.requiredPrepublishPluginPackages = [
+          "@openclaw/codex",
+          "@openclaw/discord",
+        ]),
+    ],
     ["package artifact id", (binding) => void (binding.package.artifact.id = "105")],
     [
       "package artifact digest",
@@ -296,6 +364,13 @@ describe("full release candidate contract", () => {
     ],
     ["package artifact name", (binding) => void (binding.package.artifact.name = "other-package")],
     ["package file name", (binding) => void (binding.package.fileName = "other.tgz")],
+    [
+      "package and shared image digest tuple",
+      (binding) => {
+        binding.package.packageSha256 = "8".repeat(64);
+        binding.sharedImage.packageSha256 = "8".repeat(64);
+      },
+    ],
     ["package version", (binding) => void (binding.package.version = "2026.8.28-beta.2")],
     [
       "registry artifact id",
@@ -335,15 +410,16 @@ describe("full release candidate contract", () => {
       "shared image archive",
       (binding) => void (binding.sharedImage.archiveSha256 = "7".repeat(64)),
     ],
-  ] satisfies Array<
-    [string, (binding: ReturnType<typeof fullReleaseCandidateBindingFixture>) => void]
-  >)("binds the %s to the manifest digest", (_label, mutate) => {
-    const binding = structuredClone(fullReleaseCandidateBindingFixture());
-    mutate(binding);
-    expect(() => validateFullReleaseCandidateBinding(binding)).toThrow(
-      "manifestSha256 does not match its manifest fields",
-    );
-  });
+  ] satisfies Array<[string, (binding: CandidateBindingFixture) => void]>)(
+    "binds the %s to the manifest digest",
+    (_label, mutate) => {
+      const binding = structuredClone(fullReleaseCandidateBindingFixture());
+      mutate(binding);
+      expect(() => validateFullReleaseCandidateBinding(binding)).toThrow(
+        "manifestSha256 does not match its manifest fields",
+      );
+    },
+  );
 
   it("caps binding size independently of manifest digest coverage", () => {
     const binding = fullReleaseCandidateBindingFixture();
