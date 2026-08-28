@@ -378,6 +378,17 @@ Membership is checked against the latest received roster when context is used.
 If the same identity leaves and rejoins before then, its previously authorized
 messages can remain in the window; leaving does not erase conversation history.
 
+### Reply placement
+
+Buzz keeps automatic replies threaded by default (`channels.buzz.replyToMode: "all"`).
+Set `replyToMode: "off"` to send automatic replies at the top level of the room,
+including replies to messages inside existing threads. Typing indicators follow
+the same placement, including heartbeat typing.
+
+This changes delivery only: inbound thread context and session identity remain
+intact. Explicit message-tool or CLI sends with a thread or reply target still
+honor that target. To restore the default, use `"all"` or remove the setting.
+
 ## Manual configuration
 
 Guided setup is recommended. The equivalent configuration looks like:

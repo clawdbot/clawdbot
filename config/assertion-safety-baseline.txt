@@ -1990,7 +1990,7 @@ src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
-src/agents/session-tool-result-guard.ts	26
+src/agents/session-tool-result-guard.ts	24
 src/agents/session-transcript-repair.ts	15
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-compaction.ts	1
