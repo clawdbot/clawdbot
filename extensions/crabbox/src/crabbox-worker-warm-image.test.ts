@@ -7,14 +7,14 @@ import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plu
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { operationLeaseId, operationSlug, parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { operationLeaseId, operationSlug } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 const LEASE_ID = operationLeaseId(OPERATION_ID);
 const CHECKPOINT_ID = "chk_profile_warm";
-const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m", warmImage: true };
-const PROFILE = { ...CLASSLESS_PROFILE, class: "standard" };
+const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
+const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: true };
 const WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
@@ -196,21 +196,100 @@ describe("Crabbox profile warm images", () => {
     }
   });
 
-  it("captures by default only for profiles that forward no setup environment", () => {
-    const { warmImage, ...withoutWarmImage } = PROFILE;
-    expect(warmImage).toBe(true);
-    expect(parseCrabboxProfile(withoutWarmImage).warmImage).toBe(true);
-    const forwardsSetupEnv = {
-      ...withoutWarmImage,
-      setup: "install-toolchain",
-      setupEnv: ["REGISTRY_TOKEN"],
-    };
-    expect(parseCrabboxProfile(forwardsSetupEnv).warmImage).toBe(false);
-    // An explicit choice always wins over the derived default in both directions.
-    expect(parseCrabboxProfile({ ...forwardsSetupEnv, warmImage: true }).warmImage).toBe(true);
-    expect(parseCrabboxProfile({ ...withoutWarmImage, warmImage: false }).warmImage).toBe(false);
-    expect(() => parseCrabboxProfile({ ...PROFILE, warmImage: "yes" })).toThrow(
-      "Crabbox profile warmImage must be a boolean",
+  describe.each([
+    {
+      sizing: "omitted",
+      configuredClass: undefined,
+      placementClass: undefined,
+      effectiveClass: undefined,
+    },
+    {
+      sizing: "configured",
+      configuredClass: "standard",
+      placementClass: undefined,
+      effectiveClass: "standard",
+    },
+    {
+      sizing: "placement",
+      configuredClass: undefined,
+      placementClass: "fast",
+      effectiveClass: "fast",
+    },
+    {
+      sizing: "overridden",
+      configuredClass: "standard",
+      placementClass: "fast",
+      effectiveClass: "fast",
+    },
+  ])("warm policy with $sizing sizing", ({ configuredClass, placementClass, effectiveClass }) => {
+    it.each([
+      { choice: "default", warmImage: undefined, setupEnv: undefined, capturesKnownClass: true },
+      {
+        choice: "default, empty setupEnv",
+        warmImage: undefined,
+        setupEnv: [],
+        capturesKnownClass: true,
+      },
+      {
+        choice: "default, setupEnv",
+        warmImage: undefined,
+        setupEnv: ["WARM_POLICY_INPUT"],
+        capturesKnownClass: false,
+      },
+      { choice: "false", warmImage: false, setupEnv: undefined, capturesKnownClass: false },
+      {
+        choice: "false, setupEnv",
+        warmImage: false,
+        setupEnv: ["WARM_POLICY_INPUT"],
+        capturesKnownClass: false,
+      },
+      { choice: "true", warmImage: true, setupEnv: undefined, capturesKnownClass: true },
+      {
+        choice: "true, setupEnv",
+        warmImage: true,
+        setupEnv: ["WARM_POLICY_INPUT"],
+        capturesKnownClass: true,
+      },
+    ])(
+      "applies $choice through provision and teardown",
+      async ({ warmImage, setupEnv, capturesKnownClass }) => {
+        const { provider, calls, stateDir } = createWarmProvider();
+        const profile = {
+          provider: "aws",
+          ttl: "24h",
+          idleTimeout: "60m",
+          ...(configuredClass === undefined ? {} : { class: configuredClass }),
+          ...(warmImage === undefined ? {} : { warmImage }),
+          ...(setupEnv === undefined ? {} : { setup: "install-node", setupEnv }),
+        };
+        vi.stubEnv("WARM_POLICY_INPUT", "fixture-value");
+        if (warmImage === true && effectiveClass === undefined) {
+          await expect(
+            provisionWarmProfile(provider, profile, OPERATION_ID, placementClass),
+          ).rejects.toMatchObject({ code: "invalid_profile" });
+          expect(calls).toEqual([]);
+          return;
+        }
+        const lease = await provisionWarmProfile(provider, profile, OPERATION_ID, placementClass);
+        // Teardown uses enrolled sizing and declared setup names, never their host values.
+        vi.stubEnv("WARM_POLICY_INPUT", undefined);
+        await provider.destroy({ leaseId: lease.leaseId, profile });
+        const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
+        expect(warmup).toBeDefined();
+        if (effectiveClass === undefined) {
+          expect(calls.flatMap(({ argv }) => argv)).not.toContain("--class");
+        } else {
+          expect(warmup?.[warmup.indexOf("--class") + 1]).toBe(effectiveClass);
+          expect(warmup?.filter((arg) => arg === "--class")).toHaveLength(1);
+        }
+        const captures = effectiveClass !== undefined && capturesKnownClass;
+        expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(captures ? 1 : 0);
+        if (!captures) {
+          expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+          expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+        }
+        expect(calls.at(-1)?.argv[1]).toBe("stop");
+      },
     );
   });
 
@@ -598,11 +677,20 @@ describe("Crabbox profile warm images", () => {
     },
   );
 
-  it.each(["standard", undefined])(
-    "recovers the persisted effective class after restart with configured class %s",
-    async (machineClass) => {
+  it.each([
+    { machineClass: "standard", warmImage: true },
+    { machineClass: undefined, warmImage: true },
+    { machineClass: "standard", warmImage: undefined },
+    { machineClass: undefined, warmImage: undefined },
+  ])(
+    "recovers the enrolled class after restart (configured=$machineClass, warmImage=$warmImage)",
+    async ({ machineClass, warmImage }) => {
       const initial = createWarmProvider();
-      const profile = { ...CLASSLESS_PROFILE, ...(machineClass ? { class: machineClass } : {}) };
+      const profile = {
+        ...CLASSLESS_PROFILE,
+        ...(warmImage === undefined ? {} : { warmImage }),
+        ...(machineClass ? { class: machineClass } : {}),
+      };
       const lease = await provisionWarmProfile(initial.provider, profile, OPERATION_ID, "fast");
       initial.provider.dispose();
 
@@ -640,7 +728,11 @@ describe("Crabbox profile warm images", () => {
       const { provider, calls } = createWarmProvider();
       const lease = {
         leaseId: LEASE_ID,
-        profile: { ...CLASSLESS_PROFILE, ...(machineClass ? { class: machineClass } : {}) },
+        profile: {
+          ...CLASSLESS_PROFILE,
+          warmImage: true,
+          ...(machineClass ? { class: machineClass } : {}),
+        },
       };
 
       await provider.inspect(lease);

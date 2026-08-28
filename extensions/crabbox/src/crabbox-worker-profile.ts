@@ -48,7 +48,7 @@ type CrabboxProfile = {
   ttl: string;
   setup?: string;
   setupEnv?: string[];
-  warmImage: boolean;
+  warmImage?: boolean;
 };
 
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
@@ -186,11 +186,6 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (warmImage !== undefined && typeof warmImage !== "boolean") {
     throw new WorkerProviderError("Crabbox profile warmImage must be a boolean");
   }
-  // Capture defaults on so repeat sessions start warm. `setupEnv` is the declared channel
-  // that forwards host environment values into setup, so those profiles can derive
-  // credentials that outlive the scrub inside a shared provider image; they keep requiring
-  // an explicit opt-in. An explicit warmImage always wins over this derived default.
-  const warmImageDefault = !setupEnv?.length;
   return {
     binary,
     class: machineClass,
@@ -205,7 +200,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     setup,
     setupEnv,
     ttl,
-    warmImage: warmImage ?? warmImageDefault,
+    warmImage,
   };
 }
 
@@ -226,6 +221,19 @@ function resolveCrabboxProfileSetupEnv(
   );
 }
 
+// Resolve defaults only after sizing is known: placement and enrolled lease classes
+// must share the same policy without reading setup environment values during teardown.
+export function resolveCrabboxWarmImageProfile(
+  profile: CrabboxProfile,
+  machineClass = profile.class,
+) {
+  return {
+    ...profile,
+    class: machineClass,
+    warmImage: profile.warmImage ?? (machineClass !== undefined && !profile.setupEnv?.length),
+  };
+}
+
 type CrabboxProvisionProfile = CrabboxProfile &
   ({ warmImage: false } | { warmImage: true; class: string });
 
@@ -243,18 +251,18 @@ export function resolveCrabboxProvisionProfile(
       "Crabbox machine class must be a non-empty string of at most 128 characters",
     );
   }
-  const machineClass = requestedClass ?? configured.class;
-  const forwardedEnv = resolveCrabboxProfileSetupEnv(configured.setupEnv);
-  if (!configured.warmImage) {
-    return { profile: { ...configured, class: machineClass, warmImage: false }, forwardedEnv };
+  const resolved = resolveCrabboxWarmImageProfile(configured, requestedClass ?? configured.class);
+  const forwardedEnv = resolveCrabboxProfileSetupEnv(resolved.setupEnv);
+  if (!resolved.warmImage) {
+    return { profile: { ...resolved, warmImage: false }, forwardedEnv };
   }
   // Image identity is exact-class; resolve placement overrides before any provider command.
-  if (!machineClass) {
+  if (!resolved.class) {
     throw new WorkerProviderError(
       "Crabbox warmImage requires a configured class or a placement machine class",
     );
   }
-  return { profile: { ...configured, class: machineClass, warmImage: true }, forwardedEnv };
+  return { profile: { ...resolved, class: resolved.class, warmImage: true }, forwardedEnv };
 }
 
 export function listCrabboxMachineOptions(

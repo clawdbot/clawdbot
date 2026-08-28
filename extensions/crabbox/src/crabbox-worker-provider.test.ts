@@ -37,8 +37,8 @@ const WORKER_WALLPAPER_PATH = fileURLToPath(
 const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
 // These lifecycle cases opt out of capture; defaults and checkpoints have boundary coverage
 // in the warm-image suite and the classless plugin lifecycle cases.
-const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m", warmImage: false };
-const PROFILE = { ...CLASSLESS_PROFILE, class: "standard" };
+const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
+const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: false };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
@@ -2884,6 +2884,7 @@ describe("Crabbox worker provider", () => {
       profile: { ...PROFILE, class: machineClass },
       message: "class",
     })),
+    { profile: { ...PROFILE, warmImage: "yes" }, message: "warmImage must be a boolean" },
     { profile: { ...PROFILE, ttl: "" }, message: "ttl" },
     { profile: { ...PROFILE, ttl: "garbage" }, message: "positive Go duration" },
     { profile: { ...PROFILE, ttl: "0.1ns" }, message: "positive Go duration" },

@@ -41,6 +41,7 @@ import {
   parseCrabboxProfile,
   resolveCrabboxBinary,
   resolveCrabboxProvisionProfile,
+  resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
 import {
   countCrabboxProvisionSetupPhases,
@@ -340,12 +341,9 @@ async function runProvisionSetupAndWaitReady(
   return await waitForProvisionReady({ ...params, refresh: true });
 }
 
-async function stopProvisionId(params: {
-  binary: string;
-  id: string;
-  provider: string;
-  runCommand: CrabboxCommandRunner;
-}): Promise<void> {
+async function stopLeaseWithLifecycleTimeout(
+  params: LeaseCommandContext & { runCommand: CrabboxCommandRunner },
+): Promise<void> {
   await stopCrabboxLease({
     binary: params.binary,
     id: params.id,
@@ -361,7 +359,7 @@ async function failProvisionAfterCleanup(
   provisionError: unknown,
 ): Promise<never> {
   try {
-    await stopProvisionId(params);
+    await stopLeaseWithLifecycleTimeout(params);
   } catch (cleanupError) {
     throw WorkerProviderError.cleanupIndeterminate(params.id, provisionError, cleanupError);
   }
@@ -723,22 +721,21 @@ export function createCrabboxWorkerProvider(
       const { context, profile } = resolveLeaseContext(lease);
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
       heartbeats.stop(context.id);
-      if (profile.warmImage) {
-        // Lifecycle profiles omit placement class overrides; only successful
-        // provisioning can durably attest which class owns this reusable image.
-        const machineClass = openWarmLeases().lookup(context.id)?.machineClass;
+      // Lifecycle profiles omit placement overrides. Successful enrollment records
+      // the class that owns both the default warm policy and reusable image after restart.
+      const machineClass = openWarmLeases().lookup(context.id)?.machineClass;
+      const captureProfile = resolveCrabboxWarmImageProfile(profile, machineClass ?? profile.class);
+      if (captureProfile.warmImage) {
         await warmImages.capture({
           ...context,
-          profile: machineClass ? { ...profile, class: machineClass } : profile,
+          profile: captureProfile,
           eligible: machineClass !== undefined,
         });
       }
-      await stopCrabboxLease({
-        ...context,
-        runCommand,
-        timeoutMs: resolveCrabboxLifecycleTimeoutMs(context.provider),
-      });
-      warmLeases?.delete(context.id);
+      await stopLeaseWithLifecycleTimeout({ ...context, runCommand });
+      if (machineClass !== undefined) {
+        warmLeases?.delete(context.id);
+      }
     },
   };
 }
