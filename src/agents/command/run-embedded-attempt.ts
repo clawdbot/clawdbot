@@ -134,7 +134,7 @@ export async function runEmbeddedAgentAttempt(params: {
       sessionId,
       sessionKey,
       storePath,
-      suppressVisibleSessionEffects: params.suppressVisibleSessionEffects === true,
+      suppressVisibleSessionEffects: params.suppressVisibleSessionEffects,
       workspaceDir,
     });
   params.trackInternalModelRunTarget(internalSessionTarget);
