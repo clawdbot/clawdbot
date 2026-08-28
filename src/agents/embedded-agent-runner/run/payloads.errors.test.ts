@@ -287,6 +287,58 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "LLM request rejected");
   });
 
+  it("surfaces actionable numeric provider limits without replaying the raw error", () => {
+    const rawError =
+      "400 max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "deepseek-v4-flash:0731");
+  });
+
+  it("keeps numeric limits generic for non-token parameters", () => {
+    const rawError = "400 account_id (1234567890123456) exceeds maximum length (8)";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "1234567890123456");
+  });
+
+  it("does not infer a token maximum from unrelated trailing digits", () => {
+    const rawError = "400 max_tokens 384000 exceeds maximum for model gpt-5";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "provider maximum of 5");
+  });
+
   it("surfaces /new guidance for terminal thinking-signature replay failures", () => {
     const rawError =
       '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}';

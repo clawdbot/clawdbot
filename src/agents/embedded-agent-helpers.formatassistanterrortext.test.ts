@@ -197,6 +197,59 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: provider rejected the request schema or tool payload.",
     );
   });
+  it("surfaces allowlisted token limits from structured provider messages", () => {
+    const msg = makeAssistantError(
+      JSON.stringify({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message:
+            "max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731",
+        },
+      }),
+    );
+
+    const userFacing = formatUserFacingAssistantErrorText(msg);
+    expect(userFacing).toBe(
+      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+    );
+    expect(userFacing).not.toContain("deepseek-v4-flash:0731");
+  });
+
+  it("surfaces token limits from structured error bodies", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody: JSON.stringify({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message:
+            "max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731",
+        },
+      }),
+      content: [],
+    });
+
+    const userFacing = formatUserFacingAssistantErrorText(msg);
+    expect(userFacing).toBe(
+      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+    );
+    expect(userFacing).not.toContain("deepseek-v4-flash:0731");
+  });
+
+  it("surfaces token limits from provider-wrapped HTTP errors", () => {
+    const msg = makeAssistantError(
+      "OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
+    );
+
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+    );
+  });
   it("sanitizes Codex error-prefixed JSON payloads", () => {
     const msg = makeAssistantError(
       'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"},"sequence_number":2}',

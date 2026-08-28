@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   extractLeadingHttpStatus,
+  extractProviderWrappedHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
   isGenericProviderInternalError,
@@ -52,6 +53,10 @@ const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
+const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
+  "LLM request failed: provider rejected the request schema or tool payload.";
+const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
+  /^['"]?(max_(?:tokens|output_tokens|completion_tokens|new_tokens))['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 
 /** Format billing copy with optional provider/model and credential context. */
 export function formatBillingErrorMessage(
@@ -75,6 +80,27 @@ export function formatBillingErrorMessage(
 }
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
+
+/** Surface only bounded numeric limit facts, never arbitrary provider-controlled error text. */
+export function renderFormatErrorCopy(raw: string): string {
+  const trimmed = raw.trim();
+  const providerWrappedStatus = extractProviderWrappedHttpStatus(trimmed);
+  const normalized = providerWrappedStatus ? trimmed : trimmed.replace(ERROR_PREFIX_RE, "").trim();
+  const providerWrappedRest = providerWrappedStatus?.rest;
+  const candidate =
+    extractLeadingHttpStatus(normalized)?.rest ??
+    (providerWrappedRest ? extractLeadingHttpStatus(providerWrappedRest)?.rest : undefined) ??
+    providerWrappedRest ??
+    extractProviderWrappedHttpStatus(normalized)?.rest ??
+    normalized;
+  const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
+  const [, parameter, value, maximum] = match ?? [];
+  if (!parameter || !value || !maximum) {
+    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+  }
+  const normalizedParameter = parameter.toLowerCase();
+  return `LLM request rejected: ${normalizedParameter} is ${value}, above the provider maximum of ${maximum}. Lower ${normalizedParameter} and try again.`;
+}
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
@@ -109,7 +135,7 @@ function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
 const FAILOVER_REASON_BASE_COPY = {
   auth: () => AUTH_INVALID_TOKEN_USER_TEXT,
   auth_permanent: () => AUTH_INVALID_TOKEN_USER_TEXT,
-  format: () => "LLM request failed: provider rejected the request schema or tool payload.",
+  format: (context) => renderFormatErrorCopy(context.raw ?? ""),
   rate_limit: renderRateLimitBaseCopy,
   overloaded: (context) =>
     MODEL_CAPACITY_ERROR_RE.test(context.raw ?? "")

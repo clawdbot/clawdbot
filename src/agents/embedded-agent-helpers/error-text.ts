@@ -4,6 +4,7 @@ import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
+  extractProviderWrappedHttpStatus,
   formatRawAssistantErrorForUi,
   isGenericProviderInternalError,
   parseApiErrorInfo,
@@ -27,6 +28,7 @@ import {
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
   isStreamingJsonParseError,
+  renderFormatErrorCopy,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
@@ -36,8 +38,6 @@ const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
-const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
-  "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
   "The selected model was not found by the provider. Check the model id or choose a different model.";
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -75,6 +75,12 @@ export function formatAssistantErrorText(
     ...buildAssistantFailoverSignal(msg, { provider: providerOwner }),
     message: raw,
   });
+  const wrappedFormatCopy = extractProviderWrappedHttpStatus(raw)
+    ? renderFormatErrorCopy(raw)
+    : undefined;
+  if (wrappedFormatCopy?.startsWith("LLM request rejected:")) {
+    return wrappedFormatCopy;
+  }
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -250,7 +256,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "schema") {
-    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    return renderFormatErrorCopy(raw);
   }
 
   if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
@@ -298,14 +304,31 @@ export function formatUserFacingAssistantErrorText(
   const friendlyError = formatAssistantErrorText(msg, opts);
   const rawError = msg.errorMessage?.trim();
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
-  const parsedErrorType = parseApiErrorInfo(rawError ?? "")?.type?.toLowerCase() ?? "";
+  const parsedApiError = parseApiErrorInfo(rawError ?? "");
+  const parsedErrorType = parsedApiError?.type?.toLowerCase() ?? "";
+  const parsedErrorBody = parseApiErrorInfo(
+    typeof msg.errorBody === "string" ? msg.errorBody.trim() : "",
+  );
+  const parsedErrorBodyType = parsedErrorBody?.type?.toLowerCase() ?? "";
+  const structuredSchemaDetail = parsedErrorType.includes("invalid_request")
+    ? parsedApiError?.message
+    : parsedErrorBodyType.includes("invalid_request")
+      ? parsedErrorBody?.message
+      : undefined;
   const rawProviderSchemaError =
     friendlyError?.startsWith("LLM request rejected:") ||
-    parsedErrorType.includes("invalid_request");
-  const safeFriendlyError = rawPassthrough
-    ? rawProviderSchemaError
-      ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
-      : undefined
-    : friendlyError;
+    parsedErrorType.includes("invalid_request") ||
+    parsedErrorBodyType.includes("invalid_request");
+  const schemaFriendlyError =
+    friendlyError === "LLM request failed: provider rejected the request schema or tool payload." ||
+    friendlyError?.startsWith("LLM request rejected:");
+  const safeFriendlyError =
+    structuredSchemaDetail && schemaFriendlyError
+      ? renderFormatErrorCopy(structuredSchemaDetail)
+      : rawPassthrough
+        ? rawProviderSchemaError
+          ? renderFormatErrorCopy(parsedApiError?.message ?? "")
+          : undefined
+        : friendlyError;
   return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
 }

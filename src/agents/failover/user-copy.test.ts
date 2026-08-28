@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  renderFormatErrorCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderMissingApiKeyReplyCopy,
@@ -26,6 +27,31 @@ describe("failover user copy", () => {
         raw: "429 rate limit: service overloaded, try again in 30 seconds",
       }),
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
+  });
+
+  it("surfaces token limits through common Error HTTP wrappers", () => {
+    const expected =
+      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.";
+    expect(
+      renderFormatErrorCopy(
+        "Error: 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
+      ),
+    ).toBe(expected);
+    expect(
+      renderFormatErrorCopy(
+        "OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
+      ),
+    ).toBe(expected);
+    expect(
+      renderFormatErrorCopy(
+        "Azure OpenAI API error (400): max_tokens (384000) exceeds model's maximum output tokens (65536)",
+      ),
+    ).toBe(expected);
+    expect(
+      renderFormatErrorCopy(
+        "OpenAI API error (400): 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
+      ),
+    ).toBe(expected);
   });
 
   it("renders structured cooldown durations and exhausted model sets", () => {
