@@ -818,7 +818,10 @@ describe("prepared model catalog worker boundary", () => {
   it("retires a worker whose reconstructed generation does not match", async () => {
     const fixture = await createStaticSnapshot(0);
     writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
-    fixture.config.plugins.entries[PLUGIN_ID] = { enabled: true, config: {} };
+    (fixture.config as OpenClawConfig).plugins!.entries![PLUGIN_ID] = {
+      enabled: true,
+      config: {},
+    };
 
     await expect(fixture.snapshot.loadFullModelCatalog?.()).rejects.toThrow(
       "generation was invalid",
@@ -858,7 +861,10 @@ describe("prepared model catalog worker boundary", () => {
       catalogMode: "static",
     });
     writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
-    fixture.config.plugins.entries[PLUGIN_ID] = { enabled: true, config: {} };
+    (fixture.config as OpenClawConfig).plugins!.entries![PLUGIN_ID] = {
+      enabled: true,
+      config: {},
+    };
 
     const loadRecoveredCatalog = async () =>
       await loadGatewayModelCatalogSnapshot({
