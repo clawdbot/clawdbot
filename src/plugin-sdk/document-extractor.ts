@@ -3,6 +3,7 @@
  */
 export type {
   DocumentExtractedImage,
+  DocumentExtractionMetadata,
   DocumentExtractionRequest,
   DocumentExtractionResult,
   DocumentExtractorPlugin,

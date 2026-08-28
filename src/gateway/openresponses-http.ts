@@ -23,6 +23,7 @@ import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
+import { renderDocumentTruncationNotice } from "../media/document-extraction-metadata.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -561,18 +562,19 @@ export async function handleOpenResponsesHttpRequest(
               signal: abortController.signal,
             });
             const rawText = file.text;
+            const notice = renderDocumentTruncationNotice(file.metadata);
             if (rawText?.trim()) {
               fileContexts.push(
                 renderFileContextBlock({
                   filename: file.filename,
-                  content: wrapUntrustedFileContent(rawText),
+                  content: [notice, wrapUntrustedFileContent(rawText)].filter(Boolean).join("\n"),
                 }),
               );
             } else if (file.images && file.images.length > 0) {
               fileContexts.push(
                 renderFileContextBlock({
                   filename: file.filename,
-                  content: "[PDF content rendered to images]",
+                  content: [notice, "[PDF content rendered to images]"].filter(Boolean).join("\n"),
                   surroundContentWithNewlines: false,
                 }),
               );
@@ -580,7 +582,7 @@ export async function handleOpenResponsesHttpRequest(
               fileContexts.push(
                 renderFileContextBlock({
                   filename: file.filename,
-                  content: "[No extractable text]",
+                  content: [notice, "[No extractable text]"].filter(Boolean).join("\n"),
                   surroundContentWithNewlines: false,
                 }),
               );

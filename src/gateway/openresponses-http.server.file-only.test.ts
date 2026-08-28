@@ -79,6 +79,44 @@ function createInputFile(filename: string) {
 }
 
 describe("OpenResponses file-only input that renders to images", () => {
+  it("keeps extraction truncation visible outside uploaded file content", async () => {
+    extractFileContentFromSourceMock.mockResolvedValueOnce({
+      filename: "partial.pdf",
+      text: "visible prefix",
+      images: [],
+      metadata: {
+        pages: {
+          total: 21,
+          processed: [1, 2, 3],
+          selection: "automatic",
+          truncated: true,
+        },
+        textTruncated: false,
+        imagesTruncated: false,
+      },
+    });
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses({
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [createInputFile("partial.pdf")],
+        },
+      ],
+    });
+
+    const body = await res.text();
+    expect(res.status, body).toBe(200);
+    const opts = agentCommandMock.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
+    expect(opts.extraSystemPrompt).toContain("[Partial document: 3 of 21 pages processed.]");
+    expect(opts.extraSystemPrompt).toMatch(
+      /\[Partial document[^]*<<<EXTERNAL_UNTRUSTED_CONTENT[^]*visible prefix/,
+    );
+  });
+
   it("accepts a file-only turn whose file renders to images and forwards them", async () => {
     extractFileContentFromSourceMock.mockResolvedValueOnce({
       filename: "scan.pdf",
