@@ -312,7 +312,7 @@ async function buildOpenAILiveProviderConfig(
         provider: { ...fallback, models: [] },
         outcome: {
           provider: PROVIDER_ID,
-          ...(params.rejectionScope || error.status === 403 ? { rejectionScope: "catalog" } : {}),
+          ...(params.rejectionScope ? { rejectionScope: "catalog" } : {}),
           status: "auth-rejected",
         },
       };
