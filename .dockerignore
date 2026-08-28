@@ -68,3 +68,6 @@ vendor/
 !vendor/a2ui/renderers/
 !vendor/a2ui/renderers/lit/
 !vendor/a2ui/renderers/lit/**
+
+# Agent session state — worktrees under .claude/ are whole extra checkouts of this repo
+.claude
