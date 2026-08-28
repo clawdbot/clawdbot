@@ -28,8 +28,8 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
 ];
 const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
-export const FULL_RELEASE_WAIT_POLL_INTERVAL_MS = 45_000;
-const FULL_RELEASE_PROGRESS_INTERVAL_MS = 5 * 60_000;
+export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 15 * 60_000;
+const FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS = 2;
 const RELEASE_DECISION_FILE = "full-release-decision.json";
 const MAX_RELEASE_DECISION_BYTES = 128 * 1024;
 const GH_READ_OPTIONS = {
@@ -684,7 +684,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let consecutiveErrors = 0;
   const startedAt = Date.now();
   const deadline = startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
-  let nextProgressAt = startedAt + FULL_RELEASE_PROGRESS_INTERVAL_MS;
+  let nextProgressAt = startedAt + FULL_RELEASE_GITHUB_POLL_INTERVAL_MS;
   while (Date.now() < deadline) {
     let suite: Record<string, unknown> | undefined;
     try {
@@ -742,7 +742,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
           `Parent run progress query failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      nextProgressAt += FULL_RELEASE_PROGRESS_INTERVAL_MS;
+      nextProgressAt += FULL_RELEASE_GITHUB_POLL_INTERVAL_MS;
     }
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -752,7 +752,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       new Int32Array(new SharedArrayBuffer(4)),
       0,
       0,
-      Math.min(FULL_RELEASE_WAIT_POLL_INTERVAL_MS, remainingMs),
+      Math.min(FULL_RELEASE_GITHUB_POLL_INTERVAL_MS, remainingMs),
     );
   }
   throw new Error(
@@ -981,12 +981,19 @@ function main() {
     }
     parentRunId = collectRunId(dispatchOutput);
     if (!parentRunId && !args.dryRun) {
-      for (let attempt = 0; attempt < 60; attempt += 1) {
+      for (let attempt = 0; attempt < FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS; attempt += 1) {
         parentRunId = findLatestRunId(branch, workflowSha);
         if (parentRunId) {
           break;
         }
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
+        if (attempt + 1 < FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS) {
+          Atomics.wait(
+            new Int32Array(new SharedArrayBuffer(4)),
+            0,
+            0,
+            FULL_RELEASE_GITHUB_POLL_INTERVAL_MS,
+          );
+        }
       }
     }
     if (!parentRunId) {

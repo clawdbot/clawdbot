@@ -69,10 +69,15 @@ The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
-active so blockers can surface while Diagnostic Drain collects failures. A
-not-yet-created artifact remains an unavailable polling result; terminal
-handling and temporary-ref cleanup wait for the parent to complete with a
-conclusion. Failed validations retain both refs for reruns and diagnosis. The
+active so blockers can surface while Diagnostic Drain collects failures. It
+waits 15 minutes between run-discovery attempts and between parent polling
+iterations. One parent iteration may perform status, decision-artifact, and
+progress-job reads together; the delay limits repeated polling cycles rather
+than spacing every GitHub call. Run discovery makes one immediate check and one
+delayed retry before failing. A not-yet-created artifact remains an unavailable
+polling result; terminal handling and temporary-ref cleanup wait for the parent
+to complete with a conclusion. Failed validations retain both refs for reruns
+and diagnosis. The
 Validation SHA equals the Code SHA for product validation or the Release SHA
 for changelog-only validation; it is not a third release identity. The workflow
 rejects malformed or mismatched expected SHAs before child dispatch. Every
