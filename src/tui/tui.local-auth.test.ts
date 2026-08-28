@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   formatTuiAuthCommandArgv,
   resolveCodexCliBin,
@@ -17,6 +21,25 @@ describe("formatTuiAuthCommandArgv", () => {
     expect(
       formatTuiAuthCommandArgv("/tmp/" + "x".repeat(400), ["login"]).length,
     ).toBeLessThanOrEqual(320);
+  });
+
+  it("keeps built-in masking when custom log patterns are configured", async () => {
+    await withTempDir("openclaw-tui-auth-redaction-", async (dir) => {
+      const configPath = path.join(dir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ logging: { redactPatterns: ["project-secret-\\d+"] } }),
+      );
+      const token = "sk-proof-only-1234567890";
+      const customSecret = "project-secret-12345";
+
+      const rendered = withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+        formatTuiAuthCommandArgv("codex", ["login", token, customSecret]),
+      );
+
+      expect(rendered).not.toContain(token);
+      expect(rendered).not.toContain(customSecret);
+    });
   });
 });
 

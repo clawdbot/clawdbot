@@ -31,7 +31,7 @@ import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invoc
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -189,7 +189,7 @@ export function resolveTuiLocalAuthCliInvocation(params: {
 }
 
 export function formatTuiAuthCommandArgv(command: string, args: readonly string[]): string {
-  const value = sanitizeRenderableLine(redactSensitiveText(JSON.stringify([command, ...args])));
+  const value = sanitizeRenderableLine(redactToolPayloadText(JSON.stringify([command, ...args])));
   return value.length > TUI_AUTH_COMMAND_MAX_CHARS
     ? `${truncateUtf16Safe(value, TUI_AUTH_COMMAND_MAX_CHARS - 1)}…`
     : value;
