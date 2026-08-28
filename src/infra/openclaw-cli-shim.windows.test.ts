@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -9,7 +11,31 @@ import {
   createSourceCliFixture,
   runSourceCliProbe,
 } from "./openclaw-cli-invocation.test-support.js";
+import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
+
+const requireFromHere = createRequire(import.meta.url);
+
+function expectSourceCliSuccess(
+  phase: string,
+  result: ReturnType<typeof runSourceCliProbe>,
+  fixtureRoot: string,
+) {
+  // Child stacks in assertion messages make Vitest parse TSX's source-map template.
+  // Keep bounded child evidence separate so the launcher failure stays visible.
+  console.info(
+    "[source-cli-probe]",
+    JSON.stringify({
+      phase,
+      status: result.status,
+      signal: result.signal,
+      error: result.error?.message.replaceAll(fixtureRoot, "<fixture>").slice(0, 2048),
+      stdout: (result.stdout ?? "").replaceAll(fixtureRoot, "<fixture>").slice(0, 2048),
+      stderr: (result.stderr ?? "").replaceAll(fixtureRoot, "<fixture>").slice(-4096),
+    }),
+  );
+  expect(result.status, phase).toBe(0);
+}
 
 afterEach(() => {
   clearGatewayAgentCliShim();
@@ -26,7 +52,11 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
           [...fixture.invocation.args, "--profile", "work", "probe"],
           fixture.checkout,
         );
-        expect(control.status, control.stderr).toBe(0);
+        expectSourceCliSuccess(
+          `direct source control (delayed expansion ${delayedExpansion})`,
+          control,
+          root,
+        );
         expect(JSON.parse(control.stdout)).toMatchObject({
           source: "gateway",
           args: ["--profile", "work", "probe"],
@@ -47,7 +77,11 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
           fixture.callerCwd,
           { windowsVerbatimArguments: true },
         );
-        expect(result.status, result.stderr).toBe(0);
+        expectSourceCliSuccess(
+          `generated cmd launcher (delayed expansion ${delayedExpansion})`,
+          result,
+          root,
+        );
         expect(JSON.parse(result.stdout)).toMatchObject({
           source: "gateway",
           args: ["--profile", "work", "probe"],
@@ -57,4 +91,44 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
       });
     },
   );
+
+  it("launches source mode from a generic Node host with the resolved TSX loader", async () => {
+    await withTempDir("openclaw-source-cli-host-win-", async (root) => {
+      const fixture = await createSourceCliFixture(root);
+      const modulesDir = path.join(fixture.checkout, "node_modules");
+      await fs.mkdir(modulesDir);
+      await fs.symlink(
+        path.dirname(requireFromHere.resolve("tsx/package.json")),
+        path.join(modulesDir, "tsx"),
+        "junction",
+      );
+      const hostEntry = path.join(fixture.checkout, "scripts", "host.mjs");
+      await fs.mkdir(path.dirname(hostEntry));
+      await fs.writeFile(hostEntry, "// A generic Node host is not the OpenClaw CLI entry.\n");
+      const control = runSourceCliProbe(
+        fixture.invocation.command,
+        [...fixture.invocation.args, "probe"],
+        fixture.checkout,
+      );
+      expectSourceCliSuccess("generic host direct source control", control, root);
+      expect(JSON.parse(control.stdout)).toMatchObject({
+        source: "gateway",
+        args: ["probe"],
+        cwd: fixture.checkout,
+      });
+      const invocation = resolveCurrentOpenClawCliInvocation(["probe"], {
+        argv1: hostEntry,
+        cwd: fixture.callerCwd,
+        execArgv: [],
+        execPath: process.execPath,
+      });
+      const result = runSourceCliProbe(invocation.command, invocation.args, fixture.checkout);
+      expectSourceCliSuccess("generic Node host source fallback", result, root);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        source: "gateway",
+        args: ["probe"],
+        cwd: fixture.checkout,
+      });
+    });
+  });
 });
