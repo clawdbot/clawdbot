@@ -912,6 +912,13 @@ describe("runGatewayUpdate", () => {
       "config",
       "--add",
       "remote.origin.fetch",
+      "refs/tags/*:refs/tags/*",
+    );
+    await runRealGit(
+      localRoot,
+      "config",
+      "--add",
+      "remote.origin.fetch",
       "refs/*:refs/remotes/origin/*",
     );
     const reachedMutation = new Error("reached release mutation");
