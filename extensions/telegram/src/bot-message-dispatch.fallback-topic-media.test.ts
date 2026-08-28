@@ -103,6 +103,65 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(bot.api["editForumTopic"]).not.toHaveBeenCalled();
   });
 
+  it("labels a DM topic opened by a captionless voice note from the transcript", async () => {
+    const sessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      [sessionKey]: { sessionId: "s1", updatedAt: 1 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+      settledReceipt: visibleFinalReceipt,
+    });
+    const bot = createBot();
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          SessionKey: sessionKey,
+          // A captionless voice note carries an empty string, not `undefined`.
+          RawBody: "",
+          BodyForAgent: "[Audio transcript]: Remind me to renew the domain",
+          Body: "[Telegram user] [Audio transcript]: Remind me to renew the domain",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      telegramCfg: { autoTopicLabel: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(generateTopicLabel).toHaveBeenCalled();
+    });
+    const call = generateTopicLabel.mock.calls[0]?.[0] as { userMessage: string };
+    expect(call.userMessage).toBe("[Audio transcript]: Remind me to renew the domain");
+  });
+
+  it("skips the DM topic auto-rename when no field carries text", async () => {
+    const sessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      [sessionKey]: { sessionId: "s1", updatedAt: 1 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+      settledReceipt: visibleFinalReceipt,
+    });
+    const bot = createBot();
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          SessionKey: sessionKey,
+          RawBody: "",
+          BodyForAgent: "   ",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      telegramCfg: { autoTopicLabel: true },
+    });
+
+    expect(generateTopicLabel).not.toHaveBeenCalled();
+    expect(bot.api["editForumTopic"]).not.toHaveBeenCalled();
+  });
+
   it("truncates DM topic auto-rename input on UTF-16 boundaries", async () => {
     const sessionKey = "agent:default:telegram:direct:123";
     loadSessionStore.mockReturnValue({

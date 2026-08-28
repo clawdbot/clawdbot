@@ -238,10 +238,15 @@ function scheduleDmTopicLabel(params: {
   if (!isDmTopic || !params.isFirstTurnInSession) {
     return;
   }
-  const userMessage = truncateUtf16Safe(
-    context.ctxPayload.RawBody ?? context.ctxPayload.Body ?? "",
-    500,
-  );
+  // Captionless media (voice notes, photos, stickers) arrives with `RawBody` set to an
+  // empty string rather than `undefined`, so a `??` chain stops there and never reaches
+  // the fields that do carry text. Fall through on any blank value instead: `BodyForAgent`
+  // holds the audio-preflight transcript for a captionless voice note, `Body` is last resort.
+  const labelSource =
+    [context.ctxPayload.RawBody, context.ctxPayload.BodyForAgent, context.ctxPayload.Body].find(
+      (candidate) => candidate?.trim(),
+    ) ?? "";
+  const userMessage = truncateUtf16Safe(labelSource, 500);
   if (!userMessage.trim()) {
     return;
   }
