@@ -1,10 +1,10 @@
 // Verifies manifest-driven model suppression behavior.
+import fs from "node:fs";
 import {
   normalizeModelCatalog,
   normalizeModelCatalogProviderRows,
 } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import qwenManifest from "../../extensions/qwen/openclaw.plugin.json" with { type: "json" };
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -288,8 +288,17 @@ describe("manifest model suppression", () => {
         ["https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", false],
         ["https://proxy.example/v1", false],
       ] as const)("matches the plan at %s", (baseUrl, suppressed) => {
+        // Public metadata is fixture data; core's type graph must not compile plugin files.
+        const qwenManifest: Record<string, unknown> = JSON.parse(
+          fs.readFileSync(
+            new URL("../../extensions/qwen/openclaw.plugin.json", import.meta.url),
+            "utf8",
+          ),
+        );
         mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([qwenManifest]));
-        const providerCatalog = normalizeModelCatalog(qwenManifest.modelCatalog)?.providers?.qwen;
+        const providerCatalog = normalizeModelCatalog(qwenManifest.modelCatalog, {
+          ownedProviders: new Set(["qwen"]),
+        })?.providers?.qwen;
         if (!providerCatalog) {
           throw new Error("Qwen manifest catalog is missing");
         }
