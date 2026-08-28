@@ -384,6 +384,11 @@ trusted proxy owns those synthetic ranges.
 }
 ```
 
+`tools.web.search.cacheTtlMinutes` controls OpenClaw's local search-result
+caches. Set it to `0` to bypass reads and writes, even for previously cached
+queries. A shorter positive TTL limits reuse by entry age; a longer TTL does
+not extend an entry's original expiry. Provider-side caching is separate.
+
 Provider-specific config (API keys, base URLs, modes) lives under
 `plugins.entries.<plugin>.config.webSearch.*`. Gemini can also reuse
 `models.providers.google.apiKey` and `models.providers.google.baseUrl` as lower-priority

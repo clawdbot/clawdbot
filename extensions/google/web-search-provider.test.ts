@@ -210,6 +210,55 @@ describe("google web search provider", () => {
     expect(postCalls).toHaveLength(1);
   });
 
+  it.each([0, 1])("honors the current Gemini cache TTL of %s minutes", async (cacheTtlMinutes) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    let content = "Original grounded answer";
+    const mockFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: content }] } }] })),
+    );
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const provider = createGeminiWebSearchProvider();
+    const createTool = (ttl: number) =>
+      provider.createTool({
+        config: {
+          plugins: {
+            entries: { google: { config: { webSearch: { apiKey: "AIza-plugin-test" } } } },
+          },
+        },
+        searchConfig: { provider: "gemini", cacheTtlMinutes: ttl },
+      });
+    const query = `Gemini current request cache TTL ${cacheTtlMinutes}`;
+    const cachedTool = createTool(15);
+    await cachedTool?.execute({ query });
+    await expect(cachedTool?.execute({ query })).resolves.toMatchObject({
+      cached: true,
+      content: expect.stringContaining("Original grounded answer"),
+    });
+    expect(mockFetch).toHaveBeenCalledOnce();
+
+    now.mockReturnValue(1_060_000);
+    content = "Fresh grounded answer";
+    const currentTool = createTool(cacheTtlMinutes);
+    const fresh = await currentTool?.execute({ query });
+    expect(fresh).not.toHaveProperty("cached");
+    expect(fresh).toMatchObject({ content: expect.stringContaining("Fresh grounded answer") });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    if (cacheTtlMinutes === 0) {
+      await expect(currentTool?.execute({ query })).resolves.not.toHaveProperty("cached");
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      await expect(cachedTool?.execute({ query })).resolves.toMatchObject({
+        cached: true,
+        content: expect.stringContaining("Original grounded answer"),
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    } else {
+      await expect(currentTool?.execute({ query })).resolves.toEqual({ ...fresh, cached: true });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    }
+  });
+
   it("does not partition cached results by overwritten provider-owned headers", async () => {
     const mockFetch = installGeminiFetch();
 
