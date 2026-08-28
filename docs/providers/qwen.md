@@ -134,8 +134,8 @@ Choose your plan type and follow the setup steps.
 
   </Tab>
 
-  <Tab title="Token Plan (Team Edition)">
-    **Best for:** credit-based team subscription access to Qwen and supported third-party models through Alibaba Cloud Model Studio.
+  <Tab title="Token Plan">
+    **Best for:** credit-based subscription access to Qwen and supported third-party models through Alibaba Cloud Model Studio. Personal and Team editions share this endpoint; the models your key can reach depend on your edition.
 
     <Steps>
       <Step title="Get your dedicated key">
@@ -188,8 +188,8 @@ Choose your plan type and follow the setup steps.
 | Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`                          |
 | Standard (pay-as-you-go)   | China  | `qwen-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`                      |
 | Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1`                 |
-| Token Plan (Team Edition)  | China  | `qwen-token-plan-cn`       | `token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`     |
-| Token Plan (Team Edition)  | Global | `qwen-token-plan`          | `token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` |
+| Token Plan                 | China  | `qwen-token-plan-cn`       | `token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`     |
+| Token Plan                 | Global | `qwen-token-plan`          | `token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` |
 
 The provider auto-selects the endpoint based on your auth choice. Canonical
 choices use the `qwen-*` family; `modelstudio-*` remains compatibility-only.
@@ -227,20 +227,26 @@ present in the static catalog.
 
 ### Token Plan catalog
 
-Token Plan uses a separate exact-string allowlist. The built-in catalog shows
-Alibaba's currently recommended plan models and keeps the newer Qwen3-Coder
-compatibility tier selectable but hidden. Other allowlisted model IDs remain
-available as custom model refs. Image-generation-only plan models are not
-included here because they use different APIs.
+Token Plan uses a separate exact-string allowlist. Image-generation-only plan
+models are not included here because they use different APIs.
 
-| Model ref                          | Input       | Context   | Picker status |
-| ---------------------------------- | ----------- | --------- | ------------- |
-| `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
-| `qwen-token-plan/kimi-k2.5`        | text, image | 262,144   | visible       |
-| `qwen-token-plan/glm-5`            | text        | 202,752   | visible       |
-| `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
+| Model ref                                | Input       | Context   |
+| ---------------------------------------- | ----------- | --------- |
+| `qwen-token-plan/qwen3.7-max`            | text        | 1,000,000 |
+| `qwen-token-plan/qwen3.7-plus`           | text, image | 1,000,000 |
+| `qwen-token-plan/qwen3.6-plus`           | text, image | 1,000,000 |
+| `qwen-token-plan/qwen3.6-flash`          | text, image | 1,000,000 |
+| `qwen-token-plan/deepseek-v4-pro`        | text        | 1,000,000 |
+| `qwen-token-plan/deepseek-v4-flash`      | text        | 1,000,000 |
+| `qwen-token-plan/deepseek-v4-flash-0731` | text        | 1,000,000 |
+| `qwen-token-plan/deepseek-v3.2`          | text        | 131,072   |
+| `qwen-token-plan/kimi-k2.7-code`         | text, image | 262,144   |
+| `qwen-token-plan/kimi-k2.6`              | text, image | 262,144   |
+| `qwen-token-plan/kimi-k2.5`              | text, image | 262,144   |
+| `qwen-token-plan/glm-5.2`                | text        | 1,000,000 |
+| `qwen-token-plan/glm-5.1`                | text        | 202,752   |
+| `qwen-token-plan/glm-5`                  | text        | 202,752   |
+| `qwen-token-plan/MiniMax-M2.5`           | text        | 196,608   |
 
 ## Thinking controls
 
