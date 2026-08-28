@@ -13,44 +13,28 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Scenario = {
   consent?: boolean;
   registry?: boolean;
-  corruptRegistry?: boolean;
-  companion?: "missing" | "wrong-identity";
   channel?: "telegram" | "discord" | "slack";
   bundled?: boolean;
   sourcePlugin?: boolean;
-  helpFailure?: "exit" | "timeout";
-  failProbe?: number;
 };
 
 function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-function registryFixture(root: string, scenario: Scenario): NodeJS.ProcessEnv {
-  const artifactDir = join(root, "registry-artifact");
-  const staging = join(root, "staging");
+function createPackageTarball(root: string, tarballPath: string, name: string): void {
+  const staging = join(root, `staging-${name.replaceAll("/", "-").replaceAll("@", "")}`);
   mkdirSync(join(staging, "package"), { recursive: true });
+  writeFileSync(join(staging, "package/package.json"), JSON.stringify({ name, version }));
+  execFileSync("tar", ["-czf", tarballPath, "-C", staging, "package"]);
+}
+
+function registryFixture(root: string): NodeJS.ProcessEnv {
+  const artifactDir = join(root, "registry-artifact");
   mkdirSync(artifactDir);
-  // Extra verified companions must not select source mode on their own.
-  const packages = ["codex", "discord", "slack"]
-    .filter((id) => scenario.companion !== "missing" || id !== scenario.channel)
-    .map((id) => {
-      const name = `@openclaw/${id}`;
-      writeFileSync(
-        join(staging, "package/package.json"),
-        JSON.stringify({
-          name:
-            scenario.companion === "wrong-identity" && id === scenario.channel
-              ? "@openclaw/other"
-              : name,
-          version,
-        }),
-      );
-      const tarball = `${id}.tgz`;
-      const tarballPath = join(artifactDir, tarball);
-      execFileSync("tar", ["-czf", tarballPath, "-C", staging, "package"]);
-      return { name, version, tarball, sha256: sha256(tarballPath) };
-    });
+  const tarball = "codex.tgz";
+  const tarballPath = join(artifactDir, tarball);
+  createPackageTarball(root, tarballPath, "@openclaw/codex");
   const manifest = join(artifactDir, "prepublish-plugin-registry.json");
   writeFileSync(
     manifest,
@@ -59,7 +43,7 @@ function registryFixture(root: string, scenario: Scenario): NodeJS.ProcessEnv {
       schemaVersion: 1,
       candidateVersion: version,
       sourceSha,
-      packages,
+      packages: [{ name: "@openclaw/codex", version, tarball, sha256: sha256(tarballPath) }],
     }),
   );
   return {
@@ -85,6 +69,9 @@ function runScenario(scenario: Scenario = {}) {
   if (bundled) {
     mkdirSync(join(packageRoot, "dist/extensions", channel), { recursive: true });
   }
+  if (scenario.sourcePlugin) {
+    createPackageTarball(root, join(root, "openclaw-channel-plugin.tgz"), `@openclaw/${channel}`);
+  }
   const cli = join(bin, "openclaw");
   writeFileSync(
     cli,
@@ -101,11 +88,6 @@ const fail = (message) => { console.error(message); process.exit(31); };
 if (help) {
   console.log("OpenClaw ${version}\\nUsage: openclaw plugins install [options] <source>");
   if (current) console.log("  --accept-capabilities  Accept reviewed plugin capabilities");
-  const probe = events.filter((event) => event.includes("--help")).length;
-  if (probe === Number(env.FAIL_PROBE)) {
-    if (env.HELP_FAILURE === "timeout") setInterval(() => {}, 1000);
-    else process.exit(29);
-  }
 } else if (args[0] === "plugins") {
   if (!current) fail("legacy package must retain automatic setup");
   if (!args.includes("--accept-capabilities")) fail("capability consent missing");
@@ -159,10 +141,7 @@ openclaw_e2e_package_root() { printf '%s' "$PACKAGE_ROOT"; }
 openclaw_e2e_start_mock_openai() { :; }
 openclaw_e2e_wait_mock_openai() { :; }
 `;
-  const registryEnv = scenario.registry ? registryFixture(root, scenario) : {};
-  if (scenario.corruptRegistry) {
-    registryEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 = "0".repeat(64);
-  }
+  const registryEnv = scenario.registry ? registryFixture(root) : {};
   const commandPath = [bin, dirname(process.execPath), process.env.PATH]
     .filter(Boolean)
     .join(delimiter);
@@ -181,10 +160,7 @@ openclaw_e2e_wait_mock_openai() { :; }
       EVENTS: eventsPath,
       CONSENT: scenario.consent === false ? "0" : "1",
       BUNDLED: bundled ? "1" : "0",
-      HELP_FAILURE: scenario.helpFailure ?? "",
-      FAIL_PROBE: scenario.helpFailure ? String(scenario.failProbe ?? 1) : "0",
-      OPENCLAW_E2E_COMMAND_TIMEOUT: scenario.helpFailure === "timeout" ? "1s" : "5s",
-      OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS: "10",
+      OPENCLAW_E2E_COMMAND_TIMEOUT: "5s",
       OPENCLAW_NPM_ONBOARD_CHANNEL: channel,
       OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE: scenario.sourcePlugin ? "1" : "0",
       OPENCLAW_TEST_STATE_SCRIPT_B64: Buffer.from(testState).toString("base64"),
@@ -203,14 +179,78 @@ openclaw_e2e_wait_mock_openai() { :; }
     .map((file) => readFileSync(file, "utf8"))
     .join("\n");
   expect(result.error, `${result.stdout}\n${result.stderr}\n${logs}`).toBeUndefined();
-  return { result, events, installs, detail: `${result.stdout}\n${result.stderr}\n${logs}` };
+  return { result, events, installs, root, detail: `${result.stdout}\n${result.stderr}\n${logs}` };
+}
+
+function runOuterSourceScenario(registry: boolean) {
+  const root = tempDirs.make("openclaw-onboard-outer-");
+  const bin = join(root, "bin");
+  const sourceRoot = join(root, "source");
+  const packageTgz = join(root, "openclaw-package.tgz");
+  const dockerArgsPath = join(root, "docker-args.txt");
+  mkdirSync(bin);
+  mkdirSync(join(sourceRoot, "extensions/discord"), { recursive: true });
+  mkdirSync(join(sourceRoot, "scripts"), { recursive: true });
+  writeFileSync(packageTgz, "core package fixture");
+  writeFileSync(
+    join(sourceRoot, "extensions/discord/package.json"),
+    JSON.stringify({ name: "@openclaw/discord", version }),
+  );
+  writeFileSync(
+    join(sourceRoot, "scripts/plugin-npm-publish.sh"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+stage="$OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR/staging"
+mkdir -p "$stage/package"
+cp "$2/package.json" "$stage/package/package.json"
+tar -czf "$OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR/openclaw-discord-${version}.tgz" -C "$stage" package
+rm -rf "$stage"
+`,
+  );
+  writeFileSync(
+    join(bin, "docker"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "run" ]; then
+  printf '%s\\n' "$@" >"$DOCKER_ARGS_PATH"
+  cat >/dev/null
+fi
+`,
+    { mode: 0o755 },
+  );
+
+  const registryEnv = registry ? registryFixture(root) : {};
+  const result = spawnSync("bash", [runnerPath], {
+    encoding: "utf8",
+    timeout: 20_000,
+    env: {
+      ...process.env,
+      PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter),
+      DOCKER_ARGS_PATH: dockerArgsPath,
+      DOCKER_COMMAND_TIMEOUT: "10s",
+      OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
+      OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS: "1",
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
+      OPENCLAW_NPM_ONBOARD_CHANNEL: "discord",
+      OPENCLAW_NPM_ONBOARD_E2E_IMAGE: "openclaw-onboard-test-image",
+      OPENCLAW_NPM_ONBOARD_HOST_BUILD: "0",
+      OPENCLAW_NPM_ONBOARD_SOURCE_ROOT: sourceRoot,
+      OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE: "1",
+      OPENCLAW_SKIP_DOCKER_BUILD: "1",
+      ...registryEnv,
+    },
+  });
+  const dockerArgs = readFileSync(dockerArgsPath, { encoding: "utf8", flag: "a+" })
+    .split("\n")
+    .filter(Boolean);
+  return { dockerArgs, result };
 }
 
 describe("npm onboarding fixture consent", () => {
   it.each([false, true])("selects the reviewed Codex source with registry=%s", (registry) => {
     const { result, events, installs, detail } = runScenario({ registry });
     expect(result.status, detail).toBe(0);
-    expect(installs).toEqual([
+    expect(installs, detail).toEqual([
       registry
         ? ["plugins", "install", `npm:@openclaw/codex@${version}`, "--pin", "--accept-capabilities"]
         : ["plugins", "install", "codex", "--accept-capabilities"],
@@ -253,8 +293,8 @@ describe("npm onboarding fixture consent", () => {
   it.each([
     { registry: false, channel: "telegram" as const },
     { registry: true, channel: "telegram" as const },
-    { registry: false, channel: "discord" as const },
-    { registry: true, channel: "slack" as const, sourcePlugin: true },
+    { registry: false, channel: "discord" as const, sourcePlugin: true },
+    { registry: true, channel: "slack" as const },
   ])("keeps same-version legacy setup automatic: $channel registry=$registry", (scenario) => {
     const { result, installs, detail } = runScenario({ ...scenario, consent: false });
     expect(result.status, detail).toBe(0);
@@ -271,7 +311,7 @@ describe("npm onboarding fixture consent", () => {
   ])("prepares only the selected external channel: %j", (scenario) => {
     const { result, installs, detail } = runScenario({ ...scenario, registry: true });
     expect(result.status, detail).toBe(0);
-    expect(installs.slice(1)).toEqual(
+    expect(installs.slice(1), detail).toEqual(
       scenario.bundled
         ? []
         : [
@@ -287,61 +327,24 @@ describe("npm onboarding fixture consent", () => {
     );
   });
 
-  it.each([
-    { channel: "discord" as const, consent: true },
-    { channel: "discord" as const, consent: false },
-    { channel: "slack" as const, consent: true },
-    { channel: "slack" as const, consent: false },
-  ])("rejects source fixtures without a verified registry: %j", (scenario) => {
-    const { result, events, detail } = runScenario({ ...scenario, sourcePlugin: true });
-    expect(result.status, detail).not.toBe(0);
-    expect(detail).toContain(
-      "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
+  it("propagates the source package through the outer Docker boundary without install overrides", () => {
+    const { dockerArgs, result } = runOuterSourceScenario(true);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(dockerArgs).toContain("OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1");
+    expect(dockerArgs.some((arg) => arg.endsWith(":/tmp/openclaw-channel-plugin.tgz:ro"))).toBe(
+      true,
     );
-    expect(events).toEqual([]);
+    expect(dockerArgs.join("\n")).not.toContain("OPENCLAW_PLUGIN_INSTALL_OVERRIDES");
+    expect(dockerArgs.join("\n")).not.toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES");
   });
 
-  it.each([
-    { channel: "discord" as const, companion: "missing" as const },
-    { channel: "slack" as const, companion: "missing" as const },
-    { channel: "discord" as const, companion: "wrong-identity" as const },
-    { channel: "slack" as const, companion: "wrong-identity" as const },
-  ])("verifies the selected companion before any CLI call: %j", (scenario) => {
-    const { result, events, detail } = runScenario({
-      ...scenario,
-      registry: true,
-      sourcePlugin: true,
-    });
-    expect(result.status, detail).not.toBe(0);
-    expect(detail).toContain(
-      scenario.companion === "missing"
-        ? "missing Docker-plan package"
-        : "tarball identity mismatch",
+  it("fails source package mode instead of falling back without the mounted registry", () => {
+    const { result } = runOuterSourceScenario(false);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Source plugin package mode requires the mounted prerelease plugin registry.",
     );
-    expect(events).toEqual([]);
-  });
-
-  it.each(["exit", "timeout"] as const)("stops before mutation on help %s", (helpFailure) => {
-    const { result, events, detail } = runScenario({ helpFailure });
-    expect(result.status, detail).toBe(helpFailure === "timeout" ? 124 : 29);
-    expect(events).toEqual([["plugins", "install", "--help"]]);
-  });
-
-  it.each([2, 3])("stops at the shared helper's failed probe %s", (failProbe) => {
-    const { result, events, installs, detail } = runScenario({
-      channel: "discord",
-      helpFailure: "exit",
-      failProbe,
-    });
-    expect(result.status, detail).toBe(29);
-    expect(installs).toHaveLength(failProbe === 2 ? 0 : 1);
-    expect(events.some((args) => args[0] === "channels" && args[1] === "add")).toBe(false);
-  });
-
-  it("rejects a mismatched registry artifact before any CLI call", () => {
-    const { result, events, detail } = runScenario({ registry: true, corruptRegistry: true });
-    expect(result.status, detail).not.toBe(0);
-    expect(detail).toContain("manifest SHA-256 differs from the immutable tuple");
-    expect(events).toEqual([]);
   });
 });

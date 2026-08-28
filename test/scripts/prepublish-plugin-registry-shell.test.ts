@@ -220,6 +220,46 @@ test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
     },
   );
 
+  it("rejects a mislabeled caller-owned package before registry startup", () => {
+    const root = tempDirs.make("openclaw-prepublish-registry-identity-");
+    const registryRoot = join(root, "registry");
+    const tarball = createTarball(
+      root,
+      root,
+      "@openclaw/discord",
+      "openclaw-discord-2026.8.1-beta.1.tgz",
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+set -euo pipefail
+source "$HELPER"
+registry_pid=""
+openclaw_prepublish_plugin_registry_start \
+  "" "" "$VERSION" "" "$REGISTRY_ROOT" registry_pid \
+  "@openclaw/slack" "$VERSION" "$TARBALL"
+`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HELPER: SCRIPT,
+          REGISTRY_ROOT: registryRoot,
+          TARBALL: tarball,
+          VERSION,
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "npm package tarball identity mismatch: expected @openclaw/slack@2026.8.1-beta.1",
+    );
+  });
+
   it("is valid Bash", () => {
     const result = spawnSync("bash", ["-n", SCRIPT], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
