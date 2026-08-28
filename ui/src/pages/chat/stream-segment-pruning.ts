@@ -1,11 +1,18 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  accumulatedStreamText,
+  advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
-import { streamCausalInterval, type StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
+import {
+  streamCausalInterval,
+  resolveCumulativeAssistantTail,
+  type StreamCausalBoundaryState,
+} from "./stream-causal-boundary.ts";
 import {
   hasAssistantStreamPartReplacement,
   visibleAssistantStreamParts,
@@ -59,6 +66,62 @@ export function discardStreamSegmentIndexes(
     state.chatRunId,
     (_segment, index) => discarded.has(index),
   );
+}
+
+export function reconcilePersistedAssistantStream(state: StreamSegmentPruningState): void {
+  const runId = state.chatRunId;
+  if (!runId) {
+    return;
+  }
+  const stream = state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
+  if (!stream) {
+    return;
+  }
+  const messages = (state.chatMessages ?? []).filter((message) => {
+    const identity = readSessionMessageIdentity(message);
+    return (
+      identity?.role === "assistant" &&
+      identity.id &&
+      !identity.isImported &&
+      identity.runId === runId &&
+      !readAssistantStreamSegmentIdentity(message)
+    );
+  });
+  const tail = resolveCumulativeAssistantTail(messages, stream, runId);
+  const prefix = stream.slice(0, stream.length - (tail?.length ?? 0));
+  if (!prefix) {
+    return;
+  }
+  let segments = state.chatStreamSegments ?? [];
+  const accumulated = state.chatStream === null ? stream : accumulatedStreamText(segments);
+  const shouldPrune = (segment: ChatStreamSegment) =>
+    segment.persisted !== true &&
+    segment.runId === runId &&
+    streamSegmentUsesAccumulatedText(segment) &&
+    prefix.startsWith(segment.text);
+  // Preserve renderer identity fast paths when persistence retires no segments.
+  if (segments.some(shouldPrune)) {
+    segments = pruneAccumulatedStreamSegments(segments, runId, shouldPrune);
+    state.chatStreamSegments = segments;
+  }
+  if (advanceAccumulatedStreamText(accumulated, prefix) === accumulated) {
+    return;
+  }
+  // Persistence can overtake chat deltas. Retire only the observed cumulative
+  // prefix; keep the received buffer intact so later deltas cannot restart it.
+  const last = segments.at(-1);
+  const extendsPersisted =
+    last?.persisted && last.runId === runId && !last.boundaryRunId && !last.toolCallId;
+  state.chatStreamSegments = [
+    ...(extendsPersisted ? segments.slice(0, -1) : segments),
+    {
+      ...(extendsPersisted ? last : {}),
+      text: prefix,
+      ts: state.chatStreamStartedAt ?? Date.now(),
+      runId,
+      persisted: true,
+    },
+  ];
 }
 
 /** A durable commentary row immediately replaces its keyed live projection.
