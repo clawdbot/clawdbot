@@ -200,14 +200,8 @@ export async function querySessionReference(
 }
 
 function incompleteSessionReferenceResolution(
-  kind: SessionReferenceSearch["kind"],
   sessions: GatewaySessionRow[],
 ): SessionReferenceResolution {
-  if (kind === "slug" && sessions.length === 0) {
-    // Slugs are best-effort: an incomplete exact-key search must retain the
-    // authoritative literal route, while a bounded zero-match slug is a 404.
-    return { kind: "not-found" };
-  }
   return { kind: "ambiguous", sessions, truncated: true };
 }
 
@@ -247,11 +241,11 @@ async function querySessionReferencePages(
       return session ? { kind: "unique", session } : { kind: "not-found" };
     }
     if (page === SESSION_REF_SEARCH_MAX_PAGES - 1) {
-      return incompleteSessionReferenceResolution(search.kind, sessions);
+      return incompleteSessionReferenceResolution(sessions);
     }
     const nextOffset = result.nextOffset ?? offset + result.sessions.length;
     if (nextOffset <= offset) {
-      return incompleteSessionReferenceResolution(search.kind, sessions);
+      return incompleteSessionReferenceResolution(sessions);
     }
     offset = nextOffset;
   }

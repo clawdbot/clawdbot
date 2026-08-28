@@ -929,6 +929,29 @@ describe("gateway-backed session route resolution", () => {
     expect(list).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a capped slug lookup nonterminal while later matches remain possible", async () => {
+    const exactKey = "agent:roboclaw:unknown-thread";
+    const laterMatch = row({ displayName: "Unknown thread" });
+    const { context, list } = contextFor(({ search, offset = 0 }) => {
+      if (search === exactKey) {
+        return result([]);
+      }
+      return offset === 100
+        ? result([laterMatch], { offset })
+        : result([], { hasMore: true, nextOffset: offset + 20, offset });
+    });
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/unknown-thread", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "ambiguous", candidates: [], truncated: true });
+    expect(list).toHaveBeenCalledTimes(6);
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ offset: 100 }));
+  });
+
   it("resolves a cached literal without a gateway round-trip", async () => {
     const literal = row({ key: "agent:roboclaw:standup", displayName: "Standup" });
     const { context, list } = contextFor(() => result([literal]), [literal]);
