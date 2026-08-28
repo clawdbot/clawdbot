@@ -958,6 +958,11 @@ describe("state migrations", () => {
       await upsertSessionEntryCore(scope, { sessionId: "qa-source", updatedAt: 1000 });
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
+      const originalEntry = loadSessionEntryReadOnly(scope);
+      expect(originalEntry).toMatchObject({
+        sessionId: "qa-source",
+        updatedAt: expect.any(Number),
+      });
 
       const readFile = vi.spyOn(fsSync, "readFileSync");
       try {
@@ -977,10 +982,7 @@ describe("state migrations", () => {
       expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
         expect.objectContaining({ agentId: "main", path: storePath }),
       ]);
-      expect(loadSessionEntryReadOnly(scope)).toMatchObject({
-        sessionId: "qa-source",
-        updatedAt: 1000,
-      });
+      expect(loadSessionEntryReadOnly(scope)).toStrictEqual(originalEntry);
       const database = new DatabaseSync(storePath, { readOnly: true });
       try {
         expect(
@@ -5254,7 +5256,7 @@ describe("state migrations", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "preserves a key-shaped pending row while moving its matching legacy transcript",
+    "preserves a key-shaped pending row while Doctor moves its matching legacy transcript",
     async () => {
       const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
@@ -5296,6 +5298,7 @@ describe("state migrations", () => {
         env,
         homedir: () => root,
         now: () => 1234,
+        doctorOnlyStateMigrations: true,
       });
 
       expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
@@ -5354,6 +5357,7 @@ describe("state migrations", () => {
         env,
         homedir: () => root,
         now: () => 1234,
+        doctorOnlyStateMigrations: true,
       });
       await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(firstBytes);
       expect(rerun.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(

@@ -30,7 +30,7 @@ describe("purgeAgentSessionStoreEntries", () => {
           kind === "fixed selector" ? "shared.json" : "shared.sqlite",
         );
         const cfg = {
-          agents: { entries: { main: {}, ops: {} } },
+          agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
           session: { store: storePath },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);

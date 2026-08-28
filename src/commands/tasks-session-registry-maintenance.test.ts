@@ -114,7 +114,7 @@ describe("runSessionRegistryMaintenance", () => {
             ? undefined
             : state.statePath(kind === "fixed selector" ? "shared.json" : "shared.sqlite");
         await state.writeConfig({
-          agents: { entries: { main: {}, beta: {} } },
+          agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
           ...(store ? { session: { store } } : {}),
         });
         const scopes = [];

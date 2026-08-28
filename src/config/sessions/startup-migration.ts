@@ -31,7 +31,6 @@ export async function runSessionStartupMigration(params: {
     migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
     migrateManagedWorktreeCanonicalWorkspaces?: typeof migrateManagedWorktreeCanonicalWorkspaces;
     resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
-    sessionSqliteDatabaseExists?: (options: OpenClawAgentDatabaseOptions) => boolean;
   };
 }): Promise<OpenClawAgentDatabaseOptions[]> {
   const env = params.env ?? process.env;
@@ -68,10 +67,6 @@ export async function runSessionStartupMigration(params: {
   }
 
   const databases = new Map<string, OpenClawAgentDatabaseOptions>();
-  const databaseExists =
-    params.deps?.sessionSqliteDatabaseExists ??
-    ((options: OpenClawAgentDatabaseOptions) =>
-      fs.existsSync(resolveOpenClawAgentSqlitePath(options)));
   const migrateWorktreeSessions =
     params.deps?.migrateManagedWorktreeCanonicalWorkspaces ??
     migrateManagedWorktreeCanonicalWorkspaces;
@@ -82,7 +77,7 @@ export async function runSessionStartupMigration(params: {
   for (const target of targets) {
     const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
     const databasePath = resolveOpenClawAgentSqlitePath(options);
-    if (databases.has(databasePath) || !databaseExists(options)) {
+    if (databases.has(databasePath) || !fs.existsSync(databasePath)) {
       continue;
     }
     databases.set(databasePath, options);

@@ -44,7 +44,7 @@ describe("sessions cleanup applied summary", () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const storePath = state.statePath("shared.json");
       const cfg = {
-        agents: { entries: { main: {}, beta: {} } },
+        agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
         session: { store: storePath, maintenance: { mode: "warn", pruneAfter: "1d" } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
@@ -53,11 +53,13 @@ describe("sessions cleanup applied summary", () => {
         sessionKey: `agent:${agentId}:stale`,
         storePath,
       }));
+      const updatedAt = Date.now() - 2 * 24 * 60 * 60_000;
       for (const scope of scopes) {
         await replaceSessionEntry(scope, {
           sessionId: `${scope.agentId}-stale`,
-          updatedAt: Date.now() - 2 * 24 * 60 * 60_000,
+          updatedAt,
         });
+        expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
       }
 
       const result = await runSessionsCleanup({ cfg, opts: { agent: "beta", enforce: true } });

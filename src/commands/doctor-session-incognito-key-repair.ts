@@ -49,7 +49,7 @@ export function repairReservedIncognitoSessionKeys(params: {
   env: NodeJS.ProcessEnv;
 }): ReservedIncognitoKeyRepairReport {
   const targets = listExistingAgentDatabaseTargets(params.cfg, params.env).map((target) => ({
-    ...target,
+    target,
     databaseOptions: resolveTargetSqliteOptions(target, params.env),
   }));
   const reservedKeys = new Set<string>();
@@ -57,14 +57,14 @@ export function repairReservedIncognitoSessionKeys(params: {
   const journalRenames = sharedDatabase
     ? readRepairJournal(sharedDatabase.db)
     : readRepairJournalReadOnly(params.env);
-  for (const target of targets) {
+  for (const { target, databaseOptions } of targets) {
     const operation = runDoctorAgentDatabaseOperation({
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () =>
         withOpenClawAgentDatabaseReadOnly(
           (database) => listReservedIncognitoKeys(database.db),
-          target.databaseOptions,
+          databaseOptions,
         ),
     });
     if (!operation.ok || !operation.value.found) {
@@ -88,14 +88,14 @@ export function repairReservedIncognitoSessionKeys(params: {
   const occupiedKeys = sharedDatabase
     ? collectSharedStateSessionKeys(sharedDatabase.db)
     : new Set<string>();
-  for (const target of targets) {
+  for (const { target, databaseOptions } of targets) {
     const operation = runDoctorAgentDatabaseOperation({
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () =>
         withOpenClawAgentDatabaseReadOnly(
           (database) => collectOccupiedSessionKeys(database.db),
-          target.databaseOptions,
+          databaseOptions,
         ),
     });
     if (operation.ok && operation.value.found) {
@@ -124,12 +124,12 @@ export function repairReservedIncognitoSessionKeys(params: {
     { env: params.env },
     { operationLabel: "doctor.rename-reserved-incognito-shared-state-keys" },
   );
-  for (const target of targets) {
+  for (const { target, databaseOptions } of targets) {
     const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
     try {
       runOpenClawAgentWriteTransaction(
         (database) => applyReservedIncognitoKeyRenameColumns(database, renames),
-        target.databaseOptions,
+        databaseOptions,
         { operationLabel: "doctor.rename-reserved-incognito-session-keys" },
       );
       rewriteDoctorSessionEntries({
