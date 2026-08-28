@@ -42,6 +42,11 @@ export function resolveLineMentionStrippedText(message: LineMessageContent): str
   let cursor = 0;
   for (const span of spans) {
     stripped += text.slice(cursor, span.start);
+    // Removing an inline mention must not join neighboring text into a new
+    // command token that the sender never wrote.
+    if (/\S$/u.test(stripped) && /^\S/u.test(text.slice(span.end))) {
+      stripped += " ";
+    }
     cursor = Math.max(cursor, span.end);
   }
   return `${stripped}${text.slice(cursor)}`.trim();

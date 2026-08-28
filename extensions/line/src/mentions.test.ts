@@ -58,6 +58,12 @@ describe("resolveLineMentionStrippedText", () => {
     expect(resolveLineMentionStrippedText(message)).toBe("@Alice  /status");
   });
 
+  it("does not join text around an inline bot mention into a new command", () => {
+    const message = textMessage("/re@openclaw3set", [selfMention(3, 10)]);
+
+    expect(resolveLineMentionStrippedText(message)).toBe("/re set");
+  });
+
   it("removes an @all mention, which addresses the bot like a direct mention", () => {
     const message = textMessage("@All /status", [{ type: "all", index: 0, length: 4 }]);
 
