@@ -596,80 +596,47 @@ export function forgetNodeRunnerInventory(nodeRegistry: object, connId: string):
   state.runnerState.reconcile(declaration.nodeId, true);
 }
 
-export function isNodeRunnerSessionHost(params: {
-  registry: object;
-  nodeId: string;
-  connId: string;
-  pairingGeneration?: string;
-}): boolean {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
-  const node = state?.context.getNode(params.nodeId);
-  if (!state || !node || node.connId !== params.connId) {
-    return false;
+/** Capture the catalog's live metadata without reloading pairing or mutating registry state. */
+export function collectNodeCatalogRuntimeState(
+  registry: object,
+  connectedNodes: ReadonlyArray<
+    Pick<NodeRegistryPrivateSession, "nodeId" | "connId" | "pairingGeneration">
+  >,
+) {
+  const sessionHostNodeIds = new Set<string>();
+  const issuesByNodeId = new Map<string, NodeRunnerInventoryIssue[]>();
+  const workerSlotsByNodeId = new Map<string, NodeWorkerCapacitySnapshot>();
+  const workerBundleByNodeId = new Map<string, NodeWorkerBundleStatus>();
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(registry);
+  // This synchronous projection reads one current connection per supplied snapshot row;
+  // it must not reload pairing, publish presence, or admit worker execution.
+  for (const node of connectedNodes) {
+    const current = state?.context.getNode(node.nodeId);
+    if (!state || !current || current.connId !== node.connId) {
+      continue;
+    }
+    const proof = resolveNodeWorkerSupervisorProof(current, state.runnerInventoryByConn);
+    if (proof && proof.pairingGeneration === node.pairingGeneration) {
+      sessionHostNodeIds.add(node.nodeId);
+    }
+    const issue = resolveNodeRunnerInventoryIssue(current, state.runnerInventoryByConn);
+    if (issue) {
+      issuesByNodeId.set(node.nodeId, [issue]);
+    }
+    if (proof) {
+      workerSlotsByNodeId.set(node.nodeId, { ...proof.workerHost.capacity });
+    }
+    const observation = state.bundleStatusByConn.get(node.connId);
+    if (observation) {
+      workerBundleByNodeId.set(node.nodeId, structuredClone(observation.status));
+    }
   }
-  const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
-  return Boolean(proof && proof.pairingGeneration === params.pairingGeneration);
-}
-
-function getNodeRunnerInventoryIssue(params: {
-  registry: object;
-  nodeId: string;
-  connId: string;
-}): NodeRunnerInventoryIssue | undefined {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
-  const node = state?.context.getNode(params.nodeId);
-  return state && node?.connId === params.connId
-    ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn)
-    : undefined;
-}
-
-export function collectNodeWorkerCapacityByNodeId(
-  registry: object,
-  connectedNodes: ReadonlyArray<{ nodeId: string; connId: string }>,
-): Map<string, NodeWorkerCapacitySnapshot> {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(registry);
-  return new Map(
-    connectedNodes.flatMap((node) => {
-      const current = state?.context.getNode(node.nodeId);
-      if (!state || !current || current.connId !== node.connId) {
-        return [];
-      }
-      const proof = resolveNodeWorkerSupervisorProof(current, state.runnerInventoryByConn);
-      return proof ? [[node.nodeId, { ...proof.workerHost.capacity }] as const] : [];
-    }),
-  );
-}
-
-export function collectNodeWorkerBundleStatusByNodeId(
-  registry: object,
-  connectedNodes: ReadonlyArray<{ nodeId: string; connId: string }>,
-): Map<string, NodeWorkerBundleStatus> {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(registry);
-  return new Map(
-    connectedNodes.flatMap((node) => {
-      const current = state?.context.getNode(node.nodeId);
-      const observation =
-        current?.connId === node.connId ? state?.bundleStatusByConn.get(node.connId) : undefined;
-      return observation ? [[node.nodeId, structuredClone(observation.status)] as const] : [];
-    }),
-  );
-}
-
-/** Shared node/environments read-projection shape: nodeId -> runner issues. */
-export function collectNodeRunnerIssuesByNodeId(
-  registry: object,
-  connectedNodes: ReadonlyArray<{ nodeId: string; connId: string }>,
-): Map<string, NodeRunnerInventoryIssue[]> {
-  return new Map(
-    connectedNodes.flatMap((node) => {
-      const issue = getNodeRunnerInventoryIssue({
-        registry,
-        nodeId: node.nodeId,
-        connId: node.connId,
-      });
-      return issue ? [[node.nodeId, [issue]] as const] : [];
-    }),
-  );
+  return {
+    sessionHostNodeIds,
+    issuesByNodeId,
+    workerSlotsByNodeId,
+    workerBundleByNodeId,
+  };
 }
 
 export function isNodeRegistryPendingInvokeConnectionActive(params: {
