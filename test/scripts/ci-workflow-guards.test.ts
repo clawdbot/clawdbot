@@ -104,6 +104,7 @@ function evaluateWorkflowExpression(
     // Runner routing keys off contributor trust, so pull-request cases default
     // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
     authorAssociation?: string;
+    dispatchId?: string;
     eventName: "pull_request" | "push" | "workflow_dispatch";
     frozenTarget?: boolean;
     headRepository?: string;
@@ -115,6 +116,7 @@ function evaluateWorkflowExpression(
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
+    targetContextRef?: string;
   },
 ) {
   if (typeof expression !== "string") {
@@ -135,6 +137,7 @@ function evaluateWorkflowExpression(
         ? haystack.includes(needle)
         : String(haystack).includes(String(needle)),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
+    startsWith: (value: unknown, prefix: unknown) => String(value).startsWith(String(prefix)),
     github: {
       event_name: context.eventName,
       repository: context.repository,
@@ -150,7 +153,9 @@ function evaluateWorkflowExpression(
           : {},
     },
     inputs: {
+      dispatch_id: context.dispatchId ?? "",
       release_gate: context.releaseGate ?? false,
+      target_context_ref: context.targetContextRef ?? "",
     },
     matrix: context.matrix ?? {},
     needs: {
@@ -3655,21 +3660,48 @@ NODE
     };
     const evaluateDispatch = (
       runnerBackend: "blacksmith" | "github" | "hybrid",
-      releaseGate = false,
+      overrides: {
+        dispatchId?: string;
+        frozenTarget?: boolean;
+        matrix?: Record<string, unknown>;
+        releaseGate?: boolean;
+        repository?: string;
+        targetContextRef?: string;
+      } = {},
     ) =>
       evaluateWorkflowExpression(runsOn, {
         eventName: "workflow_dispatch",
         matrix: lintMatrix,
-        releaseGate,
         repository: "openclaw/openclaw",
         runAttempt: 1,
         runnerBackend,
+        ...overrides,
       });
 
     expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
-    expect(evaluateDispatch("blacksmith", true)).toBe("ubuntu-24.04");
+    expect(evaluateDispatch("blacksmith", { releaseGate: true })).toBe("ubuntu-24.04");
     expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
     expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
+
+    const frozenFrv = {
+      dispatchId: "full-release-validation-33128772779-ci",
+      frozenTarget: true,
+      targetContextRef: "release/2026.9.1",
+    };
+    expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
+    expect(evaluateDispatch("hybrid", { ...frozenFrv, dispatchId: "manual-ci-proof" })).toBe(
+      "ubuntu-24.04",
+    );
+    expect(evaluateDispatch("hybrid", { ...frozenFrv, releaseGate: true })).toBe("ubuntu-24.04");
+    expect(
+      evaluateDispatch("hybrid", {
+        ...frozenFrv,
+        matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
+      }),
+    ).toBe("ubuntu-24.04");
+    expect(evaluateDispatch("hybrid", { ...frozenFrv, repository: "fork/openclaw" })).toBe(
+      "ubuntu-24.04",
+    );
     expect(
       evaluateWorkflowExpression(runsOn, {
         authorAssociation: "NONE",
