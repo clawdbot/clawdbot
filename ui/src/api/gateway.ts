@@ -55,9 +55,11 @@ import {
   enrichProtocolMismatchDetails,
   resolveGatewayErrorDetailCode,
 } from "./gateway-connect-errors.ts";
+import { GatewayPayloadLimitError, normalizeGatewayPayloadError } from "./gateway-payload-error.ts";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 
 export { resolveGatewayErrorDetailCode };
+export { GatewayPayloadLimitError };
 
 export class GatewayRequestError extends GatewayProtocolRequestError {
   constructor(error: ErrorShape) {
@@ -261,8 +263,13 @@ export class GatewayBrowserClient {
         };
       },
       createRequestId: generateUUID,
-      validateRequestFrame: (frame, method) =>
-        gatewaySocket.validateGatewayRequestFrame(frame, method, this.maxPayloadBytes),
+      validateRequestFrame: (frame, method) => {
+        try {
+          gatewaySocket.validateGatewayRequestFrame(frame, method, this.maxPayloadBytes);
+        } catch (error) {
+          throw normalizeGatewayPayloadError(error);
+        }
+      },
       createRequestError: (error) =>
         new GatewayRequestError({
           code: error.code ?? "UNAVAILABLE",
@@ -717,14 +724,5 @@ export class GatewayBrowserClient {
     } catch (callbackError) {
       console.error("[gateway] close handler error:", callbackError);
     }
-  }
-}
-
-export class GatewayPayloadLimitError extends Error {
-  constructor() {
-    super(
-      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-    );
-    this.name = "GatewayPayloadLimitError";
   }
 }

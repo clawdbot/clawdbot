@@ -185,8 +185,12 @@ class MockWebSocket {
   }
 }
 
-const { GatewayBrowserClient, GatewayRequestError, resolveGatewayErrorDetailCode } =
-  await import("./gateway.ts");
+const {
+  GatewayBrowserClient,
+  GatewayPayloadLimitError,
+  GatewayRequestError,
+  resolveGatewayErrorDetailCode,
+} = await import("./gateway.ts");
 
 type ConnectFrame = {
   id?: string;
@@ -920,6 +924,7 @@ describe("GatewayBrowserClient", () => {
     ws.sent.length = 0;
 
     const oversized = client.request("chat.send", { text: "x".repeat(256) });
+    await expect(oversized).rejects.toBeInstanceOf(GatewayPayloadLimitError);
     await expect(oversized).rejects.toThrow(
       "gateway request chat.send exceeds negotiated max payload",
     );

@@ -5,7 +5,7 @@ import { render } from "lit";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   beginChatMetadataPublication,
@@ -7281,6 +7281,32 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("safe to restore");
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores input and attachments when a payload limit rejects before transport", async () => {
+    const attachment = {
+      id: "oversized-attachment",
+      dataUrl: "data:text/plain;base64,SGVsbG8=",
+      fileName: "note.txt",
+      mimeType: "text/plain",
+      sizeBytes: 5,
+    };
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => {
+          throw new GatewayPayloadLimitError();
+        },
+      },
+      chatAttachments: [attachment],
+      chatMessage: "keep this draft",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatAttachments).toStrictEqual([attachment]);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.lastError).toContain("Request exceeds the Gateway payload limit");
   });
 
   it("retains a connected attachment when browser quota rejects durable admission", async () => {
