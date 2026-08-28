@@ -137,6 +137,7 @@ vi.mock("../../agents/embedded-agent.js", () => ({
 }));
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
+  clearActiveEmbeddedRun: vi.fn(),
   formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
     outcome.reason && outcome.sessionId
       ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`

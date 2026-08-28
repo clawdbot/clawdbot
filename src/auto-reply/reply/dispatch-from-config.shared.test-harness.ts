@@ -505,6 +505,7 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
+  diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
   logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
   logMessageQueued: diagnosticMocks.logMessageQueued,
