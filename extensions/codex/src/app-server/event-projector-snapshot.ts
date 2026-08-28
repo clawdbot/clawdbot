@@ -80,6 +80,7 @@ export function buildCodexSteeringMessagesSnapshot(params: {
     .filter(({ itemId }) => params.completedItemIds.has(itemId));
   const assistantMessages = params.assistantProjection.collectCompletedAssistantMessages(
     params.completedItemIds,
+    { tokenUsage: undefined, aborted: false, promptError: undefined },
   );
   const messages = buildCodexMessagesSnapshot({
     runParams: params.runParams,

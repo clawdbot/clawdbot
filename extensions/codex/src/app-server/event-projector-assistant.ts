@@ -410,6 +410,7 @@ export class CodexAssistantProjection {
 
   collectCompletedAssistantMessages(
     completedItemIds: ReadonlySet<string>,
+    options: AssistantMessageOptions,
   ): Array<{ itemId: string; message: AssistantMessage }> {
     // Steering history covers visible completed items even across final-answer
     // handoffs. Mirror identities deduplicate them across subsequent steers.
@@ -424,20 +425,9 @@ export class CodexAssistantProjection {
       ) {
         return [];
       }
-      const message = this.createAssistantMessage(text, {
-        tokenUsage: undefined,
-        aborted: false,
-        promptError: undefined,
-      });
-      return [
-        {
-          itemId,
-          message: {
-            ...message,
-            timestamp: this.assistantTimestampByItem.get(itemId) ?? message.timestamp,
-          },
-        },
-      ];
+      const message = this.createAssistantMessage(text, options);
+      const timestamp = this.assistantTimestampByItem.get(itemId) ?? message.timestamp;
+      return [{ itemId, message: { ...message, timestamp } }];
     });
   }
 
