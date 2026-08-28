@@ -4,26 +4,20 @@
  * write must not truncate the original host file.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyPatch } from "./apply-patch.test-support.js";
 
 describe("apply_patch unrestricted host writes", () => {
-  let tempDir = "";
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.restoreAllMocks();
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
-      tempDir = "";
-    }
   });
 
   async function createHostFile(content: string) {
-    tempDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-host-write-")),
-    );
+    const tempDir = tempDirs.make("openclaw-patch-host-write-");
     const filePath = path.join(tempDir, "important.txt");
     await fs.writeFile(filePath, content);
     return filePath;
@@ -92,11 +86,11 @@ describe("apply_patch unrestricted host writes", () => {
     failPrefixWrites(filePath, Buffer.byteLength(originalContent));
 
     await expect(
-      applyPatch(buildUpdatePatch(filePath), { cwd: tempDir, workspaceOnly: false }),
+      applyPatch(buildUpdatePatch(filePath), { cwd: path.dirname(filePath), workspaceOnly: false }),
     ).rejects.toThrow("disk full");
 
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe(originalContent);
-    await expect(fs.readdir(tempDir)).resolves.toEqual(["important.txt"]);
+    await expect(fs.readdir(path.dirname(filePath))).resolves.toEqual(["important.txt"]);
   });
 
   it("keeps the original host file when an update hunk cannot extend the file", async () => {
@@ -105,11 +99,11 @@ describe("apply_patch unrestricted host writes", () => {
     failExtensionWrites(filePath, Buffer.byteLength(originalContent));
 
     await expect(
-      applyPatch(buildUpdatePatch(filePath), { cwd: tempDir, workspaceOnly: false }),
+      applyPatch(buildUpdatePatch(filePath), { cwd: path.dirname(filePath), workspaceOnly: false }),
     ).rejects.toThrow("disk full");
 
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe(originalContent);
-    await expect(fs.readdir(tempDir)).resolves.toEqual(["important.txt"]);
+    await expect(fs.readdir(path.dirname(filePath))).resolves.toEqual(["important.txt"]);
   });
 
   it.runIf(process.platform !== "win32")("applies host update hunks in place", async () => {
@@ -118,7 +112,7 @@ describe("apply_patch unrestricted host writes", () => {
     const before = await fs.stat(filePath);
 
     const result = await applyPatch(buildUpdatePatch(filePath), {
-      cwd: tempDir,
+      cwd: path.dirname(filePath),
       workspaceOnly: false,
     });
 
