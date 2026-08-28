@@ -336,7 +336,12 @@ suite.define(() => {
           .toBe(false);
         await composer.fill("queued while offline");
         await composer.press("Enter");
-        await page.locator(".chat-queue__item", { hasText: "queued while offline" }).waitFor();
+        const queuedGroup = page.locator(".chat-group.user", { hasText: "queued while offline" });
+        await queuedGroup.locator(".chat-bubble").waitFor();
+        await queuedGroup
+          .locator(".chat-queue__item")
+          .getByText("Waiting for reconnect", { exact: true })
+          .waitFor();
         expect(await composer.inputValue()).toBe("");
         if (recoveryKind !== "none") {
           // Accepted retirement can fail to remove its sending row after the map owner
