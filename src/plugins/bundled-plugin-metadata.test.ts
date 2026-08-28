@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { assert, beforeAll, describe, expect, it } from "vitest";
+import { assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
@@ -28,6 +28,7 @@ import {
   loadPluginManifest,
   type PackageManifest,
 } from "./manifest.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { writeBundledRuntimeSidecarPathBaseline } from "./runtime-sidecar-paths-baseline.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
@@ -35,6 +36,10 @@ const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS = ["memory-core", "xai"] as const;
 
 installGeneratedPluginTempRootCleanup();
+
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+});
 
 function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
   artifacts.forEach((artifact) => {
@@ -767,7 +772,7 @@ describe("bundled plugin metadata", () => {
     ).toBe(path.join(pluginRoot, "index.ts"));
   });
 
-  it("reflects bundled manifest edits on the next metadata read", () => {
+  it("reflects bundled manifest edits in the next lifecycle generation", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-fresh-");
     const pluginRoot = path.join(tempRoot, "extensions", "alpha");
 
@@ -792,6 +797,7 @@ describe("bundled plugin metadata", () => {
       name: "After",
       configSchema: { type: "object" },
     });
+    clearPluginMetadataLifecycleCaches();
 
     expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("After");
   });

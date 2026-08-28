@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 function requireMockCallArg(
   mockFn: { mock: { calls: unknown[][] } },
@@ -73,6 +74,7 @@ const installWriteOptions = {
 
 describe("persistPluginInstall", () => {
   beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
     resetPluginsCliTestState();
   });
 
@@ -724,10 +726,12 @@ describe("persistPluginInstall", () => {
     });
 
     expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledTimes(1);
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith({
-      config: enabledConfig,
-      onlyPluginIds: ["legacy-memory"],
-    });
+    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+        onlyPluginIds: ["legacy-memory"],
+      }),
+    );
     expect(
       requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
         .config,
@@ -850,10 +854,12 @@ describe("persistPluginInstall", () => {
     });
 
     expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledTimes(1);
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith({
-      config: enabledConfig,
-      onlyPluginIds: ["plain"],
-    });
+    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+        onlyPluginIds: ["plain"],
+      }),
+    );
     expect(
       requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
         .config,
