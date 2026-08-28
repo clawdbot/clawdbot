@@ -15,7 +15,6 @@ const ACTION_KEYS = {
   telegramApiRelease: new Set(["type", "atMs"]),
   followupDrainHold: new Set(["type", "atMs", "sessionKey", "timeoutMs"]),
   followupDrainWaitHeld: new Set(["type", "atMs", "timeoutMs"]),
-  stuckSessionRecover: new Set(["type", "atMs", "timeoutMs"]),
   followupDrainRelease: new Set(["type", "atMs", "timeoutMs"]),
 };
 
@@ -108,11 +107,7 @@ export function parseScenario(value) {
         timeoutMs: positiveInteger(action.timeoutMs, `${label}.timeoutMs`, 60_000),
       };
     }
-    if (
-      action.type === "followupDrainWaitHeld" ||
-      action.type === "stuckSessionRecover" ||
-      action.type === "followupDrainRelease"
-    ) {
+    if (action.type === "followupDrainWaitHeld" || action.type === "followupDrainRelease") {
       return {
         type: action.type,
         atMs,

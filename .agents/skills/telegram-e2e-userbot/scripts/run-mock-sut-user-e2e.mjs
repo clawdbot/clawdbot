@@ -984,12 +984,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       gatewayEnv.TELEGRAM_E2E_IGNORE_ABORT_METHODS = JSON.stringify(heldTelegramMethods);
     }
     const hasFollowupControl = (args.scenario?.actions ?? []).some((action) =>
-      [
-        "followupDrainHold",
-        "followupDrainWaitHeld",
-        "stuckSessionRecover",
-        "followupDrainRelease",
-      ].includes(action.type),
+      ["followupDrainHold", "followupDrainWaitHeld", "followupDrainRelease"].includes(action.type),
     );
     if (hasFollowupControl) {
       gatewayEnv.NODE_OPTIONS = [
@@ -1172,7 +1167,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             "telegramApiRelease",
             "followupDrainHold",
             "followupDrainWaitHeld",
-            "stuckSessionRecover",
             "followupDrainRelease",
           ].includes(action.type),
         )
@@ -1254,8 +1248,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             followupControl = await runFollowupControl("arm", action);
           } else if (action.type === "followupDrainWaitHeld") {
             followupControl = await runFollowupControl("waitHeld", action);
-          } else if (action.type === "stuckSessionRecover") {
-            followupControl = await runFollowupControl("recover", action);
           } else if (action.type === "followupDrainRelease") {
             followupControl = await runFollowupControl("release", action);
           }

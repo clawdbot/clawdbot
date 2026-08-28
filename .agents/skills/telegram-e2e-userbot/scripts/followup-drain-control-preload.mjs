@@ -1,6 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const commandPath = process.env.TELEGRAM_E2E_FOLLOWUP_CONTROL_COMMAND;
 const statusPath = process.env.TELEGRAM_E2E_FOLLOWUP_CONTROL_STATUS;
@@ -11,11 +9,9 @@ if (commandPath && statusPath) {
   let lastSeq = 0;
   let wrappedKey;
   let originalCallback;
-  let heldRun;
   let heldOnce = false;
   let waitSeq;
   let gate;
-  let processing = false;
 
   const queueId = (queue) => {
     if (!queue) return null;
@@ -49,7 +45,6 @@ if (commandPath && statusPath) {
   };
 
   const tick = async () => {
-    if (processing) return;
     const command = readCommand();
     if (!command || command.seq <= lastSeq) return;
     if (command.command === "arm") {
@@ -63,7 +58,6 @@ if (commandPath && statusPath) {
       callbacks.set(command.sessionKey, async (run) => {
         if (!heldOnce) {
           heldOnce = true;
-          heldRun = run;
           if (waitSeq) {
             writeStatus({
               seq: waitSeq,
@@ -108,43 +102,6 @@ if (commandPath && statusPath) {
         ...queueState(wrappedKey),
       });
       return;
-    }
-    if (command.command === "recover" && heldRun) {
-      processing = true;
-      const before = queueState(wrappedKey);
-      try {
-        const recoveryUrl = pathToFileURL(
-          path.join(process.cwd(), "src/logging/diagnostic-stuck-session-recovery.runtime.ts"),
-        );
-        const { recoverStuckDiagnosticSession } = await import(recoveryUrl.href);
-        const outcome = await recoverStuckDiagnosticSession({
-          sessionId: heldRun.run.sessionId,
-          sessionKey: wrappedKey,
-          ageMs: 12 * 60_000,
-          queueDepth: Math.max(1, before.pending),
-          allowActiveAbort: true,
-        });
-        const after = queueState(wrappedKey);
-        writeStatus({
-          seq: command.seq,
-          command: "recover",
-          status: "completed",
-          before,
-          after,
-          replaced: before.queueId !== after.queueId,
-          recoveryStatus: outcome.status,
-          recoveryAction: outcome.action,
-        });
-      } catch (error) {
-        writeStatus({
-          seq: command.seq,
-          command: "recover",
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        processing = false;
-      }
     }
   };
 

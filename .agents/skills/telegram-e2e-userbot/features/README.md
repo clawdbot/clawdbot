@@ -59,17 +59,15 @@ held, then release it after the behavior checkpoint:
 }
 ```
 
-Follow-up drain controls reproduce stuck-session recovery without changing the
-Gateway protocol. Arm one session callback, wait until the real drain enters
-it, invoke canonical recovery, then release the retired callback:
+Follow-up drain controls hold one session callback at a known point, then
+release it after the behavior checkpoint:
 
 ```json
 {
   "actions": [
     { "type": "followupDrainHold", "sessionKey": "agent:main:main" },
     { "type": "followupDrainWaitHeld", "atMs": 1000 },
-    { "type": "stuckSessionRecover", "atMs": 5000 },
-    { "type": "followupDrainRelease", "atMs": 10000 }
+    { "type": "followupDrainRelease", "atMs": 5000 }
   ]
 }
 ```
