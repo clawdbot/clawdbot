@@ -16,7 +16,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import { loadModels } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
@@ -36,10 +36,6 @@ export type ModelProvidersData = {
   costByProvider: SessionModelUsage[] | null;
   updatedAt: number | null;
   error: string | null;
-};
-
-type ModelProvidersCatalogResult = {
-  providerOutcomes?: ModelCatalogProviderOutcome[];
 };
 
 type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
@@ -86,38 +82,26 @@ export async function loadModelProvidersData(
       : params === undefined
         ? client.request<T>(method)
         : client.request<T>(method, params);
-  const loadConfiguredModels = (loadOpts: { preparedOnly?: true; refresh?: true }) =>
+  const loadConfiguredCatalog = (loadOpts: { preparedOnly?: true; refresh?: true }) =>
     settleRequest(
-      loadModels(client, {
+      loadModelCatalog(client, {
         agentId: opts.agentId,
         ...loadOpts,
         rejectOnFailure: true,
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     );
-  const modelsRefresh = opts.refresh ? loadConfiguredModels({ refresh: true }) : undefined;
-  const catalogRefresh = modelsRefresh
-    ? modelsRefresh.then((modelsResult) =>
-        modelsResult.ok
-          ? settleRequest(
-              request<ModelProvidersCatalogResult>("models.list", {
-                view: "all",
-                agentId: opts.agentId,
-              }).then((result) => result ?? null),
-            )
-          : modelsResult,
+  const catalogRefresh = opts.refresh ? loadConfiguredCatalog({ refresh: true }) : undefined;
+  const catalogLoad = catalogRefresh
+    ? catalogRefresh.then((refreshResult) =>
+        refreshResult.ok ? refreshResult : loadConfiguredCatalog({ preparedOnly: true }),
       )
-    : Promise.resolve({ ok: true as const, result: null });
-  const modelsLoad = modelsRefresh
-    ? modelsRefresh.then((refreshResult) =>
-        refreshResult.ok ? refreshResult : loadConfiguredModels({ preparedOnly: true }),
-      )
-    : loadConfiguredModels({ preparedOnly: true });
-  const [authStatus, models, catalogResult, config, providerUsageFetch, costByProvider] =
+    : loadConfiguredCatalog({ preparedOnly: true });
+  const [authStatus, catalog, refreshResult, config, providerUsageFetch, costByProvider] =
     await Promise.all([
       settleRequest(loadModelAuthStatus(client, opts)),
-      modelsLoad,
-      catalogRefresh,
+      catalogLoad,
+      catalogRefresh ?? Promise.resolve(undefined),
       request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
         .catch(() => null),
@@ -134,13 +118,14 @@ export async function loadModelProvidersData(
   return {
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
-    models: models.ok ? models.result : null,
-    providerOutcomes: catalogResult.ok ? (catalogResult.result?.providerOutcomes ?? []) : [],
-    catalogError: !catalogResult.ok
-      ? errorMessage(catalogResult.error)
-      : !models.ok
-        ? errorMessage(models.error)
-        : null,
+    models: catalog.ok ? catalog.result.models : null,
+    providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
+    catalogError:
+      refreshResult && !refreshResult.ok
+        ? errorMessage(refreshResult.error)
+        : catalog.ok
+          ? null
+          : errorMessage(catalog.error),
     config,
     providerUsage: providerUsageFetch,
     costByProvider,

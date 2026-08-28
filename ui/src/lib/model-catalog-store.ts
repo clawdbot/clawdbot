@@ -1,6 +1,6 @@
 // Control UI model metadata boundary.
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ModelCatalogEntry } from "../api/types.ts";
+import type { ModelCatalogResult } from "../api/types.ts";
 import { peekChatMetadata, revalidateChatMetadata } from "./chat/chat-metadata-store.ts";
 
 const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
@@ -10,7 +10,7 @@ const MODEL_CATALOG_REFRESH_COOLDOWN_MS = 5 * 60_000;
 type ModelCatalogCacheEntry = {
   expiresAt: number;
   refreshEligibleAt?: number;
-  models: ModelCatalogEntry[];
+  result: ModelCatalogResult;
   inFlight?: ModelCatalogPendingRequest;
   inFlightRefresh?: boolean;
   inFlightRejects?: boolean;
@@ -18,7 +18,7 @@ type ModelCatalogCacheEntry = {
 
 type ModelCatalogPendingRequest = {
   controller?: AbortController;
-  promise: Promise<ModelCatalogEntry[]>;
+  promise: Promise<ModelCatalogResult>;
   subscribers: Set<object>;
 };
 
@@ -37,7 +37,7 @@ function modelCatalogCacheFor(client: GatewayBrowserClient): Map<string, ModelCa
   return cache;
 }
 
-export async function loadModels(
+export async function loadModelCatalog(
   client: GatewayBrowserClient,
   opts: {
     agentId: string;
@@ -47,7 +47,7 @@ export async function loadModels(
     rejectOnFailure?: boolean;
     signal?: AbortSignal;
   },
-): Promise<ModelCatalogEntry[]> {
+): Promise<ModelCatalogResult> {
   opts.signal?.throwIfAborted();
   const cache = modelCatalogCacheFor(client);
   const agentId = opts.agentId.trim();
@@ -77,8 +77,8 @@ export async function loadModels(
   ) {
     return await subscribeToModelCatalogRequest(cached.inFlight, opts.signal);
   }
-  if (!refresh && cached?.models && (cached.expiresAt > now || refreshCooldownActive)) {
-    return cached.models;
+  if (!refresh && cached?.result && (cached.expiresAt > now || refreshCooldownActive)) {
+    return cached.result;
   }
   if (
     cached?.inFlight &&
@@ -98,7 +98,7 @@ export async function loadModels(
     subscribers: new Set(),
     promise: requestModels(
       client,
-      cached?.models,
+      cached?.result,
       agentId,
       opts.preparedOnly === true,
       refresh,
@@ -116,7 +116,7 @@ export async function loadModels(
           const entry = {
             expiresAt: result.fresh ? Date.now() + MODEL_CATALOG_CACHE_TTL_MS : 0,
             ...(refreshEligibleAt ? { refreshEligibleAt } : {}),
-            models: result.models,
+            result: result.value,
           };
           cache.set(cacheKey, entry);
           if (result.fresh && opts.preparedOnly !== true) {
@@ -130,7 +130,7 @@ export async function loadModels(
             }
           }
         }
-        return result.models;
+        return result.value;
       })
       .catch((error: unknown) => {
         const latest = cache.get(cacheKey);
@@ -149,7 +149,7 @@ export async function loadModels(
   cache.set(cacheKey, {
     expiresAt: cached?.expiresAt ?? 0,
     ...(nextRefreshEligibleAt ? { refreshEligibleAt: nextRefreshEligibleAt } : {}),
-    models: cached?.models ?? [],
+    result: cached?.result ?? { models: [] },
     inFlight,
     inFlightRejects: rejectOnFailure,
     ...(refresh ? { inFlightRefresh: true } : {}),
@@ -160,7 +160,7 @@ export async function loadModels(
 async function subscribeToModelCatalogRequest(
   pending: ModelCatalogPendingRequest,
   signal: AbortSignal | undefined,
-): Promise<ModelCatalogEntry[]> {
+): Promise<ModelCatalogResult> {
   const subscriber = {};
   pending.subscribers.add(subscriber);
   if (!signal) {
@@ -198,13 +198,13 @@ async function subscribeToModelCatalogRequest(
 
 async function requestModels(
   client: GatewayBrowserClient,
-  fallback: ModelCatalogEntry[] | undefined,
+  fallback: ModelCatalogResult | undefined,
   agentId: string,
   preparedOnly: boolean,
   refresh: boolean,
   rejectOnFailure: boolean,
   signal: AbortSignal | undefined,
-): Promise<{ models: ModelCatalogEntry[]; fresh: boolean }> {
+): Promise<{ value: ModelCatalogResult; fresh: boolean }> {
   try {
     const params = {
       view: "configured",
@@ -213,14 +213,14 @@ async function requestModels(
       ...(refresh ? { refresh: true } : {}),
     };
     const result = signal
-      ? await client.request<{ models: ModelCatalogEntry[] }>("models.list", params, { signal })
-      : await client.request<{ models: ModelCatalogEntry[] }>("models.list", params);
-    return { models: result?.models ?? [], fresh: true };
+      ? await client.request<ModelCatalogResult>("models.list", params, { signal })
+      : await client.request<ModelCatalogResult>("models.list", params);
+    return { value: result, fresh: true };
   } catch (error) {
     if (rejectOnFailure) {
       throw error;
     }
     // Failed loads fall back without extending the TTL so the next call retries.
-    return { models: fallback ?? [], fresh: false };
+    return { value: fallback ?? { models: [] }, fresh: false };
   }
 }

@@ -6,7 +6,10 @@ import {
   rememberChatMetadata,
   subscribeChatMetadata,
 } from "./chat/chat-metadata-store.ts";
-import { invalidateModelCatalogCache, loadModels } from "./model-catalog-store.ts";
+import { invalidateModelCatalogCache, loadModelCatalog } from "./model-catalog-store.ts";
+
+const loadModels = async (...args: Parameters<typeof loadModelCatalog>) =>
+  (await loadModelCatalog(...args)).models;
 
 describe("loadModels", () => {
   it("requests the configured model list view", async () => {

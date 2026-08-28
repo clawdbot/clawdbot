@@ -56,7 +56,7 @@ describe("loadModelProvidersData", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    await loadModelProvidersData(client, { refresh: true, agentId: "writer" });
+    const result = await loadModelProvidersData(client, { refresh: true, agentId: "writer" });
 
     expect(request).toHaveBeenCalledWith("models.authStatus", {
       refresh: true,
@@ -64,8 +64,8 @@ describe("loadModelProvidersData", () => {
     });
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
       ["models.list", { view: "configured", agentId: "writer", refresh: true }],
-      ["models.list", { view: "all", agentId: "writer" }],
     ]);
+    expect(result.providerOutcomes).toEqual([]);
     expect(request).toHaveBeenCalledWith("usage.status");
     const sessionUsageCall = request.mock.calls.find(([method]) => method === "sessions.usage");
     expect(sessionUsageCall?.[1]).not.toHaveProperty("agentId");
@@ -104,7 +104,7 @@ describe("loadModelProvidersData", () => {
     { label: "the initial prepared catalog", refresh: false },
     { label: "the configured catalog after discovery", refresh: true },
   ])("surfaces a failure loading $label without discarding provider data", async ({ refresh }) => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       switch (method) {
         case "models.authStatus":
           return {
@@ -112,9 +112,6 @@ describe("loadModelProvidersData", () => {
             providers: [{ provider: "openai", displayName: "OpenAI", status: "ok", profiles: [] }],
           };
         case "models.list":
-          if ((params as { view?: string } | undefined)?.view === "all") {
-            return { providerOutcomes: [] };
-          }
           throw new Error("configured catalog unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
         case "config.get":
           return {
