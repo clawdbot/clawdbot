@@ -3853,6 +3853,8 @@ export const en: TranslationMap = {
     },
     notices: {
       applied: "Applied",
+      statusNotConfirmed:
+        "The Gateway did not confirm that the proposal is {status}. Refresh and try again.",
       proposalChanged: "Proposal changed. Review the updated draft before choosing another action.",
       rejected: "Rejected",
       revisionRequested: "Revision requested",

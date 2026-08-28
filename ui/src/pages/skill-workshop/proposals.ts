@@ -360,10 +360,11 @@ async function refreshAfterMutation(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   proposalId: string,
-): Promise<void> {
+): Promise<SkillWorkshopProposal | undefined> {
   state.skillWorkshopLoaded = false;
   await loadSkillWorkshopProposals(state, context, { force: true });
   await loadSkillWorkshopProposalDetail(state, context, proposalId, { force: true });
+  return state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
 }
 
 function markSkillWorkshopRevisionChanged(
@@ -412,11 +413,14 @@ export async function runSkillWorkshopLifecycleAction(
       expectedRevisionHash,
     };
     await client.request(method, requestParams);
-    await refreshAfterMutation(state, context, proposalId);
-    const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+    const updated = await refreshAfterMutation(state, context, proposalId);
+    const expectedStatus = action === "apply" ? "applied" : "rejected";
+    if (updated?.status !== expectedStatus) {
+      throw new Error(t("skillWorkshop.notices.statusNotConfirmed", { status: expectedStatus }));
+    }
     showActionNotice(
       state,
-      updated ?? previous,
+      updated,
       t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
     );
   } catch (err) {

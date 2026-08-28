@@ -319,6 +319,31 @@ describe("Skill Workshop proposal RPCs", () => {
     },
   );
 
+  it("does not show success when refresh leaves an applied proposal pending", async () => {
+    const { state, context, request } = createFixture(
+      {
+        skillWorkshopProposals: [proposal()],
+        skillWorkshopSelectedKey: "proposal-1",
+      },
+      { assistantAgentId: "reviewer" },
+      ["skills.proposals.apply", "skills.proposals.list", "skills.proposals.inspect"],
+    );
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.proposals.list") {
+        return manifest("pending");
+      }
+      if (method === "skills.proposals.inspect") {
+        return inspectResult("pending");
+      }
+      return {};
+    });
+
+    await runSkillWorkshopLifecycleAction(state, context, "apply", proposalDecision());
+
+    expect(state.skillWorkshopActionNotice).toBeNull();
+    expect(state.skillWorkshopError).toContain("did not confirm");
+  });
+
   it.each(["apply", "reject"] as const)(
     "%s refuses to act without the reviewed revision hash",
     async (action) => {
