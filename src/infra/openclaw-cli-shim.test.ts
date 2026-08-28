@@ -30,10 +30,11 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
       const staleCliPath = path.join(staleBinDir, "openclaw");
       const stateDir = path.join(root, "state");
       const invocationCwd = await fs.realpath(root);
+      const callerCwd = await fs.realpath(path.dirname(root));
       await fs.mkdir(staleBinDir, { recursive: true });
       await fs.writeFile(
         entryPath,
-        'console.log(JSON.stringify({ source: "gateway", args: process.argv.slice(2), cwd: process.cwd(), pathHead: process.env.PATH?.split(":")[0] }));\n',
+        'console.log(JSON.stringify({ source: "gateway", args: process.argv.slice(2), cwd: process.cwd(), tsconfigPath: process.env.TSX_TSCONFIG_PATH, pathHead: process.env.PATH?.split(":")[0] }));\n',
       );
       await fs.writeFile(staleCliPath, "#!/bin/sh\nprintf '%s\\n' '{\"source\":\"stale\"}'\n", {
         mode: 0o700,
@@ -59,7 +60,7 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
         host: "gateway",
         security: "full",
         ask: "off",
-        cwd: path.dirname(root),
+        cwd: callerCwd,
         notifyOnExit: false,
       });
       const result = await tool.execute("gateway-cli-version-probe", {
@@ -69,7 +70,8 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
       expect(JSON.parse(readExecText(result))).toEqual({
         source: "gateway",
         args: testCase.expectedArgs,
-        cwd: invocationCwd,
+        cwd: callerCwd,
+        tsconfigPath: path.join(invocationCwd, "tsconfig.json"),
         pathHead: shimBinDir,
       });
     });
@@ -91,7 +93,7 @@ it("renders a Windows PATH launcher for the running CLI", async () => {
 
     const executablePath = path.join(root, "tmp", "agent-cli", "openclaw.cmd");
     expect(await fs.readFile(executablePath, "utf8")).toBe(
-      '@echo off\r\ncd /d C:\\OpenClaw\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
+      '@echo off\r\nset "TSX_TSCONFIG_PATH=C:\\OpenClaw\\tsconfig.json"\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
     );
   });
 });

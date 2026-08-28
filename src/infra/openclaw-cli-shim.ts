@@ -27,16 +27,18 @@ function quotePosixArgument(value: string): string {
 
 function renderPosixShim(invocation: OpenClawCliInvocation, profile: string | null): string {
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
+  const tsconfigPath = path.join(invocation.cwd, "tsconfig.json");
   return `#!/bin/sh
 set -eu
-cd -- ${quotePosixArgument(invocation.cwd)}
+export TSX_TSCONFIG_PATH=${quotePosixArgument(tsconfigPath)}
 exec ${[invocation.command, ...args].map(quotePosixArgument).join(" ")} "$@"
 `;
 }
 
 function renderWindowsShim(invocation: OpenClawCliInvocation, profile: string | null): string {
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
-  return `@echo off\r\ncd /d ${quoteCmdScriptArg(invocation.cwd)}\r\n${[invocation.command, ...args].map(quoteCmdScriptArg).join(" ")} %*\r\n`;
+  const tsconfigPath = path.win32.join(invocation.cwd, "tsconfig.json");
+  return `@echo off\r\nset "TSX_TSCONFIG_PATH=${tsconfigPath}"\r\n${[invocation.command, ...args].map(quoteCmdScriptArg).join(" ")} %*\r\n`;
 }
 
 /**
