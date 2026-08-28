@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 
-export type SessionGlyphContent = TemplateResult | typeof nothing;
+type SessionGlyphContent = TemplateResult | typeof nothing;
 
 /**
  * Persistent artwork in the sidebar's leading slot (owner avatar, page icon,

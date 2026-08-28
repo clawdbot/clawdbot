@@ -148,7 +148,7 @@ export function renderSessionRowBadges(params: {
     ${pullRequestLabel
       ? renderSessionRowBadge(
           pullRequestLabel,
-          icons.gitPullRequest,
+          pullRequestState === "merged" ? icons.gitMerge : icons.gitPullRequest,
           "session-row-badge--pull-request",
           0,
           pullRequestState,
