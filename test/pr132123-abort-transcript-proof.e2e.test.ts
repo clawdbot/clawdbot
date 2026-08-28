@@ -181,11 +181,24 @@ describe("PR #132123 real gateway proof", () => {
           gateway: { auth: { mode: "token", token: "pr132123-proof-token" } },
         };
         const sessionKey = "agent:main:pr132123-abort-proof";
+        // Resolved once the gateway broadcasts a streamed event carrying the
+        // buffered reply text, which is the state the abort decision reads.
+        let notifyReplyStreamed: (() => void) | undefined;
+        const replyStreamed = new Promise<void>((resolve) => {
+          notifyReplyStreamed = resolve;
+        });
         gateway = await startGatewayWithClient({
           cfg,
           configPath,
           token: "pr132123-proof-token",
           clientDisplayName: "pr132123-proof-gateway",
+          onEvent: (evt) => {
+            if (notifyReplyStreamed && JSON.stringify(evt.payload ?? {}).includes(REPLY_TEXT)) {
+              const notify = notifyReplyStreamed;
+              notifyReplyStreamed = undefined;
+              notify();
+            }
+          },
         });
 
         const first = await gateway.client.request<{ runId?: string; status?: string }>(
@@ -219,10 +232,10 @@ describe("PR #132123 real gateway proof", () => {
         );
         expect(second.status).toBe("started");
         await secondStreamStarted.promise;
-        // Let the streamed text settle into the live run buffer before aborting.
-        await new Promise((resolve) => {
-          setTimeout(resolve, 500);
-        });
+        // The streamed text has reached the live run buffer once the gateway
+        // broadcast an event carrying it; aborting before that would read an
+        // empty buffer.
+        await replyStreamed;
 
         const abort = await gateway.client.request<{ aborted?: boolean }>(
           "chat.abort",
