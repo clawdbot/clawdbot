@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ControlUiGitHubError } from "./control-ui-github-api.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -110,6 +111,27 @@ describe("Gateway pending-profile authorization", () => {
     expect(handler).toHaveBeenCalledOnce();
     expect(retried).toHaveBeenCalledWith(true, { ok: true });
     expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns GitHub's rate-limit delay without exposing upstream details", async () => {
+    const client = createPendingProfileClient();
+    client.authenticatedGitHubIdentitySync = vi
+      .fn()
+      .mockRejectedValue(
+        new ControlUiGitHubError(429, "private upstream detail", { retryAfterMs: 42_000 }),
+      );
+    const handler = vi.fn<GatewayRequestHandler>();
+
+    const respond = await dispatchPendingProfileMethod({ client, handler, method: "agent" });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Authenticated profile verification is unavailable; retry the request.",
+      retryable: true,
+      retryAfterMs: 42_000,
+      details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+    });
   });
 
   it("classifies profile-owned core families and plugin or auxiliary methods fail-closed", async () => {

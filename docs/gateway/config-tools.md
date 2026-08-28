@@ -261,7 +261,7 @@ Verification proves which account answered the GitHub API request. Status report
 
 Removing an agent override or choosing native credentials deletes the associated local refresh record after the config change. Already-running local processes may retain the old profile and its current access token until they exit, restart, or the token expires, while new runs use the updated identity immediately. This local change does not revoke the authorization at GitHub; revoke it separately from the OAuth application's GitHub settings when required.
 
-Control UI repository previews and project discovery use the separate optional `gateway.controlUi.github.token` service credential. They never consume an agent tool identity. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
+GitHub-backed profile verification, Control UI repository previews, and project discovery use the separate optional `gateway.controlUi.github.token` service credential. These Gateway-owned requests never consume an agent tool identity. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
 
 ### `tools.exec`
 

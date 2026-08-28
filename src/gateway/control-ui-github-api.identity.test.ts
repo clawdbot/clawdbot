@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   setActiveDegradedSecretOwners,
   SecretSurfaceUnavailableError,
 } from "../secrets/runtime-degraded-state.js";
-import { githubApiToken, hasConfiguredGitHubApiCredential } from "./control-ui-github-api.js";
+import {
+  githubApiToken,
+  hasConfiguredGitHubApiCredential,
+  readGitHubJsonResponse,
+} from "./control-ui-github-api.js";
 
-afterEach(() => setActiveDegradedSecretOwners([]));
+afterEach(() => {
+  setActiveDegradedSecretOwners([]);
+  vi.restoreAllMocks();
+});
 
 describe("Control UI GitHub credential", () => {
   it("keeps the explicit preview credential separate and preserves ambient fallback by omission", () => {
@@ -62,5 +69,82 @@ describe("Control UI GitHub credential", () => {
     );
     expect(hasConfiguredGitHubApiCredential({}, config)).toBe(true);
     expect(githubApiToken({ GH_TOKEN: "ambient" }, {})).toBe("ambient");
+  });
+});
+
+describe("GitHub rate-limit retry timing", () => {
+  it("prefers Retry-After over the primary reset header", async () => {
+    const now = Date.parse("2026-08-23T10:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const response = new Response("rate limited", {
+      status: 403,
+      headers: {
+        "retry-after": "120",
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": String(Math.floor(now / 1_000) + 30),
+      },
+    });
+
+    await expect(readGitHubJsonResponse(response)).rejects.toMatchObject({
+      statusCode: 429,
+      retryAfterMs: 120_000,
+    });
+  });
+
+  it("uses the primary reset epoch when Retry-After is absent", async () => {
+    const now = Date.parse("2026-08-23T10:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const response = new Response("rate limited", {
+      status: 403,
+      headers: {
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": String(Math.floor(now / 1_000) + 30),
+      },
+    });
+
+    await expect(readGitHubJsonResponse(response)).rejects.toMatchObject({
+      statusCode: 429,
+      retryAfterMs: 30_000,
+    });
+  });
+
+  it("uses a bounded one-minute fallback without usable headers", async () => {
+    await expect(
+      readGitHubJsonResponse(new Response("rate limited", { status: 429 })),
+    ).rejects.toMatchObject({
+      statusCode: 429,
+      retryAfterMs: 60_000,
+    });
+  });
+
+  it("rejects malformed delta-seconds instead of interpreting exponent notation", async () => {
+    const now = Date.parse("2026-08-23T10:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const response = new Response("rate limited", {
+      status: 429,
+      headers: { "retry-after": "1e2" },
+    });
+
+    await expect(readGitHubJsonResponse(response)).rejects.toMatchObject({
+      statusCode: 429,
+      retryAfterMs: 60_000,
+    });
+  });
+
+  it("does not use the primary reset while secondary limiting leaves quota", async () => {
+    const now = Date.parse("2026-08-23T10:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const response = new Response("secondary rate limit", {
+      status: 429,
+      headers: {
+        "x-ratelimit-remaining": "42",
+        "x-ratelimit-reset": String(Math.floor(now / 1_000) + 3_600),
+      },
+    });
+
+    await expect(readGitHubJsonResponse(response)).rejects.toMatchObject({
+      statusCode: 429,
+      retryAfterMs: 60_000,
+    });
   });
 });

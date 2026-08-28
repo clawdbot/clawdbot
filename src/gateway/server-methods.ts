@@ -378,8 +378,8 @@ async function authorizeAuthenticatedProfileForMethod(params: {
   }
   try {
     await sync();
-  } catch {
-    return authenticatedProfileUnavailableError();
+  } catch (error) {
+    return authenticatedProfileUnavailableError(error);
   }
   return params.client?.authenticatedUserProfile?.profileId.trim()
     ? null

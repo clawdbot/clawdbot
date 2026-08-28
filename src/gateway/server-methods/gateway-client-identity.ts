@@ -4,6 +4,7 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { ControlUiGitHubError } from "../control-ui-github-api.js";
 import type { GatewayClient } from "./shared-types.js";
 
 type GatewayClientSender = { id: string; name?: string };
@@ -12,13 +13,17 @@ export function isGatewayClientProfilePending(client: GatewayClient | null): boo
   return Boolean(client?.authenticatedGitHubIdentitySync && !client.authenticatedUserProfile);
 }
 
-export function authenticatedProfileUnavailableError(): ErrorShape {
+export function authenticatedProfileUnavailableError(error?: unknown): ErrorShape {
+  const retryAfterMs =
+    error instanceof ControlUiGitHubError && error.statusCode === 429
+      ? (error.retryAfterMs ?? 1_000)
+      : 1_000;
   return errorShape(
     ErrorCodes.UNAVAILABLE,
     "Authenticated profile verification is unavailable; retry the request.",
     {
       retryable: true,
-      retryAfterMs: 1_000,
+      retryAfterMs,
       details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
     },
   );

@@ -20,14 +20,18 @@ const GITHUB_JSON_MAX_BYTES = 256 * 1024;
 export const GITHUB_REQUEST_TIMEOUT_MS = 8_000;
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_API_MAX_REDIRECTS = 3;
+const GITHUB_RATE_LIMIT_FALLBACK_MS = 60_000;
+const GITHUB_RATE_LIMIT_MAX_BACKOFF_MS = 24 * 60 * 60_000;
 
 export class ControlUiGitHubError extends Error {
   readonly statusCode: number;
+  readonly retryAfterMs?: number;
 
-  constructor(statusCode: number, message: string) {
+  constructor(statusCode: number, message: string, options?: { retryAfterMs?: number }) {
     super(message);
     this.name = "ControlUiGitHubError";
     this.statusCode = statusCode;
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 
@@ -196,6 +200,37 @@ function githubResponseErrorStatus(response: Response): number {
   return 502;
 }
 
+function boundedRateLimitDelay(delayMs: number): number | undefined {
+  if (!Number.isFinite(delayMs) || delayMs < 0) {
+    return undefined;
+  }
+  return Math.min(GITHUB_RATE_LIMIT_MAX_BACKOFF_MS, Math.max(1_000, Math.ceil(delayMs)));
+}
+
+function githubRateLimitRetryAfterMs(response: Response, now = Date.now()): number {
+  const retryAfter = response.headers.get("retry-after")?.trim();
+  if (retryAfter) {
+    const seconds = /^\d+$/u.test(retryAfter) ? Number(retryAfter) : Number.NaN;
+    const secondsDelay = boundedRateLimitDelay(seconds * 1_000);
+    if (secondsDelay !== undefined) {
+      return secondsDelay;
+    }
+    const retryAt = Date.parse(retryAfter);
+    const dateDelay = boundedRateLimitDelay(retryAt - now);
+    if (dateDelay !== undefined) {
+      return dateDelay;
+    }
+  }
+
+  const reset =
+    response.headers.get("x-ratelimit-remaining") === "0"
+      ? response.headers.get("x-ratelimit-reset")?.trim()
+      : undefined;
+  const resetEpochSeconds = reset && /^\d+$/u.test(reset) ? Number(reset) : Number.NaN;
+  const resetDelay = boundedRateLimitDelay(resetEpochSeconds * 1_000 - now);
+  return resetDelay ?? GITHUB_RATE_LIMIT_FALLBACK_MS;
+}
+
 // Optional host auth raises quota and unlocks private-repo reads, but an
 // unusable credential must not disable public GitHub data that works anonymously.
 export async function withOptionalGitHubAuth<T>(
@@ -216,8 +251,14 @@ export async function withOptionalGitHubAuth<T>(
 export async function readGitHubJsonResponse(response: Response): Promise<unknown> {
   if (!response.ok) {
     const status = githubResponseErrorStatus(response);
+    const retryAfterMs = status === 429 ? githubRateLimitRetryAfterMs(response) : undefined;
     await discardResponse(response);
-    throw new ControlUiGitHubError(status, `GitHub request failed (${response.status})`);
+    const retrySuffix = retryAfterMs === undefined ? "" : `; retry after ${retryAfterMs}ms`;
+    throw new ControlUiGitHubError(
+      status,
+      `GitHub request failed (${response.status})${retrySuffix}`,
+      retryAfterMs === undefined ? undefined : { retryAfterMs },
+    );
   }
   const body = await readBoundedResponse(response, GITHUB_JSON_MAX_BYTES);
   try {

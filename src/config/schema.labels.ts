@@ -375,7 +375,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.environment.label": "Control UI Environment Label",
   "gateway.controlUi.environment.color": "Control UI Environment Color",
   "gateway.controlUi.toolTitles": "Control UI Tool Call Titles",
-  "gateway.controlUi.github.token": "Control UI GitHub Service Credential",
+  "gateway.controlUi.github.token": "GitHub Service Credential",
   "gateway.controlUi.sessionObserver": "Control UI Session Observer",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.embedSandbox": "Control UI Embed Sandbox Mode",
