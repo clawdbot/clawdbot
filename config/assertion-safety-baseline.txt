@@ -4134,7 +4134,7 @@ ui/src/pages/chat/route.ts	2
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
-ui/src/pages/chat/stream-reconciliation.ts	12
+ui/src/pages/chat/stream-reconciliation.ts	11
 ui/src/pages/chat/tool-stream.ts	5
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/config-page.ts	1

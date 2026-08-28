@@ -1,7 +1,11 @@
 // @vitest-environment node
 // Control UI tests cover stream reconciliation behavior.
 import { describe, expect, it } from "vitest";
-import { reconcileTerminalStreamBoundary, rolloverChatStream } from "./stream-causal-boundary.ts";
+import {
+  reconcileTerminalStreamBoundary,
+  resolveCumulativeAssistantTail,
+  rolloverChatStream,
+} from "./stream-causal-boundary.ts";
 import {
   appendTerminalAssistantMessage,
   historyReplacedVisibleStream,
@@ -75,6 +79,49 @@ function createConcurrentToolStreamState() {
 }
 
 describe("stream reconciliation", () => {
+  it.each([
+    { name: "commentary mirror", fallback: { itemId: "commentary" }, text: "Progress", tail: "C" },
+    {
+      name: "matching commentary mirror",
+      fallback: { itemId: "commentary" },
+      text: "BC",
+      tail: "C",
+    },
+    { name: "ordinary assistant", fallback: undefined, text: "Other answer", tail: "BC" },
+    { name: "unkeyed fallback", fallback: {}, text: "Other answer", tail: "BC" },
+    { name: "blank item id", fallback: { itemId: " " }, text: "Other answer", tail: "BC" },
+  ])("subtracts the cumulative prefix across an interleaved $name", ({ fallback, text, tail }) => {
+    const messages = [
+      { role: "assistant", content: "A", __openclaw: { idempotencyKey: "active-run" } },
+      {
+        role: "assistant",
+        content: text,
+        __openclaw: { idempotencyKey: "active-run" },
+        ...(fallback ? { openclawStreamFallback: { source: "segment", ...fallback } } : {}),
+      },
+      { role: "assistant", content: "B", __openclaw: { idempotencyKey: "active-run" } },
+    ];
+
+    expect(resolveCumulativeAssistantTail(messages, "ABC", "active-run")).toBe(tail);
+  });
+
+  it("does not anchor cumulative coverage on matching commentary before an older reply", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: "ABC",
+        __openclaw: { idempotencyKey: "active-run" },
+        openclawStreamFallback: { source: "segment", itemId: "commentary" },
+      },
+      { role: "assistant", content: "ABC" },
+      { role: "user", content: "Current request" },
+      { role: "assistant", content: "A", __openclaw: { idempotencyKey: "active-run" } },
+      { role: "assistant", content: "B", __openclaw: { idempotencyKey: "active-run" } },
+    ];
+
+    expect(resolveCumulativeAssistantTail(messages, "ABC", "active-run")).toBe("C");
+  });
+
   it("materializes keyed preambles by timestamp instead of tool index", () => {
     const state = makeIdleStreamState({
       chatStreamSegments: [
