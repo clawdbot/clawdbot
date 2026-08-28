@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { fingerprintCodexAppServerAuthBinding } from "./app-server/auth-binding.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./app-server/auth-bridge.js";
@@ -56,21 +58,41 @@ export async function withCodexPluginCommandContext<T>(
     "preparedAuth" in auth.clientOptions ? auth.clientOptions.preparedAuth : undefined;
   const usesNativeAuth = scope.authProfileId === null || appServer.start.homeScope === "user";
   const profileId = usesNativeAuth ? undefined : auth.authProfileId;
-  const readAccountKey = () =>
-    usesNativeAuth
-      ? Promise.resolve(undefined)
-      : preparedAuth?.kind === "api-key"
-        ? Promise.resolve(resolveCodexAppServerPreparedApiKeyCacheKey(preparedAuth.apiKey))
-        : resolveCodexAppServerAuthAccountCacheKey({
+  const readAuthBinding = () =>
+    profileId
+      ? fingerprintCodexAppServerAuthBinding({
+          authProfileId: profileId,
+          authProfileStore: resolveCodexAppServerAuthProfileStore({
+            authProfileId: profileId,
+            agentDir: scope.agentDir,
+            config: ctx.config,
+          }),
+          agentDir: scope.agentDir,
+          config: ctx.config,
+        })
+      : Promise.resolve(undefined);
+  // Compare the prepared principal binding, not cache keys with email/profile fallbacks.
+  // A profile can change accounts while preparation awaits, before a client is leased.
+  const authBinding =
+    "authBindingFingerprint" in auth.clientOptions
+      ? auth.clientOptions.authBindingFingerprint
+      : await readAuthBinding();
+  const accountId = usesNativeAuth
+    ? undefined
+    : preparedAuth?.kind === "api-key"
+      ? resolveCodexAppServerPreparedApiKeyCacheKey(preparedAuth.apiKey)
+      : preparedAuth?.kind === "profile"
+        ? preparedAuth.snapshot.secretFreeCacheKey
+        : await resolveCodexAppServerAuthAccountCacheKey({
             authProfileId: profileId,
             agentDir: scope.agentDir,
             config: ctx.config,
           });
-  // The live account guard and prepared cache identity have different contracts
-  // for profiles without a stable account id; compare the same reader across awaits.
-  const accountGuardKey = await readAccountKey();
-  const accountId =
-    preparedAuth?.kind === "profile" ? preparedAuth.snapshot.secretFreeCacheKey : accountGuardKey;
+  if ((await readAuthBinding()) !== authBinding) {
+    throw new Error(
+      "Codex account, conversation, or plugin policy changed. Run the command again.",
+    );
+  }
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     pluginConfig,
@@ -89,7 +111,7 @@ export async function withCodexPluginCommandContext<T>(
       await ctx.getCurrentConversationBinding(),
     );
     const currentPolicy = JSON.stringify(await deps.codexPluginsManagementIo?.readConfig());
-    const currentAccount = await readAccountKey();
+    const currentAuthBinding = await readAuthBinding();
     if (
       accountChanged ||
       client.getCloseError() ||
@@ -107,7 +129,7 @@ export async function withCodexPluginCommandContext<T>(
       currentBinding?.conversationStartId !== binding?.conversationStartId ||
       currentBinding?.pluginAppsFingerprint !== binding?.pluginAppsFingerprint ||
       currentPolicy !== initialPolicy ||
-      currentAccount !== accountGuardKey
+      currentAuthBinding !== authBinding
     ) {
       throw new Error(
         "Codex account, conversation, or plugin policy changed. Run the command again.",

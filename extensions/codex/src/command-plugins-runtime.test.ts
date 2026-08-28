@@ -24,6 +24,7 @@ import * as sharedClients from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { resolveCodexCommandDeps } from "./command-handler-deps.js";
 import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
+import * as commandRpc from "./command-rpc.js";
 
 let root: string;
 let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
@@ -131,6 +132,40 @@ function fixture(stableAccount = true) {
 }
 
 describe("Codex plugin command context", () => {
+  it.each([true, false])(
+    "rejects an account replaced during preparation (stored account %s)",
+    async (stableAccount) => {
+      const test = fixture(stableAccount);
+      const prepare = commandRpc.prepareCodexControlSessionAuth;
+      vi.spyOn(commandRpc, "prepareCodexControlSessionAuth").mockImplementation(async (...args) => {
+        const auth = await prepare(...args);
+        const store =
+          "authProfileStore" in auth.clientOptions
+            ? structuredClone(auth.clientOptions.authProfileStore)
+            : undefined;
+        const profile = store?.profiles["openai:second"];
+        if (!store || profile?.type !== "oauth") {
+          throw new Error("Expected the prepared fixture profile");
+        }
+        if (stableAccount) {
+          profile.accountId = "test-replacement-account";
+        } else {
+          profile.access = `e30.${Buffer.from(
+            JSON.stringify({
+              "https://api.openai.com/auth": { chatgpt_account_id: "test-replacement-account" },
+            }),
+          ).toString("base64url")}.test-signature`;
+        }
+        replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: test.agentDir, store }]);
+        return auth;
+      });
+      await expect(
+        withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async () => "stale result"),
+      ).rejects.toThrow("Codex account, conversation, or plugin policy changed");
+      expect(test.acquire).not.toHaveBeenCalled();
+    },
+  );
+
   it("accepts delayed startup notifications for the unchanged managed account", async () => {
     const test = fixture();
     let pendingStartupNotification = true;
