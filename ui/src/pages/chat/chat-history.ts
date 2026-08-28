@@ -452,10 +452,15 @@ function readChatRunProjections(state: ChatState, sessionKey: string, agentId?: 
 }
 
 function mergeInFlightAssistantText(snapshot: string | null, live: string | null): string | null {
-  if (!snapshot) {
-    return live;
+  if (!snapshot || live?.startsWith(snapshot)) {
+    return live ?? snapshot;
   }
-  return live?.startsWith(snapshot) ? live : snapshot;
+  if (!live || snapshot.startsWith(live)) {
+    return snapshot;
+  }
+  // Divergence: live deltas are newer than the bounded snapshot, so the local
+  // cumulative buffer wins — a lagging snapshot must not rewind streamed text.
+  return live;
 }
 
 function applyHistoryRunSnapshot(params: {

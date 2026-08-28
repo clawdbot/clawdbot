@@ -29,6 +29,7 @@ type StreamVisibility = (stream: string) => boolean;
 
 function pruneAccumulatedStreamSegments(
   segments: readonly ChatStreamSegment[],
+  activeRunId: string | null | undefined,
   shouldPrune: (segment: ChatStreamSegment, index: number) => boolean,
 ): ChatStreamSegment[] {
   return segments.flatMap((segment, index) => {
@@ -36,7 +37,10 @@ function pruneAccumulatedStreamSegments(
       return [segment];
     }
     // Durable rows replace display, not the producer's cumulative baseline.
-    return streamSegmentUsesAccumulatedText(segment)
+    // A segment owned by a different run than the active one has no future
+    // deltas to trim, so retaining it would leak sibling-run state.
+    const foreignRun = Boolean(segment.runId && activeRunId && segment.runId !== activeRunId);
+    return !foreignRun && streamSegmentUsesAccumulatedText(segment)
       ? [{ ...segment, persisted: true as const }]
       : [];
   });
@@ -52,6 +56,7 @@ export function discardStreamSegmentIndexes(
   const discarded = new Set(discardedIndexes);
   state.chatStreamSegments = pruneAccumulatedStreamSegments(
     state.chatStreamSegments,
+    state.chatRunId,
     (_segment, index) => discarded.has(index),
   );
 }
@@ -111,6 +116,7 @@ export function pruneHistoryReplacedStreamSegments(
   }
   state.chatStreamSegments = pruneAccumulatedStreamSegments(
     state.chatStreamSegments,
+    state.chatRunId,
     (_segment, index) => replacedIndexes.has(index),
   );
   return true;
@@ -147,26 +153,30 @@ export function prunePersistedToolStreamMessages(
     return;
   }
   let toolIndexedSegmentIndex = 0;
-  state.chatStreamSegments = pruneAccumulatedStreamSegments(state.chatStreamSegments, (segment) => {
-    if (segment.boundaryMarker === true || segment.persisted === true) {
-      return false;
-    }
-    const explicitToolCallId = normalizeOptionalString(segment.toolCallId);
-    const usesItemId = streamSegmentHasItemId(segment);
-    const indexedToolRef = usesItemId ? undefined : liveToolRefs[toolIndexedSegmentIndex];
-    if (!usesItemId) {
-      toolIndexedSegmentIndex += 1;
-    }
-    const segmentRunId = normalizeOptionalString(segment.runId);
-    const toolIdentity = explicitToolCallId
-      ? resolveMatchingLiveToolIdentity(
-          {
-            id: explicitToolCallId,
-            ...(segmentRunId ? { runId: segmentRunId } : {}),
-          },
-          liveToolRefs,
-        )
-      : indexedToolRef?.identity;
-    return Boolean(toolIdentity && persistedToolIds.has(toolIdentity));
-  });
+  state.chatStreamSegments = pruneAccumulatedStreamSegments(
+    state.chatStreamSegments,
+    state.chatRunId,
+    (segment) => {
+      if (segment.boundaryMarker === true || segment.persisted === true) {
+        return false;
+      }
+      const explicitToolCallId = normalizeOptionalString(segment.toolCallId);
+      const usesItemId = streamSegmentHasItemId(segment);
+      const indexedToolRef = usesItemId ? undefined : liveToolRefs[toolIndexedSegmentIndex];
+      if (!usesItemId) {
+        toolIndexedSegmentIndex += 1;
+      }
+      const segmentRunId = normalizeOptionalString(segment.runId);
+      const toolIdentity = explicitToolCallId
+        ? resolveMatchingLiveToolIdentity(
+            {
+              id: explicitToolCallId,
+              ...(segmentRunId ? { runId: segmentRunId } : {}),
+            },
+            liveToolRefs,
+          )
+        : indexedToolRef?.identity;
+      return Boolean(toolIdentity && persistedToolIds.has(toolIdentity));
+    },
+  );
 }
