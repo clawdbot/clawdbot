@@ -11,7 +11,6 @@ import {
 import type {
   ShortTermPhaseSignalEntry,
   ShortTermPhaseSignalStore,
-  ShortTermRecallEntry,
   ShortTermRecallStore,
   ShortTermStoreMeta,
 } from "./short-term-promotion-types.js";
@@ -21,6 +20,53 @@ import {
   normalizeShortTermRecallStore,
   toFiniteNonNegativeInt,
 } from "./short-term-promotion-utils.js";
+
+const SHORT_TERM_STORE_NAMESPACES = {
+  recall: SHORT_TERM_RECALL_NAMESPACE,
+  phase: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+};
+
+async function readShortTermStore(
+  workspaceDir: string,
+  kind: keyof typeof SHORT_TERM_STORE_NAMESPACES,
+  nowIso: string,
+) {
+  const [entryRows, metaRows] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<unknown>({
+      namespace: SHORT_TERM_STORE_NAMESPACES[kind],
+      workspaceDir,
+    }),
+    readMemoryCoreWorkspaceEntries<ShortTermStoreMeta>({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
+  return {
+    version: 1,
+    updatedAt: metaRows.find((entry) => entry.key === kind)?.value?.updatedAt ?? nowIso,
+    entries: Object.fromEntries(entryRows.map((entry) => [entry.key, entry.value])),
+  };
+}
+
+async function writeShortTermStore(
+  workspaceDir: string,
+  kind: keyof typeof SHORT_TERM_STORE_NAMESPACES,
+  store: ShortTermRecallStore | ShortTermPhaseSignalStore,
+): Promise<void> {
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace: SHORT_TERM_STORE_NAMESPACES[kind],
+      workspaceDir,
+      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: kind,
+      value: { updatedAt: store.updatedAt },
+    }),
+  ]);
+}
 
 export function resolveStorePath(workspaceDir: string): string {
   return memoryCoreStateReference(SHORT_TERM_RECALL_NAMESPACE, workspaceDir);
@@ -34,23 +80,8 @@ export async function readStore(
   workspaceDir: string,
   nowIso: string,
 ): Promise<ShortTermRecallStore> {
-  const [entryRows, metaRows] = await Promise.all([
-    readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      workspaceDir,
-    }),
-    readMemoryCoreWorkspaceEntries<ShortTermStoreMeta>({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-    }),
-  ]);
-  const meta = metaRows.find((entry) => entry.key === "recall")?.value;
   const store = normalizeShortTermRecallStore(
-    {
-      version: 1,
-      updatedAt: meta?.updatedAt ?? nowIso,
-      entries: Object.fromEntries(entryRows.map((entry) => [entry.key, entry.value])),
-    },
+    await readShortTermStore(workspaceDir, "recall", nowIso),
     nowIso,
   );
   enforceShortTermRecallStoreRetention(store);
@@ -124,23 +155,8 @@ export async function readPhaseSignalStore(
   workspaceDir: string,
   nowIso: string,
 ): Promise<ShortTermPhaseSignalStore> {
-  const [entryRows, metaRows] = await Promise.all([
-    readMemoryCoreWorkspaceEntries<ShortTermPhaseSignalEntry>({
-      namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-      workspaceDir,
-    }),
-    readMemoryCoreWorkspaceEntries<ShortTermStoreMeta>({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-    }),
-  ]);
-  const meta = metaRows.find((entry) => entry.key === "phase")?.value;
   return normalizeShortTermPhaseSignalStore(
-    {
-      version: 1,
-      updatedAt: meta?.updatedAt ?? nowIso,
-      entries: Object.fromEntries(entryRows.map((entry) => [entry.key, entry.value])),
-    },
+    await readShortTermStore(workspaceDir, "phase", nowIso),
     nowIso,
   );
 }
@@ -149,35 +165,11 @@ export async function writePhaseSignalStore(
   workspaceDir: string,
   store: ShortTermPhaseSignalStore,
 ): Promise<void> {
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-      workspaceDir,
-      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
-    }),
-    writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-      key: "phase",
-      value: { updatedAt: store.updatedAt },
-    }),
-  ]);
+  await writeShortTermStore(workspaceDir, "phase", store);
 }
 
 export async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   enforceShortTermRecallSnippetCap(store);
   enforceShortTermRecallStoreRetention(store);
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      workspaceDir,
-      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
-    }),
-    writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-      key: "recall",
-      value: { updatedAt: store.updatedAt },
-    }),
-  ]);
+  await writeShortTermStore(workspaceDir, "recall", store);
 }
