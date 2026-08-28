@@ -101,6 +101,20 @@ export async function fenceLeaseFailure({
   throw error;
 }
 
+export async function waitForGatewayLeaseReady({ child, readiness, leaseFailure }) {
+  const outcome = await Promise.race([readiness.then(() => ({ type: "ready" })), leaseFailure]);
+  if (outcome.type === "lease-failure") {
+    await fenceLeaseFailure({
+      error: outcome.error,
+      cancelControls: () => {},
+      probe: child,
+      controlWork: [],
+      persistLogs: () => {},
+    });
+  }
+  return child;
+}
+
 function parseArgs(argv) {
   const args = {
     text: "@{sut} Please answer with OPENCLAW_E2E_OK only.",
@@ -965,6 +979,10 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       configPath: temp.configPath,
       stateDir: temp.stateDir,
     });
+    const leaseFailure = creds.whenLeaseUnhealthy.then((error) => ({
+      type: "lease-failure",
+      error,
+    }));
     const startGateway = async () => {
       const command = "node";
       const gatewayArgs = args.sourceGateway
@@ -972,8 +990,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
         : ["dist/entry.js", "gateway", "--port", String(args.gatewayPort)];
       const child = spawnProcess(command, gatewayArgs, { cwd: repoRoot, env: gatewayEnv });
       try {
-        await waitForGatewayReady(child, args.gatewayPort, args.sourceGateway ? 300_000 : 45_000);
-        return child;
+        return await waitForGatewayLeaseReady({
+          child,
+          readiness: waitForGatewayReady(
+            child,
+            args.gatewayPort,
+            args.sourceGateway ? 300_000 : 45_000,
+          ),
+          leaseFailure,
+        });
       } catch (error) {
         await stopChild(child);
         throw error;
@@ -1232,7 +1257,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       : Promise.resolve([]);
     const probeOutcome = await Promise.race([
       new Promise((resolveCode) => probe.on("exit", (code) => resolveCode({ type: "exit", code }))),
-      creds.whenLeaseUnhealthy.then((error) => ({ type: "lease-failure", error })),
+      leaseFailure,
     ]);
     if (probeOutcome.type === "lease-failure") {
       await fenceLeaseFailure({

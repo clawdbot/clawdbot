@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -8,6 +9,7 @@ import {
   fenceLeaseFailure,
   ownChild,
   sanitizeChildEnvironment,
+  waitForGatewayLeaseReady,
   writeConfig,
 } from "./run-mock-sut-user-e2e.mjs";
 
@@ -64,6 +66,41 @@ test("lease loss cancels and joins active cron and restart work", async () => {
     (error) => error === leaseError,
   );
   assert.equal(logsPersisted, true);
+});
+
+test("lease loss during blocked readiness stops the gateway before polling", async (context) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-gateway-lease-fence-"));
+  const pollMarker = path.join(temp, "poll-started");
+  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const gateway = ownChild(
+    spawn(
+      process.execPath,
+      [
+        "-e",
+        'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.POLL_MARKER,"polled"),200); setInterval(()=>{},1000);',
+      ],
+      {
+        detached: true,
+        env: { ...process.env, POLL_MARKER: pollMarker },
+        stdio: "ignore",
+      },
+    ),
+  );
+  const leaseError = new Error("lease heartbeat failed during gateway readiness");
+  const leaseFailure = new Promise((resolve) =>
+    setTimeout(() => resolve({ type: "lease-failure", error: leaseError }), 20),
+  );
+
+  await assert.rejects(
+    waitForGatewayLeaseReady({
+      child: gateway,
+      readiness: new Promise(() => {}),
+      leaseFailure,
+    }),
+    (error) => error === leaseError,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(fs.existsSync(pollMarker), false);
 });
 
 test("credential-bearing child processes receive no parent control secrets", () => {
