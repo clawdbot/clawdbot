@@ -11,10 +11,28 @@ import {
 import type { MemorySearchResult } from "./lancedb-store.js";
 import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";
 
+// Bounded so a long-running session's cursor can't grow without limit;
+// large enough to survive a typical compaction pass without re-embedding
+// messages the cursor already captured earlier in the same session.
+const MAX_TRACKED_AUTO_CAPTURE_FINGERPRINTS = 20;
+
 export type AutoCaptureCursor = {
   nextIndex: number;
   lastMessageFingerprint?: string;
+  // Recently captured message fingerprints, most-recent-last. Content-based
+  // (not position-based) so a message that survives a history compaction
+  // unchanged is recognized as already-captured even when its array index
+  // shifts or resolveAutoCaptureStartIndex can't find a reliable resume
+  // position and falls back to rescanning from 0.
+  capturedFingerprints?: string[];
 };
+
+export function withCapturedFingerprint(tracked: string[], fingerprint: string): string[] {
+  const next = [...tracked, fingerprint];
+  return next.length > MAX_TRACKED_AUTO_CAPTURE_FINGERPRINTS
+    ? next.slice(next.length - MAX_TRACKED_AUTO_CAPTURE_FINGERPRINTS)
+    : next;
+}
 
 export function extractUserTextContent(message: unknown): string[] {
   const msgObj = asOptionalRecord(message);

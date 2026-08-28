@@ -42,6 +42,7 @@ import {
   normalizeRecallQuery,
   resolveAutoCaptureStartIndex,
   shouldCapture,
+  withCapturedFingerprint,
 } from "./memory-policy.js";
 
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
@@ -535,10 +536,16 @@ export default definePluginEntry({
       try {
         const rawCursorKey = ctx.sessionKey ?? ctx.sessionId;
         const cursorKey = rawCursorKey ? `${agentId}:${rawCursorKey}` : undefined;
-        const startIndex = resolveAutoCaptureStartIndex(
-          event.messages,
-          cursorKey ? autoCaptureCursors.get(cursorKey) : undefined,
-        );
+        const cursor = cursorKey ? autoCaptureCursors.get(cursorKey) : undefined;
+        const startIndex = resolveAutoCaptureStartIndex(event.messages, cursor);
+        // Content-based guard against resolveAutoCaptureStartIndex falling
+        // back to a full rescan from 0 (its tracked message fell out of
+        // history, e.g. compacted away): an earlier, already-captured
+        // message commonly survives a compaction that only rewrote the
+        // *tracked* one, and re-embedding it every subsequent turn wastes
+        // the embedding endpoint indefinitely on unchanged old content.
+        let trackedFingerprints = cursor?.capturedFingerprints ?? [];
+        const alreadyCaptured = new Set(trackedFingerprints);
         let stored = 0;
         let capturableSeen = 0;
         for (let index = startIndex; index < event.messages.length; index++) {
@@ -548,47 +555,56 @@ export default definePluginEntry({
             continue;
           }
           let messageProcessed = false;
+          let justCaptured = false;
 
           try {
-            for (const text of extractUserTextContent(message)) {
-              // Sanitize envelope metadata before checking and storing
-              const sanitized = sanitizeForMemoryCapture(text);
-              if (
-                !sanitized ||
-                !shouldCapture(sanitized, {
-                  customTriggers: currentCfg.customTriggers,
-                  maxChars: currentCfg.captureMaxChars,
-                })
-              ) {
-                continue;
-              }
-              capturableSeen++;
-              if (capturableSeen > 3) {
-                continue;
-              }
+            if (!alreadyCaptured.has(fingerprint)) {
+              for (const text of extractUserTextContent(message)) {
+                // Sanitize envelope metadata before checking and storing
+                const sanitized = sanitizeForMemoryCapture(text);
+                if (
+                  !sanitized ||
+                  !shouldCapture(sanitized, {
+                    customTriggers: currentCfg.customTriggers,
+                    maxChars: currentCfg.captureMaxChars,
+                  })
+                ) {
+                  continue;
+                }
+                capturableSeen++;
+                if (capturableSeen > 3) {
+                  continue;
+                }
 
-              const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(agentId, sanitized, currentCfg.embedding);
+                const category = detectCategory(sanitized);
+                const vector = await embeddings.embed(agentId, sanitized, currentCfg.embedding);
 
-              const existing = await findCleanDuplicateMemory(db, agentId, vector);
-              if (existing) {
-                continue;
+                const existing = await findCleanDuplicateMemory(db, agentId, vector);
+                if (existing) {
+                  continue;
+                }
+
+                await db.store(agentId, {
+                  text: sanitized,
+                  vector,
+                  importance: 0.7,
+                  category,
+                });
+                stored++;
+                justCaptured = true;
               }
-
-              await db.store(agentId, {
-                text: sanitized,
-                vector,
-                importance: 0.7,
-                category,
-              });
-              stored++;
             }
             messageProcessed = true;
           } finally {
+            if (justCaptured) {
+              trackedFingerprints = withCapturedFingerprint(trackedFingerprints, fingerprint);
+              alreadyCaptured.add(fingerprint);
+            }
             if (messageProcessed && cursorKey) {
               autoCaptureCursors.set(cursorKey, {
                 nextIndex: index + 1,
                 lastMessageFingerprint: fingerprint,
+                capturedFingerprints: trackedFingerprints,
               });
             }
           }
