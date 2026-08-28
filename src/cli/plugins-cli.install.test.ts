@@ -6,6 +6,8 @@ import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
+import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import { resolveNpmInstallSpecsForUpdateChannel } from "../plugins/install-channel-specs.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
 import {
   listOfficialExternalPluginCatalogEntries,
@@ -14,6 +16,7 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { VERSION } from "../version.js";
 import {
   applyExclusiveSlotSelectionMock,
   buildPluginSnapshotReportMock,
@@ -61,6 +64,13 @@ const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
+
+function expectedNpmInstallSpec(spec: string): string {
+  return resolveNpmInstallSpecsForUpdateChannel({
+    spec,
+    updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
+  }).installSpec;
+}
 
 const OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY = listOfficialExternalPluginCatalogEntries()
   .map((entry) => {
@@ -2069,7 +2079,7 @@ describe("plugins cli install", () => {
             lookup: { kind: "pluginId", value: pluginId },
           });
           expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-          expect(npmInstallCall().spec).toBe(npmSpec);
+          expect(npmInstallCall().spec).toBe(expectedNpmInstallSpec(npmSpec));
           expect(npmInstallCall().expectedPluginId).toBe(pluginId);
           expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
           expect(npmInstallCall().expectedIntegrity).toBeUndefined();
