@@ -2234,7 +2234,24 @@ jobs:
           set -euo pipefail
           mkdir -p .artifacts/docker-tests
 
-          if [[ "$PREPARE_ONLY" == "true" || "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
+          if [[ "$PREPARE_ONLY" == "true" ]]; then
+            # Shared artifacts serve both release-path and plugin prerelease consumers.
+            # Plan their union here without expanding either child's execution scope.
+            preparation_lanes="$(node --input-type=module <<'NODE'
+          import { allReleasePathLanes } from "./.release-harness/scripts/lib/docker-e2e-scenarios.mts";
+          import { createPluginPrereleaseTestPlan } from "./.release-harness/scripts/lib/plugin-prerelease-test-plan.mts";
+          const releaseLanes = allReleasePathLanes({
+            includeOpenWebUI: process.env.INCLUDE_OPENWEBUI === "true",
+            releaseProfile: process.env.RELEASE_TEST_PROFILE,
+          });
+          console.log([...new Set([
+            ...releaseLanes.map(({ name }) => name),
+            ...createPluginPrereleaseTestPlan().dockerLanes,
+          ])].join(" "));
+          NODE
+            )"
+            export OPENCLAW_DOCKER_ALL_LANES="$preparation_lanes"
+          elif [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
             export OPENCLAW_DOCKER_ALL_PROFILE=release-path
             export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
           elif [[ -n "$LANES" ]]; then
