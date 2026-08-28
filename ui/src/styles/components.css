@@ -1001,6 +1001,7 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__header .viewer-avatar--footer {
+  flex-shrink: 0;
   width: 34.5px;
   height: 34.5px;
   font-size: calc(12px * var(--control-ui-text-scale));
