@@ -1094,11 +1094,8 @@ describe("failed package update recovery provenance", () => {
       result: {
         status: "error",
         mode: "npm",
-        reason: "doctor-failed",
-        steps: [
-          { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
-          { name: "openclaw doctor", command: "doctor", cwd: "/", durationMs: 1, exitCode: 1 },
-        ],
+        reason: "global-install-failed",
+        steps: [{ name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 }],
         packageReplacementVerified: true,
         durationMs: 1,
       },
@@ -1111,6 +1108,32 @@ describe("failed package update recovery provenance", () => {
     expect(mocks.restart).toHaveBeenCalledWith(
       expect.objectContaining({ packageReplacementVerified: true }),
     );
+  });
+
+  it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await finishUpdate({
+      result: {
+        status: "error",
+        mode: "npm",
+        reason: "doctor-failed",
+        steps: [
+          { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
+          { name: "openclaw doctor", command: "doctor", cwd: "/", durationMs: 1, exitCode: 1 },
+        ],
+        packageReplacementVerified: true,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        durationMs: 1,
+      },
+      opts: {},
+      showProgress: false,
+      preManagedServiceStop: { stopped: true, serviceEnv: {} },
+      controlPlaneUpdateSentinelMeta: undefined,
+    } as unknown as FinishUpdateParams);
+
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
   });
 
   it("keeps pre-swap package failures on the guarded restart only", async () => {
