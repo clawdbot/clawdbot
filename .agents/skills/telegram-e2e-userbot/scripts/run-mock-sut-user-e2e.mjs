@@ -40,6 +40,10 @@ const CHILD_ENV_DENIED_PREFIXES = [
   "GITHUB_",
   "OPENCLAW_QA_CONVEX_",
 ];
+const CHILD_ENV_DENIED_KEYS = new Set([
+  "TELEGRAM_E2E_STATE_DIR",
+  "TELEGRAM_USER_DRIVER_STATE_DIR",
+]);
 const CHILD_ENV_SECRET_KEY =
   /(?:^|_)(?:ACCESS_KEY|API_KEY|AUTH|COOKIE|CREDENTIAL|PASS|PASSWORD|PRIVATE_KEY|SECRET|SESSION|TOKEN)(?:_|$)/u;
 let activeCredential;
@@ -51,10 +55,23 @@ export function sanitizeChildEnvironment(env = process.env) {
     Object.entries(env).filter(
       ([key, value]) =>
         value !== undefined &&
+        !CHILD_ENV_DENIED_KEYS.has(key) &&
         !CHILD_ENV_DENIED_PREFIXES.some((prefix) => key.startsWith(prefix)) &&
         !CHILD_ENV_SECRET_KEY.test(key),
     ),
   );
+}
+
+export function createScenarioCommandEnvironment({
+  baseEnv = process.env,
+  configPath,
+  stateDir,
+}) {
+  return {
+    ...sanitizeChildEnvironment(baseEnv),
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
+  };
 }
 
 function assertRunnerActive() {
@@ -946,7 +963,10 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       gatewayEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(repoRoot, "extensions");
       gatewayEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     }
-    const commandEnv = sanitizeChildEnvironment(gatewayEnv);
+    const commandEnv = createScenarioCommandEnvironment({
+      configPath: temp.configPath,
+      stateDir: temp.stateDir,
+    });
     const startGateway = async () => {
       const command = "node";
       const gatewayArgs = args.sourceGateway
