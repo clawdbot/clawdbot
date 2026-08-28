@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { escapeRegExp } from "../shared/regexp.js";
 import {
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -390,44 +389,47 @@ export async function updateGitCheckout(params: {
     if (remoteStep.exitCode !== 0) {
       return buildError("fetch-failed");
     }
-    for (const remote of normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"))) {
-      const skipConfig = await runCommand(
-        [
-          "git",
-          "-C",
-          gitRoot,
-          "config",
-          "--type=bool",
-          "--get-regexp",
-          `^remote\\.${escapeRegExp(remote)}\\.(skipfetchall|skipdefaultupdate)$`,
-        ],
-        { cwd: gitRoot, timeoutMs },
-      );
-      if (skipConfig.code !== 0 && skipConfig.code !== 1) {
-        return buildError("fetch-failed");
+    const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
+    const mainRemoteStep = await runCommand(
+      ["git", "-C", gitRoot, "config", "--get", `branch.${DEV_BRANCH}.remote`],
+      { cwd: gitRoot, timeoutMs },
+    );
+    if (mainRemoteStep.code !== 0 && mainRemoteStep.code !== 1) {
+      return buildError("fetch-failed");
+    }
+    const configuredMainRemote = mainRemoteStep.stdout.trim();
+    let releaseRemote: string | null = null;
+    if (configuredMainRemote) {
+      if (configuredMainRemote !== "." && remotes.includes(configuredMainRemote)) {
+        releaseRemote = configuredMainRemote;
       }
-      if (skipConfig.stdout.trimEnd().split("\n").at(-1)?.endsWith(" true")) {
-        continue;
-      }
-      // Configured pruning must not delete unrelated tags during this forced tag refresh.
-      const tagFetchFailure = await runRequiredStep(
-        `git fetch ${remote} tags`,
-        [
-          "git",
-          "-C",
-          gitRoot,
-          "fetch",
-          "--no-prune",
-          "--no-tags",
-          "--",
-          remote,
-          "+refs/tags/*:refs/tags/*",
-        ],
-        "fetch-failed",
-      );
-      if (tagFetchFailure) {
-        return tagFetchFailure;
-      }
+    } else if (remotes.length === 1) {
+      releaseRemote = remotes.at(0) ?? null;
+    } else if (remotes.includes("origin")) {
+      releaseRemote = "origin";
+    }
+    if (!releaseRemote) {
+      return buildError("fetch-failed");
+    }
+    // Only the main branch's source remote may force-update shared release tags.
+    // Configured pruning must not delete unrelated operator-local tags.
+    const tagFetchFailure = await runRequiredStep(
+      `git fetch ${releaseRemote} tags`,
+      [
+        "git",
+        "-C",
+        gitRoot,
+        "fetch",
+        "--no-prune",
+        "--no-tags",
+        "--",
+        releaseRemote,
+        "+refs/tags/*:refs/tags/*",
+      ],
+      "fetch-failed",
+    );
+    if (tagFetchFailure) {
+      return tagFetchFailure;
     }
     const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
     if (!tag) {

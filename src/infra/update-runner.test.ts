@@ -592,6 +592,39 @@ describe("runGatewayUpdate", () => {
     await expect(runRealGit(localRoot, "rev-parse", localOnlyTag)).resolves.toBeTruthy();
   });
 
+  it("keeps release tags scoped to the main remote when another remote disagrees", async () => {
+    const { sourceRoot, localRoot, releaseSha, releaseTag } =
+      await createRecreatedReleaseTagFixture();
+    await runRealGit(localRoot, "remote", "rename", "origin", "upstream");
+    const secondaryRoot = await fixtureRootTracker.make("release-secondary");
+    await fs.rm(secondaryRoot, { recursive: true });
+    await runRealGit(path.dirname(secondaryRoot), "clone", "--quiet", sourceRoot, secondaryRoot);
+    await runRealGit(secondaryRoot, "config", "user.name", "OpenClaw Test");
+    await runRealGit(secondaryRoot, "config", "user.email", "openclaw@example.com");
+    await fs.writeFile(path.join(secondaryRoot, "README.md"), "secondary release\n");
+    await runRealGit(secondaryRoot, "add", "README.md");
+    await runRealGit(secondaryRoot, "commit", "-m", "secondary release");
+    const secondarySha = await runRealGit(secondaryRoot, "rev-parse", "HEAD");
+    await runRealGit(secondaryRoot, "tag", "--force", releaseTag);
+    await runRealGit(localRoot, "remote", "add", "zz-secondary", secondaryRoot);
+    const reachedMutation = new Error("reached release mutation");
+
+    await expect(
+      runWithCommand(createRealGitUpdateRunner(), {
+        cwd: localRoot,
+        channel: "stable",
+        beforeGitMutation: async () => {
+          throw reachedMutation;
+        },
+      }),
+    ).rejects.toBe(reachedMutation);
+
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.not.toBe(
+      secondarySha,
+    );
+  });
+
   it("keeps a configured non-tag non-fast-forward ref protected", async () => {
     const { sourceRoot, localRoot, baseSha, releaseSha } = await createRecreatedReleaseTagFixture();
     await runRealGit(sourceRoot, "branch", "protected", releaseSha);
