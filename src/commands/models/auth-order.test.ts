@@ -102,7 +102,7 @@ describe("models auth order", () => {
     expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), "ops", {
       kind: "mutation",
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("ops");
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("ops", runtime);
     expect(runtime.logs).toContain("Auth profile order override: anthropic:b, anthropic:a");
   });
 
@@ -142,7 +142,7 @@ describe("models auth order", () => {
     expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), undefined, {
       kind: "mutation",
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("main");
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("main", runtime);
     expect(runtime.logs.some((line) => line.includes("Auth profile order override cleared"))).toBe(
       true,
     );
