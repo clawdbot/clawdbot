@@ -14,8 +14,7 @@ const suite = createChatFlowE2eSuite();
 const selected = "agent:main:card-selected";
 const watched = "agent:main:card-viewing";
 const proofDirectory = path.resolve(".artifacts/control-ui-e2e/people-activity-cards");
-const recentLabel =
-  "Review the complete cross-platform launch readiness checklist before release";
+const recentLabel = "Review the complete cross-platform launch readiness checklist before release";
 const updatedRecentLabel = `${recentLabel} with every regional owner`;
 const focusUpdatedRecentLabel = `${updatedRecentLabel} and final approval`;
 
@@ -84,8 +83,7 @@ async function expectMultilineTitle(title: Locator) {
     const style = getComputedStyle(element);
     return {
       lineClamp: style.getPropertyValue("-webkit-line-clamp"),
-      renderedLines:
-        element.getBoundingClientRect().height / Number.parseFloat(style.lineHeight),
+      renderedLines: element.getBoundingClientRect().height / Number.parseFloat(style.lineHeight),
       whiteSpace: style.whiteSpace,
     };
   });
