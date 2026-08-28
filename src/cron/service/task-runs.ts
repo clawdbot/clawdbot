@@ -1,6 +1,7 @@
 /** Detached task-ledger integration for cron runs. */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createExecutionStartedOwnerBinding,
   isRetainedExecutionOwnerBinding,
@@ -14,9 +15,11 @@ import {
   findTaskByRunId,
   recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
+import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import {
   bindTaskRunExecution,
+  listTaskRecordsByRuntimeSourceIdFromSqlite,
   listTaskRecordsByRuntimeSourceIdInDatabase,
 } from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
@@ -44,13 +47,59 @@ import {
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
 import type {
   CronCompletionStatus,
+  CronFailureNotificationDelivery,
   CronJob,
+} from "../types.js";
   CronRunErrorClassification,
   CronRunStatus,
 } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronExecutionIdentityAdmission, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
+
+/** Writes the settled failure-alert delivery outcome back onto its run-history record. */
+export function tryRecordCronFailureNotificationDeliveryOutcome(
+  state: CronServiceState,
+  params: {
+    jobId: string;
+    outcome: CronFailureNotificationDelivery;
+  },
+): void {
+  try {
+    const storeKey = cronStoreKey(state.deps.storePath);
+    const pending = listTaskRecordsByRuntimeSourceIdFromSqlite({
+      runtime: "cron",
+      sourceId: params.jobId,
+    })
+      .filter(
+        (task) =>
+          cronTaskRecordStoreKey(task) === storeKey &&
+          task.runId !== undefined &&
+          isRecord(task.detail) &&
+          isRecord(task.detail.failureNotificationDelivery) &&
+          task.detail.failureNotificationDelivery.status === "unknown",
+      )
+      .toSorted((left, right) => right.createdAt - left.createdAt)[0];
+    const runId = pending?.runId;
+    const detail = pending?.detail;
+    if (!pending || runId === undefined || !isRecord(detail)) {
+      return;
+    }
+    updateTaskStateByRunId({
+      runId,
+      runtime: "cron",
+      detail: {
+        ...detail,
+        failureNotificationDelivery: { ...params.outcome },
+      } as JsonValue,
+    });
+  } catch (error) {
+    state.deps.log.warn(
+      { jobId: params.jobId, error },
+      "cron: failed to record failure-notification delivery outcome on run history",
+    );
+  }
+}
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {
