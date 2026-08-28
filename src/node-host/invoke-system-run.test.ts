@@ -1676,7 +1676,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(runCommand).not.toHaveBeenCalled();
       expectInvokeErrorMessage(
         sendInvokeResult,
-        "SYSTEM_RUN_DENIED: approval requires a stable executable path — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+        // Windows hits the stable-path denial (no pinned executable for .sh); the
+        // send site routes it binding-owned, so the renewal hint — not the policy
+        // hint — is the sanctioned-path guidance (parity with the mac binding tests).
+        "SYSTEM_RUN_DENIED: approval requires a stable executable path — the approved binding no longer matches this execution; request approval again for the current command",
         true,
       );
       return;
@@ -1713,7 +1716,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         if (process.platform === "win32") {
           expectInvokeErrorMessage(
             sendInvokeResult,
-            "SYSTEM_RUN_DENIED: approval requires a stable executable path — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+            // Windows hits the stable-path denial (no pinned executable for .sh); the
+            // send site routes it binding-owned, so the renewal hint — not the policy
+            // hint — is the sanctioned-path guidance (parity with the mac binding tests).
+            "SYSTEM_RUN_DENIED: approval requires a stable executable path — the approved binding no longer matches this execution; request approval again for the current command",
             true,
           );
           return;
