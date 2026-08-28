@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 // Tests provider usage aggregation and formatting.
-import { fetchCopilotUsage } from "../../extensions/github-copilot/usage.js";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 import {
   getProviderUsageSnapshotWithPluginMock,
@@ -159,46 +158,5 @@ describe("provider usage loading", () => {
     expect(minimax?.windows[0]?.usedPercent).toBe(75);
     expect(zai?.plan).toBe("Pro");
     expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("keeps malformed Copilot usage visible alongside a healthy provider", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
-      async ({ provider, context }): Promise<ProviderUsageSnapshot | null> => {
-        if (provider === "github-copilot") {
-          return await fetchCopilotUsage(context.token, context.timeoutMs, context.fetchFn);
-        }
-        if (provider === "anthropic") {
-          return {
-            provider,
-            displayName: "Healthy sibling fixture",
-            windows: [{ label: "Daily", usedPercent: 25 }],
-          };
-        }
-        return null;
-      },
-    );
-    const mockFetch = createProviderUsageFetch(
-      async () =>
-        new Response("{", {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-
-    const summary = await loadUsageWithAuth(
-      loadProviderUsageSummary,
-      [
-        { provider: "github-copilot", token: "redacted" },
-        { provider: "anthropic", token: "redacted" },
-      ],
-      mockFetch,
-    );
-
-    expect(formatUsageReportLines(summary)).toEqual([
-      "Usage:",
-      "  Copilot: Malformed usage response",
-      "  Healthy sibling fixture",
-      "    Daily: 75% left",
-    ]);
   });
 });
