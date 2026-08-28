@@ -4,8 +4,12 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 
 const ENDPOINT_PREFIX = "/qa-credentials/v1";
+const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
+const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
+const DEFAULT_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_PAYLOAD_MAX_CHUNKS = 4096;
+const DEFAULT_RESPONSE_MAX_BYTES = 1024 * 1024;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
-const TERMINAL_LEASE_CODES = new Set(["LEASE_EXPIRED", "LEASE_NOT_OWNER"]);
 
 export class QaCredentialBrokerError extends Error {
   constructor(code, message, retryAfterMs) {
@@ -28,14 +32,32 @@ export function brokerConfig(env = process.env) {
   return { siteUrl: siteUrl.replace(/\/+$/u, ""), secret };
 }
 
-async function callBroker(suffix, body, env, fetchImpl) {
+async function readBrokerResponse(response, maxBytes) {
+  const text = await response.text();
+  if (Buffer.byteLength(text, "utf8") > maxBytes) {
+    throw new Error(`Broker response exceeded ${maxBytes} bytes.`);
+  }
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Broker returned invalid JSON.");
+  }
+}
+
+async function callBroker(
+  suffix,
+  body,
+  { env, fetchImpl, httpTimeoutMs, maxResponseBytes = DEFAULT_RESPONSE_MAX_BYTES },
+) {
   const { siteUrl, secret } = brokerConfig(env);
   const response = await fetchImpl(`${siteUrl}${ENDPOINT_PREFIX}/${suffix}`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(httpTimeoutMs),
   });
-  const payload = await response.json().catch(() => ({}));
+  const payload = await readBrokerResponse(response, maxResponseBytes);
   if (!response.ok || payload.status !== "ok") {
     const code = typeof payload.code === "string" ? payload.code : "BROKER_REQUEST_FAILED";
     const message =
@@ -46,17 +68,65 @@ async function callBroker(suffix, body, env, fetchImpl) {
   return payload;
 }
 
+function parseChunkedPayloadMarker(payload, { payloadMaxBytes, payloadMaxChunks }) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  if (payload[CHUNKED_PAYLOAD_MARKER] !== true) return null;
+  if (!Number.isSafeInteger(payload.chunkCount) || payload.chunkCount < 1) {
+    throw new Error("Chunked credential payload has invalid chunkCount.");
+  }
+  if (payload.chunkCount > payloadMaxChunks) {
+    throw new Error(`Chunked credential payload exceeded ${payloadMaxChunks} chunks.`);
+  }
+  if (!Number.isSafeInteger(payload.byteLength) || payload.byteLength < 0) {
+    throw new Error("Chunked credential payload has invalid byteLength.");
+  }
+  if (payload.byteLength > payloadMaxBytes) {
+    throw new Error(`Chunked credential payload exceeded ${payloadMaxBytes} bytes.`);
+  }
+  return { chunkCount: payload.chunkCount, byteLength: payload.byteLength };
+}
+
+async function resolveCredentialPayload(acquired, identity, requestOptions, limits) {
+  const marker = parseChunkedPayloadMarker(acquired.payload, limits);
+  if (!marker) return acquired.payload;
+  const chunks = [];
+  let byteLength = 0;
+  for (let index = 0; index < marker.chunkCount; index += 1) {
+    const chunk = await callBroker(
+      "payload-chunk",
+      { ...identity, index },
+      { ...requestOptions, maxResponseBytes: limits.payloadMaxBytes },
+    );
+    if (typeof chunk.data !== "string") {
+      throw new Error("Broker payload chunk is missing data.");
+    }
+    byteLength += Buffer.byteLength(chunk.data, "utf8");
+    if (byteLength > marker.byteLength) {
+      throw new Error("Chunked credential payload exceeded its declared byteLength.");
+    }
+    chunks.push(chunk.data);
+  }
+  if (byteLength !== marker.byteLength) {
+    throw new Error("Chunked credential payload length mismatch.");
+  }
+  return JSON.parse(chunks.join(""));
+}
+
 export async function acquireQaLease({
   kind,
   ownerId = `qa-lease-${os.hostname()}-${process.pid}-${randomUUID()}`,
   leaseTtlMs = 20 * 60_000,
   heartbeatIntervalMs = 30_000,
   acquireTimeoutMs = 90_000,
+  httpTimeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
+  payloadMaxBytes = DEFAULT_PAYLOAD_MAX_BYTES,
+  payloadMaxChunks = DEFAULT_PAYLOAD_MAX_CHUNKS,
   env = process.env,
   fetchImpl = fetch,
   sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   if (!kind) throw new Error("acquireQaLease requires a credential kind.");
+  const requestOptions = { env, fetchImpl, httpTimeoutMs };
   const startedAt = Date.now();
   let acquired;
   for (;;) {
@@ -64,8 +134,7 @@ export async function acquireQaLease({
       acquired = await callBroker(
         "acquire",
         { kind, ownerId, actorRole: "ci", leaseTtlMs, heartbeatIntervalMs },
-        env,
-        fetchImpl,
+        requestOptions,
       );
       break;
     } catch (error) {
@@ -86,15 +155,38 @@ export async function acquireQaLease({
     credentialId: acquired.credentialId,
     leaseToken: acquired.leaseToken,
   };
+  if (!identity.credentialId || !identity.leaseToken) {
+    throw new Error("Broker acquire response is missing lease identity.");
+  }
+  let payload;
+  try {
+    payload = await resolveCredentialPayload(acquired, identity, requestOptions, {
+      payloadMaxBytes,
+      payloadMaxChunks,
+    });
+  } catch (error) {
+    try {
+      await callBroker("release", identity, requestOptions);
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        "Credential payload hydration and lease release failed.",
+      );
+    }
+    throw error;
+  }
   let heartbeatError;
   let heartbeatInFlight;
+  let resolveUnhealthy;
+  const whenUnhealthy = new Promise((resolve) => {
+    resolveUnhealthy = resolve;
+  });
   const timer = setInterval(() => {
     if (heartbeatInFlight || heartbeatError) return;
-    heartbeatInFlight = callBroker("heartbeat", { ...identity, leaseTtlMs }, env, fetchImpl)
+    heartbeatInFlight = callBroker("heartbeat", { ...identity, leaseTtlMs }, requestOptions)
       .catch((error) => {
-        if (error instanceof QaCredentialBrokerError && TERMINAL_LEASE_CODES.has(error.code)) {
-          heartbeatError = error;
-        }
+        heartbeatError = error;
+        resolveUnhealthy(error);
       })
       .finally(() => {
         heartbeatInFlight = undefined;
@@ -103,8 +195,9 @@ export async function acquireQaLease({
   timer.unref?.();
   let released = false;
   return {
-    payload: acquired.payload,
+    payload,
     credentialId: acquired.credentialId,
+    whenUnhealthy,
     assertHealthy: () => {
       if (heartbeatError) throw heartbeatError;
     },
@@ -113,7 +206,7 @@ export async function acquireQaLease({
       released = true;
       clearInterval(timer);
       await heartbeatInFlight;
-      await callBroker("release", identity, env, fetchImpl);
+      await callBroker("release", identity, requestOptions);
     },
   };
 }

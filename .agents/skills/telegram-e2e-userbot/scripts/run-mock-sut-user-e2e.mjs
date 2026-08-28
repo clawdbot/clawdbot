@@ -707,6 +707,7 @@ async function main() {
 
   const credential = await acquireTelegramTestCredential();
   try {
+    credential.assertLeaseHealthy();
     await drive(args, repoRoot, credential);
     credential.assertLeaseHealthy();
   } finally {
@@ -757,6 +758,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
   let mock;
   let gateway;
   try {
+    creds.assertLeaseHealthy();
     const drained = await drainSutUpdates(creds.sutToken);
     const sut = await sutIdentity(creds.sutToken);
     let selectedChatTarget = selectChatTarget({
@@ -867,8 +869,10 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       }
     };
     gateway = await startGateway();
+    creds.assertLeaseHealthy();
 
     for (const text of args.preSend) {
+      creds.assertLeaseHealthy();
       const sent = spawnSync("uv", ["run", USER_DRIVER_PATH, "send", "--text", text], {
         cwd: repoRoot,
         env: driverEnv,
@@ -881,6 +885,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     }
 
     const recording = Boolean(args.record);
+    creds.assertLeaseHealthy();
     const recorderReadyPath = path.join(temp.root, "recorder-ready.json");
     const probeArgs = recording ? ["run", USER_RECORD_PATH] : ["run", USER_DRIVER_PATH, "probe"];
     if (recording) {
@@ -1009,6 +1014,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           break;
         }
         const beganAt = Date.now();
+        creds.assertLeaseHealthy();
         if (action.type === "cron") {
           const actionRecord = {
             type: action.type,
@@ -1134,7 +1140,16 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           () => controlsStopped,
         )
       : Promise.resolve([]);
-    const code = await new Promise((resolveCode) => probe.on("exit", resolveCode));
+    const probeOutcome = await Promise.race([
+      new Promise((resolveCode) => probe.on("exit", (code) => resolveCode({ type: "exit", code }))),
+      creds.whenLeaseUnhealthy.then((error) => ({ type: "lease-failure", error })),
+    ]);
+    if (probeOutcome.type === "lease-failure") {
+      await stopChild(probe);
+      persistRecorderLogs();
+      throw probeOutcome.error;
+    }
+    const code = probeOutcome.code;
     persistRecorderLogs();
     controlsStopped = true;
     await gatewayControl;

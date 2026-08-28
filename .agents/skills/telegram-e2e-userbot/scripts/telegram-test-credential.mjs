@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { acquireQaLease } from "./qa-credential-lease.mjs";
 
 export const TELEGRAM_TEST_CREDENTIAL_KIND = "telegram-test-userbot";
@@ -199,5 +199,6 @@ export async function acquireTelegramTestCredential({ env = process.env } = {}) 
     credentialSource: "convex",
     credentialId: lease.credentialId,
     assertLeaseHealthy: lease.assertHealthy,
+    whenLeaseUnhealthy: lease.whenUnhealthy,
   };
 }

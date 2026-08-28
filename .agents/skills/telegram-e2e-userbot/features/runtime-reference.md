@@ -122,6 +122,8 @@ not the model.
 - The driver pins `@prebuilt-tdlib` `0.1008067.0`, which reports TDLib `1.8.67`.
 - TDLib 1.8.6 and later take the existing base64 database key in `setTdlibParameters`; re-encoding changes the key.
 - OpenClaw does not expose grammY's Test Server option, so the loopback proxy inserts `/test` after the bot token.
+- Broker calls time out after 15 seconds. A failed heartbeat fences the runner before later actions and stops an active probe.
+- Chunked broker payloads are authenticated per chunk and bounded to 64 MiB and 4096 chunks before JSON parsing.
 - Scope gateway logs with `logging.file`; the default `/tmp/openclaw/<date>.log` mixes concurrent runs.
 - Gateway logs do not prove edit versus send; TDLib events do.
 - Progress drafts are provider-shaped; a single final-answer fixture correctly records no progress revisions.

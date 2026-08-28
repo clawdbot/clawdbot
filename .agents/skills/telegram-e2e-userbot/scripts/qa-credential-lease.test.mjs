@@ -76,6 +76,46 @@ test("waits for a pooled credential and preserves the broker retry delay", async
   assert.deepEqual(sleeps, [2000]);
 });
 
+test("hydrates an authenticated broker payload above the inline threshold", async () => {
+  const expected = { schemaVersion: 1, archive: "x".repeat(300_000) };
+  const serialized = JSON.stringify(expected);
+  const chunks = [
+    serialized.slice(0, 120_000),
+    serialized.slice(120_000, 240_000),
+    serialized.slice(240_000),
+  ];
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url, body, authorization: init.headers.authorization });
+    if (url.endsWith("/acquire")) {
+      return Response.json({
+        status: "ok",
+        credentialId: "credential-chunked",
+        leaseToken: "lease-token-chunked",
+        payload: {
+          __openclawQaCredentialPayloadChunksV1: true,
+          chunkCount: chunks.length,
+          byteLength: Buffer.byteLength(serialized, "utf8"),
+        },
+      });
+    }
+    if (url.endsWith("/payload-chunk")) {
+      return Response.json({ status: "ok", data: chunks[body.index] });
+    }
+    return Response.json({ status: "ok" });
+  };
+  const lease = await acquireQaLease({ kind: "telegram-test-userbot", env, fetchImpl });
+  assert.deepEqual(lease.payload, expected);
+  const chunkCalls = calls.filter((call) => call.url.endsWith("/payload-chunk"));
+  assert.deepEqual(
+    chunkCalls.map((call) => call.body.index),
+    [0, 1, 2],
+  );
+  assert.ok(chunkCalls.every((call) => call.authorization === "Bearer ci-secret"));
+  await lease.release();
+});
+
 test("reports pool exhaustion after the acquire budget", async () => {
   const fetchImpl = async () =>
     Response.json(
@@ -129,4 +169,42 @@ test("surfaces terminal heartbeat loss and still releases", async () => {
   );
   await lease.release();
   assert.equal(calls.filter((url) => url.endsWith("/release")).length, 1);
+});
+
+test("fences a stalled heartbeat and bounds lease cleanup", async () => {
+  let released = false;
+  const fetchImpl = async (url, init) => {
+    if (url.endsWith("/acquire")) {
+      return Response.json({
+        status: "ok",
+        credentialId: "credential-stalled",
+        leaseToken: "lease-token-stalled",
+        payload: { schemaVersion: 1 },
+      });
+    }
+    if (url.endsWith("/heartbeat")) {
+      return await new Promise((resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      });
+    }
+    released = true;
+    return Response.json({ status: "ok" });
+  };
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    heartbeatIntervalMs: 5,
+    httpTimeoutMs: 10,
+    env,
+    fetchImpl,
+  });
+  const heartbeatError = await Promise.race([
+    lease.whenUnhealthy,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("heartbeat did not fence")), 100)),
+  ]);
+  assert.throws(
+    () => lease.assertHealthy(),
+    (error) => error === heartbeatError,
+  );
+  await lease.release();
+  assert.equal(released, true);
 });
