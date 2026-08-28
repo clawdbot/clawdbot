@@ -96,6 +96,9 @@ const {
   uninstallScheduledTask,
 } = await import("./schtasks.js");
 const { launchFallbackTaskScript, removeStartupEntries } = await import("./schtasks-runtime.js");
+const { createMockGatewayService } = await import("./service.test-helpers.js");
+const { readServiceStatusSummary } = await import("../commands/status.service-summary.js");
+const { formatStatusServiceValue } = await import("../commands/status-all/format.js");
 
 function createSpawnChild(error?: Error): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
@@ -509,7 +512,22 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("keeps unexpected scheduled-task query failures visible", async () => {
+  it("normalizes a localized schtasks availability failure", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push({ code: 1, stdout: "", stderr: "错误: 拒绝访问。" });
+
+      await expect(readScheduledTaskRuntime(env)).resolves.toEqual({
+        status: "unknown",
+        detail: "service runtime inspection failed",
+        inspectionFailure: {
+          code: "service-runtime-inspection-failed",
+          detail: "schtasks unavailable: 错误: 拒绝访问。",
+        },
+      });
+    });
+  });
+
+  it("normalizes unexpected scheduled-task failures through the shared status summary", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const detail = "Zugriff verweigert";
       schtasksResponses.push(
@@ -518,11 +536,29 @@ describe("Windows startup fallback", () => {
       );
       spawnSync.mockReturnValue(makeSpawnSyncResult({ status: 1, stdout: "-2147024891" }));
 
-      await expect(readScheduledTaskRuntime(env)).resolves.toEqual({
+      const summary = await readServiceStatusSummary(
+        createMockGatewayService({
+          label: "Scheduled Task",
+          loadedText: "registered",
+          notLoadedText: "missing",
+          readRuntime: () => readScheduledTaskRuntime(env),
+        }),
+        "Daemon",
+      );
+
+      expect(summary.runtime).toEqual({
         status: "unknown",
-        detail,
+        detail: "service runtime inspection failed",
+        inspectionFailure: {
+          code: "service-runtime-inspection-failed",
+          detail,
+        },
         missingUnit: false,
       });
+      expect(formatStatusServiceValue(summary)).toBe(
+        "Scheduled Task missing (inspection failed: service runtime inspection failed) · unknown",
+      );
+      expect(formatStatusServiceValue(summary)).not.toContain(detail);
     });
   });
 
