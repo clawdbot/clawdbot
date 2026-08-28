@@ -90,16 +90,24 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             aria-selected=${selected ? "true" : "false"}
             data-test-id=${tab.testId ?? nothing}
             @click=${(event: MouseEvent) => {
+              const activeElement = event.currentTarget;
+              if (!(activeElement instanceof HTMLElement)) {
+                return;
+              }
               if (
                 !tab.disabled &&
                 (event.detail > 0 || event.isTrusted) &&
                 tab.value !== props.active
               ) {
                 props.onSelect(tab.value);
-                props.onActivate?.(event.currentTarget as HTMLElement);
+                props.onActivate?.(activeElement);
               }
             }}
             @keydown=${(event: KeyboardEvent) => {
+              const activeElement = event.currentTarget;
+              if (!(activeElement instanceof HTMLElement)) {
+                return;
+              }
               if (
                 !tab.disabled &&
                 !event.repeat &&
@@ -111,10 +119,10 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
                   hubId: props.id,
                   tab: tab.value,
                   at: Date.now(),
-                  source: event.currentTarget as Element,
+                  source: activeElement,
                 };
                 props.onSelect(tab.value);
-                props.onActivate?.(event.currentTarget as HTMLElement);
+                props.onActivate?.(activeElement);
               }
             }}
             ${selected ? ref((element) => reclaimFocus(props.id, tab.value, element)) : nothing}

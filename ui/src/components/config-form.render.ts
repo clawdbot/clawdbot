@@ -81,7 +81,10 @@ export function renderConfigTierGroups(params: {
             class="config-advanced-disclosure"
             ?open=${params.revealAdvanced}
             @toggle=${(event: Event) => {
-              const disclosure = event.currentTarget as HTMLDetailsElement;
+              const disclosure = event.currentTarget;
+              if (!(disclosure instanceof HTMLDetailsElement)) {
+                return;
+              }
               if (disclosure.open === params.revealAdvanced) {
                 return;
               }
