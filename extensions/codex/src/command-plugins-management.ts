@@ -7,6 +7,9 @@ import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
 import type { v2 } from "./app-server/protocol.js";
+import { canMutateCodexHost } from "./command-authorization.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
+import { buildCodexPluginAppLinks } from "./command-plugin-app-links.js";
 import {
   describeConfiguredPluginIdentityConflict,
   marketplaceNamesRepresentSameCatalog,
@@ -18,10 +21,6 @@ import {
   type CodexPluginConfigEntry,
   type CodexPluginsConfigBlock,
 } from "./command-plugin-config.js";
-export type { CodexPluginsConfigBlock } from "./command-plugin-config.js";
-import { canMutateCodexHost } from "./command-authorization.js";
-import { formatCodexDisplayText } from "./command-formatters.js";
-import { buildCodexPluginAppLinks } from "./command-plugin-app-links.js";
 import {
   formatCodexPluginReadiness,
   readCodexPluginReadiness,
@@ -37,6 +36,8 @@ import {
   type CodexAvailablePlugin,
   type CodexPluginMarketplaceListRequest,
 } from "./plugin-marketplace-discovery.js";
+
+export type { CodexPluginsConfigBlock } from "./command-plugin-config.js";
 
 /**
  * Lightweight read/write surface over the Openclaw config file. Plugged in by

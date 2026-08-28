@@ -113,7 +113,9 @@ function fixture(
         break;
       case "app/read":
         response = {
-          apps: apps.map((app) => ({ ...app, pluginDisplayNames: ["Notes"], toolSummaries: null })),
+          apps: apps.map((app) =>
+            Object.assign({}, app, { pluginDisplayNames: ["Notes"], toolSummaries: null }),
+          ),
           missingAppIds: [],
         };
         break;
