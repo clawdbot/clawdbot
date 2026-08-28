@@ -190,3 +190,6 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
+
+patchedDependencies:
+  "@vitest/runner@4.1.11": patches/@vitest__runner@4.1.11.patch

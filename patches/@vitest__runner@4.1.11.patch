@@ -1,0 +1,24 @@
+diff --git a/dist/chunk-artifact.js b/dist/chunk-artifact.js
+index 1f3db9bac2448d085c881ded1ec0f3a37cda6a13..62d6532b38245750b4fc53529cfd856d34e5f75b 100644
+--- a/dist/chunk-artifact.js
++++ b/dist/chunk-artifact.js
+@@ -2843,14 +2843,17 @@ function throttle(fn, ms) {
+ 	let pendingCall;
+ 	return function call(...args) {
+ 		const now = unixNow();
+-		if (now - last > ms) {
++		if (now - last >= ms) {
+ 			last = now;
+ 			clearTimeout(pendingCall);
+ 			pendingCall = undefined;
+ 			return fn.apply(this, args);
+ 		}
+ 		// Make sure fn is still called even if there are no further calls
+-		pendingCall ??= setTimeout(() => call.bind(this)(...args), ms);
++		pendingCall ??= setTimeout(() => {
++			pendingCall = undefined;
++			call.apply(this, args);
++		}, ms);
+ 	};
+ }
+ // throttle based on summary reporter's DURATION_UPDATE_INTERVAL_MS
