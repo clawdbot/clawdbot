@@ -13,15 +13,17 @@ import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
 } from "openclaw/plugin-sdk/realtime-voice";
-import {
-  isRequestBodyLimitError,
-  readRequestBodyWithLimit,
-  resolveAcceptedBrowserOrigin,
-  requestBodyErrorToText,
-  sendHttpRequestRejection,
-} from "openclaw/plugin-sdk/webhook-request-guards";
+import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
+import {
+  applyRealtimeOfferCorsHeaders,
+  createResponseDeliveryWaiter,
+  readOfferBearerToken,
+  rejectOversizedOffer,
+  respondOfferText,
+  type ResponseDeliveryWaiter,
+} from "./realtime-quicksilver-offer-http.js";
 import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
@@ -97,65 +99,6 @@ type OpenAIRealtimeOfferMetrics = {
   sidebandReadyMs: number;
   totalOfferMs: number;
 };
-
-type ResponseDeliveryWaiter = {
-  result: Promise<boolean>;
-  cancel: () => void;
-};
-
-function createResponseDeliveryWaiter(
-  res: ServerResponse,
-  onDelivered: () => void,
-): ResponseDeliveryWaiter {
-  let settle!: (delivered: boolean) => void;
-  const result = new Promise<boolean>((resolve) => {
-    settle = (delivered) => {
-      res.removeListener("finish", onFinish);
-      res.removeListener("close", onClose);
-      resolve(delivered);
-    };
-  });
-  const onFinish = () => {
-    onDelivered();
-    settle(true);
-  };
-  const onClose = () => settle(false);
-  res.once("finish", onFinish);
-  res.once("close", onClose);
-  return { result, cancel: () => settle(false) };
-}
-
-const OFFER_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
-
-function respondText(res: ServerResponse, statusCode: number, body: string): void {
-  res.statusCode = statusCode;
-  res.setHeader("cache-control", "no-store");
-  res.setHeader("content-type", OFFER_TEXT_CONTENT_TYPE);
-  res.setHeader("x-content-type-options", "nosniff");
-  res.end(body);
-}
-
-function applyRealtimeOfferCorsHeaders(
-  req: IncomingMessage,
-  res: ServerResponse,
-  cfg: OpenClawConfig | undefined,
-): boolean {
-  if (!req.headers.origin) {
-    return true;
-  }
-  const origin = resolveAcceptedBrowserOrigin({ req, cfg });
-  if (!origin) {
-    return false;
-  }
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
-  return true;
-}
-
-function readBearerToken(req: IncomingMessage): string | undefined {
-  const authorization = req.headers.authorization?.trim();
-  return authorization?.match(/^Bearer\s+([^\s]+)$/i)?.[1];
-}
 
 export async function resolveOpenAIChatGptSubscriptionAuth(params: {
   cfg?: OpenClawConfig;
@@ -382,7 +325,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
     const corsAllowed = applyRealtimeOfferCorsHeaders(req, res, params.getConfig());
     if (req.method === "OPTIONS") {
       if (!corsAllowed) {
-        respondText(res, 403, "Origin not allowed");
+        respondOfferText(res, 403, "Origin not allowed");
         return true;
       }
       res.statusCode = 204;
@@ -401,23 +344,23 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       return true;
     }
     if (!corsAllowed) {
-      respondText(res, 403, "Origin not allowed");
+      respondOfferText(res, 403, "Origin not allowed");
       return true;
     }
     if (req.method !== "POST") {
-      respondText(res, 405, "Method not allowed");
+      respondOfferText(res, 405, "Method not allowed");
       return true;
     }
     const mediaType = req.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
     if (mediaType !== "application/sdp") {
-      respondText(res, 415, "Expected application/sdp");
+      respondOfferText(res, 415, "Expected application/sdp");
       return true;
     }
     prunePendingOffers();
-    const token = readBearerToken(req);
+    const token = readOfferBearerToken(req);
     const offer = token ? pendingOffers.get(token) : undefined;
     if (!token || !offer || offer.expiresAt <= Date.now()) {
-      respondText(res, 401, "Invalid or expired realtime session token");
+      respondOfferText(res, 401, "Invalid or expired realtime session token");
       return true;
     }
     // Offer credentials are single-use so a captured browser request cannot join twice.
@@ -459,7 +402,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         destroyOnLimit: false,
       });
       if (!sdp.trim()) {
-        respondText(res, 400, "SDP offer is required");
+        respondOfferText(res, 400, "SDP offer is required");
         return true;
       }
       const upstreamSignal = AbortSignal.any([
@@ -482,7 +425,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         try {
           assertOpenAIRealtimeAudioOnlyOffer(sdp);
         } catch (error) {
-          respondText(res, 400, error instanceof Error ? error.message : "Invalid SDP offer");
+          respondOfferText(res, 400, error instanceof Error ? error.message : "Invalid SDP offer");
           return true;
         }
         if (offer.auth.type !== "api-key") {
@@ -667,21 +610,10 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (browserDisconnected) {
         return true;
       }
-      if (isRequestBodyLimitError(error)) {
-        // Keep the plain-text envelope and hardening headers the offer endpoint
-        // already sends; only the transport moves to the rejection owner.
-        res.setHeader("cache-control", "no-store");
-        res.setHeader("x-content-type-options", "nosniff");
-        await sendHttpRequestRejection(
-          req,
-          res,
-          error.statusCode,
-          requestBodyErrorToText(error.code),
-          OFFER_TEXT_CONTENT_TYPE,
-        );
+      if (await rejectOversizedOffer(req, res, error)) {
         return true;
       }
-      respondText(
+      respondOfferText(
         res,
         502,
         error instanceof Error ? error.message : "OpenAI realtime session failed",
