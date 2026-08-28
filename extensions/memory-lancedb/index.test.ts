@@ -2570,6 +2570,66 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("does not re-embed a message once its embedding matched an existing duplicate memory", async () => {
+    // Every db.search call returns this same clean entry, so any embedded
+    // text is treated as a duplicate of an already-stored memory -- the
+    // scenario where db.store is never reached, which is exactly the path
+    // that previously left the fingerprint untracked.
+    const harness = await setupAutoCaptureCursorHarness({
+      searchResults: [
+        {
+          id: "existing-duplicate",
+          text: "some existing memory",
+          vector: [0.1, 0.2, 0.3],
+          importance: 0.7,
+          category: "preference",
+          createdAt: 1,
+          _distance: 0,
+        },
+      ],
+    });
+
+    try {
+      await harness.agentEnd?.(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: "I prefer Helix for editing code every day." },
+            { role: "user", content: "I prefer Fish for shell commands every day." },
+          ],
+        },
+        { agentId: "main", sessionKey: "session-duplicate-fingerprint" },
+      );
+
+      // Turn 2: the cursor's tracked message ("...Fish...") was compacted
+      // away, but the earlier "...Helix..." message -- already embedded and
+      // matched to an existing duplicate in turn 1 -- survives verbatim,
+      // ahead of one genuinely new message.
+      await harness.agentEnd?.(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: "I prefer Helix for editing code every day." },
+            { role: "user", content: "I prefer Zed for editing code every day." },
+          ],
+        },
+        { agentId: "main", sessionKey: "session-duplicate-fingerprint" },
+      );
+
+      // Correct behavior: "...Helix..." was already embedded and duplicate-
+      // checked in turn 1, so it must not be re-embedded in turn 2 even
+      // though db.store was never called for it -- 3 calls total.
+      expect(harness.embeddingsCreate).toHaveBeenCalledTimes(3);
+      expect(harness.embeddingsCreate).toHaveBeenNthCalledWith(3, {
+        model: "text-embedding-3-small",
+        input: "I prefer Zed for editing code every day.",
+      });
+      expect(harness.add).not.toHaveBeenCalled();
+    } finally {
+      cleanupAutoCaptureCursorHarness();
+    }
+  });
+
   test("evicts auto-capture cursor state on session end", async () => {
     const harness = await setupAutoCaptureCursorHarness();
 

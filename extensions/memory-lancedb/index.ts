@@ -555,7 +555,11 @@ export default definePluginEntry({
             continue;
           }
           let messageProcessed = false;
-          let justCaptured = false;
+          // Set once the embedding-consuming work for this message's captured
+          // text has run to a conclusion (stored new, or matched an existing
+          // duplicate) so it is never re-embedded on a later rescan — a
+          // duplicate match is still a completed, non-repeatable outcome.
+          let justProcessed = false;
 
           try {
             if (!alreadyCaptured.has(fingerprint)) {
@@ -581,6 +585,7 @@ export default definePluginEntry({
 
                 const existing = await findCleanDuplicateMemory(db, agentId, vector);
                 if (existing) {
+                  justProcessed = true;
                   continue;
                 }
 
@@ -591,12 +596,12 @@ export default definePluginEntry({
                   category,
                 });
                 stored++;
-                justCaptured = true;
+                justProcessed = true;
               }
             }
             messageProcessed = true;
           } finally {
-            if (justCaptured) {
+            if (justProcessed) {
               trackedFingerprints = withCapturedFingerprint(trackedFingerprints, fingerprint);
               alreadyCaptured.add(fingerprint);
             }
