@@ -64,20 +64,22 @@ let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-m
 function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
   // Minimal process snapshot used to prove when metadata may be reused.
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash,
     workspaceDir,
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [], diagnostics: [] },
     plugins: [],

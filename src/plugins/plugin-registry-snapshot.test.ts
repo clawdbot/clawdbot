@@ -244,6 +244,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       configFingerprint: "",
       workspaceDir,
       index,
+      registryIndex: index,
       registryDiagnostics: [],
       manifestRegistry: { plugins: [], diagnostics: [] },
       plugins: [],

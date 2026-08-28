@@ -161,21 +161,23 @@ let harness: GatewayHarness;
 
 function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    // Matches the real isolated bundled snapshot: no installed-index rows,
+    // with the selected bundled manifests supplied below.
+    plugins: [],
+    diagnostics: [],
+  };
   const emptySnapshot: PluginMetadataSnapshot = {
     policyHash,
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      // Matches the real isolated bundled snapshot: no installed-index rows,
-      // with the selected bundled manifests supplied below.
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [], diagnostics: [] },
     plugins: [],
