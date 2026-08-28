@@ -109,7 +109,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   };
 }
 
-export type AcceptedRunCleanupOwnership = "owned" | "changed";
+export type AcceptedRunCleanupOwnership = "released" | "changed";
 
 export async function terminateAcceptedCollectorRun(params: {
   childSessionKey: string;
@@ -121,19 +121,20 @@ export async function terminateAcceptedCollectorRun(params: {
 }): Promise<AcceptedRunCleanupOwnership> {
   const call = params.callGateway ?? callSubagentGateway;
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
-  let ownership: AcceptedRunCleanupOwnership = "owned";
+  let ownership: AcceptedRunCleanupOwnership = "released";
+  let runAborted = false;
   await retrySubagentCleanup(async () => {
-    try {
-      const response = await call({
-        method: "chat.abort",
-        params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
-        timeoutMs,
-      });
-      if (isMatchingAbortResponse(response, params.gatewayRunId)) {
-        return true;
+    if (!runAborted) {
+      try {
+        const response = await call({
+          method: "chat.abort",
+          params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+          timeoutMs,
+        });
+        runAborted = isMatchingAbortResponse(response, params.gatewayRunId);
+      } catch {
+        // Fall through to exact-session deletion.
       }
-    } catch {
-      // Fall through to exact-session deletion.
     }
     const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
       deleteTranscript: true,

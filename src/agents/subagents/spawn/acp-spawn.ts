@@ -445,7 +445,7 @@ export async function spawnAcpDirect(
     preparedBinding = prepared.binding;
   }
 
-  let sessionOwnership: "absent" | "owned" | "changed" = "absent";
+  let sessionOwnership: "absent" | "owned" | "released" | "changed" = "absent";
   let childCreationEntry: SessionEntry | undefined;
   let initializedSession: AcpSpawnInitializedRuntime | undefined;
   const childIdem = crypto.randomUUID();
@@ -635,7 +635,7 @@ export async function spawnAcpDirect(
     },
     async cleanupOnFailure({ state }) {
       state?.parentRelay?.dispose();
-      if (sessionOwnership === "changed") {
+      if (sessionOwnership === "released" || sessionOwnership === "changed") {
         return;
       }
       await cleanupFailedAcpSpawn({

@@ -3687,27 +3687,21 @@ describe("spawnAcpDirect", () => {
       },
       timeoutMs: 60_000,
     });
-    expect(lifecycle).toEqual(["accepted", "abort-unconfirmed", "deleted", "cleaned"]);
+    expect(lifecycle).toEqual(["accepted", "abort-unconfirmed", "deleted"]);
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
-    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeCloseHandle: expect.objectContaining({
-          handle: expect.objectContaining({ backend: "acpx" }),
-        }),
-      }),
-    );
+    expect(hoisted.cleanupFailedAcpSpawnMock).not.toHaveBeenCalled();
   });
 
-  it("preserves a successor lifecycle when guarded cancellation cleanup loses ownership", async () => {
+  it("preserves a successor lifecycle after matching abort loses cleanup ownership", async () => {
     const controller = new AbortController();
     controller.abort();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as { method?: string };
+      const args = argsUnknown as { method?: string; params?: { runId?: string } };
       if (args.method === "agent") {
         return { runId: "accepted-before-successor" };
       }
       if (args.method === "chat.abort") {
-        return { ok: true, aborted: true, runIds: ["successor-run"] };
+        return { ok: true, aborted: true, runIds: [args.params?.runId] };
       }
       if (args.method === "sessions.delete") {
         throw Object.assign(new Error("session changed"), {
