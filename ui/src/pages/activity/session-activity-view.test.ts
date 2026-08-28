@@ -67,15 +67,18 @@ describe("session activity semantics", () => {
 
   it("renders agent-owned session and people images without replacing human pictures", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test");
-    vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([1, 2, 3]), {
-          headers: { "content-type": "image/png" },
-        }),
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          "content-type": url.endsWith("/avatar/research") ? "image/jpeg" : "image/png",
+        },
+      });
+    });
+    // Identify each image by its content type, not the order concurrent fetches finish.
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) =>
+      "type" in blob && blob.type === "image/png" ? "blob:human" : "blob:agent",
     );
-    vi.spyOn(URL, "createObjectURL")
-      .mockReturnValueOnce("blob:human")
-      .mockReturnValueOnce("blob:agent");
     const agent = {
       type: "agent" as const,
       id: "research",

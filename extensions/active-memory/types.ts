@@ -253,6 +253,7 @@ type ActiveMemoryPartialTimeoutError = Error & {
   activeMemoryPartialReply?: string;
   activeMemorySearchDebug?: ActiveMemorySearchDebug;
   activeMemoryUnavailableMemorySearch?: boolean;
+  activeMemoryHasUsableMemoryResult?: boolean;
 };
 
 type TranscriptReadLimits = {

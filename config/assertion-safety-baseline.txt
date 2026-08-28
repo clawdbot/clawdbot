@@ -190,7 +190,6 @@ extensions/codex/src/app-server/dynamic-tools.ts	6
 extensions/codex/src/app-server/effective-mcp-catalog.ts	1
 extensions/codex/src/app-server/elicitation-bridge.ts	1
 extensions/codex/src/app-server/event-projector-reasoning.ts	1
-extensions/codex/src/app-server/event-projector-snapshot.ts	2
 extensions/codex/src/app-server/event-projector-tool-items.ts	1
 extensions/codex/src/app-server/event-projector-tool-transcript.ts	4
 extensions/codex/src/app-server/event-projector-values.ts	2
@@ -2220,7 +2219,6 @@ src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/inbound-meta.ts	1
 src/auto-reply/reply/mentions.ts	2
 src/auto-reply/reply/model-selection.ts	3
-src/auto-reply/reply/queue/cleanup.ts	1
 src/auto-reply/reply/queue/drain.ts	2
 src/auto-reply/reply/queue/enqueue.ts	1
 src/auto-reply/reply/queue/settings.ts	1
@@ -2368,7 +2366,7 @@ src/cli/completion-runtime.ts	4
 src/cli/config-cli-input.ts	3
 src/cli/config-cli-path.ts	6
 src/cli/config-cli-runner.ts	7
-src/cli/config-cli.ts	11
+src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
 src/cli/config-set-input.ts	2
 src/cli/connect-cli.ts	1
@@ -2523,7 +2521,7 @@ src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	8
-src/commands/doctor-session-sqlite-readers.ts	9
+src/commands/doctor-session-sqlite-readers.ts	5
 src/commands/doctor-session-sqlite-recover-report.ts	3
 src/commands/doctor-session-sqlite.ts	3
 src/commands/doctor-session-state-providers.ts	3
@@ -2660,11 +2658,11 @@ src/config/io.snapshot.ts	1
 src/config/io.warnings.ts	2
 src/config/io.write-prepare.ts	16
 src/config/io.write-safety.ts	4
-src/config/io.write.ts	13
+src/config/io.write.ts	7
 src/config/issue-location.ts	2
 src/config/legacy-private-network-migration.ts	1
 src/config/legacy.default-agent-roles.ts	1
-src/config/legacy.roster.ts	15
+src/config/legacy.roster.ts	13
 src/config/legacy.ts	3
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
@@ -2874,7 +2872,6 @@ src/gateway/local-request-context.ts	2
 src/gateway/managed-image-attachments.ts	8
 src/gateway/mcp-app-operations.ts	3
 src/gateway/mcp-app-reconstruction.ts	3
-src/gateway/mcp-app-standalone.ts	7
 src/gateway/mcp-grant-store.ts	2
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.request.ts	2
@@ -3360,7 +3357,6 @@ src/media-understanding/runtime.ts	2
 src/media-understanding/shared.ts	2
 src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
-src/media/configured-max-bytes.ts	3
 src/media/fetch.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1

@@ -201,7 +201,7 @@ describe("channels section order", () => {
     const headings = Array.from(container.querySelectorAll(".settings-section__heading"), (node) =>
       node.textContent?.trim(),
     );
-    expect(headings).toEqual(["Your channels", "Add a channel", "DM access requests"]);
+    expect(headings).toEqual(["Connected channels", "Add a channel", "DM access requests"]);
   });
 });
 

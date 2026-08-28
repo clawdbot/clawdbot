@@ -63,6 +63,14 @@ occurs on more than one day, for example `openclaw transcripts show
 2026-05-22/standup`. Default session ids include a timestamp and random
 suffix; give a session a fixed id only when that id is unique within the day.
 
+If the filesystem-safe export name exceeds 255 bytes, OpenClaw shortens it
+to a prefix plus a deterministic SHA-256 hash of the complete original session
+ID. Only the derived export name and its selector change; the raw session ID,
+provider stop handle, and stored notes stay intact. Names that already fit
+remain unchanged. Use the selector printed by `list` for the shortened name.
+For existing sessions with oversized stored names, run `openclaw doctor --fix`
+to repair their derived selectors without changing stored notes.
+
 ## Output
 
 `list` prints one tab-separated line per session: selector, start time, title,

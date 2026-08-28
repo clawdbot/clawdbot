@@ -23,7 +23,7 @@ type CatalogEntry = Partial<Record<"version" | "description" | "source" | "kind"
     contracts?: Record<string, string[] | undefined>;
     channel: Record<string, unknown>;
     channelHostConfig?: Record<string, unknown>;
-    channelConfigs?: Record<string, { schema?: unknown }>;
+    channelConfigs?: Record<string, { schema?: unknown; label?: string }>;
     providerEndpoints?: Array<Record<string, unknown>>;
     install: CatalogInstall;
   };

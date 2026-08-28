@@ -163,6 +163,7 @@ async function sendZalouserMediaFromContext({
     mediaUrl,
     mediaLocalRoots,
     mediaReadFile,
+    mediaMaxBytes: account.mediaMaxBytes,
     textMode: "markdown",
     textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
     textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),

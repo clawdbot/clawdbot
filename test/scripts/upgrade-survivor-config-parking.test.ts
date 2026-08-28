@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = path.resolve("scripts/e2e/lib/upgrade-survivor/config-parking.mjs");
 const SURVIVOR_SCRIPT_PATH = path.resolve("scripts/e2e/upgrade-survivor-docker.sh");
+const E2E_INSTANCE_SCRIPT_PATH = path.resolve("scripts/lib/openclaw-e2e-instance.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function run(...args: string[]) {
@@ -121,6 +122,20 @@ describe("upgrade survivor config parking", () => {
     expect(functionStart).toBeGreaterThan(-1);
     expect(functionEnd).toBeGreaterThan(functionStart);
     const functionSource = survivorScript.slice(functionStart, functionEnd + 2);
+    const e2eInstanceScript = readFileSync(E2E_INSTANCE_SCRIPT_PATH, "utf8");
+    const fixtureCommandStart = e2eInstanceScript.indexOf(
+      "openclaw_e2e_fixture_plugin_command() {",
+    );
+    const fixtureCommandEnd = e2eInstanceScript.indexOf(
+      "\n}\nopenclaw_e2e_enable_openclaw_cli_timeout",
+      fixtureCommandStart,
+    );
+    expect(fixtureCommandStart).toBeGreaterThan(-1);
+    expect(fixtureCommandEnd).toBeGreaterThan(fixtureCommandStart);
+    const fixtureCommandSource = e2eInstanceScript.slice(
+      fixtureCommandStart,
+      fixtureCommandEnd + 2,
+    );
     writeFileSync(
       path.join(binDir, "openclaw"),
       `#!/usr/bin/env bash
@@ -141,6 +156,7 @@ fi
       runnerPath,
       `#!/usr/bin/env bash
 set -euo pipefail
+${fixtureCommandSource}
 ${functionSource}
 install_companion_plugins
 `,

@@ -50,6 +50,8 @@ import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
+  resolveAutoMediaKeyProvidersFromRegistry,
+  resolveDefaultMediaModelFromRegistry,
 } from "./provider-registry.js";
 import {
   resolveModelEntries,
@@ -193,46 +195,6 @@ function resolveCatalogImageModelId(params: {
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
-function resolveDefaultMediaModelFromRegistry(params: {
-  providerId: string;
-  capability: MediaUnderstandingCapability;
-  providerRegistry: ProviderRegistry;
-}): string | undefined {
-  const provider = params.providerRegistry.get(normalizeMediaProviderId(params.providerId));
-  return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
-}
-
-function resolveAutoMediaKeyProvidersFromRegistry(params: {
-  capability: MediaUnderstandingCapability;
-  providerRegistry: ProviderRegistry;
-}): string[] {
-  type AutoProviderEntry = {
-    provider: MediaUnderstandingProvider;
-    priority: number;
-  };
-  return [...params.providerRegistry.values()]
-    .filter(
-      (provider) =>
-        provider.capabilities?.includes(params.capability) ??
-        providerSupportsCapability(provider, params.capability),
-    )
-    .map((provider): AutoProviderEntry | null => {
-      const priority = provider.autoPriority?.[params.capability];
-      return typeof priority === "number" && Number.isFinite(priority)
-        ? { provider, priority }
-        : null;
-    })
-    .filter((entry): entry is AutoProviderEntry => entry !== null)
-    .toSorted((left, right) => {
-      if (left.priority !== right.priority) {
-        return left.priority - right.priority;
-      }
-      return left.provider.id.localeCompare(right.provider.id);
-    })
-    .map((entry) => normalizeMediaProviderId(entry.provider.id))
-    .filter(Boolean);
-}
-
 async function explicitImageModelVisionStatus(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -372,65 +334,12 @@ async function resolveKeyEntry(params: {
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
-  const { cfg, agentId, agentDir, workspaceDir, providerRegistry, capability } = params;
-  const checkProvider = async (
+  const { cfg, providerRegistry, capability } = params;
+  const checkProvider = (
     providerId: string,
     model?: string,
-  ): Promise<MediaUnderstandingModelConfig | null> => {
-    const provider = getMediaUnderstandingProvider(providerId, providerRegistry);
-    if (!provider) {
-      return null;
-    }
-    if (capability === "audio" && !provider.transcribeAudio) {
-      return null;
-    }
-    if (capability === "image" && !provider.describeImage) {
-      return null;
-    }
-    if (capability === "video" && !provider.describeVideo) {
-      return null;
-    }
-    if (
-      !(await hasProviderAuthAvailable({
-        capability,
-        provider: providerId,
-        cfg,
-        agentDir,
-        workspaceDir,
-      }))
-    ) {
-      return null;
-    }
-    // The supplied model can belong to the active chat route. Audio providers
-    // use their own default or stay model-less; explicit media entries bypass this auto path.
-    const resolvedModel =
-      capability === "image"
-        ? await resolveAutoImageModelId({
-            cfg,
-            agentId,
-            providerId,
-            providerRegistry,
-            explicitModel: model,
-            agentDir,
-            workspaceDir,
-          })
-        : capability === "audio"
-          ? resolveDefaultMediaModelFromRegistry({
-              providerId,
-              capability: "audio",
-              providerRegistry,
-            })
-          : (model ??
-            resolveDefaultMediaModelFromRegistry({
-              providerId,
-              capability: "video",
-              providerRegistry,
-            }));
-    if (capability === "image" && !resolvedModel) {
-      return null;
-    }
-    return { type: "provider" as const, provider: providerId, model: resolvedModel };
-  };
+  ): Promise<MediaUnderstandingModelConfig | null> =>
+    resolveAutoProviderModelEntry(params, providerId, () => model);
 
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {
@@ -649,17 +558,23 @@ async function resolveActiveModelEntry(params: {
   if (!providerId) {
     return null;
   }
+  return await resolveAutoProviderModelEntry(params, providerId, () => params.activeModel?.model);
+}
+
+async function resolveAutoProviderModelEntry(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+    providerRegistry: ProviderRegistry;
+    capability: MediaUnderstandingCapability;
+  },
+  providerId: string,
+  readModel: () => string | undefined,
+): Promise<MediaUnderstandingModelConfig | null> {
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
-  if (!provider) {
-    return null;
-  }
-  if (params.capability === "audio" && !provider.transcribeAudio) {
-    return null;
-  }
-  if (params.capability === "image" && !provider.describeImage) {
-    return null;
-  }
-  if (params.capability === "video" && !provider.describeVideo) {
+  if (!providerSupportsCapability(provider, params.capability)) {
     return null;
   }
   const hasAuth = await hasProviderAuthAvailable({
@@ -672,6 +587,8 @@ async function resolveActiveModelEntry(params: {
   if (!hasAuth) {
     return null;
   }
+  // Active selection reads its model after auth; key selection captures it before auth.
+  // Audio uses its provider default instead of the active chat model in either path.
   let model: string | undefined;
   if (params.capability === "image") {
     model = await resolveAutoImageModelId({
@@ -679,7 +596,7 @@ async function resolveActiveModelEntry(params: {
       agentId: params.agentId,
       providerId,
       providerRegistry: params.providerRegistry,
-      explicitModel: params.activeModel?.model,
+      explicitModel: readModel(),
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
@@ -691,7 +608,7 @@ async function resolveActiveModelEntry(params: {
     });
   } else {
     model =
-      params.activeModel?.model ??
+      readModel() ??
       resolveDefaultMediaModelFromRegistry({
         providerId,
         capability: "video",

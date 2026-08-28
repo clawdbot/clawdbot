@@ -54,6 +54,8 @@ export type SystemAgentTurnRunner = (params: {
   surface: "cli" | "gateway";
   /** Host-verified: the user's current message is an explicit approval. */
   approvalArmed: boolean;
+  /** Delegated sessions can only resolve approvals in the operator UI. */
+  operatorApprovalOnly?: boolean;
   session: SystemAgentSession;
 }) => Promise<SystemAgentTurnReply | null>;
 
@@ -333,6 +335,7 @@ async function runSystemAgentTurnWithDeps(
   const systemAgentTool = {
     surface: params.surface,
     approvalArmed: params.approvalArmed,
+    ...(params.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
     proposalRef: params.session.proposalRef,
     directiveRef,
   };

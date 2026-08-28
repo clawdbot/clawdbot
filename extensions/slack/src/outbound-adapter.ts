@@ -266,8 +266,10 @@ export const slackOutbound: ChannelOutboundAdapter = {
   },
   sendPayload: async (ctx) => {
     const send = await prepareSlackOutboundSend(ctx);
+    // Media belongs to each media unit, never to subsequent card or text sends.
+    const { mediaUrl: _mediaUrl, ...commonCtx } = ctx;
     const preparedCtx = {
-      ...ctx,
+      ...commonCtx,
       replyToId: resolveSlackThreadTsValue(ctx),
       // Keeping the fallback thread would resurrect an implicit reply consumed by fanout.
       threadId: null,

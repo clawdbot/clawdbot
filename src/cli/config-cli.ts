@@ -1,9 +1,8 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
-import { isDeepStrictEqual } from "node:util";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshotWithPluginMetadata, replaceConfigFile } from "../config/config.js";
+import { readConfigFileSnapshotWithPluginMetadata } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
@@ -12,8 +11,7 @@ import {
   buildRuntimeConfigSchemaFromRegistry,
   readBestEffortRuntimeConfigSchema,
 } from "../config/runtime-schema.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { danger, info, success, warn } from "../globals.js";
+import { danger, success, warn } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   ExitError,
@@ -28,36 +26,19 @@ import { formatCliCommand } from "./command-format.js";
 import {
   buildConfigSetOperations,
   buildUnsetOperation,
-  ConfigSetDryRunValidationError,
   configPatchModeError,
   modeError,
   readConfigPatchOperations,
   type ConfigPatchOptions,
   type ConfigUnsetOptions,
 } from "./config-cli-input.js";
-import { normalizeConfigMutationModelRefs } from "./config-cli-model-normalization.js";
+import { getAtPath, isConfigSchemaPath, parseConfigSetPath } from "./config-cli-path.js";
+import { handleConfigMutationError, runConfigOperations } from "./config-cli-runner.js";
 import {
-  formatConfigUnsetMissingPathMessage,
-  getAtPath,
-  isConfigSchemaPath,
-  parseConfigSetPath,
-  unsetAtPath,
-} from "./config-cli-path.js";
-import {
-  assertConfigPathIsNotAutoManaged,
-  configApplyHintForOperations,
-  handleConfigMutationError,
-  runConfigOperations,
-} from "./config-cli-runner.js";
-import {
-  assertStrictConfigForMutation,
   ensureValidConfigSnapshotForCli,
   formatInvalidConfigRepairHint,
-  loadValidConfig,
-  loadValidConfigForWrite,
   strictlyValidateConfigSnapshotForCli,
 } from "./config-cli-validation.js";
-import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import {
   hasBatchMode,
@@ -231,92 +212,12 @@ export async function runConfigUnset(opts: {
       throw new Error("--json can only be used with --dry-run.");
     }
     const pathTokens = parseConcreteConfigPathTokens(opts.path);
-    const parsedPath = pathTokens.map(String);
-    assertConfigPathIsNotAutoManaged(parsedPath);
-    const mutationStart = cliOptions.dryRun
-      ? { snapshot: await loadValidConfig(runtime), writeOptions: {} }
-      : await loadValidConfigForWrite(runtime);
-    const { snapshot } = mutationStart;
-    // Mutate resolved config so runtime defaults never leak into the authored file.
-    const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-    const currentConfig = normalizeConfigMutationModelRefs(
-      structuredClone(snapshot.resolved) as OpenClawConfig,
-    );
-    const unsetResult = unsetAtPath(next, parsedPath);
-    if (!unsetResult.removed) {
-      const runtimeOnly = getAtPath(snapshot.runtimeConfig, parsedPath).found;
-      const missingPathMessage = formatConfigUnsetMissingPathMessage({
-        path: opts.path,
-        runtimeOnly,
-      });
-      if (cliOptions.json) {
-        throw new ConfigSetDryRunValidationError({
-          ok: false,
-          operations: 1,
-          configPath: snapshot.path,
-          inputModes: ["unset"],
-          checks: { schema: false, resolvability: false, resolvabilityComplete: false },
-          refsChecked: 0,
-          skippedExecRefs: 0,
-          errors: [
-            {
-              kind: "missing-path",
-              message: runtimeOnly
-                ? missingPathMessage
-                : `Config path not found: ${opts.path}. Nothing was changed.`,
-            },
-          ],
-        });
-      }
-      if (!cliOptions.dryRun) {
-        assertStrictConfigForMutation(
-          currentConfig,
-          mutationStart.writeOptions.basePluginMetadataSnapshot,
-        );
-      }
-      runtime.error(danger(missingPathMessage));
-      runtime.exit(1);
-      return;
-    }
-    const operation = buildUnsetOperation(parsedPath, pathTokens);
-    if (cliOptions.dryRun) {
-      await runConfigOperations({
-        runtime,
-        operations: [operation],
-        options: cliOptions,
-        successMode: "set",
-      });
-      return;
-    }
-    const nextConfig = normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig);
-    if (isDeepStrictEqual(currentConfig, nextConfig)) {
-      assertStrictConfigForMutation(
-        nextConfig,
-        mutationStart.writeOptions.basePluginMetadataSnapshot,
-      );
-      runtime.log(info("No change"));
-      return;
-    }
-    const modelRefCheck = await checkTouchedTextModelRefs({
-      config: nextConfig,
-      previousConfig: currentConfig,
-      touchedPaths: [parsedPath],
-      redactDependencyValues: true,
+    await runConfigOperations({
+      runtime,
+      operations: [buildUnsetOperation(pathTokens.map(String), pathTokens)],
+      options: cliOptions,
+      successMode: "set",
     });
-    if (modelRefCheck.errors[0]) {
-      throw new Error(modelRefCheck.errors[0]);
-    }
-    await replaceConfigFile({
-      nextConfig,
-      snapshot,
-      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-      writeOptions:
-        unsetResult.leafContainer === "array"
-          ? { ...mutationStart.writeOptions, auditOrigin: "cli" }
-          : { ...mutationStart.writeOptions, auditOrigin: "cli", unsetPaths: [parsedPath] },
-    });
-    const hint = configApplyHintForOperations([operation], currentConfig, nextConfig);
-    runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });
   }
@@ -356,7 +257,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
     const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
-    const snapshot = strictlyValidateConfigSnapshotForCli(
+    const snapshot = await strictlyValidateConfigSnapshotForCli(
       read.snapshot,
       read.pluginMetadataSnapshot,
     );

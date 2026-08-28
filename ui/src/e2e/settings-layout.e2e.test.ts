@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -66,6 +67,36 @@ const actionSectionCases = [
   { route: "mcp", heading: "Configured servers" },
   { route: "model-providers", heading: "Default models" },
 ] as const;
+
+const settingsRowRoutes = [
+  "profile",
+  "appearance",
+  "lobsterdex",
+  "notifications",
+  "connection",
+  "channels",
+  "communications",
+  "talk",
+  "devices",
+  "cloud-workers",
+  "agents",
+  "ai-agents",
+  "labs",
+  "model-setup",
+  "model-providers",
+  "mcp",
+  "memory",
+  "automation",
+  "security",
+  "secrets",
+  "approvals",
+  "infrastructure",
+  "updates",
+  "advanced",
+  "plugins",
+  "about",
+  "debug",
+] as const satisfies readonly RouteId[];
 
 const responsiveViewports = [
   { width: 390, height: 844 },
@@ -171,11 +202,12 @@ suite.define(() => {
       expect(Math.abs(spacing.belowTabs - spacing.aboveTabs)).toBeLessThanOrEqual(1);
 
       const advanced = page.locator("details.config-advanced-disclosure");
+      // Scope to the disclosure's own summary; expanded advanced content can
+      // add nested collapsible-object summaries a bare locator would match.
+      const advancedSummary = advanced.locator(":scope > summary");
       await expect.poll(() => advanced.count()).toBe(1);
       await expect.poll(() => advanced.getAttribute("open")).toBeNull();
-      await expect
-        .poll(() => advanced.locator("summary").textContent())
-        .toContain("Advanced settings");
+      await expect.poll(() => advancedSummary.textContent()).toContain("Advanced settings");
       if (proofEnabled) {
         await mkdir(proofDir, { recursive: true });
         await page.screenshot({
@@ -185,7 +217,7 @@ suite.define(() => {
         });
       }
 
-      await advanced.locator("summary").click();
+      await advancedSummary.click();
       await expect.poll(() => advanced.getAttribute("open")).not.toBeNull();
       await expect.poll(() => page.getByText("Response prefix", { exact: true }).count()).toBe(1);
       if (proofEnabled) {
@@ -214,7 +246,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps settings introductions, section headings, and Learn more links on one layout system", async () => {
+  it("keeps settings rows, introductions, section headings, and Learn more links on one layout system", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -229,13 +261,33 @@ suite.define(() => {
         await mkdir(proofDir, { recursive: true });
       }
 
-      const routes = new Set([...introRoutes, ...learnMoreRoutes, ...sectionAlignmentRoutes]);
-      for (const route of routes) {
-        await page.goto(`${suite.server.baseUrl}settings/${route}`);
+      let auditedPairCount = 0;
+      for (const route of settingsRowRoutes) {
+        const pathname = pathForRoute(route);
+        // Reload each route so earlier lazy styles cannot hide missing or misordered CSS.
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, {
-          pathname: `/settings/${route}`,
+          pathname,
           routeId: route,
         });
+
+        const titleDescriptionPairs = page.locator(
+          ".settings-row__text > .settings-row__title + .settings-row__desc",
+        );
+        const gaps = await titleDescriptionPairs.evaluateAll((descriptions) =>
+          descriptions.map((description) => {
+            const title = description.previousElementSibling;
+            if (!(title instanceof HTMLElement)) {
+              throw new Error("settings row description is missing its title");
+            }
+            const titleBox = title.getBoundingClientRect();
+            const descriptionBox = description.getBoundingClientRect();
+            return Math.round(descriptionBox.y - titleBox.y - titleBox.height);
+          }),
+        );
+        auditedPairCount += gaps.length;
+        expect(gaps, `${route} title/subtitle gaps`).toEqual(gaps.map(() => 0));
+
         if ((introRoutes as readonly string[]).includes(route)) {
           const title = page.locator(".page-title");
           const subtitle = page.locator(".page-subtitle");
@@ -286,6 +338,8 @@ suite.define(() => {
           ).toBe("none");
         }
       }
+
+      expect(auditedPairCount).toBeGreaterThan(0);
 
       for (const guidanceLink of settingsGuidanceLinks) {
         await page.goto(`${suite.server.baseUrl}settings/${guidanceLink.route}`);

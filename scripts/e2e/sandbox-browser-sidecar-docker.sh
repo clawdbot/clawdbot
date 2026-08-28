@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 FUNCTIONAL_IMAGE="$(docker_e2e_resolve_image \
@@ -68,13 +69,13 @@ docker_e2e_build_or_reuse \
 
 docker_build_run sandbox-browser-sidecar-sandbox-build \
   -t "$SANDBOX_IMAGE" \
-  -f "$ROOT_DIR/scripts/docker/sandbox/Dockerfile" \
-  "$ROOT_DIR"
+  -f "$SOURCE_ROOT/scripts/docker/sandbox/Dockerfile" \
+  "$SOURCE_ROOT"
 
 docker_build_run sandbox-browser-sidecar-browser-build \
   -t "$BROWSER_IMAGE" \
-  -f "$ROOT_DIR/scripts/docker/sandbox/Dockerfile.browser" \
-  "$ROOT_DIR"
+  -f "$SOURCE_ROOT/scripts/docker/sandbox/Dockerfile.browser" \
+  "$SOURCE_ROOT"
 
 cat >"$BUILD_DIR/Dockerfile" <<'EOF'
 ARG BASE_IMAGE

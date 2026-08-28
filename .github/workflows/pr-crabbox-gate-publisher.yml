@@ -39,6 +39,7 @@ jobs:
   publish:
     name: Validate AWS proof and publish gate
     runs-on: ubuntu-24.04
+    environment: qa-live-shared
     timeout-minutes: 10
     permissions:
       checks: write
@@ -80,8 +81,8 @@ jobs:
         env:
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
-          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
-          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
         run: node scripts/pr-crabbox-gate-publisher.mjs

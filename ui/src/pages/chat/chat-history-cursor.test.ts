@@ -150,71 +150,96 @@ describe("chat history cursor revalidation", () => {
     ).toBe("cursor-2");
   });
 
-  it("restores active commentary and tools with an empty cached delta", async () => {
-    const cached = message("user", "cached", "cached-user", 1);
-    const handler = vi.fn(async (_params?: unknown) => ({
-      kind: "delta",
-      messages: [],
-      deltaCursor: "cursor-2",
-      sessionInfo: {
-        key: "main",
-        kind: "direct",
-        sessionId: "session-cursor",
-        updatedAt: 2,
-        hasActiveRun: true,
-        activeRunIds: ["run-live"],
-        status: "running",
-      },
-      inFlightRun: {
-        runId: "run-live",
-        text: "",
-        startedAt: 900,
-        events: [
-          {
-            runId: "run-live",
-            seq: 1,
-            stream: "item",
-            ts: 900,
-            sessionKey: "main",
-            data: {
-              kind: "preamble",
-              itemId: "preamble-restored",
-              progressText: "Checking the workspace",
+  it.each([
+    { kind: "delta", persistedRunId: undefined },
+    { kind: "delta", persistedRunId: "run-live" },
+    { kind: "delta", persistedRunId: "run-other" },
+    { kind: "full", persistedRunId: "run-live" },
+  ] as const)(
+    "restores active commentary once from $kind history with persisted owner $persistedRunId",
+    async ({ kind, persistedRunId }) => {
+      const cached = message("user", "cached", "cached-user", 1);
+      const commentary = {
+        ...message("assistant", "Checking the workspace", "persisted-commentary", 2),
+        __openclaw: { id: "persisted-commentary", seq: 2, runId: persistedRunId },
+        openclawStreamFallback: {
+          itemId: "preamble-restored",
+          replacementText: "Checking the workspace",
+          source: "segment",
+        },
+      };
+      const cachedMessages = persistedRunId ? [cached, commentary] : [cached];
+      const handler = vi.fn(async (_params?: unknown) => ({
+        ...(kind === "delta"
+          ? { kind: "delta", messages: [], deltaCursor: "cursor-2" }
+          : { messages: cachedMessages }),
+        sessionInfo: {
+          key: "main",
+          kind: "direct",
+          sessionId: "session-cursor",
+          updatedAt: 2,
+          hasActiveRun: true,
+          activeRunIds: ["run-live"],
+          status: "running",
+        },
+        inFlightRun: {
+          runId: "run-live",
+          text: "",
+          startedAt: 900,
+          events: [
+            {
+              runId: "run-live",
+              seq: 1,
+              stream: "item",
+              ts: 900,
+              sessionKey: "main",
+              data: {
+                kind: "preamble",
+                itemId: "preamble-restored",
+                progressText: "Checking the workspace",
+              },
             },
-          },
-          {
-            runId: "run-live",
-            seq: 2,
-            stream: "tool",
-            ts: 1_000,
-            sessionKey: "main",
-            data: {
-              toolCallId: "call-restored",
-              name: "read",
-              phase: "start",
-              args: { path: "README.md" },
+            {
+              runId: "run-live",
+              seq: 2,
+              stream: "tool",
+              ts: 1_000,
+              sessionKey: "main",
+              data: {
+                toolCallId: "call-restored",
+                name: "read",
+                phase: "start",
+                args: { path: "README.md" },
+              },
             },
-          },
-        ],
-      },
-    }));
-    const state = createState(handler);
-    seedCachedHistory(state, [cached], "cursor-1");
+          ],
+        },
+      }));
+      const state = createState(handler);
+      if (kind === "delta") {
+        seedCachedHistory(state, cachedMessages, "cursor-1");
+      }
 
-    await loadHistoryWithBrowserTimers(state);
+      await loadHistoryWithBrowserTimers(state);
 
-    expect(state.chatRunId).toBe("run-live");
-    expect(state.chatStreamSegments).toContainEqual(
-      expect.objectContaining({
-        itemId: "preamble-restored",
-        runId: "run-live",
-        text: "Checking the workspace",
-      }),
-    );
-    expect(state.chatToolMessages).toContainEqual(
-      expect.objectContaining({ runId: "run-live", toolCallId: "call-restored" }),
-    );
-  });
+      expect(state.chatRunId).toBe("run-live");
+      if (persistedRunId === "run-live") {
+        expect(state.chatStreamSegments).toEqual([]);
+      } else {
+        expect(state.chatStreamSegments).toContainEqual(
+          expect.objectContaining({
+            itemId: "preamble-restored",
+            runId: "run-live",
+            text: "Checking the workspace",
+          }),
+        );
+      }
+      expect(state.chatMessages).toEqual(cachedMessages);
+      expect(state.chatToolMessages).toContainEqual(
+        expect.objectContaining({ runId: "run-live", toolCallId: "call-restored" }),
+      );
+    },
+  );
 
   it("clears a rejected cursor before falling back to a full tail fetch", async () => {
     const cached = message("user", "cached", "cached-user", 1);

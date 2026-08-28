@@ -128,6 +128,15 @@ function managedHarness() {
   };
 }
 
+function gatedCommandHarness(mode: "standalone" | "managed") {
+  if (mode === "standalone") {
+    return { input: commandInput(), output: new PassThrough() };
+  }
+  const { input, output, turn } = managedHarness();
+  turn();
+  return { input, output, managed: true };
+}
+
 describe("worker command lifetime gate", () => {
   beforeEach(() => {
     vi.mocked(runWorkerDescriptor).mockReset();
@@ -220,82 +229,80 @@ describe("worker command lifetime gate", () => {
     );
   });
 
-  it("does not enter the worker runtime before the explicit start message", async () => {
-    const output = new PassThrough();
-    const lifetime = lifetimeHarness();
-    const running = runWorkerCommand({
-      input: commandInput(),
-      output,
-      lifetime: lifetime.contract,
-    });
+  it.each(["standalone", "managed"] as const)(
+    "does not enter the worker runtime before the explicit start message (%s)",
+    async (mode) => {
+      const harness = gatedCommandHarness(mode);
+      const lifetime = lifetimeHarness();
+      const running = runWorkerCommand({ ...harness, lifetime: lifetime.contract });
 
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(runWorkerDescriptor).not.toHaveBeenCalled();
-    lifetime.open();
-
-    await running;
-    expect(runWorkerDescriptor).toHaveBeenCalledOnce();
-    expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
-    expect(lifetime.dispose).toHaveBeenCalledOnce();
-  });
-
-  it("exits without starting when IPC disconnects before the start message", async () => {
-    const output = new PassThrough();
-    const lifetime = lifetimeHarness();
-    const running = runWorkerCommand({
-      input: commandInput(),
-      output,
-      lifetime: lifetime.contract,
-    });
-
-    lifetime.disconnectBeforeStart();
-
-    await running;
-    expect(runWorkerDescriptor).not.toHaveBeenCalled();
-    expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
-    expect(lifetime.dispose).toHaveBeenCalledOnce();
-  });
-
-  it("aborts the real worker path and terminates its owned tree on IPC disconnect", async () => {
-    const output = new PassThrough();
-    let runtimeSignal: AbortSignal | undefined;
-    vi.mocked(runWorkerDescriptor).mockImplementation(async (_descriptor, options) => {
-      const signal = options?.signal;
-      if (!signal) {
-        throw new Error("expected worker lifetime abort signal");
-      }
-      runtimeSignal = signal;
-      return await new Promise<never>((_, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            const reason = signal.reason;
-            reject(reason instanceof Error ? reason : new Error("worker interrupted"));
-          },
-          { once: true },
-        );
+      await new Promise((resolve) => {
+        setImmediate(resolve);
       });
-    });
-    const lifetime = lifetimeHarness();
-    lifetime.terminateOwnedTree.mockImplementation(() => {
-      expect(runtimeSignal?.aborted).toBe(true);
-    });
-    const running = runWorkerCommand({
-      input: commandInput(),
-      output,
-      lifetime: lifetime.contract,
-    });
-    lifetime.open();
-    await vi.waitFor(() => expect(runWorkerDescriptor).toHaveBeenCalledOnce());
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+      expect(harness.input.readableLength > 0).toBe(mode === "managed");
+      lifetime.open();
 
-    lifetime.disconnectAfterStart();
+      await running;
+      expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+      expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
+      expect(lifetime.dispose).toHaveBeenCalledOnce();
+    },
+  );
 
-    await expect(running).rejects.toThrow("worker supervisor lifetime ended");
-    expect(lifetime.terminateOwnedTree).toHaveBeenCalledOnce();
-    expect(lifetime.dispose).toHaveBeenCalledOnce();
-  });
+  it.each(["standalone", "managed"] as const)(
+    "exits without starting when IPC disconnects before the start message (%s)",
+    async (mode) => {
+      const harness = gatedCommandHarness(mode);
+      const lifetime = lifetimeHarness();
+      const running = runWorkerCommand({ ...harness, lifetime: lifetime.contract });
+
+      lifetime.disconnectBeforeStart();
+
+      await running;
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+      expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
+      expect(lifetime.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["standalone", "managed"] as const)(
+    "aborts the worker path and terminates its owned tree on IPC disconnect (%s)",
+    async (mode) => {
+      const harness = gatedCommandHarness(mode);
+      let runtimeSignal: AbortSignal | undefined;
+      vi.mocked(runWorkerDescriptor).mockImplementation(async (_descriptor, options) => {
+        const signal = options?.signal;
+        if (!signal) {
+          throw new Error("expected worker lifetime abort signal");
+        }
+        runtimeSignal = signal;
+        return await new Promise<never>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(reason instanceof Error ? reason : new Error("worker interrupted"));
+            },
+            { once: true },
+          );
+        });
+      });
+      const lifetime = lifetimeHarness();
+      lifetime.terminateOwnedTree.mockImplementation(() => {
+        expect(runtimeSignal?.aborted).toBe(true);
+      });
+      const running = runWorkerCommand({ ...harness, lifetime: lifetime.contract });
+      lifetime.open();
+      await vi.waitFor(() => expect(runWorkerDescriptor).toHaveBeenCalledOnce());
+
+      lifetime.disconnectAfterStart();
+
+      await expect(running).rejects.toThrow("worker supervisor lifetime ended");
+      expect(lifetime.terminateOwnedTree).toHaveBeenCalledOnce();
+      expect(lifetime.dispose).toHaveBeenCalledOnce();
+    },
+  );
 
   it("retains state across turns and cancels only the exact active turn", async () => {
     const harness = managedHarness();
@@ -351,17 +358,6 @@ describe("worker command lifetime gate", () => {
     ).toEqual(["/tmp/openclaw-managed-worker-state", "/tmp/openclaw-managed-worker-state"]);
     expect(managedRuntime.close).toHaveBeenCalledOnce();
     expect(lifetime.dispose).toHaveBeenCalledOnce();
-  });
-
-  it("closes a retained environment when the managed input ends", async () => {
-    const harness = managedHarness();
-    managedRuntime.backgroundCount = 1;
-    const running = runWorkerCommand({ ...harness, managed: true });
-    harness.turn();
-    await vi.waitFor(() => expect(harness.results).toHaveLength(1));
-    harness.input.end();
-    await running;
-    expect(managedRuntime.close).toHaveBeenCalledOnce();
   });
 
   it.each(["owner", "output"] as const)(

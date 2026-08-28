@@ -584,11 +584,14 @@ export async function runBridgeRequest(params: {
         break;
       }
     }
-    return {
-      id: params.request.id,
-      ok: true,
-      value: boundCodeModeValue(value, params.maxOutputBytes),
-    };
+    value = boundCodeModeValue(value, params.maxOutputBytes);
+    // Search must remain a callable-name array; a truncation marker erases discovery.
+    if (params.request.method === "search" && !Array.isArray(value)) {
+      throw new ToolInputError(
+        "Search results exceed the output budget. Narrow the query or lower the limit.",
+      );
+    }
+    return { id: params.request.id, ok: true, value };
   } catch (error) {
     const settled: SettledBridgeRequest = {
       id: params.request.id,

@@ -114,9 +114,6 @@ export function validatePublisherRequest(event, env) {
   if (!SHA_PATTERN.test(context.baseSha) || !SHA_PATTERN.test(context.headSha)) {
     throw new Error("base_sha and head_sha must be exactly 40 lowercase hex characters");
   }
-  if (context.baseSha !== workflowSha) {
-    throw new Error("base_sha must match the exact protected-main workflow SHA");
-  }
   if (!SHA256_PATTERN.test(context.bootstrapSha256)) {
     throw new Error("bootstrap_sha256 must be exactly 64 lowercase hex characters");
   }
@@ -160,6 +157,29 @@ function validateTrustedMain(value, workflowSha) {
   const ref = record(value, "main ref");
   if (ref.ref !== "refs/heads/main" || record(ref.object, "main ref.object").sha !== workflowSha) {
     throw new Error("trusted main moved before Crabbox proof publication");
+  }
+}
+
+function validateBaseAncestry(value, context) {
+  const comparison = record(value, "base ancestry comparison");
+  const baseCommit = record(comparison.base_commit, "base ancestry comparison.base_commit");
+  const mergeBase = record(
+    comparison.merge_base_commit,
+    "base ancestry comparison.merge_base_commit",
+  );
+  const identical = comparison.status === "identical";
+  if (
+    baseCommit.sha !== context.baseSha ||
+    mergeBase.sha !== context.baseSha ||
+    comparison.behind_by !== 0 ||
+    (identical
+      ? context.baseSha !== context.workflowSha || comparison.ahead_by !== 0
+      : comparison.status !== "ahead" ||
+        context.baseSha === context.workflowSha ||
+        !Number.isSafeInteger(comparison.ahead_by) ||
+        comparison.ahead_by < 1)
+  ) {
+    throw new Error("pull request base is not an ancestor of the trusted publisher workflow SHA");
   }
 }
 
@@ -354,6 +374,13 @@ export async function runPublisher({
     await github.request("GET", `/repos/${REPOSITORY}/git/ref/heads/main`),
     context.workflowSha,
   );
+  validateBaseAncestry(
+    await github.request(
+      "GET",
+      `/repos/${REPOSITORY}/compare/${context.baseSha}...${context.workflowSha}`,
+    ),
+    context,
+  );
   context.plan = await Promise.resolve(resolvePlan(context));
   if (context.plan.baseSha !== context.baseSha || context.plan.headSha !== context.headSha) {
     throw new Error("Crabbox gate plan does not bind the requested base and head");
@@ -409,6 +436,7 @@ export async function runPublisher({
           planDigest: crabboxGatePlanDigest(context.plan),
           runId: context.runId,
           targetCount: context.plan.targets.length,
+          workflowSha: context.workflowSha,
         }),
         title: "Crabbox AWS exact-head gate passed",
       },
@@ -430,24 +458,30 @@ export async function runPublisher({
 }
 
 export function createJsonApi({
-  accessClientId,
-  accessClientSecret,
+  accessClientId = "",
+  accessClientSecret = "",
   baseUrl,
   token,
   fetchImpl = fetch,
 }) {
-  const base = new URL(baseUrl);
-  requiredString(accessClientId, "Crabbox Access client id");
-  requiredString(accessClientSecret, "Crabbox Access client secret");
-  requiredString(token, "Crabbox coordinator token");
+  const base = new URL(requiredString(baseUrl, "Crabbox coordinator URL"));
+  const hasAccess = Boolean(accessClientId);
+  if (hasAccess !== Boolean(accessClientSecret)) {
+    throw new Error("Crabbox Access client id and secret must be provided together");
+  }
+  const headers = {
+    Authorization: `Bearer ${requiredString(token, "Crabbox coordinator token")}`,
+    ...(hasAccess
+      ? {
+          "CF-Access-Client-Id": accessClientId,
+          "CF-Access-Client-Secret": accessClientSecret,
+        }
+      : {}),
+  };
   return {
     async request(requestPath, options = {}) {
       const response = await fetchImpl(new URL(requestPath, base), {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "CF-Access-Client-Id": accessClientId,
-          "CF-Access-Client-Secret": accessClientSecret,
-        },
+        headers,
         signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) {
@@ -488,8 +522,8 @@ async function main() {
   const event = JSON.parse(readFileSync(requiredEnv(process.env, "GITHUB_EVENT_PATH"), "utf8"));
   const brokerUrl = requiredEnv(process.env, "CRABBOX_COORDINATOR");
   const broker = createJsonApi({
-    accessClientId: requiredEnv(process.env, "CRABBOX_ACCESS_CLIENT_ID"),
-    accessClientSecret: requiredEnv(process.env, "CRABBOX_ACCESS_CLIENT_SECRET"),
+    accessClientId: process.env.CRABBOX_ACCESS_CLIENT_ID,
+    accessClientSecret: process.env.CRABBOX_ACCESS_CLIENT_SECRET,
     baseUrl: brokerUrl.endsWith("/") ? brokerUrl : `${brokerUrl}/`,
     token: requiredEnv(process.env, "CRABBOX_COORDINATOR_TOKEN"),
   });

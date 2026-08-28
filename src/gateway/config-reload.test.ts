@@ -56,6 +56,7 @@ import {
   startGatewayConfigReloader,
 } from "./config-reload.js";
 import { commitGatewayConfigWrite } from "./server-methods/config-write-flow.js";
+import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -580,6 +581,75 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it.each([
+    [{}, { agents: { defaults: { mediaMaxMb: 4 } } }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, {}],
+    [{ agents: {} }, { agents: { defaults: { mediaMaxMb: 4 } } }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: {} }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: { defaults: { mediaMaxMb: 1 } } }],
+  ])("refreshes every channel when the global media limit changes: %j → %j", (prev, next) => {
+    const paths = diffGatewayReloadPaths(prev, next);
+    expect(paths).toContain("agents.defaults.mediaMaxMb");
+    const plan = buildGatewayReloadPlan(paths);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
+  });
+
+  it("global media refresh subsumes scoped restarts without affecting other agent settings", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.mattermost.accounts.alpha.enabled",
+      "agents.defaults.mediaMaxMb",
+    ]);
+    expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
+    expect(buildGatewayReloadPlan(["agents.defaults.model"]).restartChannels).toEqual(new Set());
+  });
+
+  it.each([
+    { registration: { restartPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "restart" },
+    { registration: { hotPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "hot" },
+    { registration: { noopPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "none" },
+  ])("preserves an explicit plugin media reload policy: $kind", ({ registration, kind }) => {
+    const path = "agents.defaults.mediaMaxMb";
+    setActivePluginRegistry({
+      ...registry,
+      reloads: [
+        ...registry.reloads,
+        { pluginId: "policy-owner", pluginName: "Policy owner", registration, source: "test" },
+      ],
+    });
+    expect(resolveConfigReloadMetadata(path).kind).toBe(kind);
+    const plan = buildGatewayReloadPlan([path]);
+    expect(plan.restartGateway).toBe(kind === "restart");
+    expect(plan.restartChannels).toEqual(new Set());
+  });
+
+  it.each([
+    {
+      reload: { configPrefixes: ["agents.defaults.mediaMaxMb"] },
+      kind: "hot",
+      channels: ["telegram"],
+    },
+    {
+      reload: { configPrefixes: [], noopPrefixes: ["agents.defaults.mediaMaxMb"] },
+      kind: "none",
+      channels: [],
+    },
+  ])("preserves an explicit channel media reload policy: $kind", ({ reload, kind, channels }) => {
+    const path = "agents.defaults.mediaMaxMb";
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", plugin: { ...telegramPlugin, reload }, source: "test" },
+        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+      ]),
+    );
+    expect(resolveConfigReloadMetadata(path).kind).toBe(kind);
+    const plan = buildGatewayReloadPlan([path]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(channels));
+  });
+
   const mattermostAccountConfig = {
     channels: {
       mattermost: {
@@ -695,12 +765,18 @@ describe("buildGatewayReloadPlan", () => {
     ]);
 
     setActivePluginRegistry(emptyRegistry);
+    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
+      new Set(),
+    );
     expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
       restartGateway: true,
       restartChannels: new Set(),
     });
 
     setActivePluginRegistry(channelOnlyRegistry);
+    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
+      new Set(["telegram"]),
+    );
     expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
       restartGateway: false,
       restartChannels: new Set(["telegram"]),
@@ -1037,13 +1113,14 @@ describe("startGatewayConfigReloader include files", () => {
     await symlink(includePath, includeLinkPath);
     const configIo = createConfigIO({
       configPath,
-      env: {},
+      env: { HOME: rootDir, OPENCLAW_STATE_DIR: rootDir },
       homedir: () => rootDir,
       observe: false,
       pluginValidation: "skip",
       logger: { error: vi.fn(), warn: vi.fn() },
     });
     const initialSnapshot = await configIo.readConfigFileSnapshot();
+    expect(initialSnapshot.valid, JSON.stringify(initialSnapshot.issues)).toBe(true);
     const onHotReload = vi.fn(async () => "applied" as const);
     let signalWatcherReady!: () => void;
     const watcherReady = new Promise<void>((resolve) => {
@@ -3246,9 +3323,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
     const { watcher, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
-    const superseded = new Error("config reload superseded by a newer runtime config source");
-    superseded.name = "GatewayConfigReloadSupersededError";
-    onRestart.mockRejectedValueOnce(superseded);
+    onRestart.mockRejectedValueOnce(new GatewayConfigReloadSupersededError());
 
     watcher.emit("change");
     await vi.runAllTimersAsync();

@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
+  accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
@@ -348,7 +349,7 @@ export function visibleAssistantStreamParts(
     const afterBoundaryRunId =
       normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
     const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
-    if (!usesItemId && segment.boundaryMarker !== true) {
+    if (!usesItemId && segment.boundaryMarker !== true && segment.persisted !== true) {
       toolIndexedSegmentIndex += 1;
     }
     const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
@@ -356,7 +357,7 @@ export function visibleAssistantStreamParts(
       usesAccumulatedText ? trimAccumulatedStreamPrefix(segment.text, previousText) : segment.text,
       opts.isHiddenStreamText,
     );
-    if (visible) {
+    if (visible && segment.persisted !== true) {
       parts.push({
         text: visible,
         replacementText: segment.text,
@@ -408,12 +409,7 @@ export function visibleCurrentAssistantStreamTail(
   const segments = Array.isArray(streamHost.chatStreamSegments)
     ? streamHost.chatStreamSegments
     : [];
-  let previousText: string | null = null;
-  for (const segment of segments) {
-    if (streamSegmentUsesAccumulatedText(segment) && typeof segment.text === "string") {
-      previousText = advanceAccumulatedStreamText(previousText, segment.text);
-    }
-  }
+  const previousText = accumulatedStreamText(segments);
   return visibleAssistantStreamText(
     trimAccumulatedStreamPrefix(state.chatStream, previousText),
     isHiddenStreamText,

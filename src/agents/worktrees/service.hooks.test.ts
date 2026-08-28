@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { waitForPidFile } from "../../../test/helpers/process-wait.js";
+import { withTimeout } from "../../infra/fs-safe.js";
+import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ManagedWorktreeService } from "./service.js";
 import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -102,11 +105,83 @@ describe("ManagedWorktreeService repository code isolation", () => {
       { mode: 0o755 },
     );
 
-    const created = await service.create({ repoRoot: repo, name: "setup", baseRef: "HEAD" });
+    const progress: string[] = [];
+    const created = await service.create({
+      repoRoot: repo,
+      name: "setup",
+      baseRef: "HEAD",
+      onProgress: (phase) => progress.push(phase),
+    });
 
     await expect(fs.readFile(path.join(created.path, "setup-ran.txt"), "utf8")).resolves.toBe(
       "setup",
     );
     await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(progress).toEqual(["checkout", "setup"]);
+  });
+
+  it("stops setup and removes the unbound worktree when creation is aborted", async () => {
+    const setup = path.join(repo, ".openclaw");
+    const pidFile = path.join(setup, "setup-pid");
+    const release = path.join(setup, "release");
+    await fs.mkdir(setup);
+    await fs.writeFile(
+      path.join(setup, "worktree-setup.sh"),
+      '#!/bin/sh\nprintf "%s" "$$" > "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/setup-pid"\nwhile [ ! -f "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/release" ]; do sleep 0.05; done\n',
+      { mode: 0o755 },
+    );
+    const controller = new AbortController();
+    const creation = service.create({
+      repoRoot: repo,
+      name: "cancelled-setup",
+      baseRef: "HEAD",
+      signal: controller.signal,
+    });
+    const outcome = creation.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      const pid = await waitForPidFile(pidFile, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+      controller.abort(new Error("setup cancelled"));
+      expect(
+        await withTimeout(
+          outcome,
+          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          "worktree cancellation",
+        ),
+      ).toBeInstanceOf(Error);
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(await service.list()).toEqual([]);
+      const worktrees = await execFileAsync("git", ["-C", repo, "worktree", "list", "--porcelain"]);
+      expect(worktrees.stdout).not.toContain("cancelled-setup");
+      const branches = await execFileAsync("git", [
+        "-C",
+        repo,
+        "branch",
+        "--list",
+        "openclaw/cancelled-setup",
+      ]);
+      expect(branches.stdout.trim()).toBe("");
+    } finally {
+      await fs.writeFile(release, "release setup if the regression failed\n");
+      await outcome;
+    }
+  });
+
+  it("does not fetch repository refs after caller authority closes", async () => {
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "fenced-fetch",
+        commitGuard: () => {
+          throw new Error("authority closed");
+        },
+      }),
+    ).rejects.toThrow("authority closed");
+    await expect(fs.access(path.join(repo, ".git", "FETCH_HEAD"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await service.list()).toEqual([]);
   });
 });

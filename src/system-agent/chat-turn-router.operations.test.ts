@@ -1,5 +1,5 @@
 import "./chat-engine.mocks.test-support.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fakeOverviewLoader,
   sharedVerifiedInference,
@@ -21,6 +21,7 @@ import {
 } from "./chat-engine.test-support.js";
 import { ChatTurnRouter } from "./chat-turn-router.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
+import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
 
 const loggingMocks = vi.hoisted(() => ({ chatWarn: vi.fn() }));
 
@@ -609,6 +610,38 @@ describe("SystemAgentChatEngine operations", () => {
 
     expect(reply).toBeNull();
     expect(resolveRepair).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["config set auth.profiles.invalid true", "Direct config writes cannot change"],
+    [
+      "config set agents.defaults.model.primary openai/gpt-5.6-luna",
+      "Direct config writes cannot change",
+    ],
+  ])("rejects forbidden delegated plans before offering approval: %s", async (command, error) => {
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => ({ command }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    await expect(engine.handle("make the requested change")).rejects.toThrow(error);
+    expect(engine.getPendingOperatorProposal()).toBeNull();
+  });
+});
+
+describe("SystemAgentChatEngine CLI loop backends", () => {
+  let restoreCliBackendFixture: (() => void) | undefined;
+
+  beforeAll(() => {
+    // These cases own routing and session continuity; plugin setup tests own
+    // loading the generated backend artifact.
+    restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+  });
+
+  afterAll(() => {
+    restoreCliBackendFixture?.();
   });
 
   it("runs a configured claude-cli model through the CLI loop with the ring-zero MCP tool", async () => {

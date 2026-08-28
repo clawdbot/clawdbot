@@ -323,6 +323,9 @@ public enum QuestionStatus: String, Codable, Sendable {
 
 public enum ChatRunStartupPhase: String, Codable, Sendable {
     case preparingWorkspace = "preparing_workspace"
+    case namingWorktree = "naming_worktree"
+    case creatingWorktree = "creating_worktree"
+    case runningSetup = "running_setup"
     case provisioningEnvironment = "provisioning_environment"
     case preparingContext = "preparing_context"
     case startingModel = "starting_model"

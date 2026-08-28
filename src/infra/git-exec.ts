@@ -7,20 +7,31 @@ export const GIT_TIMEOUT_MS = 120_000;
 export async function executeGitCommand(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
-): Promise<SpawnResult> {
-  return await runCommandWithTimeout(["git", "-C", cwd, ...args], {
-    timeoutMs: GIT_TIMEOUT_MS,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    input?: string | Uint8Array;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<SpawnResult & { timeoutMs: number }> {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
+    timeoutMs,
     env: options.env,
     input: options.input,
+    signal: options.signal,
   });
+  return { ...result, timeoutMs };
 }
 
 export function createGitCommandError(
   command: string,
-  result: SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>,
+  result: (SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>) & { timeoutMs?: number },
 ): Error {
-  const error = createCommandError(command, result, { timeoutMs: GIT_TIMEOUT_MS });
+  // Buffered Git uses the fixed default; text results carry their applied budget.
+  const error = createCommandError(command, result, {
+    timeoutMs: result.timeoutMs ?? GIT_TIMEOUT_MS,
+  });
   if (result.termination === "timeout") {
     error.message += "\nCheck repository access and disk space.";
   }
@@ -30,7 +41,7 @@ export function createGitCommandError(
 export async function requireGitCommand(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
+  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
 ): Promise<string> {
   const result = await executeGitCommand(cwd, args, options);
   if (result.code !== 0) {

@@ -118,10 +118,6 @@ export function getPreparedRuntimeAuthMaterializations(
   return materializations.get(ownerKey(agentDir)) ?? [];
 }
 
-export function clearRuntimeAuthMaterializations(agentDir?: string): void {
-  materializations.delete(ownerKey(agentDir));
-}
-
 /** Clears materializations for an already resolved canonical auth database owner. */
 export function clearRuntimeAuthMaterializationsAtDatabasePath(databasePath: string): void {
   materializations.delete(databasePath);

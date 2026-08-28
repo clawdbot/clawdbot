@@ -15,7 +15,7 @@ import {
   waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
-import { exerciseTuiReconnectOutcomes } from "./tui-pty-reconnect-test-support.js";
+import { registerTuiReconnectTests } from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
   exerciseToolCardRendering,
@@ -247,11 +247,11 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "reconciles active, replacement, and terminal runs after reconnect history",
-    () => exerciseTuiReconnectOutcomes(35_000),
-    45_000,
-  );
+  registerTuiReconnectTests({
+    startupTimeoutMs: STARTUP_TIMEOUT_MS,
+    testTimeoutMs: TEST_TIMEOUT_MS,
+    startupTestTimeoutMs: STARTUP_TEST_TIMEOUT_MS,
+  });
 
   it.each([{ failures: 1 }, { failures: 2 }, { failures: 3 }, { failures: 4 }])(
     "recovers session subscription after $failures startup failures",

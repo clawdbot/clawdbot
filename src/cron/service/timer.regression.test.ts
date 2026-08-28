@@ -165,7 +165,7 @@ describe("cron service timer regressions", () => {
           status: "error",
           error: params.firstError ?? "429 rate limit exceeded",
         })
-        .mockResolvedValueOnce({ status: "ok", summary: "done" });
+        .mockResolvedValueOnce({ status: "ok", summary: "done", delivered: true });
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
@@ -1732,7 +1732,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not persist retired scheduled outcomes after restart generation advance", async () => {
+  it("recovers completed scheduled outcomes after restart generation advance", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-13T12:45:00.000Z");
     const cronJob = createDueIsolatedJob({
@@ -1767,8 +1767,8 @@ describe("cron service timer regressions", () => {
 
     const persisted = await loadCronStore(store.storePath);
     const persistedJob = persisted.jobs.find((job) => job.id === cronJob.id);
-    expect(persistedJob?.state.lastStatus).not.toBe("ok");
-    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
+    expect(persistedJob?.state.lastStatus).toBe("ok");
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
   });
 
   it("releases due-job reservations instead of admitting workers after scheduler stop wins", async () => {
@@ -2519,7 +2519,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not persist stale startup catch-up outcomes after the old service stops", async () => {
+  it("recovers stopped catch-up outcomes without overwriting replacement reservations", async () => {
     resetTaskRegistryForTests();
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-10T08:58:45.000Z");
@@ -2582,8 +2582,8 @@ describe("cron service timer regressions", () => {
     const persistedReplacementClaimedJob = persisted.jobs.find(
       (entry) => entry.id === replacementClaimedJob.id,
     );
-    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
-    expect(persistedJob?.state.lastStatus).toBeUndefined();
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    expect(persistedJob?.state.lastStatus).toBe("ok");
     expect(persistedUnstartedJob?.state.runningAtMs).toBeUndefined();
     expect(persistedUnstartedJob?.state.lastStatus).toBeUndefined();
     expect(persistedReplacementClaimedJob?.state.queuedAtMs).toBe(replacementReservationMs);

@@ -135,6 +135,7 @@ export function validateCrabboxMergeBypass({
   expectedRunId,
   headSha,
   jobs,
+  mainRef,
   membership,
   pullRequest,
   publisherRun,
@@ -186,16 +187,22 @@ export function validateCrabboxMergeBypass({
   }
   const publisherRunId = parsePublisherDetailsUrl(crabboxCheck.details_url);
   const publisher = record(publisherRun, "Crabbox publisher workflow run");
+  const mainRefRecord = record(mainRef, "protected main ref");
   if (
     publisher.id !== publisherRunId ||
     publisher.status !== "completed" ||
     publisher.conclusion !== "success" ||
     publisher.event !== "workflow_dispatch" ||
     publisher.head_branch !== "main" ||
-    publisher.head_sha !== binding.baseSha ||
-    !isProtectedMainWorkflowPath(publisher.path, ".github/workflows/pr-crabbox-gate-publisher.yml")
+    publisher.head_sha !== binding.workflowSha ||
+    !isProtectedMainWorkflowPath(
+      publisher.path,
+      ".github/workflows/pr-crabbox-gate-publisher.yml",
+    ) ||
+    mainRefRecord.ref !== "refs/heads/main" ||
+    record(mainRefRecord.object, "protected main ref.object").sha !== binding.workflowSha
   ) {
-    throw new Error("Crabbox check is not bound to the protected-main publisher workflow");
+    throw new Error("Crabbox check is not bound to the current protected-main publisher workflow");
   }
 
   const ciCheck = latestNamedCheck(checkRunList, CI_CHECK_NAME);
@@ -295,6 +302,7 @@ export function validateCrabboxMergeBypass({
     infrastructureJobs,
     planDigest: binding.planDigest,
     targetCount: binding.targetCount,
+    workflowSha: binding.workflowSha,
   };
 }
 
@@ -329,6 +337,7 @@ function main() {
     expectedRunId: requiredString(args["run-id"], "run id"),
     headSha: requiredString(args.head, "head SHA"),
     jobs,
+    mainRef: readJson(args["main-ref"], "protected main ref"),
     membership: readJson(args.membership, "organization membership"),
     pullRequest: readJson(args["pull-request"], "pull request"),
     publisherRun: readJson(args["publisher-run"], "Crabbox publisher workflow run"),

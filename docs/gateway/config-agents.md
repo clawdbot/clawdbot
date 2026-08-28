@@ -774,7 +774,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | daytona | openshell | podman | ssh
+        backend: "docker", // docker (default) | openshell | podman | ssh
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -868,7 +868,6 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 
 **Backend:**
 
-- `daytona`: Daytona-managed cloud runtime
 - `docker`: local Docker runtime (default)
 - `openshell`: OpenShell-managed local or remote runtime
 - `podman`: local Podman runtime using Docker-compatible settings
@@ -876,7 +875,6 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 
 Plugin-managed backends keep runtime-specific settings under their plugin entries:
 
-- Daytona: `plugins.entries.daytona.config`; see [Daytona](/gateway/daytona)
 - OpenShell: `plugins.entries.openshell.config`; see [OpenShell](/gateway/openshell)
 
 **SSH backend config:**

@@ -1,5 +1,6 @@
 // PTY adapter wraps pseudo-terminal processes for the process supervisor.
 import type { IDisposable } from "@lydell/node-pty";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { signalPtySessionTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import {
@@ -56,12 +57,11 @@ export async function createPtyAdapter(params: {
 
   let dataListener: IDisposable | null = null;
   let exitListener: IDisposable | null = null;
-  let waitResult: { code: number | null; signal: NodeJS.Signals | number | null } | null = null;
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | number | null }) => void)
-    | null = null;
-  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | number | null }> | null =
-    null;
+  const completion = createDeferredCore<{
+    code: number | null;
+    signal: NodeJS.Signals | number | null;
+  }>();
+  let waitSettled = false;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let stdinDestroyed = false;
   let stdinEnded = false;
@@ -75,18 +75,14 @@ export async function createPtyAdapter(params: {
   };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | number | null }) => {
-    if (waitResult) {
+    if (waitSettled) {
       return;
     }
+    waitSettled = true;
     clearForceKillWaitFallback();
     stdinDestroyed = true;
     stdinEnded = true;
-    waitResult = value;
-    if (resolveWait) {
-      const resolve = resolveWait;
-      resolveWait = null;
-      resolve(value);
-    }
+    completion.resolve(value);
   };
 
   const scheduleForceKillWaitFallback = (signal: NodeJS.Signals) => {
@@ -150,24 +146,7 @@ export async function createPtyAdapter(params: {
     // PTY gives a unified output stream.
   };
 
-  const wait = async () => {
-    if (waitResult) {
-      return waitResult;
-    }
-    if (!waitPromise) {
-      waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | number | null }>(
-        (resolve) => {
-          resolveWait = resolve;
-          if (waitResult) {
-            const settled = waitResult;
-            resolveWait = null;
-            resolve(settled);
-          }
-        },
-      );
-    }
-    return waitPromise;
-  };
+  const wait = async () => await completion.promise;
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {

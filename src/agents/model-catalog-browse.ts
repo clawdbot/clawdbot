@@ -78,7 +78,7 @@ export async function loadPreparedModelCatalogSnapshotForBrowse(params: {
   view?: ModelCatalogBrowseView;
   /** Never starts provider discovery; a completed generation cache may still be reused. */
   preparedOnly?: boolean;
-  /** Replaces the completed generation cache when discovery is otherwise required. */
+  /** Replaces the completed full-catalog generation. */
   refresh?: boolean;
   loadCatalog: (params: { readOnly: boolean; refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
   timeoutFullDiscovery?: boolean;
@@ -88,11 +88,12 @@ export async function loadPreparedModelCatalogSnapshotForBrowse(params: {
   const view = params.view ?? "default";
   const requiresFullDiscovery =
     params.preparedOnly !== true &&
-    modelCatalogBrowseRequiresFullDiscovery({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      view,
-    });
+    (params.refresh === true ||
+      modelCatalogBrowseRequiresFullDiscovery({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        view,
+      }));
   // Implicit inventory reads stay bounded; explicit refreshes complete unless their caller
   // explicitly requests a full-discovery deadline.
   const shouldTimeoutFullDiscovery =

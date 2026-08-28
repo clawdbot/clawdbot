@@ -12,6 +12,9 @@ export type ChatRunStartupStatus = Extract<ChatRunStartupState, { state: "status
 
 const STARTUP_LABEL_KEYS = {
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
+  naming_worktree: "chat.startupStatus.namingWorktree",
+  creating_worktree: "chat.startupStatus.creatingWorktree",
+  running_setup: "chat.startupStatus.runningSetup",
   provisioning_environment: "chat.startupStatus.provisioningEnvironment",
   preparing_context: "chat.startupStatus.preparingContext",
   starting_model: "chat.startupStatus.startingModel",

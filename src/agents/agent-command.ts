@@ -187,7 +187,7 @@ async function agentCommandInternal(
   }
 
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
-  let preparedRunAdmission: ReturnType<typeof executionIdentity.prepare> | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
   try {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     const sessionStoreRuntime =
@@ -546,7 +546,7 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
-    preparedRunAdmission?.close();
+    await preparedRunAdmission?.finish();
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned

@@ -913,6 +913,69 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
   });
 
+  it.each(["NONE", "FULL", "INCREMENTAL"] as const)(
+    "finalizes imports from auto_vacuum=%s without unnecessary repacking",
+    async (autoVacuum) => {
+      const { sqlitePath, store } = await createImportedStoreForCompaction();
+      fs.writeFileSync(store.storePath, "{}\n");
+      const database = nodeSqlite.openNodeSqliteDatabase(sqlitePath);
+      let freelistBefore: number;
+      try {
+        database.exec(`PRAGMA auto_vacuum = ${autoVacuum}; VACUUM;
+          CREATE TABLE cleanup_payload (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+          CREATE TABLE cleanup_discard (body BLOB);
+          BEGIN;`);
+        const insert = database.prepare("INSERT INTO cleanup_payload VALUES (?, ?)");
+        for (let index = 0; index < 1000; index++) {
+          insert.run(index, "x".repeat(1000));
+        }
+        // Keep partially filled pages as well as completely freed pages: only full
+        // compaction should repack the former when pointer maps already exist.
+        database.exec(`COMMIT; UPDATE cleanup_payload SET body = 'keep';
+          INSERT INTO cleanup_discard VALUES (zeroblob(1048576));
+          DELETE FROM cleanup_discard; PRAGMA wal_checkpoint(TRUNCATE);`);
+        freelistBefore = Number(database.prepare("PRAGMA freelist_count").get()?.freelist_count);
+      } finally {
+        database.close();
+      }
+      const imported = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "import",
+        store: store.storePath,
+      });
+      expect(imported.totals.issues).toBe(0);
+      const cleanup = expectDefined(imported.targets[0]?.compact, "import cleanup");
+      expect(cleanup.freelistAfterPages).toBe(0);
+      if (autoVacuum !== "FULL") {
+        expect(freelistBefore).toBeGreaterThan(0);
+        expect(cleanup.reclaimedBytes).toBeGreaterThan(0);
+      }
+      const compacted = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "compact",
+        store: store.storePath,
+      });
+      expect(compacted.totals.issues).toBe(0);
+      const packed = expectDefined(compacted.targets[0]?.compact, "explicit compaction");
+      if (autoVacuum === "NONE") {
+        expect(packed.dbSizeAfterBytes).toBe(cleanup.dbSizeAfterBytes);
+      } else {
+        expect(packed.dbSizeAfterBytes).toBeLessThan(cleanup.dbSizeAfterBytes);
+      }
+      const after = nodeSqlite.openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      try {
+        expect(after.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
+        expect(after.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(after.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(after.prepare("SELECT id, body FROM cleanup_payload ORDER BY id").all()).toEqual(
+          Array.from({ length: 1000 }, (_, id) => ({ id, body: "keep" })),
+        );
+      } finally {
+        after.close();
+      }
+    },
+  );
+
   it("compacts migrated agent SQLite databases and reports reclaimed pages", async () => {
     const store = createLegacyStore({
       transcriptLines: [
@@ -2473,22 +2536,21 @@ describe("runDoctorSessionSqlite", () => {
     const manifestPath = path.join(store.tempDir, "failed-migration.json");
     const unpairedSurrogate =
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
-    const writeManifest = (messages: string[], targetCount = 1) => {
+    const writeManifest = (messages: string[]) => {
       const manifest: SessionSqliteMigrationManifest = {
         failedAt: "2030-01-01T00:00:00.000Z",
         manifestVersion: 2,
         openClawVersion: "test",
         runId: "utf16-boundary",
         startedAt: "2030-01-01T00:00:00.000Z",
-        targets: Array.from({ length: targetCount }, (_, index) => {
-          const targetMessages = index === targetCount - 1 ? messages : ["x".repeat(500)];
+        targets: Array.from({ length: Math.ceil(messages.length / 10) }, (_, index) => {
           return {
-            agentId:
-              targetCount === 1
-                ? "agent-with-long-name-".repeat(10)
-                : `agent-${index}-${"long-name-".repeat(10)}`,
+            agentId: `agent-${index}`,
             completedMoves: [],
-            issues: targetMessages.map((message) => ({ code: "startup_failure", message })),
+            issues: messages.slice(index * 10, (index + 1) * 10).map((message) => ({
+              code: "startup_failure",
+              message,
+            })),
             plannedMoves: [],
             sqlitePath: path.join(store.tempDir, "openclaw-agent.sqlite"),
             storePath: store.storePath,
@@ -2501,40 +2563,51 @@ describe("runDoctorSessionSqlite", () => {
 
     writeManifest([`${"x".repeat(499)}🎉tail`]);
     const fieldIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
+    expect(fieldIssue?.body).toContain(`${"x".repeat(499)}\n`);
+    expect(fieldIssue?.body).not.toContain("🎉tail");
     expect(fieldIssue?.body).not.toMatch(unpairedSurrogate);
     expect(new URL(fieldIssue?.url ?? "").searchParams.get("body")).not.toContain("�");
 
-    const baseMessages = Array.from({ length: 9 }, () => "x".repeat(500));
-    writeManifest([...baseMessages, "MESSAGE_START"]);
-    const probe = createSessionSqliteMigrationFailureIssue(manifestPath);
-    const messageOffset = probe?.body.indexOf("MESSAGE_START") ?? -1;
-    expect(5_999 - messageOffset).toBeLessThan(500);
+    for (const [limit, messageCount] of [
+      [6_000, 20],
+      [20_000, 50],
+    ] as const) {
+      const marker = "BOUNDARY";
+      const messages = Array.from({ length: messageCount - 1 }, () => "");
+      writeManifest([...messages, `${marker}!!tail`]);
+      const probe = createSessionSqliteMigrationFailureIssue(manifestPath);
+      const markerOffset = probe?.body.indexOf(marker) ?? -1;
+      expect(markerOffset).toBeGreaterThanOrEqual(0);
+      let padding = limit - 1 - markerOffset - marker.length;
+      expect(padding).toBeGreaterThanOrEqual(0);
 
-    writeManifest([...baseMessages, `${"x".repeat(5_999 - messageOffset)}🎉tail`]);
-    const issue = createSessionSqliteMigrationFailureIssue(manifestPath);
-    expect(issue?.body).toContain("🎉tail");
-    const urlBody = new URL(issue?.url ?? "").searchParams.get("body");
-    expect(urlBody).not.toContain("�");
-    expect(urlBody).toContain("truncated for URL");
-
-    let bodyTargetCount = 0;
-    let bodyMessageOffset = -1;
-    for (let count = 1; count < 50; count += 1) {
-      writeManifest(["BODY_START"], count);
-      const candidateIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
-      const candidateOffset = candidateIssue?.body.indexOf("BODY_START") ?? -1;
-      if (candidateOffset < 0) {
-        break;
+      // Fill earlier fields, each within its 500-unit cap, so path length cannot
+      // move the surrogate away from the URL/body boundary being exercised.
+      for (let index = 0; index < messages.length; index += 1) {
+        const length = Math.min(padding, 500);
+        messages[index] = "x".repeat(length);
+        padding -= length;
       }
-      bodyTargetCount = count;
-      bodyMessageOffset = candidateOffset;
-    }
-    expect(bodyMessageOffset).toBeGreaterThanOrEqual(0);
-    expect(19_999 - bodyMessageOffset).toBeLessThan(600);
+      expect(padding).toBe(0);
+      writeManifest([...messages, `${marker}!!tail`]);
+      const aligned = createSessionSqliteMigrationFailureIssue(manifestPath);
+      expect(aligned?.body.slice(limit - 1 - marker.length, limit)).toBe(`${marker}!`);
 
-    writeManifest([`${"x".repeat(19_999 - bodyMessageOffset)}🎉tail`], bodyTargetCount);
-    const bodyIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
-    expect(bodyIssue?.body).not.toMatch(unpairedSurrogate);
+      writeManifest([...messages, `${marker}🎉tail`]);
+      const issue = createSessionSqliteMigrationFailureIssue(manifestPath);
+      const urlBody = new URL(issue?.url ?? "").searchParams.get("body");
+      expect(urlBody).not.toContain("�");
+      expect(urlBody).toContain("truncated for URL");
+      expect(issue?.body).not.toMatch(unpairedSurrogate);
+      if (limit === 6_000) {
+        expect(issue?.body).toContain(`${marker}🎉tail`);
+        expect(urlBody?.split("\n\n...(truncated for URL")[0]).toHaveLength(limit - 1);
+        expect(urlBody).toContain(`${marker}\n\n...(truncated for URL`);
+      } else {
+        expect(issue?.body).toHaveLength(limit - 1);
+        expect(issue?.body.endsWith(marker)).toBe(true);
+      }
+    }
   });
 
   it("recovers only manifests matching an explicit store selector", async () => {

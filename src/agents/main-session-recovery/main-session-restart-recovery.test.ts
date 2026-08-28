@@ -70,6 +70,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
+import { beginAgentDeletion } from "../agent-lifecycle-registry.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
@@ -694,6 +695,55 @@ describe("main-session-restart-recovery", () => {
 
     expect(storePaths).toContain(path.join(configuredSessionsDir, "sessions.json"));
     expect(storePaths).not.toContain(path.join(staleSessionsDir, "sessions.json"));
+  });
+
+  it("marks an admitted custom-store turn after a deleted agent leaves its directory behind", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+      const staleSessionsDir = await makeSessionsDir("retired-probe");
+      await writeMainSession({
+        sessionsDir: staleSessionsDir,
+        sessionKey: "agent:retired-probe:main",
+      });
+      closeOpenClawAgentDatabasesForTest();
+      const deletion = beginAgentDeletion({
+        agentId: "retired-probe",
+        agentDir: path.join(tmpDir, "agents", "retired-probe", "agent"),
+        workspaceDir: path.join(tmpDir, "workspace-retired-probe"),
+        sessionsDir: staleSessionsDir,
+        deleteFiles: false,
+      });
+      const storePath = path.join(tmpDir, "active-custom-store", "sessions.json");
+      const sessionKey = "agent:main:custom";
+      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      try {
+        await writeStorePath(storePath, {
+          [sessionKey]: runningSessionEntry("custom-session"),
+        });
+        admission = await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [sessionKey, "custom-session"],
+          assertAllowed: () => undefined,
+        });
+
+        await expect(
+          markRestartAbortedMainSessions({
+            cfg: { agents: { list: [{ id: "main", default: true }] } },
+            stateDir: tmpDir,
+            activeRuns: [],
+          }),
+        ).resolves.toEqual({ marked: 1, skipped: 0 });
+        expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+          sessionId: "custom-session",
+          abortedLastRun: true,
+          restartRecoveryForceSafeTools: true,
+        });
+      } finally {
+        admission?.release();
+        deletion.rollback();
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
+      }
+    });
   });
 
   it("keeps a configured fixed store when its path carries a retired owner id", async () => {

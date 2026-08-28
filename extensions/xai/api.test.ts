@@ -1,8 +1,18 @@
 // Xai tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveXaiForwardCompatModel, resolveXaiTransport, XAI_BASE_URL } from "./api.js";
+import {
+  normalizeXaiModelId,
+  resolveXaiForwardCompatModel,
+  resolveXaiTransport,
+  XAI_BASE_URL,
+} from "./api.js";
+import { normalizeXaiModelId as normalizeXaiModelIdDirect } from "./model-id.js";
 
 describe("xai api helpers", () => {
+  it("re-exports the model normalizer", () => {
+    expect(normalizeXaiModelId).toBe(normalizeXaiModelIdDirect);
+  });
+
   it("uses shared endpoint classification for native xAI transports", () => {
     expect(
       resolveXaiTransport({

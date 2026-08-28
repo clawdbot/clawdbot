@@ -183,6 +183,38 @@ describe("runDoctorStateSqliteCompact", () => {
     expect(report.integrityCheck).toBe("ok");
   });
 
+  it("fully repacks partially filled pages in an already incremental database", async () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env });
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      database.exec("PRAGMA auto_vacuum = INCREMENTAL; VACUUM; BEGIN;");
+      const insert = database.prepare("INSERT INTO compact_payload (payload) VALUES (?)");
+      for (let index = 0; index < 1000; index++) {
+        insert.run("x".repeat(1000));
+      }
+      database.exec(
+        "COMMIT; UPDATE compact_payload SET payload = 'keep'; PRAGMA wal_checkpoint(TRUNCATE);",
+      );
+      expect(readPragma(database, "freelist_count")).toBe(0);
+    } finally {
+      database.close();
+    }
+    const report = await runDoctorStateSqliteCompact({ env });
+    expectCompletedReport(report);
+    expect(report.before.autoVacuum).toBe(2);
+    expect(report.after.dbSizeBytes).toBeLessThan(report.before.dbSizeBytes);
+    const after = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(
+        after.prepare("SELECT COUNT(*) AS count FROM compact_payload WHERE payload = 'keep'").get(),
+      ).toEqual({ count: 1000 });
+    } finally {
+      after.close();
+    }
+  });
+
   it("compacts pre-bootstrap-column v6 state without migrating it", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });

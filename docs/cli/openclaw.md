@@ -110,6 +110,11 @@ Starting a guided setup flow also runs immediately: channel setup (`connect tele
 
 Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
+Changes delegated by a regular agent, including requests from messaging channels,
+require approval in the OpenClaw operator UI. Replying "yes" in that chat cannot
+approve the change. Run `openclaw dashboard` on the Gateway host to review the
+pending approval, or run the change directly with `openclaw setup` there.
+
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
 operator approval flow used by Ask OpenClaw; the approval summary names the

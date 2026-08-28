@@ -670,8 +670,7 @@ export function recomputeSingleJobForMaintenance(
   const hasPendingStartupCatchup =
     isFiniteTimestamp(startupCatchupAtMs) &&
     hasScheduledNextRunAtMs(nextRunAtMs) &&
-    startupCatchupAtMs === nextRunAtMs &&
-    now < startupCatchupAtMs;
+    startupCatchupAtMs === nextRunAtMs;
   if (startupCatchupAtMs !== undefined && !hasPendingStartupCatchup) {
     job.state.startupCatchupAtMs = undefined;
     changed = true;
@@ -698,6 +697,7 @@ export function recomputeSingleJobForMaintenance(
     changed = recomputeJob() || changed;
   } else if (
     recomputeExpired &&
+    !hasPendingStartupCatchup &&
     !hasForcePreservedNextRun &&
     now >= job.state.nextRunAtMs &&
     typeof job.state.queuedAtMs !== "number" &&

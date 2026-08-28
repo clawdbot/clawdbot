@@ -1709,7 +1709,7 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(deferred);
   });
 
-  it("preserves pending startup catch-up deferrals until the deferred slot is reached", () => {
+  it("preserves pending startup catch-up deferrals until the occurrence is consumed", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const deferred = Date.parse("2026-05-05T12:02:00.000Z");
     const job: CronJob = {
@@ -1738,8 +1738,8 @@ describe("recomputeNextRuns", () => {
         nowMs: deferred,
         repairFutureCronNextRunAtMs: true,
       }),
-    ).toBe(true);
-    expect(job.state.startupCatchupAtMs).toBeUndefined();
+    ).toBe(false);
+    expect(job.state.startupCatchupAtMs).toBe(deferred);
     expect(job.state.nextRunAtMs).toBe(deferred);
   });
 

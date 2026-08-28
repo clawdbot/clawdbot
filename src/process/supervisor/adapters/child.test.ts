@@ -316,22 +316,96 @@ describe("createChildAdapter", () => {
     expect(child.listenerCount("close")).toBe(0);
   });
 
-  it("fails owned worker authority closed on child process errors", async () => {
-    const { child, disconnectMock } = createStubChild(7866);
-    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
-    const adapter = await createChildAdapter({
-      argv: ["node", "worker"],
-      ownedWorker: true,
+  it.each([
+    { first: "error", waitBefore: true },
+    { first: "error", waitBefore: false },
+    { first: "close", waitBefore: true },
+    { first: "close", waitBefore: false },
+  ] as const)(
+    "keeps the first owned worker $first outcome (waitBefore=$waitBefore)",
+    async ({ first, waitBefore }) => {
+      const { child, disconnectMock, emitClose } = createStubChild(7866);
+      spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+      const adapter = await createChildAdapter({
+        argv: ["node", "worker"],
+        ownedWorker: true,
+      });
+      const error = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      const pending = Promise.allSettled(waitBefore ? [adapter.wait(), adapter.wait()] : []);
+
+      try {
+        if (first === "error") {
+          child.emit("error", error);
+          emitClose(0);
+        } else {
+          emitClose(0);
+          child.emit("error", error);
+        }
+        // Cross a turn before late waits so an unhandled eager rejection fails the test.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        const outcomes = [
+          ...(await pending),
+          ...(await Promise.allSettled([adapter.wait(), adapter.wait()])),
+        ];
+        let firstResult: Awaited<ReturnType<typeof adapter.wait>> | undefined;
+        for (const outcome of outcomes) {
+          if (first === "error") {
+            expect(outcome.status).toBe("rejected");
+            if (outcome.status === "rejected") {
+              expect(outcome.reason).toBe(error);
+            }
+          } else {
+            expect(outcome).toStrictEqual({
+              status: "fulfilled",
+              value: { code: 0, signal: null },
+            });
+            if (outcome.status === "fulfilled") {
+              firstResult ??= outcome.value;
+              expect(outcome.value).toBe(firstResult);
+            }
+          }
+        }
+      } finally {
+        adapter.dispose();
+      }
+
+      expect(disconnectMock).toHaveBeenCalledOnce();
+      expect(child.listenerCount("error")).toBe(0);
+    },
+  );
+
+  it("preserves startup failure when a worker error arrives during secret delivery", async () => {
+    const { child, killMock } = createStubChild();
+    const deliveryError = new Error("secret delivery failed");
+    const secretStream = new Writable({
+      write(_chunk, _encoding, callback) {
+        child.emit("error", new Error("worker IPC failed"));
+        setImmediate(() => callback(deliveryError));
+      },
     });
-    const wait = adapter.wait();
-    const error = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream, null],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const transient = Buffer.from("synthetic-secret");
 
-    child.emit("error", error);
+    await expect(
+      createChildAdapter({
+        argv: ["node", "worker"],
+        ownedWorker: true,
+        secretInput: { fd: 3, createData: () => transient },
+      }),
+    ).rejects.toBe(deliveryError);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
-    await expect(wait).rejects.toBe(error);
-    adapter.dispose();
-    expect(disconnectMock).toHaveBeenCalledOnce();
-    expect(child.listenerCount("error")).toBe(0);
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
+    child.removeAllListeners();
   });
 
   it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {

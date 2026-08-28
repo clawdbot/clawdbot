@@ -263,9 +263,10 @@ describe("secrets runtime snapshot auth refresh failure", () => {
       );
       expect(candidate.authStores[0]?.store.profiles[profileId]).toMatchObject({
         type: "api_key",
+        provider: "openai",
         keyRef: OPENAI_FILE_KEY_REF,
-        key: undefined,
       });
+      expect(candidate.authStores[0]?.store.profiles[profileId]).not.toHaveProperty("key");
     });
   });
 });

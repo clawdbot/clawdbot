@@ -38,7 +38,12 @@ export function gitEnvironment(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export async function runGit(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    input?: string | Uint8Array;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<GitResult> {
   return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
 }
@@ -50,7 +55,7 @@ export function commandError(command: string, result: GitResult): Error {
 export async function requireGit(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
+  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
 ): Promise<string> {
   return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
 }

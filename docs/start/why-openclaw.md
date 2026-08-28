@@ -71,7 +71,7 @@ flowchart LR
   end
   subgraph EX["Configured isolated execution (sandboxing off by default)"]
     direction TB
-    SB["Sandbox: Docker, Podman, OpenShell, Daytona"]
+    SB["Sandbox: Docker, Podman, SSH, OpenShell"]
     ND["Hosted node sessions: sealed, hash-verified worker"]
     CW["Cloud workers: scoped RPC authority, proxied inference"]
   end
@@ -80,7 +80,7 @@ flowchart LR
   EX -->|"results and scoped worker RPCs"| GW
 ```
 
-[`tools.exec.host`](/tools/exec) resolves to the gateway host, a [sandbox](/gateway/sandboxing), or a paired [node](/nodes). While a sandbox runtime is active, per-call escapes to the host are rejected, and an explicit `host=sandbox` with no runtime configured fails instead of silently running on the host. Backends: Docker and Podman (default profile: no network, read-only root, all capabilities dropped, non-root user), SSH, [OpenShell](/gateway/openshell), and [Daytona](/gateway/daytona) cloud sandboxes (automatic idle-stop with resume on next use, memory-preserving pause, cold-storage archiving) — the latter two installed as plugins, registered through the same backend contract as Docker. If you run OpenShell already, OpenClaw uses its sandboxes; it does not need to be wrapped in one.
+[`tools.exec.host`](/tools/exec) resolves to the gateway host, a [sandbox](/gateway/sandboxing), or a paired [node](/nodes). While a sandbox runtime is active, per-call escapes to the host are rejected, and an explicit `host=sandbox` with no runtime configured fails instead of silently running on the host. Backends: Docker and Podman (default profile: no network, read-only root, all capabilities dropped, non-root user), SSH, and [OpenShell](/gateway/openshell), which is installed as a plugin and registered through the same backend contract as Docker. If you run OpenShell already, OpenClaw uses its sandboxes; it does not need to be wrapped in one.
 
 Sandbox bind mounts are validated twice, once on the normalized path and again after resolving through the deepest existing ancestor, so symlink-based bypass attempts fail closed. The deny-list of credential and system paths cannot be disabled — the `dangerouslyAllowExternalBindSources` override relaxes only the allowed-roots check.
 
@@ -253,7 +253,7 @@ Since the comparison snapshot, Hermes has added [optional persistent local Pytho
 Each enterprise configuration item links to its reference:
 
 - Sandbox on: `agents.defaults.sandbox.mode: "all"` with the [`openshell`](/gateway/openshell) or [`docker`](/gateway/sandboxing) backend; `workspaceAccess: "ro"` unless the agent owns the workspace.
-- Select [`guarded` or `workspace`](/gateway/permission-modes) per session; `full` requires `operator.admin`. Managed worktree sessions default to `workspace`; other sessions without a mode use configured tool/exec policy.
+- Select [`guarded` or `workspace`](/gateway/permission-modes) per session; `full` requires `operator.admin`. Sessions without a mode, including managed worktree sessions, use configured tool/exec policy.
 - Front the gateway with [Tailscale](/gateway/tailscale) or an [identity-aware proxy](/gateway/trusted-proxy-auth); define [`gateway.roles`](/gateway/operator-scopes) with a deny-all default; leave DM policy on [pairing](/channels/pairing).
 - Everything behind [SecretRefs](/gateway/secrets); run `openclaw secrets audit --check` against your config in CI.
 - Enable [message auditing](/gateway/audit); export [OpenTelemetry](/gateway/opentelemetry) to your SIEM with operator-owned retention and monitoring for dropped data.
