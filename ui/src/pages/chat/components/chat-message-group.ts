@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { keyed } from "lit/directives/keyed.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
@@ -597,18 +596,18 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   >${icons.forward}</span
                 >
                 ${sourceSessionKey
-                  ? html`<span>${t("chat.messages.forwardedFrom")}</span> ${keyed(
-                        sourceSessionKey,
-                        // The titler owns child text; remount on source changes
-                        // so its observer also refreshes the title and href.
-                        html`<a
-                          class="markdown-session-link"
-                          role="link"
-                          tabindex="0"
-                          data-session-key=${sourceSessionKey}
-                          .textContent=${sourceSessionKey}
-                        ></a>`,
-                      )}`
+                  ? // The titler owns child text (.textContent keeps Lit's part
+                    // out of it). A rendered group's source never changes:
+                    // messages are immutable and grouping splits on
+                    // senderSession, so no keyed remount is needed here.
+                    html`<span>${t("chat.messages.forwardedFrom")}</span>
+                      <a
+                        class="markdown-session-link"
+                        role="link"
+                        tabindex="0"
+                        data-session-key=${sourceSessionKey}
+                        .textContent=${sourceSessionKey}
+                      ></a>`
                   : html`<span
                       >${group.senderSession?.agentId
                         ? t("chat.messages.forwardedFromAgent", {

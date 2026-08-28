@@ -2527,26 +2527,23 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("keeps titled source chips usable across rerenders and source changes", async () => {
+  // A rendered group's source cannot change in place: messages are immutable
+  // and grouping splits on senderSession, so a different source produces a new
+  // group key and a fresh anchor. The protected behavior is that the titler's
+  // stamped title and href survive ordinary re-renders of the same group.
+  it("keeps titled source chips usable across rerenders", async () => {
     const container = document.createElement("div");
     const group = createMessageGroup(createAssistantMessage("forwarded report"), "assistant", {
       senderSession: { sessionKey: "agent:main:main" },
     });
     const titler = new SessionLinkTitler(container);
     titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
-    vi.spyOn(titler.client, "request")
-      .mockResolvedValueOnce({
-        status: "ok",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        title: "Main session",
-      })
-      .mockResolvedValueOnce({
-        status: "ok",
-        sessionKey: "agent:main:research",
-        agentId: "main",
-        title: "Research session",
-      });
+    vi.spyOn(titler.client, "request").mockResolvedValueOnce({
+      status: "ok",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      title: "Main session",
+    });
     const sourceLink = () =>
       expectElement(container, ".chat-forwarded-attribution a", HTMLAnchorElement);
 
@@ -2555,14 +2552,7 @@ describe("grouped chat rendering", () => {
     expect(sourceLink().textContent).toBe("Main session");
     expect(() => render(renderTestMessageGroup(group), container)).not.toThrow();
     expect(sourceLink().textContent).toBe("Main session");
-
-    group.senderSession = { sessionKey: "agent:main:research" };
-    render(renderTestMessageGroup(group), container);
-    expect(sourceLink().textContent).toBe("agent:main:research");
-    await titler.decorate(sourceLink(), true);
-    expect(sourceLink().textContent).toBe("Research session");
-    expect(sourceLink().getAttribute("href")).toBe("/chat/main/research");
-    expect(sourceLink().title).toBe("agent:main:research");
+    expect(sourceLink().title).toBe("agent:main:main");
   });
 
   it("uses the assistant name when an assistant group has no sender label", () => {
