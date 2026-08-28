@@ -174,6 +174,60 @@ describe("memory forget", () => {
     ]);
   });
 
+  it("leaves the original memory file intact when a rewrite fails mid-write", async () => {
+    await seedSession("archived");
+    recordMemoryEntryOrigins({
+      agentId: "main",
+      origins: [
+        {
+          entryKey: "archived-entry",
+          agentId: "main",
+          sessionId: "archived",
+          sessionKey: "agent:main:archived",
+          originClass: "owner",
+          observedAt: 1_000,
+        },
+      ],
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const originalContent =
+      "# Long-Term Memory\n" +
+      "Curated operator fact that must survive.\n" +
+      "<!-- openclaw-memory-promotion:archived-entry -->\n" +
+      "- Archived secret.\n";
+    await fs.writeFile(memoryPath, originalContent);
+    await deleteSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:archived",
+      expectedSessionId: "archived",
+      archiveTranscript: true,
+    });
+
+    // The rewrite runs out of disk halfway through the write.
+    const writeFile = fs.writeFile.bind(fs);
+    const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      if (String(args[0]).startsWith(`${memoryPath}.forget.`)) {
+        const text = String(args[1]);
+        await writeFile(args[0], text.slice(0, Math.ceil(text.length / 2)), args[2]);
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return await writeFile(...args);
+    });
+    try {
+      await expect(
+        forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["archived"] }),
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+    } finally {
+      fault.mockRestore();
+    }
+    expect(await fs.readFile(memoryPath, "utf8")).toBe(originalContent);
+
+    // A retry with the fault cleared still completes the purge.
+    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["archived"] });
+    expect(report.entryKeys).toEqual(["archived-entry"]);
+    expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Archived secret");
+  });
+
   it.each([
     { label: "LF", content: "# Long-Term Memory\nKeep this.\n" },
     { label: "CRLF", content: "# Long-Term Memory\r\nKeep this.\r\n" },
@@ -699,9 +753,10 @@ describe("memory forget", () => {
           const writeFile = fs.writeFile.bind(fs);
           const failedPath =
             failure === "memory" ? path.join(workspaceDir, "MEMORY.md") : mixedCorpusPath;
+          const failedTempPrefix = `${failedPath}.forget.`;
           const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
             await writeFile(...args);
-            if (args[0] === failedPath) {
+            if (args[0] === failedPath || String(args[0]).startsWith(failedTempPrefix)) {
               throw new Error(failureMessage);
             }
           });

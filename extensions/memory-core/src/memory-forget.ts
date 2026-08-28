@@ -40,6 +40,7 @@ import {
   listMemoryEntryOrigins,
   recordMemorySessionTombstones,
 } from "./memory-entry-origins.js";
+import { applyMemoryFileRewrite } from "./memory-forget-atomic-write.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
@@ -721,11 +722,7 @@ async function forgetWorkspaceMemory(
       });
     }
     for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
-      if (rewrite.remove) {
-        await fs.unlink(rewrite.absolutePath);
-      } else {
-        await fs.writeFile(rewrite.absolutePath, rewrite.content, "utf8");
-      }
+      await applyMemoryFileRewrite(rewrite);
     }
     deleteMemoryEntryOrigins({ agentId: params.agentId, entryKeys: [...entryKeys] });
     return report;
