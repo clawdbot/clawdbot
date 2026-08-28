@@ -396,11 +396,9 @@ function resolveReplySessionRolloverState(
   sessionKey: string,
 ): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
-  // ACP key shape and derived role fields are not child provenance. The spawn
-  // producer records the durable origin that lets real ACP children keep lineage.
-  const preserveSpawnLineage =
-    isSubagentSessionKey(sessionKey) ||
-    (isAcpSessionKey(sessionKey) && entry.createdVia === "spawn");
+  // Stable ACP rows predate durable creation stamps. Preserve their restrictions
+  // fail-closed so rollover cannot turn an existing child into a root session.
+  const preserveSpawnLineage = isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
   return {
     thinkingLevel: entry.thinkingLevel,
     verboseLevel: entry.verboseLevel,

@@ -2001,7 +2001,7 @@ describe("initSessionState RawBody", () => {
       createdVia: "run" as const,
       subagentRole: "leaf" as const,
       subagentControlScope: undefined,
-      preservesSpawnLineage: false,
+      preservesSpawnLineage: true,
     },
     {
       name: "ordinary ACP session with a stale control scope",
@@ -2010,7 +2010,7 @@ describe("initSessionState RawBody", () => {
       createdVia: "run" as const,
       subagentRole: undefined,
       subagentControlScope: "none" as const,
-      preservesSpawnLineage: false,
+      preservesSpawnLineage: true,
     },
     {
       name: "real subagent",
