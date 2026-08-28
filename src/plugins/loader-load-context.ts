@@ -4,6 +4,7 @@ import path from "node:path";
 import { collectAutoEnableConfiguredChannelIds } from "../config/channel-activation-candidates.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { resolveExternalCatalogPathsIdentity } from "../config/plugin-auto-enable.prefer-over.js";
 import { hasMaterialPluginEntryConfig } from "../config/plugin-replacement-eligibility.js";
 import { getGatewayAmbientEnvTriggerPolicy } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -257,6 +258,14 @@ function buildCacheKey(params: {
       bundledPackage,
       devSourceRoot: params.devSourceRoot ?? "",
       discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
+      // External catalogs carry `preferOver` edges, so they decide who owns a contested channel
+      // and the cede map baked into a cached registry. `resolvePluginCacheInputs` only covers the
+      // source roots and load paths, so two loads in one process reading different catalog files
+      // -- `OPENCLAW_PLUGIN_CATALOG_PATHS` or `OPENCLAW_MPM_CATALOG_PATHS` differing between
+      // caller-supplied environments -- hashed identically, and the second reused the first's
+      // ownership while validation resolved the new one. Content rewritten at an unchanged path
+      // is handled separately, by the plugin metadata lifecycle clear.
+      externalCatalogPaths: resolveExternalCatalogPathsIdentity(params.env),
       ...params.plugins,
       installs,
       loadPaths,

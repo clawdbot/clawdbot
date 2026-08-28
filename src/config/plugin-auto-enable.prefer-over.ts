@@ -146,15 +146,29 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
   externalCatalogSnapshot = null;
 });
 
+// The same configured `~/catalog.json` resolves differently per HOME, so only absolute paths
+// identify the files an environment actually reads.
+function resolveExternalCatalogAbsolutePaths(env: NodeJS.ProcessEnv): string[] {
+  return resolveExternalCatalogPaths(env).map((rawPath) => resolveUserPath(rawPath, env));
+}
+
+/**
+ * Identity of the catalog files this environment reads.
+ *
+ * Catalogs contribute `preferOver` edges, so they help decide who owns a contested channel, which
+ * makes a cached plugin registry reusable only for an environment that reads the same files. The
+ * loader cache key folds this in. Content changes at an unchanged path are a separate concern,
+ * already handled by the metadata lifecycle clear below.
+ */
+export function resolveExternalCatalogPathsIdentity(env: NodeJS.ProcessEnv): string {
+  return JSON.stringify(resolveExternalCatalogAbsolutePaths(env));
+}
+
 function resolveExternalCatalogEntry(
   channelId: string,
   env: NodeJS.ProcessEnv,
 ): ExternalCatalogChannelEntry | undefined {
-  // Key on the resolved absolute paths: the same configured `~/catalog.json` resolves differently
-  // per HOME, so a raw-path key would hand one environment another's parsed catalog.
-  const resolvedPaths = resolveExternalCatalogPaths(env).map((rawPath) =>
-    resolveUserPath(rawPath, env),
-  );
+  const resolvedPaths = resolveExternalCatalogAbsolutePaths(env);
   const pathsKey = JSON.stringify(resolvedPaths);
   if (externalCatalogSnapshot?.pathsKey !== pathsKey) {
     externalCatalogSnapshot = {

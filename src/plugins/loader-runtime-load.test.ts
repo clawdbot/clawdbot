@@ -256,4 +256,63 @@ describe("plugin registry cache key channel ownership coverage", () => {
     });
     expect(second).toBe(first);
   });
+
+  // A cached registry carries the cede map that settled every contested channel, and external
+  // catalogs contribute `preferOver` edges to that decision. The key was built from
+  // `resolvePluginCacheInputs`, which covers only the source roots and load paths, so two loads in
+  // one process reading DIFFERENT catalog files hashed identically and the second was served the
+  // first's channel ownership while validation resolved the new catalog.
+  it("separates cache keys for environments that read different catalog files", () => {
+    const stateDir = makePluginLoaderTempDir();
+    const bundledDir = makePluginLoaderTempDir();
+    const rawConfig = { channels: { zzalpha: { token: "alpha" } } } as OpenClawConfig;
+    const cacheKeyFor = (env: NodeJS.ProcessEnv) =>
+      resolvePluginRegistryLoadCacheKey({
+        config: rawConfig,
+        activationSourceConfig: rawConfig,
+        env,
+      });
+    const baseEnv = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir };
+
+    const first = cacheKeyFor({
+      ...baseEnv,
+      OPENCLAW_PLUGIN_CATALOG_PATHS: path.join(makePluginLoaderTempDir(), "catalog.json"),
+    });
+    const second = cacheKeyFor({
+      ...baseEnv,
+      OPENCLAW_PLUGIN_CATALOG_PATHS: path.join(makePluginLoaderTempDir(), "catalog.json"),
+    });
+    expect(second).not.toBe(first);
+
+    // The other catalog env var names the same kind of file and has to separate keys too.
+    expect(
+      cacheKeyFor({
+        ...baseEnv,
+        OPENCLAW_MPM_CATALOG_PATHS: path.join(makePluginLoaderTempDir(), "catalog.json"),
+      }),
+    ).not.toBe(cacheKeyFor(baseEnv));
+  });
+
+  // The identity has to be the RESOLVED path. One configured `~/catalog.json` names a different
+  // file per HOME, so hashing the authored string would hand one environment another's catalog --
+  // the same reason the catalog snapshot itself keys on resolved paths. HOME alone moves nothing
+  // else in this key, so this separates a resolved identity from an authored one.
+  it("separates cache keys for one configured catalog path across homes", () => {
+    const stateDir = makePluginLoaderTempDir();
+    const bundledDir = makePluginLoaderTempDir();
+    const rawConfig = { channels: { zzalpha: { token: "alpha" } } } as OpenClawConfig;
+    const keyForHome = (home: string) =>
+      resolvePluginRegistryLoadCacheKey({
+        config: rawConfig,
+        activationSourceConfig: rawConfig,
+        env: {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          HOME: home,
+          OPENCLAW_PLUGIN_CATALOG_PATHS: "~/catalog.json",
+        },
+      });
+
+    expect(keyForHome(makePluginLoaderTempDir())).not.toBe(keyForHome(makePluginLoaderTempDir()));
+  });
 });
