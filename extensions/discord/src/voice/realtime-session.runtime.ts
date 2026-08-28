@@ -322,6 +322,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       toolPolicy,
       consultPolicy,
     });
+    const onReady = () => {
+      this.markProviderGenerationObserved();
+      if (this.markLifecycleReady(lifecycleGeneration)) {
+        this.playback.drainQueuedExactSpeechMessages("provider-ready");
+      }
+    };
     this.bridge = this.harness.createBridge({
       provider: resolved.provider,
       cfg: this.params.cfg,
@@ -369,13 +375,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         this.markProviderGenerationObserved();
         return this.consults.handleToolCall(event, session);
       },
-      onReady: () => {
-        this.markProviderGenerationObserved();
-        if (this.markLifecycleReady(lifecycleGeneration)) {
-          this.playback.drainQueuedExactSpeechMessages("provider-ready");
+      onReady,
+      onEvent: (event) => {
+        this.handleBridgeEvent(event);
+        // Some providers report recovered readiness without repeating onReady.
+        if (event.direction === "client" && event.type === "session.reconnect.ready") {
+          onReady();
         }
       },
-      onEvent: (event) => this.handleBridgeEvent(event),
       onResponseDone: (outcome) => {
         this.markProviderGenerationObserved();
         this.playback.handleResponseDone(outcome);
@@ -389,10 +396,20 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       },
       onError: (error) => this.logRealtimeError(formatErrorMessage(error)),
       onClose: (reason) => {
-        this.flushSuppressedRealtimeErrors();
-        logVoiceVerbose(`realtime closed: ${reason}`);
+        // Reconnects stay provider-owned. A close is terminal unless local teardown started it.
+        if (!this.isStopped()) {
+          this.stopLifecycle(`provider closed: ${reason}`);
+          this.params.onTerminalError(
+            new Error(`Realtime provider closed unexpectedly: ${reason}`),
+          );
+        }
       },
     });
+    // createBridge may close synchronously, before its returned bridge can be disposed.
+    if (this.isStopped()) {
+      this.close();
+      return;
+    }
     const resolvedModel =
       readProviderConfigString(resolved.providerConfig, "model") ?? resolved.provider.defaultModel;
     const resolvedVoice = readProviderConfigString(resolved.providerConfig, "voice");

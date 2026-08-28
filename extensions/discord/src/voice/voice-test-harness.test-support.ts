@@ -37,6 +37,7 @@ const {
   textToSpeechMock,
   logVerboseMock,
   loggerWarnMock,
+  loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -108,6 +109,7 @@ function buildVoiceTestHarness() {
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
     logVerboseMock.mockClear();
     loggerWarnMock.mockClear();
+    loggerErrorMock.mockClear();
     updateVoiceStateMock.mockClear();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
@@ -640,6 +642,7 @@ function buildVoiceTestHarness() {
     textToSpeechMock,
     logVerboseMock,
     loggerWarnMock,
+    loggerErrorMock,
     resolveConfiguredRealtimeVoiceProviderMock,
     createRealtimeVoiceBridgeSessionMock,
     controlRealtimeVoiceAgentRunMock,
