@@ -10,21 +10,39 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
 
 describe("Control UI service worker cache versioning", () => {
-  it("reloads uncontrolled window clients during activation", async () => {
+  it("reloads stale root and chat clients once while excluding other pages", async () => {
     const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
-    const windowClient = {
-      url: "https://control.example/chat",
+    const client = (id: string, url: string) => ({
+      id,
+      url,
       postMessage: vi.fn(),
       navigate: vi.fn(async () => undefined),
-    };
-    const siblingClient = {
-      url: "https://control.example/other-app",
-      postMessage: vi.fn(),
-      navigate: vi.fn(async () => undefined),
-    };
-    const matchedClients = createDeferred<Array<typeof windowClient>>();
+    });
+    const staleClients = [
+      client("root", "https://control.example/openclaw/"),
+      client("chat", "https://control.example/openclaw/chat"),
+      client(
+        "chat-deep-link",
+        "https://control.example/openclaw/chat/main/session?mode=compact#latest",
+      ),
+    ];
+    const excludedClients = [
+      client("settings", "https://control.example/openclaw/settings/appearance"),
+      client("chat-sibling", "https://control.example/openclaw/chatty"),
+      client("cross-origin", "https://other.example/openclaw/chat/main/session"),
+    ];
+    const matchedClients = createDeferred<Array<ReturnType<typeof client>>>();
     const listeners = new Map<string, Array<(event: ActivateEventStub) => void>>();
     const cacheDelete = vi.fn(async () => true);
+    const reloadMarkers = new Set<string>();
+    const reloadCache = {
+      match: vi.fn(async (request: Request) =>
+        reloadMarkers.has(request.url) ? new Response("new-build") : undefined,
+      ),
+      put: vi.fn(async (request: Request) => {
+        reloadMarkers.add(request.url);
+      }),
+    };
     const clients = {
       claim: vi.fn(async () => undefined),
       matchAll: vi.fn(() => matchedClients.promise),
@@ -38,20 +56,22 @@ describe("Control UI service worker cache versioning", () => {
         "openclaw-control-new-build",
         "other-cache",
       ]),
-      open: vi.fn(),
+      open: vi.fn(async () => reloadCache),
     };
     const serviceWorkerGlobal = {
       addEventListener(type: string, listener: (event: ActivateEventStub) => void) {
         listeners.set(type, [...(listeners.get(type) ?? []), listener]);
       },
       clients,
-      location: { href: "https://control.example/sw.js?v=new-build" },
+      location: { href: "https://control.example/openclaw/sw.js?v=new-build" },
       registration: { showNotification: vi.fn() },
       skipWaiting: vi.fn(),
     };
     const context = vm.createContext({
       URL,
       MessageChannel: UnresponsiveMessageChannel,
+      Request,
+      Response,
       caches,
       clearTimeout,
       fetch: vi.fn(),
@@ -59,7 +79,7 @@ describe("Control UI service worker cache versioning", () => {
       self: {
         ...serviceWorkerGlobal,
         registration: {
-          scope: "https://control.example/",
+          scope: "https://control.example/openclaw/",
           showNotification: vi.fn(),
         },
       },
@@ -83,18 +103,33 @@ describe("Control UI service worker cache versioning", () => {
     await Promise.resolve();
 
     expect(activationSettled).toBe(false);
-    expect(windowClient.navigate).not.toHaveBeenCalled();
+    expect(staleClients[0]?.navigate).not.toHaveBeenCalled();
 
-    matchedClients.resolve([windowClient, siblingClient]);
+    matchedClients.resolve([...staleClients, ...excludedClients]);
     await activationPromise;
 
     expect(clients.matchAll).toHaveBeenCalledWith({ type: "window", includeUncontrolled: true });
     expect(clients.claim).toHaveBeenCalledBefore(clients.matchAll);
     expect(cacheDelete).toHaveBeenCalledWith("openclaw-control-oldest");
-    expect(windowClient.postMessage).toHaveBeenCalledOnce();
-    expect(windowClient.navigate).toHaveBeenCalledExactlyOnceWith(windowClient.url);
-    expect(siblingClient.postMessage).not.toHaveBeenCalled();
-    expect(siblingClient.navigate).not.toHaveBeenCalled();
+    for (const staleClient of staleClients) {
+      expect(staleClient.postMessage).toHaveBeenCalledOnce();
+      expect(staleClient.navigate).toHaveBeenCalledExactlyOnceWith(staleClient.url);
+    }
+    for (const excludedClient of excludedClients) {
+      expect(excludedClient.postMessage).not.toHaveBeenCalled();
+      expect(excludedClient.navigate).not.toHaveBeenCalled();
+    }
+
+    listeners.get("activate")?.[0]?.({
+      waitUntil(promise: Promise<unknown>) {
+        activationPromise = promise;
+      },
+    });
+    await activationPromise;
+    for (const staleClient of staleClients) {
+      expect(staleClient.postMessage).toHaveBeenCalledTimes(2);
+      expect(staleClient.navigate).toHaveBeenCalledOnce();
+    }
   });
 
   it("keeps a current document mounted during activation", async () => {
@@ -105,7 +140,8 @@ describe("Control UI service worker cache versioning", () => {
       claim: vi.fn(async () => undefined),
       matchAll: vi.fn(async () => [
         {
-          url: "https://control.example/chat",
+          id: "current-chat-deep-link",
+          url: "https://control.example/chat/main/session",
           postMessage: vi.fn((_message: unknown, ports: MessagePort[]) => {
             ports[0]?.postMessage({ version: "new-build" });
           }),

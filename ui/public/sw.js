@@ -18,10 +18,27 @@ function isControlUiChatClient(url) {
   const clientUrl = new URL(url);
   const scopeUrl = new URL(self.registration.scope);
   const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  const chatPath = `${scopePath}chat`;
   return (
     clientUrl.origin === scopeUrl.origin &&
-    (clientUrl.pathname === scopeUrl.pathname || clientUrl.pathname === `${scopePath}chat`)
+    (clientUrl.pathname === scopeUrl.pathname ||
+      clientUrl.pathname === chatPath ||
+      clientUrl.pathname.startsWith(`${chatPath}/`))
   );
+}
+
+async function markClientReload(client) {
+  const cache = await caches.open(CACHE_NAME);
+  const guardUrl = new URL(".__openclaw__/service-worker-reload", self.registration.scope);
+  guardUrl.searchParams.set("client", client.id);
+  const guardRequest = new Request(guardUrl);
+  if (await cache.match(guardRequest)) {
+    return false;
+  }
+  // Persist before navigation so repeated activation of the same build cannot
+  // loop a document that keeps receiving stale HTML.
+  await cache.put(guardRequest, new Response(CACHE_VERSION));
+  return true;
 }
 
 function readClientVersion(client) {
@@ -74,8 +91,13 @@ self.addEventListener("activate", (event) => {
         windowClients
           .filter((client) => isControlUiChatClient(client.url))
           .map(async (client) => {
-            if ((await readClientVersion(client)) !== CACHE_VERSION) {
-              await client.navigate(client.url);
+            if (
+              (await readClientVersion(client)) !== CACHE_VERSION &&
+              (await markClientReload(client))
+            ) {
+              // Navigation starts synchronously; activation must not stay alive
+              // indefinitely waiting for a document that never finishes loading.
+              void client.navigate(client.url).catch(() => undefined);
             }
           }),
       );
