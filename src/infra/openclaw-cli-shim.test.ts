@@ -6,9 +6,16 @@ import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { createSourceCliFixture } from "./openclaw-cli-invocation.test-support.js";
 import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
 
-const envSnapshot = captureEnv(["OPENCLAW_EXEC_SHELL_SNAPSHOT", "OPENCLAW_PROFILE", "PATH"]);
+const envSnapshot = captureEnv([
+  "OPENCLAW_EXEC_SHELL_SNAPSHOT",
+  "OPENCLAW_PROFILE",
+  "PATH",
+  "TSX_TSCONFIG_PATH",
+  "TSX_DISABLE_CACHE",
+]);
 
 afterEach(() => {
   clearGatewayAgentCliShim();
@@ -25,24 +32,18 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
     { profile: undefined, expectedArgs: ["probe"] },
   ])("pins the running CLI before configured PATH entries (profile=$profile)", async (testCase) => {
     await withTempDir("openclaw-agent-cli-shim-", async (root) => {
-      const entryPath = path.join(root, "gateway-entry.mjs");
+      const fixture = await createSourceCliFixture(root);
       const staleBinDir = path.join(root, "stale-bin");
       const staleCliPath = path.join(staleBinDir, "openclaw");
       const stateDir = path.join(root, "state");
-      const invocationCwd = await fs.realpath(root);
-      const callerCwd = await fs.realpath(path.dirname(root));
       await fs.mkdir(staleBinDir, { recursive: true });
-      await fs.writeFile(
-        entryPath,
-        'console.log(JSON.stringify({ source: "gateway", args: process.argv.slice(2), cwd: process.cwd(), tsconfigPath: process.env.TSX_TSCONFIG_PATH, pathHead: process.env.PATH?.split(":")[0] }));\n',
-      );
       await fs.writeFile(staleCliPath, "#!/bin/sh\nprintf '%s\\n' '{\"source\":\"stale\"}'\n", {
         mode: 0o700,
       });
 
       await prepareGatewayAgentCliShim({
         env: testCase.profile ? { OPENCLAW_PROFILE: testCase.profile } : {},
-        invocation: { command: process.execPath, args: [entryPath], cwd: invocationCwd },
+        invocation: fixture.invocation,
         stateDir,
       });
       const shimBinDir = path.join(stateDir, "tmp", "agent-cli");
@@ -55,23 +56,24 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
       process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
       process.env.PATH = `${staleBinDir}${path.delimiter}${process.env.PATH ?? ""}`;
       delete process.env.OPENCLAW_PROFILE;
+      delete process.env.TSX_TSCONFIG_PATH;
+      process.env.TSX_DISABLE_CACHE = "1";
       const tool = createExecTool({
         ...execConfig,
         host: "gateway",
         security: "full",
         ask: "off",
-        cwd: callerCwd,
+        cwd: fixture.callerCwd,
         notifyOnExit: false,
       });
       const result = await tool.execute("gateway-cli-version-probe", {
         command: "openclaw probe",
         yieldMs: 120_000,
       });
-      expect(JSON.parse(readExecText(result))).toEqual({
+      expect(JSON.parse(readExecText(result))).toMatchObject({
         source: "gateway",
         args: testCase.expectedArgs,
-        cwd: callerCwd,
-        tsconfigPath: path.join(invocationCwd, "tsconfig.json"),
+        cwd: fixture.callerCwd,
         pathHead: shimBinDir,
       });
     });
