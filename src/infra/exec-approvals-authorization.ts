@@ -254,6 +254,7 @@ export async function commitExecAuthorizationLocked(params: {
   resolvedPath?: string;
   authorization: ExecApprovalUsageAuthorization;
   allowAlwaysDecision?: AllowAlwaysPersistenceDecision;
+  assertActive?: () => void;
 }): Promise<void> {
   if (
     (params.authorization.source === "explicit-approval" ||
@@ -269,6 +270,9 @@ export async function commitExecAuthorizationLocked(params: {
   }
   await updateExecApprovals({
     update: (file) => {
+      // This callback is the synchronous write boundary. A lifecycle fence here
+      // prevents an awaited authorization check from going stale before commit.
+      params.assertActive?.();
       const matchKeys = new Set(
         params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
       );

@@ -705,6 +705,8 @@ export async function runExecProcess({
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
   /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
   beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+  /** Synchronous lifecycle fence called with no await before supervisor spawn. */
+  assertBeforeSpawn?: () => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug(isProcessSessionIdTaken);
@@ -971,6 +973,7 @@ export async function runExecProcess({
   const spawn = (input: SpawnInput) => {
     // No await between the final cancellation check and supervisor admission.
     startupSignal?.throwIfAborted();
+    opts.assertBeforeSpawn?.();
     return withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
   };
 

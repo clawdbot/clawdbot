@@ -60,6 +60,7 @@ import {
 } from "../infra/system-run-cwd-binding.js";
 import {
   GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
@@ -644,6 +645,7 @@ export async function processGatewayAllowlist(
     source: ExecApprovalUsageAuthorization["source"];
     resolvedPath?: string;
     allowAlwaysDecision?: AllowAlwaysPersistenceDecision;
+    assertActive?: () => void;
   }) => {
     const policyAuthorization =
       options.source === "current-policy" || options.source === "ask-fallback";
@@ -688,6 +690,7 @@ export async function processGatewayAllowlist(
           policyAuthorization && durableApprovalRequirement === "segment-allowlist",
       },
       ...(options.allowAlwaysDecision ? { allowAlwaysDecision: options.allowAlwaysDecision } : {}),
+      ...(options.assertActive ? { assertActive: options.assertActive } : {}),
     });
   };
   const hasHeredocSegment = allowlistEval.segments.some((segment) =>
@@ -1458,6 +1461,19 @@ export async function processGatewayAllowlist(
       if (approvalDecision.requestFailed) {
         return;
       }
+      const resolveDetachedApprovalDecision = async () =>
+        gatewayGeneration
+          ? await resolveRegisteredExecApprovalDecision({
+              approvalId,
+              gatewayGeneration,
+              preResolvedDecision: undefined,
+            }).catch(() => undefined)
+          : undefined;
+      const assertDetachedGatewayActive = () => {
+        if (isGatewaySubordinateWorkAdmissionClosed()) {
+          throw new GatewayDrainingError("gateway is draining for restart");
+        }
+      };
       if (approvalDecision.runAborted) {
         return;
       }
@@ -1487,13 +1503,7 @@ export async function processGatewayAllowlist(
           if (params.signal?.aborted) {
             return { status: "run-aborted" as const };
           }
-          const currentDecision = gatewayGeneration
-            ? await resolveRegisteredExecApprovalDecision({
-                approvalId,
-                gatewayGeneration,
-                preResolvedDecision: undefined,
-              }).catch(() => undefined)
-            : undefined;
+          const currentDecision = await resolveDetachedApprovalDecision();
           if (currentDecision !== approvalDecision.decision) {
             return { status: "approval-invalid" as const };
           }
@@ -1504,8 +1514,12 @@ export async function processGatewayAllowlist(
               ...(approvalDecision.allowAlwaysDecision
                 ? { allowAlwaysDecision: approvalDecision.allowAlwaysDecision }
                 : {}),
+              assertActive: assertDetachedGatewayActive,
             });
-          } catch {
+          } catch (error) {
+            if (error instanceof GatewayDrainingError) {
+              return { status: "approval-invalid" as const };
+            }
             return { status: "approval-state-write-failed" as const };
           }
           if (params.signal?.aborted) {
@@ -1526,6 +1540,7 @@ export async function processGatewayAllowlist(
           let run: Awaited<ReturnType<typeof runExecProcess>>;
           let finalBindingDenied: string | undefined;
           const finalBindingDeniedError = new Error("gateway approval changed before spawn");
+          const finalApprovalInvalidError = new Error("gateway approval expired before spawn");
           try {
             gatewayInvocationStarted = true;
             run = await runExecProcess({
@@ -1547,6 +1562,7 @@ export async function processGatewayAllowlist(
               sessionKey: params.notifySessionKey ?? params.sessionKey,
               timeoutSec: effectiveTimeout,
               startupSignal: params.signal,
+              assertBeforeSpawn: assertDetachedGatewayActive,
               beforeSpawn: async () => {
                 finalBindingDenied = await resolveGatewayExecApprovalDrift({
                   binding: approvalMutableFileBinding,
@@ -1555,6 +1571,9 @@ export async function processGatewayAllowlist(
                 });
                 if (finalBindingDenied) {
                   throw finalBindingDeniedError;
+                }
+                if ((await resolveDetachedApprovalDecision()) !== approvalDecision.decision) {
+                  throw finalApprovalInvalidError;
                 }
                 return undefined;
               },
@@ -1565,6 +1584,9 @@ export async function processGatewayAllowlist(
             }
             if (error === finalBindingDeniedError && finalBindingDenied) {
               return { status: "operand-drift" as const, message: finalBindingDenied };
+            }
+            if (error === finalApprovalInvalidError || error instanceof GatewayDrainingError) {
+              return { status: "approval-invalid" as const };
             }
             return { status: "spawn-failed" as const };
           }

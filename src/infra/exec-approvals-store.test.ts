@@ -11,6 +11,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
@@ -105,6 +106,37 @@ afterEach(() => {
 });
 
 describe("exec approvals SQLite store", () => {
+  it("checks lifecycle authority inside the transaction before writing", async () => {
+    const match = { pattern: "/usr/bin/echo" };
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: { main: { allowlist: [match] } },
+    });
+    const before = readExecApprovalsSnapshot();
+    const assertActive = vi.fn(() => {
+      throw new Error("Gateway generation changed");
+    });
+
+    await expect(
+      commitExecAuthorizationLocked({
+        agentId: "main",
+        matches: [match],
+        command: "echo ok",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "off",
+          allowlistSatisfied: true,
+        },
+        assertActive,
+      }),
+    ).rejects.toThrow("Gateway generation changed");
+
+    expect(assertActive).toHaveBeenCalledOnce();
+    expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
+  });
+
   it("does not create shared state for a read-only load", () => {
     const statePath = resolveOpenClawStateSqlitePath();
     expect(fs.existsSync(statePath)).toBe(false);

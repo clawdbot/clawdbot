@@ -3466,6 +3466,64 @@ EOF`,
     expect(markBackgroundedMock).not.toHaveBeenCalled();
   });
 
+  it("blocks authorization writes when restart begins after generation validation", async () => {
+    mockApprovedDetachedExec({
+      outcome: { status: "completed", exitCode: 0, timedOut: false, aggregated: "done" },
+    });
+    resolveRegisteredExecApprovalDecisionMock.mockImplementationOnce(async () => {
+      markGatewayRestartDraining();
+      return "allow-once";
+    });
+    let authorizationWrites = 0;
+    commitExecAuthorizationMock.mockImplementation(async (input) => {
+      const params = input as Parameters<
+        typeof import("../infra/exec-approvals.js").commitExecAuthorizationLocked
+      >[0];
+      params.assertActive?.();
+      authorizationWrites += 1;
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
+    expect(authorizationWrites).toBe(0);
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(markBackgroundedMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks process spawn when restart begins after final generation validation", async () => {
+    mockApprovedDetachedExec({
+      outcome: { status: "completed", exitCode: 0, timedOut: false, aggregated: "done" },
+    });
+    resolveRegisteredExecApprovalDecisionMock
+      .mockResolvedValueOnce("allow-once")
+      .mockImplementationOnce(async () => {
+        queueMicrotask(markGatewayRestartDraining);
+        return "allow-once";
+      });
+    const runtime = await vi.importActual<typeof import("./bash-tools.exec-runtime.js")>(
+      "./bash-tools.exec-runtime.js",
+    );
+    runExecProcessMock.mockImplementation(runtime.runExecProcess);
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+      env: { PATH: "/usr/bin:/bin" },
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
+    expect(commitExecAuthorizationMock).toHaveBeenCalledOnce();
+    expect(startupCancellationMocks.prepare).toHaveBeenCalledOnce();
+    expect(startupCancellationMocks.spawn).not.toHaveBeenCalled();
+    expect(markBackgroundedMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the fire-and-forget path for headless cron approval followups", async () => {
     mockApprovedDetachedExec({
       outcome: {

@@ -338,6 +338,34 @@ describe("sandbox exec preparation failures", () => {
     expect(supervisorMock.spawn).not.toHaveBeenCalled();
   });
 
+  it("runs the synchronous lifecycle fence after final authorization and before spawn", async () => {
+    const stale = new Error("Gateway generation changed");
+    const beforeSpawn = vi.fn(async () => undefined);
+    const assertBeforeSpawn = vi.fn(() => {
+      throw stale;
+    });
+
+    await expect(
+      runExecProcess({
+        command: "host-command",
+        workdir: "/tmp",
+        env: {},
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+        beforeSpawn,
+        assertBeforeSpawn,
+      }),
+    ).rejects.toBe(stale);
+
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(assertBeforeSpawn).toHaveBeenCalledOnce();
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+  });
+
   it("rejects a sandbox without a backend-owned exec specification", async () => {
     supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
       runtimeManagedRun(input),
