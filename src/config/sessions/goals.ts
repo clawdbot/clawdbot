@@ -38,7 +38,12 @@ type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
   note?: string;
 };
 
-export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
+export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = [
+  "complete",
+  "blocked",
+  "paused",
+  "active",
+] as const;
 
 function nowMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();

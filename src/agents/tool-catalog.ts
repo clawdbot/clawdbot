@@ -391,7 +391,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "update_goal",
-    description: "Complete or block a thread goal",
+    description: "Complete, block, pause, or resume a thread goal",
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

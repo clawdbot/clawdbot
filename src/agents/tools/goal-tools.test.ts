@@ -200,4 +200,40 @@ describe("goal tools", () => {
     ]);
     expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("complete");
   });
+
+  it("lets the model pause and resume a goal it owns", async () => {
+    const { config, template } = await createStoreConfig();
+    const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+    const options = {
+      agentSessionKey: "global",
+      runSessionKey: "global",
+      sessionAgentId: "research",
+      config,
+    };
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "global",
+      entry: { sessionId: "sess-global", updatedAt: 1 },
+    });
+    await createCreateGoalTool(options).execute("call-create", {
+      objective: "Land the report once the upstream API ships",
+    });
+
+    const tool = createUpdateGoalTool(options);
+
+    const paused = await tool.execute("call-pause", {
+      status: "paused",
+      note: "waiting on upstream API release",
+    });
+    const pausedGoal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+    expect(paused.details).toMatchObject({ status: "updated", goal: { status: "paused" } });
+    expect(pausedGoal?.status).toBe("paused");
+    expect(pausedGoal?.pausedAt).toBeTypeOf("number");
+    expect(pausedGoal?.lastStatusNote).toBe("waiting on upstream API release");
+
+    const resumed = await tool.execute("call-resume", { status: "active" });
+    const resumedGoal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+    expect(resumed.details).toMatchObject({ status: "updated", goal: { status: "active" } });
+    expect(resumedGoal?.status).toBe("active");
+  });
 });
