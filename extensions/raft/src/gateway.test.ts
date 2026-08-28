@@ -7,6 +7,7 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedRaftAccount } from "./accounts.js";
 import { startRaftGatewayAccount } from "./gateway.js";
@@ -184,6 +185,46 @@ describe("Raft wake gateway", () => {
     });
     expect(settled).toBe(false);
     expect(spawnBridge).not.toHaveBeenCalled();
+
+    controller.abort();
+    await start;
+  });
+
+  // Raft already answered this case through its own close-after-response teardown; the
+  // wire behavior must survive replacing that teardown with the shared transport owner.
+  it("keeps delivering 413 for an over-limit wake payload and closing the connection", async () => {
+    const { ctx, controller, wakeDedupe } = createContext();
+    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
+    const bridge = new FakeBridge();
+    let endpoint: string | undefined;
+    let token: string | undefined;
+    const start = startRaftGatewayAccount(ctx, {
+      spawnBridge: (params) => {
+        endpoint = params.endpoint;
+        token = params.token;
+        return bridge;
+      },
+      wakeDedupe,
+    });
+
+    const wakeEndpoint = await waitFor(() => endpoint);
+    const bridgeToken = await waitFor(() => token);
+
+    // Declared and sent in one write: the shape whose rejection used to race the flush.
+    const result = await postRawWebhook({
+      url: wakeEndpoint,
+      body: JSON.stringify({ deliveryId: "x".repeat(16 * 1024) }),
+      headers: {
+        "content-type": "application/json",
+        "x-raft-bridge-token": bridgeToken,
+      },
+    });
+
+    expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+    expect(JSON.parse(result.body)).toEqual({
+      error: "Wake payload exceeds the 16 KiB limit.",
+    });
+    expect(result.closedByServer).toBe(true);
 
     controller.abort();
     await start;
