@@ -784,7 +784,9 @@ textarea.settings-input {
   .content:has(.plugins-hub-header) .content-header,
   .shell--settings .settings-page,
   .content:has(.plugins-hub-header) .settings-page,
-  .shell--settings .config-content {
+  .shell--settings .config-content,
+  .shell--settings .config-lead,
+  .shell--settings .config-content-callout {
     padding-inline: 0;
   }
 

@@ -193,31 +193,36 @@ suite.define(() => {
           contentSurface.waitFor(),
         ]);
         await expect
-          .poll(async () => {
-            const [headerBox, titleBox, workspaceBox, contentSurfaceBox, layoutViewportWidth] =
-              await Promise.all([
-                header.boundingBox(),
-                title.boundingBox(),
-                workspace.boundingBox(),
-                contentSurface.boundingBox(),
-                page.evaluate(() => document.documentElement.clientWidth),
-              ]);
-            return headerBox && titleBox && workspaceBox && contentSurfaceBox
-              ? {
-                  headerLeft: Math.round(headerBox.x),
-                  headerTop: Math.round(headerBox.y),
-                  titleLeft: Math.round(titleBox.x),
-                  workspaceLeft: Math.round(workspaceBox.x),
-                  workspaceRightInset: Math.round(
-                    layoutViewportWidth - (workspaceBox.x + workspaceBox.width),
-                  ),
-                  contentLeft: Math.round(contentSurfaceBox.x),
-                  contentRightInset: Math.round(
-                    layoutViewportWidth - (contentSurfaceBox.x + contentSurfaceBox.width),
-                  ),
-                }
-              : null;
-          })
+          .poll(() =>
+            page.evaluate((selector) => {
+              const scrollport = document.querySelector<HTMLElement>("main.content");
+              const headers = document.querySelectorAll<HTMLElement>(".content-header");
+              const workspaces = document.querySelectorAll<HTMLElement>(".settings-workspace");
+              const header = headers.item(headers.length - 1);
+              const workspace = workspaces.item(workspaces.length - 1);
+              const title = header?.querySelector<HTMLElement>(".page-title");
+              const contentSurface = workspace?.querySelector<HTMLElement>(selector);
+              if (!scrollport || !header || !title || !workspace || !contentSurface) {
+                return null;
+              }
+              const scrollportBox = scrollport.getBoundingClientRect();
+              const headerBox = header.getBoundingClientRect();
+              const titleBox = title.getBoundingClientRect();
+              const workspaceBox = workspace.getBoundingClientRect();
+              const contentSurfaceBox = contentSurface.getBoundingClientRect();
+              // clientWidth excludes a non-overlay scrollbar and its stable gutter.
+              const scrollportRight = scrollportBox.left + scrollport.clientWidth;
+              return {
+                headerLeft: Math.round(headerBox.left),
+                headerTop: Math.round(headerBox.top),
+                titleLeft: Math.round(titleBox.left),
+                workspaceLeft: Math.round(workspaceBox.left),
+                workspaceRightInset: Math.round(scrollportRight - workspaceBox.right),
+                contentLeft: Math.round(contentSurfaceBox.left),
+                contentRightInset: Math.round(scrollportRight - contentSurfaceBox.right),
+              };
+            }, contentSelector),
+          )
           .toEqual({
             contentLeft: 12,
             contentRightInset: 12,
@@ -251,9 +256,7 @@ suite.define(() => {
         const columnBox = column.getBoundingClientRect();
         return {
           columnLeft: Math.round(columnBox.left),
-          columnRightInset: Math.round(
-            document.documentElement.clientWidth - columnBox.right,
-          ),
+          columnRightInset: Math.round(document.documentElement.clientWidth - columnBox.right),
           contentPaddingInline: Math.round(
             Number.parseFloat(getComputedStyle(content).paddingLeft),
           ),
@@ -425,6 +428,30 @@ suite.define(() => {
           path: path.join(proofDir, "communications-voice.png"),
         });
       }
+
+      await page.setViewportSize({ height: 844, width: 390 });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const content = document.querySelector<HTMLElement>("main.content");
+            const lead = document.querySelector<HTMLElement>(".config-lead");
+            const tabs = document.querySelector<HTMLElement>(
+              "wa-tab-group.config-sections-hub-tabs",
+            );
+            if (!content || !lead || !tabs) {
+              return null;
+            }
+            const contentBox = content.getBoundingClientRect();
+            const leadBox = lead.getBoundingClientRect();
+            const tabsBox = tabs.getBoundingClientRect();
+            return {
+              leadLeft: Math.round(leadBox.left),
+              leadRightInset: Math.round(contentBox.left + content.clientWidth - leadBox.right),
+              tabsLeft: Math.round(tabsBox.left),
+            };
+          }),
+        )
+        .toEqual({ leadLeft: 12, leadRightInset: 12, tabsLeft: 12 });
     } finally {
       await context.close();
     }
