@@ -399,14 +399,21 @@ export async function updateGitCheckout(params: {
       return buildError("fetch-failed");
     }
     const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
-    const mainRemoteStep = await runCommand(
-      ["git", "-C", gitRoot, "config", "--get", `branch.${DEV_BRANCH}.remote`],
-      { cwd: gitRoot, timeoutMs },
-    );
-    if (mainRemoteStep.code !== 0 && mainRemoteStep.code !== 1) {
+    const mainRemoteStep = await runStep({
+      ...step(
+        "git config main remote",
+        ["git", "-C", gitRoot, "config", "--get", `branch.${DEV_BRANCH}.remote`],
+        gitRoot,
+      ),
+      runCommand: async (argv, options) => {
+        const result = await runCommand(argv, options);
+        return result.code === 1 ? { ...result, code: 0 } : result;
+      },
+    });
+    if (mainRemoteStep.exitCode !== 0) {
       return buildError("fetch-failed");
     }
-    const configuredMainRemote = mainRemoteStep.stdout.trim();
+    const configuredMainRemote = mainRemoteStep.stdoutTail?.trim() ?? "";
     let releaseRemote: string | null = null;
     if (configuredMainRemote) {
       if (configuredMainRemote !== "." && remotes.includes(configuredMainRemote)) {

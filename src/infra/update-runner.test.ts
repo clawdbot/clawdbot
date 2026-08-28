@@ -705,6 +705,48 @@ describe("runGatewayUpdate", () => {
     );
   });
 
+  it("records main remote configuration failures in steps and progress", async () => {
+    await setupGitCheckout();
+    const onStepStart = vi.fn();
+    const onStepComplete = vi.fn();
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} config --get branch.main.remote`]: {
+        code: 128,
+        stderr: "fatal: bad config line",
+      },
+    });
+
+    const result = await runWithRunner(runner, {
+      channel: "stable",
+      progress: { onStepStart, onStepComplete },
+    });
+
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "git config main remote",
+        exitCode: 128,
+        stderrTail: "fatal: bad config line",
+      }),
+    );
+    expect(onStepStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "git config main remote" }),
+    );
+    expect(onStepComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "git config main remote",
+        exitCode: 128,
+        stderrTail: "fatal: bad config line",
+      }),
+    );
+    expect(calls).not.toContain(
+      `git -C ${tempDir} ls-remote --tags --refs --sort=-v:refname -- origin v*`,
+    );
+  });
+
   it("keeps release tags scoped to the main remote when another remote disagrees", async () => {
     const { sourceRoot, localRoot, releaseSha, releaseTag } =
       await createRecreatedReleaseTagFixture();
