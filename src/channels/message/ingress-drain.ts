@@ -478,6 +478,11 @@ export function createChannelIngressDrain<
           state.occupiesLane = false;
         }
       },
+      onDeferredHeartbeat: () => {
+        if (state.phase === "deferred" && !state.guillotined && !state.superseded) {
+          armStallWatchdog(state);
+        }
+      },
       onAdoptionFinalizing: () => {
         if (state.phase !== "dispatching" && state.phase !== "deferred") {
           return;
