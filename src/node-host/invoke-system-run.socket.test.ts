@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { once } from "node:events";
@@ -65,7 +66,9 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
               );
               const request = JSON.parse(envelope.requestJson) as ExecHostRequest;
               expect(request.command).toEqual(command);
-              const child = spawn(request.command[0], request.command.slice(1), {
+              const [executable, ...args] = request.command;
+              assert.ok(executable, "Exec peer received an empty command");
+              const child = spawn(executable, args, {
                 cwd: dir,
                 env: { HOME: dir, PATH: "/usr/bin:/bin" },
                 stdio: "ignore",

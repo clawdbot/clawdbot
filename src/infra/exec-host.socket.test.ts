@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
 import { once } from "node:events";
@@ -5,6 +6,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestExecHostViaSocket, type ExecHostRequest } from "./exec-host.js";
 
@@ -171,11 +173,13 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           markers,
         ];
         const request = { command, cwd: dir, timeoutMs: 5_000, needsScreenRecording: false };
-        const release = Promise.withResolvers<void>();
+        const release = createDeferred();
         const childCloses: Promise<unknown>[] = [];
         onRequest(async (socket, received, id) => {
           expect(received).toEqual(request);
-          const child = spawn(received.command[0], received.command.slice(1), {
+          const [executable, ...args] = received.command;
+          assert.ok(executable, "Exec peer received an empty command");
+          const child = spawn(executable, args, {
             cwd: received.cwd!,
             env: { HOME: dir, PATH: "/usr/bin:/bin" },
             stdio: "pipe",

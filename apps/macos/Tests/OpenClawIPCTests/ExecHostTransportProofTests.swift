@@ -3,13 +3,12 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-/// Opt-in, process-isolated proof. The socket accept task is detached, so a task-local
-/// store override alone cannot isolate the executor from the operator's approvals.
+/// Opt-in, process-isolated proof of real native execution after caller response loss.
 @Suite(.serialized)
 @MainActor
 struct ExecHostTransportProofTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_EXEC_HOST_NATIVE_PROOF"] == "1"))
-    func `native execution survives lost response`() async throws {
+    func `native execution completes after caller response loss`() async throws {
         let environment = ProcessInfo.processInfo.environment
         let statePath = try #require(environment["OPENCLAW_STATE_DIR"])
         let state = URL(fileURLWithPath: statePath).resolvingSymlinksInPath()
@@ -34,19 +33,21 @@ struct ExecHostTransportProofTests {
                 agents: ["denied": ExecApprovalsAgent(security: .deny, ask: .off)]),
             stateDirectoryURL: state)
 
-        let server = ExecApprovalsPromptServer(
-            resolveSocketCredentials: { (socketPath, token) },
+        let server = ExecApprovalsSocketServer(
+            socketPath: socketPath,
+            token: token,
             onPrompt: { _ in
                 Issue.record("This proof must not request interactive approval")
                 return .deny
-            })
-        server.start()
+            },
+            onExec: { request in
+                await ExecApprovalsStore.withStateDirectory(state) {
+                    await ExecHostExecutor.handle(request)
+                }
+            },
+            onUnexpectedStop: { _ in Issue.record("Native proof socket stopped unexpectedly") })
         do {
-            let deadline = ContinuousClock.now + .seconds(5)
-            while !FileManager.default.fileExists(atPath: socketPath), ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            try #require(FileManager.default.fileExists(atPath: socketPath))
+            try #require(await server.start())
             var repo = URL(fileURLWithPath: #filePath)
             for _ in 0..<5 {
                 repo.deleteLastPathComponent()
@@ -79,10 +80,10 @@ struct ExecHostTransportProofTests {
             #expect(log.contains("native START -> response dropped -> client null -> native COMPLETE"))
             #expect(log.contains("native success and policy denial verified"))
         } catch {
-            if let pending = server.stop() { await pending.value }
+            await server.stop().value
             throw error
         }
-        if let pending = server.stop() { await pending.value }
+        await server.stop().value
         #expect(!FileManager.default.fileExists(atPath: socketPath))
     }
 }

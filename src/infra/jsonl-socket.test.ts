@@ -1,7 +1,9 @@
 // Covers JSONL socket request framing and response handling.
 import { getEventListeners } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import path from "node:path";
+import timers from "node:timers";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -170,16 +172,27 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
       });
     });
     await withSocketServer(server, async (socketPath) => {
-      const startMs = Date.now();
-      const result = await requestJsonlSocket({
-        socketPath,
-        requestLine: "{}",
-        timeoutMs: 250,
-        accept: () => undefined,
-      });
-
-      expect(result).toBeNull();
-      expect(Date.now() - startMs).toBeLessThan(100);
+      // Leave the deadline frozen: only the real socket close can settle this request.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const schedule = vi.spyOn(timers, "setTimeout").mockImplementation(setTimeout);
+      const clear = vi.spyOn(timers, "clearTimeout").mockImplementation(clearTimeout);
+      syncBuiltinESMExports();
+      try {
+        const pending = requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 250,
+          accept: () => undefined,
+        });
+        expect(vi.getTimerCount()).toBe(1);
+        await expect(pending).resolves.toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        schedule.mockRestore();
+        clear.mockRestore();
+        vi.useRealTimers();
+        syncBuiltinESMExports();
+      }
     });
   });
 });

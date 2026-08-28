@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { requestExecHostViaSocket, type ExecHostRequest } from "./exec-host.js";
 
 const [rootArgument, nativeSocket] = process.argv.slice(2);
@@ -91,8 +92,8 @@ console.log("native success and policy denial verified");
 const proxySocket = path.join(root, "proxy.sock");
 const sockets: net.Socket[] = [];
 const closes: Promise<void>[] = [];
-const forwarded = Promise.withResolvers<void>();
-const nativeResponse = Promise.withResolvers<string>();
+const forwarded = createDeferred();
+const nativeResponse = createDeferred<string>();
 const errors: Error[] = [];
 const order: string[] = [];
 function track(socket: net.Socket) {
