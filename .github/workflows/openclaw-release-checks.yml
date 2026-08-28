@@ -90,6 +90,15 @@ on:
           - qa
           - qa-parity
           - qa-live
+      phase:
+        description: Release check phase to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - independent
+          - candidate
       live_suite_filter:
         description: Optional exact live/E2E suite id, or comma-separated QA live lane ids (qa-live-matrix, qa-live-buzz, qa-live-telegram, qa-live-discord, qa-live-whatsapp, qa-live-slack); blank runs all selected live suites
         required: false
@@ -127,7 +136,7 @@ on:
         type: string
 
 concurrency:
-  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}
+  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
 
 env:
@@ -148,6 +157,7 @@ jobs:
       mode: ${{ steps.inputs.outputs.mode }}
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
+      phase: ${{ steps.inputs.outputs.phase }}
       qa_live_scheduled: ${{ steps.inputs.outputs.qa_live_scheduled }}
       release_check_groups_json: ${{ steps.inputs.outputs.release_check_groups_json }}
       package_required: ${{ steps.inputs.outputs.package_required }}
@@ -415,6 +425,7 @@ jobs:
           RELEASE_REF_INPUT: ${{ inputs.ref }}
           RELEASE_PROVIDER_INPUT: ${{ inputs.provider }}
           RELEASE_MODE_INPUT: ${{ inputs.mode }}
+          RELEASE_PHASE_INPUT: ${{ inputs.phase }}
           RELEASE_PROFILE_INPUT: ${{ inputs.release_profile }}
           RELEASE_RUN_RELEASE_SOAK_INPUT: ${{ inputs.run_release_soak }}
           RELEASE_FAIL_FAST_INPUT: ${{ inputs.fail_fast }}
@@ -434,6 +445,14 @@ jobs:
           RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh
         run: |
           set -euo pipefail
+          phase="$RELEASE_PHASE_INPUT"
+          case "$phase" in
+            all|independent|candidate) ;;
+            *)
+              echo "phase must be one of: all, independent, candidate" >&2
+              exit 1
+              ;;
+          esac
           candidate_artifact_json=""
           release_package_spec=""
           package_acceptance_package_spec=""
@@ -671,11 +690,43 @@ jobs:
           if [[ "$live_e2e_scheduled" == "true" && -z "$repo_live_suite_filter" ]]; then
             docker_required=true
           fi
+          case "$phase" in
+            independent)
+              cross_os_scheduled=false
+              docker_required=false
+              package_acceptance_scheduled=false
+              ;;
+            candidate)
+              install_smoke_scheduled=false
+              live_e2e_scheduled=false
+              qa_parity_scheduled=false
+              qa_live_scheduled=false
+              run_maturity_scorecard=false
+              ;;
+          esac
+
           package_required=false
           if [[ "$cross_os_scheduled" == "true" ||
                 "$package_acceptance_scheduled" == "true" ||
                 "$docker_required" == "true" ]]; then
             package_required=true
+          fi
+          if [[ "$phase" == "candidate" && -z "$candidate_artifact_json" ]]; then
+            candidate_artifact_required=false
+            if [[ -z "$release_package_spec" ]] &&
+              { [[ "$cross_os_scheduled" == "true" ]] ||
+                [[ "$docker_required" == "true" ]]; }; then
+              candidate_artifact_required=true
+            fi
+            if [[ "$package_acceptance_scheduled" == "true" &&
+                  -z "$release_package_spec" &&
+                  -z "$package_acceptance_package_spec" ]]; then
+              candidate_artifact_required=true
+            fi
+            if [[ "$candidate_artifact_required" == "true" ]]; then
+              echo "phase=candidate requires candidate_artifact_json unless every selected package path uses a published package spec." >&2
+              exit 1
+            fi
           fi
 
           {
@@ -684,6 +735,7 @@ jobs:
             printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
             printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
+            printf 'phase=%s\n' "$phase"
             printf 'qa_live_scheduled=%s\n' "$qa_live_scheduled"
             printf 'release_check_groups_json=%s\n' "$release_check_groups_json"
             printf 'package_required=%s\n' "$package_required"
@@ -721,6 +773,7 @@ jobs:
           RELEASE_REF_FAST_PATH: ${{ steps.fast_ref.outputs.fast }}
           RELEASE_PROVIDER: ${{ inputs.provider }}
           RELEASE_MODE: ${{ inputs.mode }}
+          RELEASE_PHASE: ${{ steps.inputs.outputs.phase }}
           RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           QA_LIVE_SCHEDULED: ${{ steps.inputs.outputs.qa_live_scheduled }}
@@ -746,6 +799,7 @@ jobs:
             echo "- Ref resolution fast path: \`${RELEASE_REF_FAST_PATH}\`"
             echo "- Cross-OS provider: \`${RELEASE_PROVIDER}\`"
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
+            echo "- Phase: \`${RELEASE_PHASE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Concrete release-check groups: \`${RELEASE_CHECK_GROUPS_JSON}\`"
@@ -2741,30 +2795,37 @@ jobs:
           RELEASE_CHECK_RUN_ID: ${{ github.run_id }}
           RELEASE_CHECK_RUN_ATTEMPT: ${{ github.run_attempt }}
           RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RELEASE_PHASE: ${{ needs.resolve_target.outputs.phase }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           failed=0
-          release_check_items=(
-            "resolve_target=${RESOLVE_TARGET_RESULT}"
-            "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
-            "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
-            "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
-            "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
-            "docker_e2e_release_checks=${DOCKER_E2E_RELEASE_CHECKS_RESULT}"
-            "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
-            "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
-            "maturity_scorecard_release_checks=${MATURITY_SCORECARD_RELEASE_CHECKS_RESULT}"
-            "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
-            "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
-            "runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"
-            "qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"
-            "qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"
-            "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
-            "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
-            "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
-            "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
-          )
+          release_check_items=("resolve_target=${RESOLVE_TARGET_RESULT}")
+          if [[ "$RELEASE_PHASE" != "candidate" ]]; then
+            release_check_items+=(
+              "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
+              "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
+              "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
+              "maturity_scorecard_release_checks=${MATURITY_SCORECARD_RELEASE_CHECKS_RESULT}"
+              "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
+              "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
+              "runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"
+              "qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"
+              "qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"
+              "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
+              "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
+              "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
+              "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
+            )
+          fi
+          if [[ "$RELEASE_PHASE" != "independent" ]]; then
+            release_check_items+=(
+              "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
+              "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
+              "docker_e2e_release_checks=${DOCKER_E2E_RELEASE_CHECKS_RESULT}"
+              "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
+            )
+          fi
           tideclaw_alpha=false
           if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha=true

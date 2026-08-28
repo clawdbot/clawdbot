@@ -78,6 +78,113 @@ function runFrozenTargetNodeExclusionValidation(params: {
   };
 }
 
+function pluginCandidateArtifactJson(selectedSha = "a".repeat(40)) {
+  return JSON.stringify({
+    packageArtifactName: "docker-e2e-package-123-1",
+    packageArtifactId: "456",
+    packageArtifactDigest: "b".repeat(64),
+    packageArtifactRunId: "123",
+    packageArtifactRunAttempt: "1",
+    packageFileName: "openclaw-current.tgz",
+    packageSourceSha: selectedSha,
+    packageSha256: "c".repeat(64),
+    packageVersion: "2026.8.1",
+    imageArtifactName: "docker-e2e-shared-images-123-1",
+    imageArtifactId: "789",
+    imageArtifactDigest: "d".repeat(64),
+    imageArtifactRunId: "123",
+    imageArtifactRunAttempt: "1",
+    imageArchiveSha256: "e".repeat(64),
+  });
+}
+
+function runPluginPhaseValidation(params: {
+  candidateArtifactJson?: string;
+  expectedSha?: string;
+  fullReleaseValidation?: boolean;
+  phase: string;
+}) {
+  const workflow = readPluginPrereleaseWorkflow();
+  const step = workflow.jobs.preflight.steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Validate phase inputs",
+  );
+  if (!step?.run) {
+    throw new Error("Missing plugin prerelease phase validation step");
+  }
+  return spawnSync("bash", ["-c", step.run], {
+    encoding: "utf8",
+    env: {
+      CANDIDATE_ARTIFACT_JSON: params.candidateArtifactJson ?? "",
+      EXPECTED_SHA: params.expectedSha ?? "",
+      FULL_RELEASE_VALIDATION: String(params.fullReleaseValidation ?? true),
+      PATH: process.env.PATH,
+      PHASE: params.phase,
+    },
+  });
+}
+
+function runPluginManifest(phase: "all" | "candidate" | "independent") {
+  const workflow = readPluginPrereleaseWorkflow();
+  const step = workflow.jobs.preflight.steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Build plugin prerelease manifest",
+  );
+  if (!step?.run) {
+    throw new Error("Missing plugin prerelease manifest step");
+  }
+  const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
+  const outputPath = join(root, "github-output");
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const result = spawnSync("bash", ["-c", step.run], {
+    encoding: "utf8",
+    env: {
+      EXPECTED_SHA: head,
+      FULL_RELEASE_VALIDATION: "true",
+      GITHUB_OUTPUT: outputPath,
+      PATH: process.env.PATH,
+      PHASE: phase,
+    },
+  });
+  return {
+    output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "",
+    result,
+  };
+}
+
+function runPluginSummary(params: {
+  docker: string;
+  extensions: string;
+  inspector?: string;
+  node: string;
+  runDocker: boolean;
+  runExtensions: boolean;
+  runNode: boolean;
+  runStatic: boolean;
+  static: string;
+}) {
+  const workflow = readPluginPrereleaseWorkflow();
+  const step = workflow.jobs["plugin-prerelease-suite"].steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Verify plugin prerelease suite",
+  );
+  if (!step?.run) {
+    throw new Error("Missing plugin prerelease summary step");
+  }
+  return spawnSync("bash", ["-c", step.run], {
+    encoding: "utf8",
+    env: {
+      DOCKER_RESULT: params.docker,
+      EXTENSIONS_RESULT: params.extensions,
+      INSPECTOR_RESULT: params.inspector ?? "skipped",
+      NODE_RESULT: params.node,
+      PATH: process.env.PATH,
+      RUN_DOCKER: String(params.runDocker),
+      RUN_EXTENSIONS: String(params.runExtensions),
+      RUN_NODE: String(params.runNode),
+      RUN_STATIC: String(params.runStatic),
+      STATIC_RESULT: params.static,
+    },
+  });
+}
+
 describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
   it("covers every pre-release plugin skill surface in the plugin prerelease plan", () => {
     const plan = assertPluginPrereleaseTestPlanComplete();
@@ -685,6 +792,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       required: false,
       type: "boolean",
     });
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.phase).toEqual({
+      default: "all",
+      description: "Plugin prerelease phase to run",
+      options: ["all", "independent", "candidate"],
+      required: false,
+      type: "choice",
+    });
     expect(pluginWorkflow.on.workflow_dispatch.inputs.dispatch_id).toEqual({
       description: "Optional parent workflow dispatch identifier",
       required: false,
@@ -694,12 +808,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(pluginManifestEnv).toEqual({
       EXPECTED_SHA: "${{ inputs.expected_sha }}",
       FULL_RELEASE_VALIDATION: "${{ inputs.full_release_validation && 'true' || 'false' }}",
+      PHASE: "${{ inputs.phase }}",
     });
     expect(pluginManifestScript).toContain(
       'const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";',
     );
+    expect(pluginManifestScript).toContain('const runIndependent = phase !== "candidate";');
+    expect(pluginManifestScript).toContain('const runCandidate = phase !== "independent";');
     expect(pluginManifestScript).toContain(
-      "const runDocker = fullReleaseValidation && dockerLanes.length > 0;",
+      "const runDocker = runCandidate && fullReleaseValidation && dockerLanes.length > 0;",
     );
     expect(pluginPreflight.outputs).toEqual({
       checkout_revision: "${{ steps.manifest.outputs.checkout_revision }}",
@@ -714,6 +831,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       run_plugin_prerelease_docker: "${{ steps.manifest.outputs.run_plugin_prerelease_docker }}",
       run_plugin_prerelease_extensions:
         "${{ steps.manifest.outputs.run_plugin_prerelease_extensions }}",
+      run_plugin_prerelease_inspector:
+        "${{ steps.manifest.outputs.run_plugin_prerelease_inspector }}",
       run_plugin_prerelease_node: "${{ steps.manifest.outputs.run_plugin_prerelease_node }}",
       run_plugin_prerelease_static: "${{ steps.manifest.outputs.run_plugin_prerelease_static }}",
       run_plugin_prerelease_suite: "${{ steps.manifest.outputs.run_plugin_prerelease_suite }}",
@@ -735,7 +854,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     ).toContain("--retry=1");
     expect(inspector.name).toBe("plugin-prerelease-inspector");
     expect(inspector.needs).toEqual(["preflight"]);
-    expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_suite == 'true'");
+    expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'");
     expect(inspector["continue-on-error"]).toBe(true);
     expect(inspector["runs-on"]).toBe("ubuntu-24.04");
     expect(inspector["timeout-minutes"]).toBe(30);
@@ -832,6 +951,111 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     ).toContain("plugin-prerelease-inspector advisory result");
   });
 
+  it.each([
+    {
+      expected: {
+        docker: "true",
+        extensions: "true",
+        inspector: "true",
+        node: "true",
+        static: "true",
+      },
+      phase: "all",
+    },
+    {
+      expected: {
+        docker: "false",
+        extensions: "true",
+        inspector: "true",
+        node: "true",
+        static: "true",
+      },
+      phase: "independent",
+    },
+    {
+      expected: {
+        docker: "true",
+        extensions: "false",
+        inspector: "false",
+        node: "false",
+        static: "false",
+      },
+      phase: "candidate",
+    },
+  ] as const)("routes only the $phase plugin prerelease phase", ({ expected, phase }) => {
+    const { output, result } = runPluginManifest(phase);
+
+    expect(result.status, result.stderr).toBe(0);
+    for (const [lane, scheduled] of Object.entries(expected)) {
+      expect(output).toContain(`run_plugin_prerelease_${lane}=${scheduled}\n`);
+    }
+  });
+
+  it("requires a complete immutable candidate for the plugin candidate phase", () => {
+    const selectedSha = "a".repeat(40);
+    const independent = runPluginPhaseValidation({
+      candidateArtifactJson: "",
+      phase: "independent",
+    });
+    const missing = runPluginPhaseValidation({
+      candidateArtifactJson: "",
+      expectedSha: selectedSha,
+      phase: "candidate",
+    });
+    const valid = runPluginPhaseValidation({
+      candidateArtifactJson: pluginCandidateArtifactJson(selectedSha),
+      expectedSha: selectedSha,
+      phase: "candidate",
+    });
+
+    expect(independent.status, independent.stderr).toBe(0);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain(
+      "phase=candidate requires the complete immutable package and Docker image artifact tuple.",
+    );
+    expect(valid.status, valid.stderr).toBe(0);
+  });
+
+  it("validates only scheduled plugin jobs in each phase summary", () => {
+    const independent = runPluginSummary({
+      docker: "failure",
+      extensions: "success",
+      node: "success",
+      runDocker: false,
+      runExtensions: true,
+      runNode: true,
+      runStatic: true,
+      static: "success",
+    });
+    const candidate = runPluginSummary({
+      docker: "success",
+      extensions: "failure",
+      node: "failure",
+      runDocker: true,
+      runExtensions: false,
+      runNode: false,
+      runStatic: false,
+      static: "failure",
+    });
+    const failedCandidate = runPluginSummary({
+      docker: "failure",
+      extensions: "skipped",
+      node: "skipped",
+      runDocker: true,
+      runExtensions: false,
+      runNode: false,
+      runStatic: false,
+      static: "skipped",
+    });
+
+    expect(independent.status, independent.stderr).toBe(0);
+    expect(candidate.status, candidate.stderr).toBe(0);
+    expect(failedCandidate.status).toBe(1);
+    expect(`${failedCandidate.stdout}\n${failedCandidate.stderr}`).toContain(
+      "plugin-prerelease-docker ended with failure",
+    );
+  });
+
   it("keeps exact release tuples independent without cancelling adopted children", () => {
     const releaseChecksWorkflow = parse(
       readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
@@ -840,8 +1064,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
 
     expect(releaseChecksWorkflow.concurrency).toEqual({
       group:
-        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}",
+        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}",
       "cancel-in-progress": "${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}",
+    });
+    expect(readPluginPrereleaseWorkflow().concurrency).toEqual({
+      group: "plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}-${{ inputs.phase }}",
+      "cancel-in-progress": "${{ inputs.target_ref == 'main' }}",
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group:
