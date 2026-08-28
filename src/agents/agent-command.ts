@@ -546,7 +546,7 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
-    preparedRunAdmission?.close();
+    await preparedRunAdmission?.finish();
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned

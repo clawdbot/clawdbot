@@ -192,6 +192,9 @@ export function prepareAgentCommandExecutionIdentity(params: {
     : preparedAdmission;
   return Object.freeze({
     ...admission,
+    // Observational events do not await consumers. Finish their recovery write
+    // before releasing the admission; explicit close remains immediate.
+    finish: () => Promise.resolve(turnRegistration).finally(admission.close),
     onRuntimeTurnStarted: (): Promise<void> | undefined => {
       if (!recovery || !isActive()) {
         return undefined;
