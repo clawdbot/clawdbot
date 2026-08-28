@@ -385,6 +385,7 @@ describe("runGatewayUpdate", () => {
   function createDevGitRunner(params?: {
     targetSha?: string;
     targetRef?: string;
+    candidateShas?: string[];
     packageManager?: string;
     onCommand?: (
       key: string,
@@ -394,6 +395,7 @@ describe("runGatewayUpdate", () => {
   }) {
     const calls: string[] = [];
     const targetSha = params?.targetSha ?? "upstream123";
+    const candidateShas = params?.candidateShas ?? [targetSha];
     const targetRef = params?.targetRef;
     const targetCandidate = targetRef
       ? targetRef === targetSha
@@ -430,7 +432,7 @@ describe("runGatewayUpdate", () => {
         return toCommandResult({ stdout: targetSha });
       }
       if (!targetRef && key === `git -C ${tempDir} rev-list --max-count=10 ${targetSha}`) {
-        return toCommandResult({ stdout: `${targetSha}\n` });
+        return toCommandResult({ stdout: `${candidateShas.join("\n")}\n` });
       }
       if (targetCandidate && key === `git -C ${tempDir} rev-parse ${targetCandidate}`) {
         return toCommandResult({ stdout: `${targetSha}\n` });
@@ -1308,7 +1310,7 @@ describe("runGatewayUpdate", () => {
     const installEnvs: NodeJS.ProcessEnv[] = [];
     const { runCommand } = createDevGitRunner({
       onCommand: (key, options) => {
-        if (key === "pnpm install") {
+        if (key === "pnpm install" && options?.cwd && preflightPrefixPattern.test(options.cwd)) {
           installEnvs.push(options?.env ?? {});
         }
         return undefined;
@@ -1318,7 +1320,7 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
-    expect(installEnvs).toHaveLength(2);
+    expect(installEnvs).toHaveLength(1);
     for (const env of installEnvs) {
       expect(env).toMatchObject({
         PNPM_CONFIG_RESOLUTION_MODE: "highest",
@@ -1326,6 +1328,90 @@ describe("runGatewayUpdate", () => {
         pnpm_config_resolution_mode: "highest",
       });
     }
+  });
+
+  it.each(["reset", "clean"] as const)(
+    "allows a later candidate to succeed after a preflight %s failure",
+    async (failedPreparation) => {
+      await setupGitPackageManagerFixture();
+      let preflightBuildAttempts = 0;
+      let injectedPreparationFailure = false;
+      const { calls, runCommand } = createDevGitRunner({
+        candidateShas: ["upstream123", "middle123", "older123"],
+        onCommand: (key, options) => {
+          const preflightDir = options?.cwd;
+          if (!preflightDir || !preflightPrefixPattern.test(preflightDir)) {
+            return undefined;
+          }
+          const failedSuffix = failedPreparation === "reset" ? " reset --hard" : " clean -fdx";
+          if (!injectedPreparationFailure && key.endsWith(failedSuffix)) {
+            injectedPreparationFailure = true;
+            return { stderr: `${failedPreparation} failed`, code: 1 };
+          }
+          if (key === "pnpm build") {
+            preflightBuildAttempts += 1;
+            if (preflightBuildAttempts === 1) {
+              return { stderr: "tip build failed", code: 1 };
+            }
+          }
+          return undefined;
+        },
+      });
+
+      const result = await runWithCommand(runCommand, { channel: "dev" });
+
+      expect(result.status).toBe("ok");
+      expect(injectedPreparationFailure).toBe(true);
+      expect(preflightBuildAttempts).toBe(2);
+      expect(
+        result.steps.some(
+          (step) =>
+            step.name === `preflight ${failedPreparation} (upstream)` && step.exitCode === 1,
+        ),
+      ).toBe(true);
+      expect(calls).toContain(`git -C ${tempDir} rebase older123`);
+    },
+  );
+
+  it("uses prefer-offline for every Windows preflight candidate", async () => {
+    await setupGitPackageManagerFixture();
+    let buildAttempts = 0;
+    const { calls, runCommand } = createDevGitRunner({
+      candidateShas: ["upstream123", "older123"],
+      onCommand: (key, options) => {
+        if (key === "pnpm build" && options?.cwd && preflightPrefixPattern.test(options.cwd)) {
+          buildAttempts += 1;
+          if (buildAttempts === 1) {
+            return { stderr: "tip build failed", code: 1 };
+          }
+        }
+        return undefined;
+      },
+    });
+
+    const result = await withMockedWindowsPlatform(() =>
+      runWithCommand(runCommand, { channel: "dev" }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(buildAttempts).toBe(2);
+    expect(
+      result.steps.filter((step) => step.name.startsWith("preflight deps install")),
+    ).toMatchObject([
+      {
+        name: "preflight deps install (ignore scripts) (upstream)",
+        command: "pnpm install --prefer-offline --ignore-scripts",
+        exitCode: 0,
+      },
+      {
+        name: "preflight deps install (ignore scripts) (older123)",
+        command: "pnpm install --prefer-offline --ignore-scripts",
+        exitCode: 0,
+      },
+    ]);
+    expect(
+      calls.filter((call) => call === "pnpm install --prefer-offline --ignore-scripts"),
+    ).toHaveLength(2);
   });
 
   it("resolves the dev preflight package manager from the checked-out candidate worktree", async () => {
@@ -1831,7 +1917,7 @@ describe("runGatewayUpdate", () => {
           }
         }
         if (
-          key === "pnpm install --ignore-scripts" &&
+          key === "pnpm install --prefer-offline --ignore-scripts" &&
           options?.cwd &&
           preflightPrefixPattern.test(options.cwd)
         ) {
@@ -1852,6 +1938,7 @@ describe("runGatewayUpdate", () => {
         "preflight deps install (ignore scripts) (upstream)",
       );
       expect(result.steps.map((step) => step.name)).toContain("deps install (ignore scripts)");
+      expect(calls).toContain("pnpm install --prefer-offline --ignore-scripts");
       expect(calls).toContain("pnpm install --ignore-scripts");
       expect(calls).not.toContain("pnpm lint");
     });
