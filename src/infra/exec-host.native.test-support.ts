@@ -10,6 +10,8 @@ import { requestExecHostViaSocket, type ExecHostRequest } from "./exec-host.js";
 
 const [rootArgument, nativeSocket] = process.argv.slice(2);
 assert.equal(process.env.OPENCLAW_EXEC_HOST_NATIVE_PROOF, "1");
+assert.ok(rootArgument, "Native proof requires an isolated root argument");
+assert.ok(nativeSocket, "Native proof requires a socket path argument");
 const root = await fs.realpath(rootArgument);
 assert.equal(path.dirname(root), await fs.realpath("/tmp"));
 assert.ok(path.basename(root).startsWith("oc-exec-native-"));
@@ -92,7 +94,7 @@ console.log("native success and policy denial verified");
 const proxySocket = path.join(root, "proxy.sock");
 const sockets: net.Socket[] = [];
 const closes: Promise<void>[] = [];
-const forwarded = createDeferred();
+const forwarded = createDeferred<net.Socket>();
 const nativeResponse = createDeferred<string>();
 const errors: Error[] = [];
 const order: string[] = [];
@@ -113,7 +115,7 @@ const proxy = net.createServer({ allowHalfOpen: true }, (client) => {
   client.pipe(upstream);
   client.once("end", () => {
     order.push("request-half-closed");
-    forwarded.resolve();
+    forwarded.resolve(client);
   });
   let response = "";
   upstream.setEncoding("utf8");
@@ -132,10 +134,10 @@ try {
     request,
     timeoutMs: 10_000,
   });
-  await withDeadline(forwarded.promise, 3_000);
+  const caller = await withDeadline(forwarded.promise, 3_000);
   await waitForStart();
   order.push("native-started");
-  sockets[0].end();
+  caller.end();
   order.push("response-dropped");
   assert.equal(await outcome, null);
   order.push("client-null");
