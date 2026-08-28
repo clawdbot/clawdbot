@@ -5104,7 +5104,9 @@ describe("grouped chat rendering", () => {
 
     expect(container.querySelector(".chat-inline-media-omitted")).not.toBeNull();
     expect(container.textContent).toContain("Image unavailable in history");
-    expect(container.textContent).toContain("Inline image data was omitted from stored chat history.");
+    expect(container.textContent).toContain(
+      "Inline image data was omitted from stored chat history.",
+    );
   });
 
   it("expires pairing QR images and requests a refresh at the expiry boundary", async () => {
