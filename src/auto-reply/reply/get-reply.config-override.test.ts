@@ -23,6 +23,7 @@ type CaptureSessionDiffBaseline =
   (typeof import("../../sessions/session-diff.js"))["captureSessionDiffBaseline"];
 const mocks = vi.hoisted(() => ({
   captureSessionDiffBaseline: vi.fn<CaptureSessionDiffBaseline>(),
+  handleInlineActions: vi.fn(),
   resolveReplyDirectives: vi.fn(),
   initSessionState: vi.fn(),
 }));
@@ -117,12 +118,21 @@ describe("getReplyFromConfig configOverride", () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.resolveReplyDirectives.mockReset();
     mocks.initSessionState.mockReset();
+    mocks.handleInlineActions.mockReset();
     mocks.captureSessionDiffBaseline.mockReset();
     vi.mocked(loadConfigMock).mockReset();
     vi.mocked(runPreparedReplyMock).mockReset();
 
     vi.mocked(loadConfigMock).mockReturnValue({});
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
+    mocks.handleInlineActions.mockImplementation(async (params: unknown) => {
+      const result = params as { directives?: unknown; cleanedBody?: string };
+      return {
+        kind: "continue",
+        directives: result.directives ?? {},
+        cleanedBody: result.cleanedBody ?? "",
+      };
+    });
     const sessionKey = "agent:main:telegram:123";
     const storePath = path.join(tempDirs.make("openclaw-get-reply-session-"), "sessions.json");
     const entry: InternalSessionEntry = {
@@ -176,6 +186,32 @@ describe("getReplyFromConfig configOverride", () => {
 
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
+
+  it.each(["on", "stream"] as const)(
+    "reports the current-turn inline reasoning mode %s before the agent run",
+    async (level) => {
+      const ctx = buildGetReplyCtx();
+      const onReasoningLevelResolved = vi.fn();
+      mocks.resolveReplyDirectives.mockResolvedValueOnce(
+        createGetReplyContinueDirectivesResult({
+          body: `/reasoning ${level} explain this`,
+          abortKey: ctx.SessionKey ?? "agent:main:telegram:123",
+          from: ctx.From ?? "telegram:user:42",
+          to: ctx.To ?? "telegram:123",
+          senderId: ctx.SenderId ?? "user:42",
+          commandSource: "message",
+          senderIsOwner: true,
+          resetHookTriggered: false,
+          resolvedReasoningLevel: level,
+        }),
+      );
+
+      await getReplyFromConfig(ctx, { onReasoningLevelResolved }, {});
+
+      expect(onReasoningLevelResolved).toHaveBeenCalledExactlyOnceWith(level);
+      expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    },
+  );
 
   it("settles a precreated baseline claim before reply execution", async () => {
     const sessionId = "precreated-get-reply";
