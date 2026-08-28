@@ -23,7 +23,6 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarBrand,
@@ -401,10 +400,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   handleSessionListDrop(event: DragEvent): void {
     this.sessionOrganizer.handleSessionListDrop(event);
-  }
-
-  openNewSession(target?: NewSessionTarget): void {
-    this.requestOpenNewSession(this.expandedAgentId(), target);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {

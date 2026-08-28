@@ -362,8 +362,9 @@ export class ImapAccountWatcher {
       if (mail.messageId) {
         await rememberImapMessage(state, accountId, mail.messageId);
       }
+      const gate = verdict.reason === "token" ? "gate=token" : `strength=${verdict.strength}`;
       this.options.context.logger.info(
-        `imap: account=${accountId} uid=${message.uid} domain=${senderDomain(verdict.sender)} strength=${verdict.strength} run=${result.runId}`,
+        `imap: account=${accountId} uid=${message.uid} domain=${senderDomain(verdict.sender)} ${gate} run=${result.runId}`,
       );
       return true;
     }

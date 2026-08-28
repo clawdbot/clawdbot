@@ -7,6 +7,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
 import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import {
+  clearEmbeddedSessionPromptStates,
+  getEmbeddedSessionPromptState,
+} from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
@@ -53,7 +57,9 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { resolveReplySessionPreprocessingState } from "./session.js";
@@ -530,6 +536,147 @@ describe("initSessionState guarded initialization", () => {
     );
   });
 
+  it("replaces a restart tombstone only for an authorized explicit reset", async () => {
+    const storePath = await createStorePath("openclaw-session-init-restart-tombstone-");
+    const sessionKey = "agent:main:matrix:channel:room-a";
+    const successorKey = "agent:main:dashboard:successor";
+    const failedSessionId = "failed-channel-session";
+    const successorSessionId = "dashboard-successor-session";
+    const failedLifecycleRevision = "failed-generation";
+    const tombstoneEntry = {
+      sessionId: failedSessionId,
+      lifecycleRevision: failedLifecycleRevision,
+      archivedAt: Date.now() - 1_000,
+      updatedAt: Date.now(),
+      status: "failed" as const,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: {
+          reason: "automatic recovery exhausted",
+          recoveredSessionId: successorSessionId,
+          recoveredSessionKey: successorKey,
+        },
+      },
+    };
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: tombstoneEntry,
+    });
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: failedSessionId, sessionKey, storePath },
+      { message: { role: "user", content: "preserve the failed transcript" } },
+    );
+    const cfg = { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig;
+
+    await expect(
+      initSessionState({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          From: "@owner:example.test",
+          To: "!room-a:example.test",
+          ChatType: "channel",
+          SessionKey: sessionKey,
+          Provider: "matrix",
+          Surface: "matrix",
+        },
+        cfg,
+        commandAuthorized: false,
+      }),
+    ).rejects.toThrow(/ended during restart recovery/i);
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(tombstoneEntry);
+
+    const reset = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "@owner:example.test",
+        To: "!room-a:example.test",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+        Provider: "matrix",
+        Surface: "matrix",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(reset.resetTriggered).toBe(true);
+    expect(reset.isNewSession).toBe(true);
+    expect(reset.sessionId).toBe(failedSessionId);
+    expect(reset.sessionEntry.lifecycleRevision).not.toBe(failedLifecycleRevision);
+    expect(reset.sessionEntry.mainRestartRecovery).toBeUndefined();
+    expect(reset.sessionEntry.archivedAt).toBeUndefined();
+    expect(reset.sessionKey).toBe(sessionKey);
+    expect(
+      JSON.stringify(
+        await loadTranscriptEvents({
+          agentId: "main",
+          sessionId: failedSessionId,
+          sessionKey,
+          storePath,
+        }),
+      ),
+    ).toContain("preserve the failed transcript");
+  });
+
+  it("reports a committed reset as successful when reply cancellation throws", async () => {
+    const storePath = await createStorePath("openclaw-session-init-reset-cancel-failure-");
+    const sessionKey = "agent:main:matrix:channel:cancel-failure";
+    const sessionId = "committed-reset-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      },
+    });
+    const cancel = vi.fn(() => {
+      throw new Error("backend cancellation failed");
+    });
+    const activeReply = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    activeReply.attachBackend({ kind: "embedded", cancel, isStreaming: () => false });
+    activeReply.setPhase("running");
+
+    try {
+      const reset = await initSessionState({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          From: "@owner:example.test",
+          To: "!cancel-failure:example.test",
+          ChatType: "channel",
+          SessionKey: sessionKey,
+          Provider: "matrix",
+          Surface: "matrix",
+        },
+        cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(reset.resetTriggered).toBe(true);
+      expect(reset.sessionEntry.mainRestartRecovery).toBeUndefined();
+      expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
+      expect(cancel).toHaveBeenCalledWith("restart");
+      expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
+    } finally {
+      activeReply.complete();
+    }
+  });
+
   it("serializes concurrent initializers before reading the guarded snapshot", async () => {
     const storePath = await createStorePath("openclaw-session-init-race-");
     const sessionKey = "agent:main:telegram:chat:42";
@@ -669,6 +816,9 @@ describe("initSessionState thread forking", () => {
         Body: "Thread reply",
         SessionKey: threadSessionKey,
         ParentSessionKey: parentSessionKey,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
       },
       cfg,
     });
@@ -703,6 +853,127 @@ describe("initSessionState thread forking", () => {
     warn.mockRestore();
   });
 
+  it("keeps a restart tombstone terminal when its claimed parent is missing", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-missing-parent-");
+    const storePath = path.join(root, "sessions.json");
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:missing";
+    await writeSessionStoreFast(storePath, {
+      [threadSessionKey]: {
+        sessionId: "preseed-thread-session",
+        updatedAt: Date.now(),
+        mainRestartRecovery: {
+          cycleId: "old-cycle",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "old transcript exhausted" },
+        },
+      },
+    });
+
+    await expect(
+      initSessionState({
+        ctx: {
+          Body: "Thread reply",
+          SessionKey: threadSessionKey,
+          ParentSessionKey: "agent:main:slack:channel:missing-parent",
+          InboundAccessAuthorized: true,
+          InboundEventKind: "user_request",
+          InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+        },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/ended during restart recovery/i);
+    expect(loadSessionEntry({ storePath, sessionKey: threadSessionKey })).toMatchObject({
+      sessionId: "preseed-thread-session",
+      mainRestartRecovery: { tombstone: { reason: "old transcript exhausted" } },
+    });
+  });
+
+  it("keeps a restart tombstone terminal for an unauthorized parent-fork turn", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-unauthorized-parent-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:unauthorized";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: { sessionId: "parent-session", updatedAt: Date.now() },
+      [threadSessionKey]: {
+        sessionId: "tombstoned-thread-session",
+        updatedAt: Date.now(),
+        mainRestartRecovery: {
+          cycleId: "old-cycle",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "old transcript exhausted" },
+        },
+      },
+    });
+
+    await expect(
+      initSessionState({
+        ctx: {
+          Body: "Thread reply",
+          SessionKey: threadSessionKey,
+          ParentSessionKey: parentSessionKey,
+          InboundAccessAuthorized: false,
+          InboundEventKind: "user_request",
+          InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+        },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/ended during restart recovery/i);
+    expect(loadSessionEntry({ storePath, sessionKey: threadSessionKey })).toMatchObject({
+      sessionId: "tombstoned-thread-session",
+      mainRestartRecovery: { tombstone: { reason: "old transcript exhausted" } },
+    });
+  });
+
+  it("keeps a model-locked restart tombstone terminal for a parent-fork turn", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-model-locked-parent-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:model-locked";
+    const existingEntry = {
+      sessionId: "model-locked-thread-session",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: { threadId: "codex-thread-1" },
+      },
+      mainRestartRecovery: {
+        cycleId: "old-cycle",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "old transcript exhausted" },
+      },
+    };
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: { sessionId: "parent-session", updatedAt: Date.now() },
+      [threadSessionKey]: existingEntry,
+    });
+
+    await expect(
+      initSessionState({
+        ctx: {
+          Body: "Thread reply",
+          SessionKey: threadSessionKey,
+          ParentSessionKey: parentSessionKey,
+          InboundAccessAuthorized: true,
+          InboundEventKind: "user_request",
+          InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+        },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(
+      /cannot be replaced while model selection is locked.*WebChat.*Resume in new session/i,
+    );
+
+    expect(loadSessionEntry({ storePath, sessionKey: threadSessionKey })).toMatchObject(
+      existingEntry,
+    );
+    expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
+  });
+
   it("skips fork and creates fresh session when parent tokens exceed threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-");
     const parentSessionId = "parent-overflow";
@@ -710,6 +981,7 @@ describe("initSessionState thread forking", () => {
 
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:456";
     // Set totalTokens well above PARENT_FORK_MAX_TOKENS (100_000)
     await writeSessionStoreFast(storePath, {
       [parentSessionKey]: {
@@ -718,18 +990,30 @@ describe("initSessionState thread forking", () => {
         updatedAt: Date.now(),
         totalTokens: 170_000,
       },
+      [threadSessionKey]: {
+        sessionId: "tombstoned-thread-session",
+        updatedAt: Date.now(),
+        mainRestartRecovery: {
+          cycleId: "old-cycle",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "old transcript exhausted" },
+        },
+      },
     });
 
     const cfg = {
       session: { store: storePath },
     } as OpenClawConfig;
 
-    const threadSessionKey = "agent:main:slack:channel:c1:thread:456";
     const result = await initSessionState({
       ctx: {
         Body: "Thread reply",
         SessionKey: threadSessionKey,
         ParentSessionKey: parentSessionKey,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
       },
       cfg,
     });
@@ -739,10 +1023,85 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.forkSource).toBeUndefined();
     // Session ID should NOT match the parent — it should be a fresh UUID
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
+    expect(result.sessionEntry.sessionId).not.toBe("tombstoned-thread-session");
+    expect((result.sessionEntry as SessionEntry).mainRestartRecovery).toBeUndefined();
     // Session file should NOT be the parent's file (it was not forked)
     expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
     expect(result.sessionEntry.totalTokens).toBe(0);
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
+  });
+
+  it("keeps a restart tombstone terminal when its parent fork fails", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-fork-failure-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:failed";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-session",
+        updatedAt: Date.now(),
+      },
+      [threadSessionKey]: {
+        sessionId: "tombstoned-thread-session",
+        updatedAt: Date.now(),
+        mainRestartRecovery: {
+          cycleId: "old-cycle",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "old transcript exhausted" },
+        },
+      },
+    });
+    sessionForkMocks.forkSessionFromParent.mockResolvedValueOnce(undefined);
+    const promptState = getEmbeddedSessionPromptState(threadSessionKey);
+    promptState.sentUserTurnIds.add("retained-turn");
+    enqueueFollowupRun(
+      threadSessionKey,
+      createQueueTestRun({ prompt: "retained followup" }),
+      { mode: "followup" },
+      "none",
+      undefined,
+      false,
+    );
+    enqueueSystemEvent("retained event", { sessionKey: threadSessionKey });
+    const cancel = vi.fn();
+    const activeReply = createReplyOperation({
+      sessionKey: threadSessionKey,
+      sessionId: "tombstoned-thread-session",
+      resetTriggered: false,
+    });
+    activeReply.attachBackend({ kind: "embedded", cancel, isStreaming: () => false });
+    activeReply.setPhase("running");
+
+    try {
+      await expect(
+        initSessionState({
+          ctx: {
+            Body: "Thread reply",
+            SessionKey: threadSessionKey,
+            ParentSessionKey: parentSessionKey,
+            InboundAccessAuthorized: true,
+            InboundEventKind: "user_request",
+            InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+          },
+          cfg: { session: { store: storePath } } as OpenClawConfig,
+        }),
+      ).rejects.toThrow(/ended during restart recovery/i);
+      expect(loadSessionEntry({ storePath, sessionKey: threadSessionKey })).toMatchObject({
+        sessionId: "tombstoned-thread-session",
+        mainRestartRecovery: { tombstone: { reason: "old transcript exhausted" } },
+      });
+      expect(getEmbeddedSessionPromptState(threadSessionKey)).toBe(promptState);
+      expect(promptState.sentUserTurnIds).toContain("retained-turn");
+      expect(getFollowupQueueDepth(threadSessionKey)).toBe(1);
+      expect(peekSystemEvents(threadSessionKey)).toEqual(["retained event"]);
+      expect(replyRunRegistry.get(threadSessionKey)).toBe(activeReply);
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      clearEmbeddedSessionPromptStates([threadSessionKey]);
+      clearSessionQueues([threadSessionKey]);
+      activeReply.complete();
+    }
   });
 
   it("skips fork when resolved parent token estimate exceeds threshold", async () => {
@@ -1416,7 +1775,7 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
-  it.each(["owed", "unresolved"] as const)(
+  it.each(["owed", "unresolved", "acknowledged"] as const)(
     "preserves %s delivery-notice debt across an implicit daily stale rollover",
     async (noticeState) => {
       const root = await makeCaseDir("openclaw-daily-rollover-notice-");
@@ -1625,16 +1984,69 @@ describe("initSessionState RawBody", () => {
     });
   });
 
-  it("preserves session lineage across an implicit daily stale rollover (#90119)", async () => {
+  it.each([
+    {
+      name: "ordinary top-level session",
+      sessionKey: "agent:main:main",
+      spawnedBy: "agent:main:subagent:stale-parent",
+      createdVia: "run" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
+      preservesSpawnLineage: false,
+    },
+    {
+      name: "ordinary ACP session with a stale role",
+      sessionKey: "agent:main:acp:ordinary-stale-role",
+      spawnedBy: "agent:main:main",
+      createdVia: "run" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: undefined,
+      preservesSpawnLineage: true,
+    },
+    {
+      name: "ordinary ACP session with a stale control scope",
+      sessionKey: "agent:main:acp:ordinary-stale-control-scope",
+      spawnedBy: "agent:main:main",
+      createdVia: "run" as const,
+      subagentRole: undefined,
+      subagentControlScope: "none" as const,
+      preservesSpawnLineage: true,
+    },
+    {
+      name: "real subagent",
+      sessionKey: "agent:main:subagent:daily-rollover-lineage",
+      spawnedBy: "agent:main:main",
+      createdVia: "spawn" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
+      preservesSpawnLineage: true,
+    },
+    {
+      name: "real ACP child",
+      sessionKey: "agent:main:acp:daily-rollover-lineage",
+      spawnedBy: "agent:main:subagent:parent",
+      createdVia: "spawn" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
+      preservesSpawnLineage: true,
+    },
+  ])("keeps spawned-run lineage only for a $name rollover", async (testCase) => {
     const root = await makeCaseDir("openclaw-daily-rollover-lineage-");
     const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:subagent:daily-rollover-lineage";
+    const sessionKey = testCase.sessionKey;
     const existingSessionId = "session-before-daily-reset-lineage";
     const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-    const lineage = {
-      spawnedBy: "agent:main:main",
+    const spawnLineage = {
+      spawnedBy: testCase.spawnedBy,
       spawnedWorkspaceDir: "/tmp/child-workspace",
       spawnedCwd: "/tmp/task-repo",
+      spawnDepth: 1,
+      ...(testCase.subagentRole ? { subagentRole: testCase.subagentRole } : {}),
+      ...(testCase.subagentControlScope
+        ? { subagentControlScope: testCase.subagentControlScope }
+        : {}),
+    };
+    const threadProvenance = {
       parentSessionKey: "agent:main:main",
       parentSessionId: "parent-session",
       forkedFromParent: true,
@@ -1642,13 +2054,10 @@ describe("initSessionState RawBody", () => {
         sessionKey: "agent:main:root",
         sessionId: "root-transcript-generation",
       },
-      createdVia: "spawn",
+      createdVia: testCase.createdVia,
       createdActor: { type: "agent", id: "agent:main:main" },
       createdAt: staleStartedAt - 1_000,
       sandbox: "required",
-      spawnDepth: 1,
-      subagentRole: "leaf",
-      subagentControlScope: "none",
     } as const;
 
     await writeSessionStoreFast(storePath, {
@@ -1657,7 +2066,8 @@ describe("initSessionState RawBody", () => {
         updatedAt: staleStartedAt,
         sessionStartedAt: staleStartedAt,
         lastInteractionAt: staleStartedAt,
-        ...lineage,
+        ...threadProvenance,
+        ...spawnLineage,
       },
     });
 
@@ -1674,9 +2084,15 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.previousSessionId).toBeUndefined();
-    expectEntryFields(result.sessionEntry, lineage);
+    expectEntryFields(result.sessionEntry, threadProvenance);
+    if (testCase.preservesSpawnLineage) {
+      expectEntryFields(result.sessionEntry, spawnLineage);
+    } else {
+      for (const field of Object.keys(spawnLineage)) {
+        expect(result.sessionEntry).not.toHaveProperty(field);
+      }
+    }
   });
 
   it.each([
@@ -3268,6 +3684,49 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         },
       });
     }
+  });
+
+  it("rejects replacement of a restart-tombstoned model-locked session", async () => {
+    const storePath = await createStorePath("openclaw-reset-tombstone-model-locked-");
+    const sessionKey = "agent:main:telegram:dm:tombstone-model-locked";
+    const existingSessionId = "existing-tombstone-model-locked-session";
+    const existingEntry = {
+      sessionId: existingSessionId,
+      updatedAt: Date.now(),
+      archivedAt: Date.now() - 1_000,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      status: "failed" as const,
+      mainRestartRecovery: {
+        cycleId: "model-locked-cycle",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+      pluginExtensions: {
+        codex: { threadId: "codex-thread-1" },
+      },
+    };
+    await writeSessionStoreFast(storePath, { [sessionKey]: existingEntry });
+
+    await expect(
+      initSessionState({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          From: "model-locked",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(existingEntry);
   });
 
   it("does not implicitly expire a model-locked session", async () => {

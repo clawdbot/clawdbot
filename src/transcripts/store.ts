@@ -449,14 +449,6 @@ export class TranscriptsStore {
       .map(utteranceFromRow);
   }
 
-  async updateStopped(sessionSelector: string, stoppedAt: string): Promise<void> {
-    const entry = await this.readSessionEntry(sessionSelector);
-    if (!entry) {
-      return;
-    }
-    await this.writeSession({ ...entry.session, stoppedAt });
-  }
-
   async writeSummary(
     summary: TranscriptsSummary,
     session?: TranscriptSessionDescriptor,

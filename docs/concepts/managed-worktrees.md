@@ -21,6 +21,8 @@ The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 h
 
 OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, it fetches `origin`, uses the remote default branch when available, and falls back to local `HEAD` when the repository is offline or has no usable remote.
 
+Each `git worktree add` checkout during creation or snapshot restore has a five-minute timeout, including a creation retry from local `HEAD`. Other managed-worktree Git commands keep their two-minute timeout. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
+
 ## Provision ignored files
 
 Add `.worktreeinclude` at the source repository root to copy selected ignored, untracked files into a new worktree. The file uses gitignore-pattern syntax, one pattern per line, with `#` comments:
@@ -43,6 +45,8 @@ OPENCLAW_WORKTREE_PATH=<managed worktree>
 
 A nonzero exit aborts creation and removes the new worktree and branch. This is a repository-local contract; there is no OpenClaw config key for it.
 
+Setup failures report the exit code or termination signal, or an actual timeout after 120 seconds, with a bounded excerpt of recent output rather than the full setup log. If setup times out, inspect `.openclaw/worktree-setup.sh` and its dependencies for slow downloads, unavailable services, or commands waiting for interactive input.
+
 ## Session worktrees
 
 Start an isolated chat from a Git-backed folder with a worktree session: on the Control UI's New session page, use the **Place** picker to choose a Gateway source folder, then select **Worktree** (with an optional base branch and worktree name). Choosing a paired device or cloud profile forces this managed-worktree path from the selected Gateway source; remote placement never browses or binds a node working directory. When the name is omitted, OpenClaw derives it from the explicit session label or the concise title generated from the first message, then falls back to a crustacean-themed name. The choice appears only after the Gateway confirms that the selected folder is a Git checkout; ordinary folders can run directly only on the Gateway and show no Git isolation control. iOS exposes the same choice from Chat actions, and Android exposes it beside New Chat, when the active agent workspace is Git-backed.
@@ -58,6 +62,14 @@ The resulting managed worktree is owned by the session, and every agent run in t
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. New Session dispatches a completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation.
 
 `sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a crustacean-themed fallback. The created worktree is returned in the create result and persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show the checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
+
+## Troubleshoot creation
+
+If **New session** reports `git worktree add failed`, read the termination reason and the final Git error lines. `Preparing worktree` and `Updating files` are progress, not the cause of failure. Error messages collapse carriage-return progress redraws and bound the diagnostic tail so it cannot flood the banner.
+
+`timed out after 300 seconds` means a worktree checkout reached its five-minute limit. Other Git commands report `timed out after 120 seconds` at their two-minute limit. Check repository access and available disk space on the Gateway host. A signal or nonzero exit status alone does not establish a timeout; use any accompanying `fatal:` or `error:` detail to investigate. An output-limit error means the command exceeded its output capture limit.
+
+Before another creation attempt, inspect `git -C <repo-root> worktree list` and `git -C <repo-root> branch --list 'openclaw/*'` for partial state. A failed creation does not guarantee that its checkout and branch were removed. Do not delete a checkout or branch without checking whether it contains work you need.
 
 ## Snapshots, cleanup, and restore
 

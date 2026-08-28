@@ -16,21 +16,28 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("reveals an active stream footer after a mobile tap", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  it.each([
+    { label: "desktop hover", mobile: false, viewport: { height: 900, width: 1280 } },
+    { label: "mobile tap", mobile: true, viewport: { height: 844, width: 390 } },
+  ])("shows turn metadata only after completion on $label", async ({ mobile, viewport }) => {
     const context = await suite.newBrowserContext({
-      hasTouch: true,
-      isMobile: true,
+      hasTouch: mobile,
+      isMobile: mobile,
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
+      viewport,
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        { role: "assistant", content: "Earlier completed reply.", timestamp: Date.now() - 60_000 },
+      ],
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".agent-chat__composer-combobox textarea").fill("show stream metadata");
+      await page.getByText("Earlier completed reply.").waitFor();
+      await page.locator(".agent-chat__composer-combobox textarea").fill("show turn metadata");
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
       const runId = requireString(
@@ -51,37 +58,48 @@ suite.define(() => {
       });
 
       const activeStream = page.locator(".chat-bubble.streaming");
-      await activeStream.waitFor({ state: "visible", timeout: 10_000 });
-      const footer = activeStream
-        .locator(
-          "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')][1]",
-        )
-        .locator(".chat-group-footer");
-      await footer.waitFor({ state: "attached", timeout: 10_000 });
-      const presentation = () =>
-        footer.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { opacity: style.opacity, pointerEvents: style.pointerEvents };
-        });
-      await expect.poll(presentation).toEqual({ opacity: "0", pointerEvents: "none" });
+      await activeStream.waitFor({ state: "visible" });
+      const activeGroup = page.locator(".chat-group.assistant").last();
+      const reveal = async () => {
+        if (mobile) {
+          await activeGroup.locator(".chat-bubble").last().tap();
+        } else {
+          await activeGroup.hover();
+        }
+      };
+      await reveal();
+      expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
+      expect(
+        await page.locator(".chat-group.assistant").first().locator(".chat-group-footer").count(),
+      ).toBe(1);
 
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "active-stream-metadata-resting.png"),
-        });
-      }
+      // Settled commentary is still part of an active turn while a tool runs.
+      await gateway.emitGatewayEvent("agent", {
+        data: {
+          args: { path: "README.md" },
+          name: "read",
+          phase: "start",
+          toolCallId: "footer-read",
+        },
+        runId,
+        seq: 1,
+        sessionKey: "main",
+        stream: "tool",
+        ts: Date.now(),
+      });
+      await page.locator(".chat-working-indicator").waitFor({ state: "visible" });
+      await reveal();
+      expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
 
-      await activeStream.tap();
-      await expect.poll(presentation).toEqual({ opacity: "1", pointerEvents: "auto" });
-
-      if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "active-stream-metadata-revealed.png"),
-        });
-      }
+      await gateway.emitChatFinal({ runId, text: "The turn is complete." });
+      await activeGroup.getByText("The turn is complete.", { exact: true }).waitFor();
+      await reveal();
+      const footer = activeGroup.locator(".chat-group-footer");
+      await expect
+        .poll(() => footer.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      expect(await footer.locator(".chat-sender-name").textContent()).toBe("OpenClaw");
+      expect(await footer.locator(".chat-group-timestamp").count()).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

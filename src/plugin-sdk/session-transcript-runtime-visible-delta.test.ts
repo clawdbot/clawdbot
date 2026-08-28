@@ -73,6 +73,25 @@ describe("session transcript visible cursor SDK", () => {
       throw new Error("expected first visible transcript page");
     }
 
+    const decodedCursor = JSON.parse(
+      Buffer.from(first.cursor, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    const nonCanonicalCursors = [
+      `${first.cursor}!`,
+      `${first.cursor}=`,
+      Buffer.from(JSON.stringify({ ...decodedCursor, extra: true }), "utf8").toString("base64url"),
+    ];
+    for (const cursor of nonCanonicalCursors) {
+      await expect(
+        readSessionTranscriptVisibleMessageDelta({
+          ...scope,
+          cursor,
+          maxBytes: 10_000,
+          maxMessages: 1,
+        }),
+      ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+    }
+
     const second = await readSessionTranscriptVisibleMessageDelta({
       ...scope,
       cursor: first.cursor,

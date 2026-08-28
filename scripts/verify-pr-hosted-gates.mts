@@ -281,8 +281,7 @@ function matchingAuthoritativeRuns(
 function latestRun(runs: WorkflowRun[]) {
   // GitHub run_number is creation order; updated_at moves as jobs finish.
   return runs.toSorted(
-    (left, right) =>
-      Number(right.run_number ?? right.id ?? 0) - Number(left.run_number ?? left.id ?? 0),
+    (left, right) => (right.run_number ?? right.id ?? 0) - (left.run_number ?? left.id ?? 0),
   )[0];
 }
 
@@ -819,9 +818,7 @@ export function collectHostedGateEvidence({
             ) &&
             isRecentRun(run, nowMs),
         )
-        .toSorted((left, right) =>
-          String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? "")),
-        )
+        .toSorted((left, right) => (right.updated_at ?? "").localeCompare(left.updated_at ?? ""))
         .map((run) => run.head_sha),
     ].filter((value): value is string => typeof value === "string" && value.length > 0);
     let fallbackError;

@@ -2,12 +2,14 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const commonScript = join(process.cwd(), "scripts/pr-lib/common.sh");
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const headSha = "0123456789abcdef0123456789abcdef01234567";
+const baseSha = "1111111111111111111111111111111111111111";
 const landedSha = "fedcba9876543210fedcba9876543210fedcba98";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
@@ -16,6 +18,7 @@ type MergeScenario = {
   autoError?: string;
   autoResult?: "enabled" | "inconclusive" | "unavailable";
   checks?: "fail" | "green" | "pending";
+  crabboxBypass?: "missing" | "non-admin" | "non-infra" | "stale-sha" | "valid" | "wrong-app";
   cleanupMetadataError?: string;
   commentEmpty?: boolean;
   commentFailures?: number;
@@ -55,9 +58,20 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
 `,
   );
   chmodSync(join(bin, "rg"), 0o755);
+  const usesCrabboxBypass = scenario.crabboxBypass !== undefined;
   writeFileSync(
     join(localDir, "prep.env"),
-    `PREP_HEAD_SHA=${headSha}\nLOCAL_PREP_HEAD_SHA=${headSha}\n`,
+    [
+      `PREP_HEAD_SHA=${headSha}`,
+      `LOCAL_PREP_HEAD_SHA=${headSha}`,
+      `LAST_VERIFIED_HEAD_SHA=${usesCrabboxBypass ? headSha : ""}`,
+      `FULL_GATES_HEAD_SHA=${usesCrabboxBypass ? headSha : ""}`,
+      `GATES_MODE=${usesCrabboxBypass ? "remote_crabbox_aws" : "full"}`,
+      `REMOTE_GATES_PROVIDER=${usesCrabboxBypass ? "aws" : ""}`,
+      `REMOTE_GATES_RUN_ID=${usesCrabboxBypass ? "run_abc123" : ""}`,
+      `REMOTE_GATES_LEASE_ID=${usesCrabboxBypass ? "cbx_def456" : ""}`,
+      "",
+    ].join("\n"),
   );
   for (const artifact of ["review.md", "review.json", "prep.md"]) {
     writeFileSync(join(localDir, artifact), "fixture\n");
@@ -85,18 +99,100 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
     mergeStateStatus: scenario.mergeStateStatus ?? "BEHIND",
     autoMergeRequest: null,
   });
-  const checks =
-    scenario.checks === "fail"
+  const checks = usesCrabboxBypass
+    ? [{ name: "openclaw/ci-gate", bucket: "fail", state: "SKIPPED" }]
+    : scenario.checks === "fail"
       ? [{ name: "CI", bucket: "fail", state: "FAILURE" }]
       : scenario.checks === "pending"
         ? [{ name: "CI", bucket: "pending", state: "IN_PROGRESS" }]
         : [{ name: "CI", bucket: "pass", state: "SUCCESS" }];
+  const checkRuns = {
+    check_runs: [
+      {
+        app: { id: 15368 },
+        conclusion: "skipped",
+        details_url: "https://github.com/openclaw/openclaw/actions/runs/7001/job/7002",
+        head_sha: headSha,
+        id: 20,
+        name: "openclaw/ci-gate",
+        status: "completed",
+      },
+      ...(scenario.crabboxBypass === "missing"
+        ? []
+        : [
+            {
+              app: { id: scenario.crabboxBypass === "wrong-app" ? 999 : 15368 },
+              conclusion: "success",
+              details_url: "https://github.com/openclaw/openclaw/actions/runs/8001",
+              head_sha: scenario.crabboxBypass === "stale-sha" ? "b".repeat(40) : headSha,
+              id: 21,
+              name: "openclaw/crabbox-gate",
+              output: {
+                summary: formatCrabboxGateCheckSummary({
+                  baseSha,
+                  headSha,
+                  leaseId: "cbx_def456",
+                  planDigest: "c".repeat(64),
+                  runId: "run_abc123",
+                  targetCount: 8,
+                }),
+              },
+              status: "completed",
+            },
+          ]),
+    ],
+  };
+  const workflowRun = {
+    conclusion: "failure",
+    event: "pull_request",
+    head_sha: headSha,
+    id: 7001,
+    path: ".github/workflows/ci.yml",
+    status: "completed",
+  };
+  const publisherRun = {
+    conclusion: "success",
+    event: "workflow_dispatch",
+    head_branch: "main",
+    head_sha: baseSha,
+    id: 8001,
+    path: ".github/workflows/pr-crabbox-gate-publisher.yml",
+    status: "completed",
+  };
+  const workflowJobs = {
+    jobs: [
+      {
+        conclusion: "skipped",
+        id: 7002,
+        name: "openclaw/ci-gate",
+        status: "completed",
+      },
+      {
+        conclusion: "failure",
+        id: 7003,
+        labels: ["blacksmith-4vcpu-ubuntu-2404"],
+        name: "check",
+        runner_name: null,
+        status: "completed",
+        steps:
+          scenario.crabboxBypass === "non-infra"
+            ? [
+                {
+                  conclusion: "failure",
+                  name: "The hosted runner encountered an error",
+                  status: "completed",
+                },
+              ]
+            : [],
+      },
+    ],
+  };
 
   const shell = `
 set -euo pipefail
+script_parent_dir="$OPENCLAW_TEST_SCRIPTS_DIR"
 source "$OPENCLAW_TEST_COMMON_SCRIPT"
 source "$OPENCLAW_TEST_MERGE_SCRIPT"
-script_parent_dir="$OPENCLAW_TEST_SCRIPTS_DIR"
 enter_worktree() { :; }
 require_artifact() { :; }
 validate_review_artifact_data() {
@@ -211,12 +307,42 @@ gh_route() {
       for api_arg in "$@"; do
         case "$api_arg" in
           repos/*/*/commits/*)
-            echo 'unexpected repository commit-resolution API probe' >&2
-            return 1
+            case "$api_arg" in
+              *"/check-runs?"*) ;;
+              *)
+                echo 'unexpected repository commit-resolution API probe' >&2
+                return 1
+                ;;
+            esac
             ;;
         esac
       done
       case "$*" in
+        "api user")
+          printf '%s\\n' '{"login":"maintainer"}'
+          ;;
+        *"orgs/openclaw/memberships/maintainer"*)
+          if [ "$OPENCLAW_TEST_CRABBOX_BYPASS" = "non-admin" ]; then
+            printf '%s\\n' '{"state":"active","role":"member","user":{"login":"maintainer"}}'
+          else
+            printf '%s\\n' '{"state":"active","role":"admin","user":{"login":"maintainer"}}'
+          fi
+          ;;
+        *"repos/"*"/pulls/123"*)
+          printf '%s\\n' '{"number":123,"state":"open","draft":false,"head":{"sha":"${headSha}","repo":{"full_name":"openclaw/openclaw"}},"base":{"sha":"${baseSha}","ref":"main","repo":{"full_name":"openclaw/openclaw"}}}'
+          ;;
+        *"/commits/${headSha}/check-runs"*)
+          printf '[%s]\\n' "$OPENCLAW_TEST_CHECK_RUNS_JSON"
+          ;;
+        *"/actions/runs/7001/jobs"*)
+          printf '[%s]\\n' "$OPENCLAW_TEST_WORKFLOW_JOBS_JSON"
+          ;;
+        *"/actions/runs/8001"*)
+          printf '%s\\n' "$OPENCLAW_TEST_PUBLISHER_RUN_JSON"
+          ;;
+        *"/actions/runs/7001"*)
+          printf '%s\\n' "$OPENCLAW_TEST_WORKFLOW_RUN_JSON"
+          ;;
         *"issues/123/comments"*)
           local arg
           for arg in "$@"; do
@@ -278,12 +404,14 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_AUTO_STATE: autoState,
       OPENCLAW_TEST_CHECKS_EXIT_STATUS: scenario.checks === "pending" ? "8" : "0",
       OPENCLAW_TEST_CHECKS_JSON: JSON.stringify(checks),
+      OPENCLAW_TEST_CHECK_RUNS_JSON: JSON.stringify(checkRuns),
       OPENCLAW_TEST_CLEANUP_METADATA_ERROR: scenario.cleanupMetadataError ?? "",
       OPENCLAW_TEST_COMMENT_ATTEMPTS: commentAttempts,
       OPENCLAW_TEST_COMMENT_BODY: commentBody,
       OPENCLAW_TEST_COMMENT_EMPTY: scenario.commentEmpty ? "true" : "false",
       OPENCLAW_TEST_COMMENT_FAILURES: String(scenario.commentFailures ?? 0),
       OPENCLAW_TEST_COMMON_SCRIPT: commonScript,
+      OPENCLAW_TEST_CRABBOX_BYPASS: scenario.crabboxBypass ?? "",
       OPENCLAW_TEST_DISABLED_AUTO_META: disabledAutoMeta,
       OPENCLAW_TEST_GH_CALLS: calls,
       OPENCLAW_TEST_LANDED_SHA: landedSha,
@@ -292,6 +420,7 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_MERGE_STATE_STATUS: scenario.mergeStateStatus ?? "BEHIND",
       OPENCLAW_TEST_POST_AUTO_META: postAutoMeta,
       OPENCLAW_TEST_PRE_AUTO_META: preAutoMeta,
+      OPENCLAW_TEST_PUBLISHER_RUN_JSON: JSON.stringify(publisherRun),
       OPENCLAW_TEST_REMOTE_DELETE_ERROR: scenario.remoteDeleteError ?? "",
       OPENCLAW_TEST_REMOTE_READ_ERROR: scenario.remoteReadError ?? "",
       OPENCLAW_TEST_REMOTE_REFS_JSON: scenario.remoteRefsJson ?? "[]",
@@ -300,6 +429,8 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_RG_CALLS: rgCalls,
       OPENCLAW_TEST_ROOT: root,
       OPENCLAW_TEST_SCRIPTS_DIR: join(process.cwd(), "scripts"),
+      OPENCLAW_TEST_WORKFLOW_JOBS_JSON: JSON.stringify(workflowJobs),
+      OPENCLAW_TEST_WORKFLOW_RUN_JSON: JSON.stringify(workflowRun),
       PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
     },
   });
@@ -338,6 +469,35 @@ describePosix("scripts/pr merge-run", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("Required checks are failing.");
     expect(result.calls).not.toContain("pr merge");
+  });
+
+  it("uses admin squash only for exact trusted Crabbox and hosted infrastructure proof", () => {
+    const result = runMerge({ crabboxBypass: "valid", mergeStateStatus: "CLEAN" });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.calls).toContain(
+      `plain pr merge 123 --admin --squash --match-head-commit ${headSha}`,
+    );
+    expect(result.calls.match(/orgs\/openclaw\/memberships\/maintainer/gmu)).toHaveLength(2);
+    expect(result.stdout).toContain("Crabbox admin merge bypass verified");
+    expect(result.calls).toContain("openclaw/crabbox-gate");
+    expect(result.calls).toContain("Hosted CI infrastructure failure");
+  });
+
+  it.each([
+    ["missing trusted check", "missing"],
+    ["wrong check app", "wrong-app"],
+    ["stale check SHA", "stale-sha"],
+    ["non-admin actor", "non-admin"],
+    ["ordinary CI failure", "non-infra"],
+  ] as const)("rejects Crabbox bypass with %s", (_label, crabboxBypass) => {
+    const result = runMerge({ crabboxBypass });
+
+    expect(result.status).toBe(1);
+    expect(result.calls).not.toContain("pr merge 123 --admin");
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "Crabbox merge bypass evidence is not sufficient",
+    );
   });
 
   it("does not mistake pending required checks for a GitHub API failure", () => {

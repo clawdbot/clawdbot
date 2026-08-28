@@ -8,7 +8,14 @@ import {
 } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeName } from "../../app/theme.ts";
+import {
+  loadTypefaceSpecimens,
+  normalizeTypefaceOverride,
+  THEME_TYPEFACES,
+  TYPEFACES,
+} from "../../app/typography.ts";
 import { icons } from "../../components/icons.ts";
+import { renderPicker } from "../../components/select-picker.ts";
 import {
   renderSettingsDefaultDescription,
   renderSettingsRow,
@@ -136,6 +143,72 @@ function focusCustomThemeImportInput() {
     input.focus();
     input.select();
   });
+}
+
+function renderTypography(props: ConfigProps, themeLabel: string) {
+  const options = Object.entries(TYPEFACES).map(([face, metadata]) => ({
+    value: face,
+    label: face === "system" ? t("configView.appearance.fonts.system") : metadata.label,
+    description: t(`configView.appearance.fontNotes.${face}`),
+    labelStyle: `font-family: ${metadata.stack}`,
+  }));
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("configView.appearance.typography")}</h2>
+      </div>
+      <div class="settings-group">
+        ${(["ui", "chat"] as const).map((slot) => {
+          const isUi = slot === "ui";
+          const title = t(`configView.appearance.fonts.${slot}`);
+          const face = THEME_TYPEFACES[props.theme][slot];
+          return renderSettingsRow({
+            title,
+            description: serverUiPrefProvenanceHint(
+              isUi ? props.fontUiProvenance : props.fontChatProvenance,
+            ),
+            stackedOnNarrow: true,
+            control: renderPicker({
+              id: `settings-font-${slot}`,
+              label: title,
+              value: (isUi ? props.fontUi : props.fontChat) ?? "theme",
+              options: [
+                {
+                  value: "theme",
+                  // Both slots say "Theme default": Dash and Absolutely default
+                  // chat to a serif that intentionally differs from the interface
+                  // face, so "match interface" would misname the actual fallback.
+                  label: t("configView.appearance.fonts.themeDefault"),
+                  description: t("configView.appearance.fonts.themeFace", {
+                    theme: themeLabel,
+                    face: TYPEFACES[face].label,
+                  }),
+                  labelStyle: `font-family: ${TYPEFACES[face].stack}`,
+                },
+                ...options,
+              ],
+              onOpen: loadTypefaceSpecimens,
+              onChange: (value) =>
+                (isUi ? props.setFontUi : props.setFontChat)(normalizeTypefaceOverride(value)),
+            }),
+          });
+        })}
+        <div class="settings-row settings-row--stacked">
+          <div class="settings-typography-preview">
+            <div class="settings-typography-preview__caption">
+              ${t("configView.appearance.fonts.previewCaption")}
+            </div>
+            <p class="settings-typography-preview__prose">
+              ${t("configView.appearance.fonts.previewProse")}
+            </p>
+            <code class="settings-typography-preview__code"
+              >${t("configView.appearance.fonts.previewCode")}</code
+            >
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 export function renderAppearanceSection(
@@ -343,6 +416,8 @@ export function renderAppearanceSection(
           </div>
         </div>
       </section>
+
+      ${renderTypography(props, themeOptions.find((option) => option.id === props.theme)!.label)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
         <div class="settings-section__header">

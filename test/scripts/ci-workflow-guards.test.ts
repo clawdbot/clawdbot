@@ -12,11 +12,13 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
+import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -25,6 +27,7 @@ import {
   shouldRunNativeI18n,
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
+import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -817,9 +820,9 @@ esac
       encoding: "utf8",
       env: { ...process.env, PATH: fixturePath },
     });
-    if (timeoutVersion.status !== 0 || !timeoutVersion.stdout.includes("(GNU coreutils)")) {
+    if (timeoutVersion.status !== 0) {
       throw new Error(
-        `QA timeout fixture requires GNU timeout: ${timeoutVersion.stdout}${timeoutVersion.stderr}`,
+        `QA timeout fixture requires timeout --version: ${timeoutVersion.stdout}${timeoutVersion.stderr}`,
       );
     }
 
@@ -895,7 +898,7 @@ timeout_outcome="none"`,
       stderr: run.stderr,
       stdout: run.stdout,
       timeoutSupervisorLog: readFileSync(timeoutSupervisorCapture, "utf8"),
-      timeoutVersion: timeoutVersion.stdout.trim(),
+      timeoutVersion: `${timeoutVersion.stdout}${timeoutVersion.stderr}`.trim(),
     };
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -3624,7 +3627,7 @@ NODE
     expect(
       JSON.parse(expectDefined(dispatchManifest.outputs.ui_e2e_matrix, "dispatch UI E2E matrix"))
         .include,
-    ).toHaveLength(12);
+    ).toHaveLength(14);
     expect(
       JSON.parse(
         expectDefined(dispatchManifest.outputs.qa_smoke_ci_matrix, "dispatch QA smoke matrix"),
@@ -6923,6 +6926,106 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
+  it("keeps the preflight manifest import closure dependency-free", () => {
+    const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    );
+    const manifestRun = expectDefined(manifestStep?.run, "Build CI manifest script");
+    const manifestSource = expectDefined(
+      manifestRun.match(/--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/u)?.[2],
+      "Build CI manifest Node source",
+    );
+    const repoRoot = process.cwd();
+    const pending = new Set<string>();
+
+    function inspectImports(file: string, source: string, workflow = false) {
+      const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+      const specifiers = new Set<string>();
+      const constants = new Map<string, string>();
+      for (const statement of sourceFile.statements) {
+        if (
+          !ts.isVariableStatement(statement) ||
+          !(statement.declarationList.flags & ts.NodeFlags.Const)
+        ) {
+          continue;
+        }
+        for (const declaration of statement.declarationList.declarations) {
+          if (
+            ts.isIdentifier(declaration.name) &&
+            declaration.initializer &&
+            ts.isStringLiteralLike(declaration.initializer)
+          ) {
+            constants.set(declaration.name.text, declaration.initializer.text);
+          }
+        }
+      }
+      visitModuleSpecifiers(
+        ts,
+        sourceFile,
+        ({ specifier }: { specifier: string }) => specifiers.add(specifier),
+        { includeCommonJs: true, includeImportTypes: true },
+      );
+      function visit(node: ts.Node) {
+        // The workflow selects current .mts or historical .mjs candidates before
+        // importing them through variables/helpers. Follow its existing module paths.
+        if (
+          workflow &&
+          ts.isStringLiteralLike(node) &&
+          /^\.\.?\/.*\.[cm]?[jt]s$/u.test(node.text) &&
+          existsSync(node.text)
+        ) {
+          specifiers.add(node.text);
+        }
+        if (
+          !workflow &&
+          ts.isCallExpression(node) &&
+          (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+            (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+        ) {
+          const argument = node.arguments[0];
+          if (!argument || !ts.isStringLiteralLike(argument)) {
+            const specifier =
+              argument && ts.isIdentifier(argument) ? constants.get(argument.text) : undefined;
+            expect(
+              specifier,
+              `${file}: cannot statically resolve module specifier ${argument?.getText(sourceFile) ?? "<missing>"}`,
+            ).toBeDefined();
+            specifiers.add(expectDefined(specifier, "resolved module specifier"));
+          }
+        }
+        ts.forEachChild(node, visit);
+      }
+      visit(sourceFile);
+      for (const specifier of specifiers) {
+        const diagnostic = `${file}: preflight import ${JSON.stringify(specifier)} must resolve without node_modules`;
+        if (specifier.startsWith("node:")) {
+          expect(isBuiltin(specifier), diagnostic).toBe(true);
+          continue;
+        }
+        expect(specifier, diagnostic).toMatch(/^\.\.?\//u);
+        const importedFile = path.relative(
+          repoRoot,
+          path.resolve(workflow ? repoRoot : path.dirname(file), specifier),
+        );
+        expect(importedFile, diagnostic).not.toMatch(/^(?:\.\.(?:[\\/]|$)|[\\/])/u);
+        expect(importedFile.split(path.sep), diagnostic).not.toContain("node_modules");
+        expect(existsSync(importedFile), `${diagnostic}; missing ${importedFile}`).toBe(true);
+        pending.add(importedFile);
+      }
+    }
+
+    inspectImports(".github/workflows/ci.yml (Build CI manifest)", manifestSource, true);
+    expect(pending.size, "workflow must declare preflight module entry points").toBeGreaterThan(0);
+    // Set iteration visits newly discovered modules once, including cycles.
+    for (const file of pending) {
+      expect(
+        pending.size,
+        "preflight import closure exceeded 256 repository files",
+      ).toBeLessThanOrEqual(256);
+      inspectImports(file, readFileSync(file, "utf8"));
+    }
+  });
+
   it("runs mobile protocol coverage for Node and native-only changes", () => {
     const workflow = readCiWorkflow();
     const coverageStep = workflow.jobs.preflight.steps.find(
@@ -7805,7 +7908,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy["fail-fast"]).toBe(false);
     expect(uiE2e.strategy["max-parallel"]).toBe(
-      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 12 || 4 }}",
+      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 14 || 4 }}",
     );
     expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
     const expectedUiE2eMatrix = (shardCount: number) => ({
@@ -7821,8 +7924,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     for (const [runnerBackend, shardCount] of [
       ["blacksmith", 4],
-      ["github", 12],
-      ["hybrid", 12],
+      ["github", 14],
+      ["hybrid", 14],
     ] as const) {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
@@ -8243,7 +8346,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(fullReleaseCiCase).not.toContain("release_gate");
   });
 
-  it("runs built runtime verifiers inside the artifact-check wave", () => {
+  it("measures startup memory before the built artifact-check wave", () => {
     const workflow = readCiWorkflow();
     const steps = workflow.jobs["build-artifacts"].steps;
     const verifierStep = steps.find(
@@ -8256,8 +8359,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(steps.some((step: WorkflowStep) => step.name === "Verify built runtime artifacts")).toBe(
       false,
     );
-    // The hosted RSS allowance and the serial fallback keep the startup-memory
-    // measurement unperturbed on 4-core hosted runners.
+    // RSS measures an unloaded command on every runner, including Blacksmith.
+    const startupMemory = verifierStep.run.indexOf('run_verifier "startup-memory"');
+    const memoryBarrier = verifierStep.run.indexOf("\nwait_checks\n", startupMemory);
+    expect(memoryBarrier).toBeGreaterThan(startupMemory);
+    expect(memoryBarrier).toBeLessThan(
+      verifierStep.run.indexOf('run_verifier "doctor-plugin-index"'),
+    );
     expect(verifierStep.env.OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB).toBe(
       "${{ runner.environment == 'github-hosted' && '425' || '400' }}",
     );
@@ -8419,7 +8527,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run).toContain(
       'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
     );
-    const firstWait = run.indexOf("\nwait_checks\n");
+    const firstWait = run.indexOf(
+      "\nwait_checks\n",
+      run.indexOf('start_check "core-support-boundary"'),
+    );
     const hostedGatewayWatch = run.indexOf(
       'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
     );
@@ -8437,9 +8548,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
     );
     expect(run).toContain("wait_checks()");
-    // Three wave barriers plus the one inside run_verifier, which serializes
-    // the built-runtime verifiers on hosted runners only.
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(4);
+    // Startup memory is isolated before the three artifact waves; hosted
+    // runners also serialize the remaining verifiers inside run_verifier.
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(5);
   });
 
   it("keeps docs i18n CI on the workflow-owned Go toolchain", () => {
@@ -8959,7 +9070,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expect(result.githubOutput).toContain(`qa_exit_code=${scenario.exitCode}`);
         expect(result.stderr).toContain(`child-stderr-sentinel:${scenario.mode}`);
         expect(result.stderr).toContain("child-locale:POSIX");
-        expect(result.timeoutVersion).toContain("(GNU coreutils)");
+        expect(result.timeoutVersion).not.toBe("");
 
         const supervisorSignals: readonly ("TERM" | "KILL")[] = scenario.supervisorSignals;
         for (const signal of ["TERM", "KILL"] as const) {
@@ -10451,5 +10562,57 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(rawSocketQuery).not.toContain(
       'call.getFile().getRelativePath() = "extensions/codex/src/app-server/transport-websocket.ts"',
     );
+  });
+
+  it("keeps the Crabbox gate publisher on protected main with minimal permissions", () => {
+    const workflow = parse(readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"));
+    const publisher = readFileSync("scripts/pr-crabbox-gate-publisher.mjs", "utf8");
+    const job = workflow.jobs.publish;
+    expect(workflow.permissions).toEqual({});
+    expect(workflow.on).toHaveProperty("workflow_dispatch");
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
+    expect(job.permissions).toEqual({
+      checks: "write",
+      contents: "read",
+      "pull-requests": "read",
+    });
+    expect(job.steps[0]).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        "fetch-depth": 0,
+        "persist-credentials": false,
+        ref: "${{ github.workflow_sha }}",
+      },
+    });
+    expect(job.steps.at(-1)).toMatchObject({
+      env: {
+        CRABBOX_ACCESS_CLIENT_ID: "${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}",
+        CRABBOX_ACCESS_CLIENT_SECRET: "${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}",
+        CRABBOX_COORDINATOR: "${{ secrets.CRABBOX_COORDINATOR }}",
+        CRABBOX_COORDINATOR_TOKEN: "${{ secrets.CRABBOX_COORDINATOR_TOKEN }}",
+        GH_APP_TOKEN:
+          "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
+        GH_TOKEN: "${{ github.token }}",
+      },
+      run: "node scripts/pr-crabbox-gate-publisher.mjs",
+    });
+    expect(job.steps.slice(2, 4)).toMatchObject([
+      {
+        id: "app-token",
+        uses: CREATE_GITHUB_APP_TOKEN_V3,
+        with: { "app-id": "2729701", "permission-members": "read" },
+      },
+      {
+        id: "app-token-fallback",
+        uses: CREATE_GITHUB_APP_TOKEN_V3,
+        with: { "app-id": "2971289", "permission-members": "read" },
+      },
+    ]);
+    expect(publisher).toContain("const CHECK_NAME = CRABBOX_GATE_CHECK_NAME");
+    expect(readFileSync("scripts/pr-lib/crabbox-gate-contract.mjs", "utf8")).toContain(
+      'CRABBOX_GATE_CHECK_NAME = "openclaw/crabbox-gate"',
+    );
+    expect(publisher).not.toContain('const CHECK_NAME = "openclaw/ci-gate"');
+    expect(workflow.on.workflow_dispatch.inputs).toHaveProperty("base_sha");
   });
 });

@@ -15,6 +15,8 @@ import {
 import { handleGatewayRequest, runWithGatewayRequestEnvelope } from "./server-methods.js";
 import { suspendHandlers } from "./server-methods/suspend.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { TerminalSessionManager } from "./terminal/session-manager.js";
+import { baseOpenRequest, makeFakePty } from "./terminal/session-manager.test-helpers.js";
 
 function deferred() {
   let resolve = () => {};
@@ -312,154 +314,186 @@ describe("gateway request suspension admission", () => {
     );
   });
 
-  it("drains an admitted request while fencing new roots until terminal delivery settles", async () => {
-    const started = deferred();
-    const finish = deferred();
-    const active = dispatch({
-      method: "suspend-proof.admitted",
-      scope: "operator.write",
-      handler: async ({ respond }) => {
-        started.resolve();
-        await finish.promise;
-        respond(true, { delivered: true });
-      },
-    });
-    await started.promise;
-
-    const cron = {
-      pauseScheduling: vi.fn(),
-      resumeScheduling: vi.fn(),
-      getSuspensionBlockerCount: vi.fn(() => 0),
-    };
-    const terminalSessions = new Set(["terminal-preserved"]);
-    const chatAbortControllers = new Map([
-      [
-        "reply-pending",
-        {
-          controller: new AbortController(),
-          sessionId: "session-pending",
-          sessionKey: "agent:main:session-pending",
-          startedAtMs: 1,
-          expiresAtMs: 2,
-          registrationCleanupRequested: true,
-          controlUiVisible: true,
-          projectSessionTerminalPending: true,
+  it.each(["preserve", "terminate"] as const)(
+    "drains admitted work and final-state writes with %s terminal policy",
+    async (terminalPolicy) => {
+      const preservingTerminals = terminalPolicy === "preserve";
+      const started = deferred();
+      const finish = deferred();
+      const active = dispatch({
+        method: "suspend-proof.admitted",
+        scope: "operator.write",
+        handler: async ({ respond }) => {
+          started.resolve();
+          await finish.promise;
+          respond(true, { delivered: true });
         },
-      ],
-    ]);
-    const context = {
-      cron,
-      logGateway: { warn: vi.fn() },
-      chatAbortControllers,
-      chatQueuedTurns: new Map(),
-      terminalSessions,
-    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+      });
+      await started.promise;
 
-    const prepareHandler = suspendHandlers["gateway.suspend.prepare"];
-    const statusHandler = suspendHandlers["gateway.suspend.status"];
-    const resumeHandler = suspendHandlers["gateway.suspend.resume"];
-    if (!prepareHandler || !statusHandler || !resumeHandler) {
-      throw new Error("expected complete gateway suspension RPC handlers");
-    }
+      const cron = {
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        getSuspensionBlockerCount: vi.fn(() => 0),
+      };
+      const pty = makeFakePty();
+      const terminalSessions = new TerminalSessionManager({
+        emit: vi.fn(),
+        spawn: async () => pty,
+      });
+      await terminalSessions.open(baseOpenRequest());
+      const chatAbortControllers = new Map([
+        [
+          "reply-pending",
+          {
+            controller: new AbortController(),
+            sessionId: "session-pending",
+            sessionKey: "agent:main:session-pending",
+            startedAtMs: 1,
+            expiresAtMs: 2,
+            registrationCleanupRequested: true,
+            controlUiVisible: true,
+            projectSessionTerminalPending: true,
+          },
+        ],
+      ]);
+      const context = {
+        cron,
+        logGateway: { warn: vi.fn() },
+        chatAbortControllers,
+        chatQueuedTurns: new Map(),
+        terminalSessions,
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
 
-    const prepared = dispatch({
-      method: "gateway.suspend.prepare",
-      scope: "operator.admin",
-      handler: prepareHandler,
-      requestParams: { requestId: "issue-129906-drain", drain: true },
-      context,
-    });
-    await prepared.request;
+      let suspensionId: string | undefined;
+      try {
+        const prepareHandler = suspendHandlers["gateway.suspend.prepare"];
+        const statusHandler = suspendHandlers["gateway.suspend.status"];
+        const resumeHandler = suspendHandlers["gateway.suspend.resume"];
+        if (!prepareHandler || !statusHandler || !resumeHandler) {
+          throw new Error("expected complete gateway suspension RPC handlers");
+        }
 
-    const result = prepared.respond.mock.calls[0]?.[1] as
-      | { suspensionId: string; expiresAtMs: number }
-      | undefined;
-    expect(prepared.respond).toHaveBeenCalledWith(true, {
-      status: "draining",
-      suspensionId: expect.any(String),
-      expiresAtMs: expect.any(Number),
-      retryAfterMs: 20_000,
-      activeCount: 3,
-      blockers: expect.arrayContaining([
-        expect.objectContaining({ kind: "root-request", count: 1 }),
-        expect.objectContaining({ kind: "terminal-persistence", count: 1 }),
-        expect.objectContaining({ kind: "terminal-session", count: 1 }),
-      ]),
-    });
-    if (!result) {
-      throw new Error("expected an owned draining suspension lease");
-    }
-    expect(cron.pauseScheduling).toHaveBeenCalledOnce();
-    expect(cron.resumeScheduling).not.toHaveBeenCalled();
+        const prepared = dispatch({
+          method: "gateway.suspend.prepare",
+          scope: "operator.admin",
+          handler: prepareHandler,
+          requestParams: {
+            requestId: "request-terminal-policy-drain",
+            terminalPolicy,
+            drain: true,
+          },
+          context,
+        });
+        await prepared.request;
 
-    const unrelatedHandler = vi.fn<GatewayRequestHandler>();
-    const unrelated = dispatch({
-      method: "suspend-proof.unrelated",
-      scope: "operator.write",
-      handler: unrelatedHandler,
-      context,
-    });
-    await unrelated.request;
-    expect(unrelatedHandler).not.toHaveBeenCalled();
-    expect(unrelated.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        details: expect.objectContaining({ phase: "draining" }),
-      }),
-    );
+        const result = prepared.respond.mock.calls[0]?.[1] as
+          | { suspensionId: string; expiresAtMs: number }
+          | undefined;
+        suspensionId = result?.suspensionId;
+        expect(prepared.respond).toHaveBeenCalledWith(true, {
+          status: "draining",
+          suspensionId: expect.any(String),
+          expiresAtMs: expect.any(Number),
+          retryAfterMs: 20_000,
+          activeCount: preservingTerminals ? 3 : 2,
+          blockers: expect.arrayContaining([
+            expect.objectContaining({ kind: "root-request", count: 1 }),
+            expect.objectContaining({ kind: "terminal-persistence", count: 1 }),
+            ...(preservingTerminals
+              ? [expect.objectContaining({ kind: "terminal-session", count: 1 })]
+              : []),
+          ]),
+        });
+        if (!result) {
+          throw new Error("expected an owned draining suspension lease");
+        }
+        expect(cron.pauseScheduling).toHaveBeenCalledOnce();
+        expect(cron.resumeScheduling).not.toHaveBeenCalled();
 
-    finish.resolve();
-    await active.request;
-    terminalSessions.clear();
+        const unrelatedHandler = vi.fn<GatewayRequestHandler>();
+        const unrelated = dispatch({
+          method: "suspend-proof.unrelated",
+          scope: "operator.write",
+          handler: unrelatedHandler,
+          context,
+        });
+        await unrelated.request;
+        expect(unrelatedHandler).not.toHaveBeenCalled();
+        expect(unrelated.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            details: expect.objectContaining({ phase: "draining" }),
+          }),
+        );
 
-    const pending = dispatch({
-      method: "gateway.suspend.status",
-      scope: "operator.read",
-      handler: statusHandler,
-      requestParams: { suspensionId: result.suspensionId },
-      context,
-    });
-    await pending.request;
-    expect(pending.respond).toHaveBeenCalledWith(true, {
-      status: "draining",
-      expiresAtMs: result.expiresAtMs,
-      retryAfterMs: 20_000,
-      activeCount: 1,
-      blockers: [expect.objectContaining({ kind: "terminal-persistence", count: 1 })],
-    });
+        expect(terminalSessions.size).toBe(1);
+        expect(pty.killed).toBe(false);
+        finish.resolve();
+        await active.request;
+        if (preservingTerminals) {
+          terminalSessions.disposeAll();
+        }
 
-    chatAbortControllers.clear();
-    const ready = dispatch({
-      method: "gateway.suspend.status",
-      scope: "operator.read",
-      handler: statusHandler,
-      requestParams: { suspensionId: result.suspensionId },
-      context,
-    });
-    await ready.request;
-    expect(ready.respond).toHaveBeenCalledWith(true, {
-      status: "ready",
-      expiresAtMs: result.expiresAtMs,
-    });
-    expect(cron.resumeScheduling).not.toHaveBeenCalled();
+        const pending = dispatch({
+          method: "gateway.suspend.status",
+          scope: "operator.read",
+          handler: statusHandler,
+          requestParams: { suspensionId: result.suspensionId },
+          context,
+        });
+        await pending.request;
+        expect(pending.respond).toHaveBeenCalledWith(true, {
+          status: "draining",
+          expiresAtMs: result.expiresAtMs,
+          retryAfterMs: 20_000,
+          activeCount: 1,
+          blockers: [expect.objectContaining({ kind: "terminal-persistence", count: 1 })],
+        });
 
-    const resumed = dispatch({
-      method: "gateway.suspend.resume",
-      scope: "operator.admin",
-      handler: resumeHandler,
-      requestParams: { suspensionId: result.suspensionId },
-      context,
-    });
-    await resumed.request;
-    expect(resumed.respond).toHaveBeenCalledWith(true, {
-      ok: true,
-      status: "running",
-      resumed: true,
-    });
-    expect(cron.resumeScheduling).toHaveBeenCalledOnce();
-  });
+        chatAbortControllers.clear();
+        const ready = dispatch({
+          method: "gateway.suspend.status",
+          scope: "operator.read",
+          handler: statusHandler,
+          requestParams: { suspensionId: result.suspensionId },
+          context,
+        });
+        await ready.request;
+        expect(ready.respond).toHaveBeenCalledWith(true, {
+          status: "ready",
+          expiresAtMs: result.expiresAtMs,
+        });
+        expect(cron.resumeScheduling).not.toHaveBeenCalled();
+
+        const resumed = dispatch({
+          method: "gateway.suspend.resume",
+          scope: "operator.admin",
+          handler: resumeHandler,
+          requestParams: { suspensionId: result.suspensionId },
+          context,
+        });
+        await resumed.request;
+        expect(resumed.respond).toHaveBeenCalledWith(true, {
+          ok: true,
+          status: "running",
+          resumed: true,
+        });
+        expect(cron.resumeScheduling).toHaveBeenCalledOnce();
+        expect(terminalSessions.size).toBe(preservingTerminals ? 0 : 1);
+        expect(pty.killed).toBe(preservingTerminals);
+      } finally {
+        finish.resolve();
+        await active.request;
+        if (suspensionId) {
+          resumeGatewaySuspend(suspensionId);
+        }
+        terminalSessions.disposeAll();
+      }
+    },
+  );
 
   it("rejects new read and write handlers outside the suspension allowlist", async () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});

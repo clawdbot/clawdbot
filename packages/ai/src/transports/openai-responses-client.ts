@@ -43,6 +43,7 @@ import {
   summarizeResponsesPayload,
 } from "./openai-responses-debug.js";
 import {
+  buildOpenAIResponsesCompactSystemMessage,
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
@@ -175,12 +176,19 @@ async function postOpenAIResponsesCompaction(params: {
   request: ReturnType<typeof buildOpenAIResponsesParams>;
   options: OpenAIResponsesOptions | undefined;
 }): Promise<OpenAIResponsesCompactEndpointResult> {
+  const compactInput =
+    typeof params.request.instructions === "string" && params.request.instructions.length > 0
+      ? [
+          buildOpenAIResponsesCompactSystemMessage(params.model, params.request.instructions),
+          ...(params.request.input ?? []),
+        ]
+      : params.request.input;
   const response = await params.client.post<unknown>("/responses/compact", {
     ...buildOpenAISdkRequestOptions(params.model, params.options?.signal, {
       timeoutMs: params.options?.timeoutMs,
       maxRetries: params.options?.maxRetries,
     }),
-    body: { model: params.request.model, input: params.request.input },
+    body: { model: params.request.model, input: compactInput },
   });
   const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
   const item = output.at(-1);

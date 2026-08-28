@@ -51,20 +51,15 @@ function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void 
   }
 }
 
-// Clone config fragments before patching so mutation preparation never aliases callers.
-function cloneUnknown<T>(value: T): T {
-  return structuredClone(value);
-}
-
 export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown): unknown {
   if (!isRecord(source) || !isRecord(runtime)) {
-    return cloneUnknown(source);
+    return structuredClone(source);
   }
 
   const next: Record<string, unknown> = {};
   for (const [key, sourceValue] of Object.entries(source)) {
     if (!(key in runtime)) {
-      next[key] = cloneUnknown(sourceValue);
+      next[key] = structuredClone(sourceValue);
       continue;
     }
     next[key] = projectSourceOntoRuntimeShape(sourceValue, runtime[key]);
@@ -205,7 +200,7 @@ function getPathValue(value: unknown, path: string[]): unknown {
 
 function setPathValue(value: unknown, path: string[], nextValue: unknown): unknown {
   if (path.length === 0) {
-    return cloneUnknown(nextValue);
+    return structuredClone(nextValue);
   }
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
@@ -264,7 +259,7 @@ function findOverlappingIncludeOwnedPath(
 
 function setPathValueCreatingParents(value: unknown, path: string[], nextValue: unknown): unknown {
   if (path.length === 0) {
-    return cloneUnknown(nextValue);
+    return structuredClone(nextValue);
   }
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
@@ -518,7 +513,7 @@ function projectRootAuthoredIncludeSibling(params: {
     params.baselinePresent &&
     isDeepStrictEqual(params.next, params.baseline)
   ) {
-    return { ok: true, present: true, value: cloneUnknown(params.authored) };
+    return { ok: true, present: true, value: structuredClone(params.authored) };
   }
   if (!params.nextPresent) {
     return collectIncludeOwnedPaths(params.authored).length > 0
@@ -526,7 +521,7 @@ function projectRootAuthoredIncludeSibling(params: {
       : { ok: true, present: false };
   }
   if (!params.baselinePresent) {
-    return { ok: true, present: true, value: cloneUnknown(params.next) };
+    return { ok: true, present: true, value: structuredClone(params.next) };
   }
   if (hasOwnValidIncludeDirective(params.authored)) {
     return { ok: false };
@@ -534,21 +529,21 @@ function projectRootAuthoredIncludeSibling(params: {
   if (Array.isArray(params.authored)) {
     return Array.isArray(params.next)
       ? { ok: false }
-      : { ok: true, present: true, value: cloneUnknown(params.next) };
+      : { ok: true, present: true, value: structuredClone(params.next) };
   }
   if (!isRecord(params.authored)) {
-    return { ok: true, present: true, value: cloneUnknown(params.next) };
+    return { ok: true, present: true, value: structuredClone(params.next) };
   }
   if (!isRecord(params.next)) {
     return collectIncludeOwnedPaths(params.authored).length > 0
       ? { ok: false }
-      : { ok: true, present: true, value: cloneUnknown(params.next) };
+      : { ok: true, present: true, value: structuredClone(params.next) };
   }
   if (!isRecord(params.baseline)) {
-    return { ok: true, present: true, value: cloneUnknown(params.next) };
+    return { ok: true, present: true, value: structuredClone(params.next) };
   }
 
-  const value: Record<string, unknown> = cloneUnknown(params.authored);
+  const value: Record<string, unknown> = structuredClone(params.authored);
   const keys = new Set([
     ...Object.keys(params.authored),
     ...Object.keys(params.baseline),
@@ -739,7 +734,7 @@ function mergeMissingExplicitValues(
         continue;
       }
       if (index >= next.length || next[index] === undefined) {
-        next[index] = cloneUnknown(childExplicitValue);
+        next[index] = structuredClone(childExplicitValue);
         changed = true;
         continue;
       }
@@ -758,7 +753,7 @@ function mergeMissingExplicitValues(
       continue;
     }
     if (!Object.hasOwn(next, key)) {
-      next[key] = cloneUnknown(childExplicitValue);
+      next[key] = structuredClone(childExplicitValue);
       changed = true;
       continue;
     }
@@ -985,7 +980,7 @@ function projectAuthoredRosterValue(params: {
   }
   if (Array.isArray(params.next)) {
     if (explicitlySet && params.explicitPresent && Array.isArray(params.explicit)) {
-      return { present: true, value: cloneUnknown(params.explicit) };
+      return { present: true, value: structuredClone(params.explicit) };
     }
     const authored = Array.isArray(params.authored) ? params.authored : [];
     const explicit = Array.isArray(params.explicit) ? params.explicit : [];
@@ -1057,7 +1052,7 @@ function projectAuthoredRosterValue(params: {
     };
   }
   if (explicitlySet && params.explicitPresent) {
-    return { present: true, value: cloneUnknown(params.explicit) };
+    return { present: true, value: structuredClone(params.explicit) };
   }
   const unchangedFromRuntime =
     params.runtimePresent && isDeepStrictEqual(params.runtime, params.next);
@@ -1066,8 +1061,8 @@ function projectAuthoredRosterValue(params: {
     present: true,
     value:
       params.authoredPresent && (unchangedFromRuntime || unchangedFromSource)
-        ? cloneUnknown(params.authored)
-        : cloneUnknown(params.next),
+        ? structuredClone(params.authored)
+        : structuredClone(params.next),
   };
 }
 
@@ -1378,7 +1373,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
                 isRecord(sourceEntries[priorId]) &&
                 isDeepStrictEqual(sourceEntries[priorId].default, nextEntry.default)));
           if (!preservesAuthoredReference) {
-            value.default = cloneUnknown(nextEntry.default);
+            value.default = structuredClone(nextEntry.default);
           }
         } else {
           delete value.default;
@@ -1473,12 +1468,13 @@ function restoreAuthoredAgentRoster(value: unknown, rootAuthoredConfig: unknown)
   let next = deletePathValue(value, ["agents", "entries"]);
   next = deletePathValue(next, ["agents", "list"]);
   const authoredRoster = readAgentRosterProperty(rootAuthoredConfig);
-  return authoredRoster
-    ? setPathValueCreatingParents(
-        next,
-        ["agents", authoredRoster.kind],
-        cloneUnknown(authoredRoster.value),
-      )
+  if (authoredRoster) {
+    return setPathValueCreatingParents(next, ["agents", authoredRoster.kind], authoredRoster.value);
+  }
+  // Roster injection must not leave an unauthored parent, but empty authored sections are intent.
+  return !hasPathValue(rootAuthoredConfig, ["agents"]) &&
+    isDeepStrictEqual(getPathValue(next, ["agents"]), {})
+    ? deletePathValue(next, ["agents"])
     : next;
 }
 

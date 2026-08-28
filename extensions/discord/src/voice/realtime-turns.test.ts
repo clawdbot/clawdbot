@@ -32,6 +32,45 @@ defineDiscordVoiceTests(
     expectUserMessageIncludes,
     expectUserMessageNotIncludes,
   }) => {
+    it.each(["before-final", "before-delivery"] as const)(
+      "keeps realtime transcript output with its retired audio binding %s",
+      async (ordering) => {
+        const manager = createAgentProxyManager(undefined, {
+          voice: { realtime: { requireWakeName: true } },
+        });
+        await manager.join({ guildId: "g1", channelId: "1001" });
+        const first = vi.fn();
+        const second = vi.fn();
+        await manager.join(
+          { guildId: "g1", channelId: "1001" },
+          { transcripts: { sessionId: "old", onUtterance: first } },
+        );
+        const entry = getSessionEntry(manager);
+        const bridge = lastRealtimeBridgeParams();
+        beginSpeakerTurn(entry);
+        if (ordering === "before-delivery") {
+          bridge?.onTranscript?.("user", "old room speech", true);
+        }
+        const replacing = manager.join(
+          { guildId: "g1", channelId: "1001" },
+          { transcripts: { sessionId: "new", onUtterance: second } },
+        );
+        await replacing;
+        if (ordering === "before-final") {
+          bridge?.onTranscript?.("user", "old room speech", true);
+        }
+        await Promise.resolve();
+        expect(first).not.toHaveBeenCalled();
+        expect(second).not.toHaveBeenCalled();
+        beginSpeakerTurn(entry);
+        await emitFinalRealtimeUserTranscript(bridge, "fresh room speech");
+        expect(second).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: "new", text: "fresh room speech" }),
+        );
+        await manager.destroy();
+      },
+    );
+
     it("applies Discord realtime model and voice overrides during provider auto-selection", async () => {
       const manager = createManager(
         makeVoiceConfig(

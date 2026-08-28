@@ -2,13 +2,11 @@ import AVFoundation
 
 enum CameraDeviceResolver {
     static func availableCameras() -> [AVCaptureDevice] {
-        var types: [AVCaptureDevice.DeviceType] = [
+        let types: [AVCaptureDevice.DeviceType] = [
             .builtInWideAngleCamera,
             .continuityCamera,
+            .external,
         ]
-        if let external = self.externalDeviceType() {
-            types.append(external)
-        }
         return AVCaptureDevice.DiscoverySession(
             deviceTypes: types,
             mediaType: .video,
@@ -19,10 +17,22 @@ enum CameraDeviceResolver {
         self.availableCameras().first { $0.uniqueID == deviceId }
     }
 
-    private static func externalDeviceType() -> AVCaptureDevice.DeviceType? {
-        if #available(macOS 14.0, *) {
-            return .external
+    static func landscapePhotoFormatIndex(
+        deviceType: AVCaptureDevice.DeviceType,
+        activeFormat: CMFormatDescription,
+        formats: [CMFormatDescription]) -> Int?
+    {
+        let activeSize = CMVideoFormatDescriptionGetDimensions(activeFormat)
+        guard deviceType == .external, activeSize.width < activeSize.height else {
+            return nil
         }
-        return AVCaptureDevice.DeviceType(rawValue: "AVCaptureDeviceTypeExternalUnknown")
+        let subtype = CMFormatDescriptionGetMediaSubType(activeFormat)
+        // Repair portrait negotiation without choosing a different resolution or encoding.
+        // Cameras without an exact landscape counterpart keep their negotiated format.
+        return formats.firstIndex { format in
+            let size = CMVideoFormatDescriptionGetDimensions(format)
+            return size.width == activeSize.height && size.height == activeSize.width &&
+                CMFormatDescriptionGetMediaSubType(format) == subtype
+        }
     }
 }

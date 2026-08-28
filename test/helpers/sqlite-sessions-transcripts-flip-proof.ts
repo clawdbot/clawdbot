@@ -25,6 +25,7 @@ import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../src/gateway/test-helpers.e2e.js";
+import { listKnownProviderAuthEnvVarNames } from "../../src/secrets/provider-env-vars.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
 import { sleep } from "../../src/utils.js";
@@ -97,14 +98,13 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     name: `sqlite-sessions-transcripts-flip-${randomUUID()}`,
     config: buildMockOpenAiConfig(mockOpenAiPort),
     env: {
+      ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
       ALL_PROXY: undefined,
       HTTP_PROXY: undefined,
       HTTPS_PROXY: undefined,
       NO_PROXY: "127.0.0.1,localhost",
       ...(options.requireBuiltCli !== true
         ? {
-            OPENCODE_API_KEY: undefined,
-            OPENCODE_ZEN_API_KEY: undefined,
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           }
         : {}),
@@ -121,6 +121,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   const context = buildProofContext(inst.stateDir);
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
+  let bundledPlugins: Array<{ id: string; source: string }> = [];
   let gatewayEntrypoint: string[] = [];
   let busyContention: BusyContentionEvidence | undefined;
   let downgradeReupgrade: DowngradeReupgradeEvidence | undefined;
@@ -147,6 +148,23 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     gatewayEntrypoint = await inst.entrypoint();
     if (options.requireBuiltCli === true && !isBuiltCliEntrypoint(gatewayEntrypoint)) {
       throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
+    }
+    if (options.requireBuiltCli === true) {
+      const inventory = await inst.cli(["plugins", "list", "--json"]);
+      const plugins = parseJsonObject(inventory.stdout)?.plugins;
+      if (inventory.code !== 0 || !Array.isArray(plugins)) {
+        throw new Error("built CLI could not list bundled plugin artifacts");
+      }
+      bundledPlugins = plugins.flatMap((value) => {
+        const plugin = asRecord(value);
+        if (plugin?.origin !== "bundled") {
+          return [];
+        }
+        if (typeof plugin.id !== "string" || typeof plugin.source !== "string") {
+          throw new Error("bundled plugin inventory omitted its identity or source artifact");
+        }
+        return [{ id: plugin.id, source: plugin.source }];
+      });
     }
 
     mockOpenAi = await startMockOpenAiServer({
@@ -317,6 +335,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   const report = {
     ok: failures.length === 0,
     agentId: context.agentId,
+    bundledPlugins,
     checkpoints,
     concurrentDeleteSessionKey: context.concurrentDeleteSessionKey,
     concurrentResetSessionKey: context.concurrentResetSessionKey,

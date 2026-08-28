@@ -97,7 +97,7 @@ export async function prepareGatewayServerBootstrap(input: {
   ] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("../state/openclaw-agent-db.js"),
-    import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db-contract.js"),
   ]);
   const databaseSchemas = preflightOpenClawDatabaseSchemas({
     env: process.env,

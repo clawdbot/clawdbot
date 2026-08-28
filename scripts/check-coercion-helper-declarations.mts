@@ -215,6 +215,12 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
   {
+    file: "scripts/lib/ci-test-timings-schema.mts",
+    name: "isRecord",
+    kind: "function",
+    reason: "Dependency-free CI preflight runs before install and cannot use workspace resolution.",
+  },
+  {
     file: "ui/src/test-helpers/control-ui-e2e.ts",
     name: "isRecord",
     kind: "function",

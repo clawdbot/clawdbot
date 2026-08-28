@@ -4,16 +4,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
-  readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+} from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import {
   inspectPluginRegistry,
   loadPluginRegistrySnapshotWithMetadata,
-  refreshPluginRegistry,
 } from "./plugin-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -54,10 +54,7 @@ afterEach(() => {
 });
 
 describe("doctor-contract-registry module loader", () => {
-  beforeEach(async () => {
-    resetRegistryJitiMocks();
-    mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
-    doctorContractWarnMock.mockReset();
+  beforeAll(async () => {
     vi.resetModules();
     ({
       applyPluginDoctorCompatibilityMigrations,
@@ -71,6 +68,18 @@ describe("doctor-contract-registry module loader", () => {
       clearPluginDoctorContractRegistryCache,
       setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
     } = await import("./doctor-contract-registry.test-fixtures.js"));
+  });
+
+  beforeEach(() => {
+    resetRegistryJitiMocks();
+    mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+    doctorContractWarnMock.mockReset();
+    // Loaded once in beforeAll; afterEach guards the same binding optionally because it
+    // can fire when that import never completed. Fail loudly here instead of silently
+    // running a case against the real module loader.
+    if (!setPluginDoctorContractRegistryModuleLoaderFactoryForTest) {
+      throw new Error("doctor contract registry test fixtures were not loaded");
+    }
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
   });

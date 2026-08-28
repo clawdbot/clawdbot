@@ -1409,7 +1409,7 @@ stderr="$(<"$TMPDIR/stderr")"
 node() {
   local script="$1"
   shift
-  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
     command node "$script" "$@"
     return
   fi
@@ -1552,7 +1552,7 @@ export PATH="$TMPDIR/bin:$PATH"
 node() {
   local script="$1"
   shift
-  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
     command node "$script" "$@"
     return
   fi
@@ -4739,7 +4739,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'KITCHEN_SINK_CLI_TIMEOUT="${KITCHEN_SINK_CLI_TIMEOUT:-180s}"',
       "run_kitchen_sink_openclaw_logged()",
       "run_kitchen_sink_openclaw_capture()",
-      'openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$log_file" 2>&1',
       'local log_file="${KITCHEN_SINK_TMP_DIR}/${safe_label}.log"',
     ]);
 
@@ -5031,10 +5030,6 @@ done
     expect(scheduler).toContain("env.npm_execpath ? path.dirname(env.npm_execpath)");
     expect(scheduler).toContain("path.dirname(process.execPath)");
     expect(scheduler).toContain("env.PATH = [...new Set(pathEntries)].join(path.delimiter)");
-    expect(scheduler).toContain(
-      "const pnpmCommand = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();",
-    );
-    expect(scheduler).toContain("lane.command.replace(/(^|\\s)pnpm(?=\\s)/g");
     expect(scheduler).toContain(
       'env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);',
     );
@@ -5863,7 +5858,6 @@ done
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file"',
       "plugins_lifecycle_trace_enabled()",
       "print_plugins_stderr_log()",
-      'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"',
       "Plugin sweep command timed out after %s: %s",
       "Plugin sweep command failed with status %s: %s",
       "Plugin sweep capture timed out after %s: %s",
@@ -5913,7 +5907,6 @@ done
     expectTextToIncludeAll(clawhub, [
       'plugins install "$CLAWHUB_PLUGIN_SPEC"',
       'plugins update "$CLAWHUB_PLUGIN_ID"',
-      "run_plugins_openclaw_logged install-clawhub",
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT"',
       "clawhub:@openclaw/kitchen-sink",
     ]);

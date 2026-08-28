@@ -10,6 +10,14 @@ export const queryErrorHandlerByDatabase = new WeakMap<DatabaseSync, (error: unk
 // both caches before the native database handle closes.
 export const statementCacheSymbol = Symbol("openclaw.kyselySyncStatementCache");
 
+/** Register the lifecycle owner's handler for synchronous Kysely query failures. */
+export function registerNodeSqliteKyselyQueryErrorHandler(
+  db: DatabaseSync,
+  handler: (error: unknown) => void,
+): void {
+  queryErrorHandlerByDatabase.set(db, handler);
+}
+
 /** Drop cached Kysely state for a DatabaseSync. */
 export function clearNodeSqliteKyselyCacheForDatabase(db: DatabaseSync): void {
   // Delete the database-owned cache before close so statements release their

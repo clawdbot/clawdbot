@@ -19,7 +19,6 @@ import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-m
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
   readPersistedInstalledPluginIndexSync,
-  refreshPersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
 import {
@@ -34,7 +33,6 @@ import {
   type InstalledPluginIndex,
   type InstalledPluginIndexRecord,
   type LoadInstalledPluginIndexParams,
-  type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
 import {
@@ -154,7 +152,10 @@ type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
 
-function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(params: T): T {
+// Shared with plugin-registry-refresh.ts.
+export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
+  params: T,
+): T {
   if (!params.config) {
     return params;
   }
@@ -672,13 +673,4 @@ export async function inspectPluginRegistry(
     persisted,
     current: result.snapshot,
   };
-}
-
-export function refreshPluginRegistry(
-  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
-): Promise<PluginRegistrySnapshot> {
-  if (!params.config) {
-    return refreshPersistedInstalledPluginIndex(params);
-  }
-  return refreshPersistedInstalledPluginIndex(resolveControlPlaneRegistryParams(params));
 }

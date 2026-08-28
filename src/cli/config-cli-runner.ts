@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
+import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
@@ -30,13 +32,16 @@ import {
 import {
   assertNonDestructiveReplacement,
   formatConfigSetPath,
+  formatConfigUnsetMissingPathMessage,
   getAtPath,
   mergeAtPath,
+  parseConfigSetPath,
   setAtPath,
   type JsonSchemaRecord,
   type PathSegment,
   unsetAtPath,
 } from "./config-cli-path.js";
+import { ConfigMutationAgentRoster } from "./config-cli-roster.js";
 import {
   assertStrictConfigForMutation,
   collectDryRunRefs,
@@ -138,15 +143,6 @@ function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
   ].join("\n");
 }
 
-export function assertConfigPathIsNotAutoManaged(path: PathSegment[]): void {
-  const targets = findAutoManagedMetaTargets([
-    { inputMode: "json", requestedPath: path, setPath: path, value: undefined, mutation: "delete" },
-  ]);
-  if (targets.length > 0) {
-    throw new Error(formatAutoManagedMetaError(targets));
-  }
-}
-
 function pruneInactiveGatewayAuthCredentials(params: {
   root: Record<string, unknown>;
   operations: ConfigSetOperation[];
@@ -222,7 +218,7 @@ function expandActualChangedPaths(
   return [...expanded];
 }
 
-export function configApplyHintForOperations(
+function configApplyHintForOperations(
   operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
   beforeConfig: OpenClawConfig,
   afterConfig: OpenClawConfig,
@@ -303,18 +299,73 @@ export async function runConfigOperations(params: {
     structuredClone(snapshot.resolved) as OpenClawConfig,
   );
   const mutationSchema = await loadMutationSchema();
-  const unsetPaths: PathSegment[][] = [];
+  const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
+  let unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
+  const appliedOperations: ConfigSetOperation[] = [];
+  const recordOperation = (operation: ConfigSetOperation): PathSegment[] => {
+    const setPath = roster.writePath(operation.setPath);
+    let touchedSecretTargetPath = operation.touchedSecretTargetPath;
+    if (touchedSecretTargetPath) {
+      const path = parseConfigSetPath(touchedSecretTargetPath);
+      const writePath = roster.writePath(path);
+      if (writePath !== path) {
+        touchedSecretTargetPath = toDotPath(writePath);
+      }
+    }
+    appliedOperations.push({
+      ...operation,
+      setPath,
+      ...(touchedSecretTargetPath ? { touchedSecretTargetPath } : {}),
+    });
+    return setPath;
+  };
   for (const operation of operations) {
+    const merge =
+      operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
+    roster.prepare(operation, Boolean(merge));
     if (operation.mutation === "delete") {
+      const writePath = recordOperation(operation);
       const unsetResult = unsetAtPath(next, operation.setPath);
+      if (!unsetResult.removed && operation.inputMode === "unset") {
+        const runtimeOnly = getAtPath(snapshot.runtimeConfig, operation.setPath).found;
+        const message = formatConfigUnsetMissingPathMessage({
+          path: formatConfigSetPath(operation.requestedPath, operation.pathTokens),
+          runtimeOnly,
+        });
+        if (options.dryRun && options.json) {
+          throw new ConfigSetDryRunValidationError({
+            ok: false,
+            operations: 1,
+            configPath: snapshot.path,
+            inputModes: ["unset"],
+            checks: { schema: false, resolvability: false, resolvabilityComplete: false },
+            refsChecked: 0,
+            skippedExecRefs: 0,
+            errors: [
+              {
+                kind: "missing-path",
+                message: runtimeOnly
+                  ? message
+                  : `Config path not found: ${formatConfigSetPath(operation.requestedPath, operation.pathTokens)}. Nothing was changed.`,
+              },
+            ],
+          });
+        }
+        if (!options.dryRun) {
+          assertStrictConfigForMutation(
+            currentConfig,
+            mutationStart.writeOptions.basePluginMetadataSnapshot,
+          );
+        }
+        throw new Error(message);
+      }
       if (!unsetResult.removed || unsetResult.leafContainer !== "array") {
-        unsetPaths.push(operation.setPath);
+        unsetPaths.push(writePath);
       }
       continue;
     }
-    explicitSetPaths.push(operation.setPath);
-    if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
+    if (merge) {
       mergeAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
         ...(operation.pathTokens ? { pathTokens: operation.pathTokens } : {}),
@@ -339,10 +390,25 @@ export async function runConfigOperations(params: {
         schema: mutationSchema,
       });
     }
+    explicitSetPaths.push(recordOperation(operation));
   }
+  roster.finish();
+  // A later operation can recreate a deleted path, including through a roster alias.
+  // Only final deletions may be replayed by the persistence owner.
+  unsetPaths = unsetPaths.filter((path) => !getAtPath(next, path).found);
   const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({ root: next, operations });
-  const nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
+  let nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
+  if (options.dryRun) {
+    nextConfig = prepareConfigWriteTopology({
+      snapshot,
+      pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+      nextConfig,
+      options: { explicitSetPaths: normalizedExplicitSetPaths },
+      unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
+      env: process.env,
+    }).nextConfig;
+  }
   const policyIssueLines = formatConfigIssueLines(
     collectUnsupportedSecretRefPolicyIssues(nextConfig),
     "",
@@ -350,7 +416,7 @@ export async function runConfigOperations(params: {
   ).map((line) => line.trim());
   const pluginIntegrationErrors = collectPluginIntegrationProviderErrors({
     config: nextConfig,
-    operations,
+    operations: appliedOperations,
   });
   if (options.dryRun) {
     const hasJsonMode = operations.some(({ inputMode }) => inputMode === "json");
@@ -362,7 +428,9 @@ export async function runConfigOperations(params: {
         (operation.inputMode === "json" && operation.schemaValidated !== true),
     );
     const checksRefs = hasJsonMode || hasBuilderMode || hasUnsetMode;
-    const refs = checksRefs ? collectDryRunRefs({ config: nextConfig, operations }) : [];
+    const refs = checksRefs
+      ? collectDryRunRefs({ config: nextConfig, operations: appliedOperations })
+      : [];
     const selectedRefs = selectDryRunRefsForResolution({
       refs,
       allowExecInDryRun: Boolean(options.allowExec),
@@ -371,7 +439,7 @@ export async function runConfigOperations(params: {
     const modelRefCheck = await checkTouchedTextModelRefs({
       config: nextConfig,
       previousConfig: currentConfig,
-      touchedPaths: operations.map(({ setPath }) => setPath),
+      touchedPaths: appliedOperations.map(({ setPath }) => setPath),
       redactDependencyValues: true,
     });
     errors.push(...modelRefCheck.errors.map((message) => ({ kind: "model" as const, message })));
@@ -479,7 +547,7 @@ export async function runConfigOperations(params: {
   const modelRefCheck = await checkTouchedTextModelRefs({
     config: nextConfig,
     previousConfig: currentConfig,
-    touchedPaths: operations.map(({ setPath }) => setPath),
+    touchedPaths: appliedOperations.map(({ setPath }) => setPath),
     redactDependencyValues: true,
   });
   if (modelRefCheck.errors[0]) {

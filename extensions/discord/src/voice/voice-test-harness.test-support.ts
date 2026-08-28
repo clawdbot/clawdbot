@@ -1,8 +1,8 @@
 import { PassThrough } from "node:stream";
 import { DAVESession } from "@discordjs/voice";
-import { expectDefined } from "@openclaw/normalization-core";
 import { VoiceOpcodes, type VoiceSendPayload } from "discord-api-types/voice/v8";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";

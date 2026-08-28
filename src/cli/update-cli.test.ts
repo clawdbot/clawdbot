@@ -71,9 +71,8 @@ const loadInstalledPluginIndexInstallRecords = vi.fn(
     params.config?.plugins?.installs ?? {},
 );
 const readPersistedInstalledPluginIndex = vi.fn(async () => null);
-const restorePersistedInstalledPluginIndex = vi.fn(async () => undefined);
 const restorePersistedInstalledPluginIndexIfCurrent = vi.fn<
-  typeof import("../plugins/installed-plugin-index-store.js").restorePersistedInstalledPluginIndexIfCurrent
+  typeof import("../plugins/installed-plugin-index-store-write.js").restorePersistedInstalledPluginIndexIfCurrent
 >(async () => true);
 const writePersistedInstalledPluginIndexInstallRecords = vi.fn(async () => undefined);
 const writePersistedInstalledPluginIndexInstallRecordsWithLease = vi.fn(async () => ({
@@ -321,7 +320,14 @@ vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => 
   return {
     ...actual,
     readPersistedInstalledPluginIndex,
-    restorePersistedInstalledPluginIndex,
+  };
+});
+
+vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/installed-plugin-index-store-write.js")>();
+  return {
+    ...actual,
     restorePersistedInstalledPluginIndexIfCurrent,
   };
 });
@@ -964,7 +970,10 @@ describe("update-cli", () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
   };
 
-  const expectFreshPostUpdateDoctor = (params: { yes: boolean }) => {
+  const expectFreshPostUpdateDoctor = (params: {
+    yes: boolean;
+    workspaceSuggestions?: boolean;
+  }) => {
     const calls = vi
       .mocked(runExec)
       .mock.calls.filter(
@@ -976,7 +985,7 @@ describe("update-cli", () => {
       "doctor",
       "--repair",
       "--non-interactive",
-      "--no-workspace-suggestions",
+      ...(params.workspaceSuggestions ? [] : ["--no-workspace-suggestions"]),
       ...(params.yes ? ["--yes"] : []),
     ]);
   };
@@ -1479,7 +1488,6 @@ describe("update-cli", () => {
     vi.resetAllMocks();
     serviceEnabled.mockResolvedValue(true);
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
-    restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
     restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
     writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
     writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
@@ -2774,16 +2782,17 @@ describe("update-cli", () => {
   });
 
   it("keeps fresh doctor output off stdout during json post-core resume", async () => {
-    vi.mocked(runExec).mockResolvedValueOnce({
-      stdout: "doctor ui output",
-      stderr: "doctor diagnostic output",
-    });
+    vi.mocked(runExec).mockImplementation(async (_file, args) => ({
+      stdout: args.includes("doctor") ? "doctor ui output" : "",
+      stderr: args.includes("doctor") ? "doctor diagnostic output" : "",
+    }));
 
     await runPostCoreCommand({ json: true, restart: false });
 
     expectFreshPostUpdateDoctor({ yes: false });
     expect(getLogOutput()).not.toContain("doctor ui output");
-    expect(getErrorOutput()).not.toContain("doctor diagnostic output");
+    expect(getErrorOutput()).toContain("doctor ui output");
+    expect(getErrorOutput()).toContain("doctor diagnostic output");
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({ status: "ok" }),
     );
@@ -7124,6 +7133,7 @@ describe("update-cli", () => {
   });
 
   it("updateFinalizeCommand defers plugin installation during pre-plugin doctor", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
     await withEnvAsync(
       {
         OPENCLAW_UPDATE_IN_PROGRESS: undefined,
@@ -7133,8 +7143,11 @@ describe("update-cli", () => {
       },
       async () => {
         let doctorEnv: NodeJS.ProcessEnv | undefined;
-        vi.mocked(doctorCommand).mockImplementationOnce(async () => {
-          doctorEnv = { ...process.env };
+        vi.mocked(runExec).mockImplementationOnce(async (_file, _args, options) => {
+          if (typeof options === "object") {
+            doctorEnv = { ...options.baseEnv, ...options.env };
+          }
+          return { stdout: "", stderr: "" };
         });
         vi.mocked(defaultRuntime.writeJson).mockClear();
 
@@ -7153,11 +7166,7 @@ describe("update-cli", () => {
         expect(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
-        expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
-          nonInteractive: true,
-          repair: true,
-          yes: true,
-        });
+        expectFreshPostUpdateDoctor({ yes: true, workspaceSuggestions: true });
         expect(syncPluginCall()?.channel).toBe("stable");
         expect(lastNpmPluginUpdateCall()?.timeoutMs).toBe(9_000);
         expect(
@@ -7233,6 +7242,9 @@ describe("update-cli", () => {
     pathExists.mockResolvedValue(false);
     await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE: "1" }, async () => {
       const run = async (command: "repair" | "finalize") => {
+        vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+          FRESH_POST_UPDATE_ENTRYPOINT,
+        );
         vi.mocked(defaultRuntime.writeJson).mockClear();
         const program = new Command();
         program.name("openclaw");
@@ -7261,7 +7273,7 @@ describe("update-cli", () => {
       restart: false,
     });
 
-    expectNoSideEffects(replaceConfigFile, doctorCommand, syncPluginsForUpdateChannel);
+    expectNoSideEffects(replaceConfigFile, runExec, syncPluginsForUpdateChannel);
     expect(lastWriteJsonCall()).toMatchObject({
       status: "error",
       mode: "git",
@@ -7271,7 +7283,9 @@ describe("update-cli", () => {
   });
 
   it("updateFinalizeCommand repairs doctor by default and refreshes plugin state after doctor", async () => {
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce("/tmp/openclaw-entry.mjs");
+    vi.mocked(resolveGatewayInstallEntrypoint)
+      .mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT)
+      .mockResolvedValueOnce("/tmp/openclaw-entry.mjs");
     const preDoctorConfig = {
       update: { channel: "stable" },
       plugins: { entries: { pre: { enabled: true } } },
@@ -7306,15 +7320,12 @@ describe("update-cli", () => {
 
     await updateFinalizeCommand({ json: true, timeout: "9", restart: false });
 
-    expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
-      nonInteractive: true,
-      repair: true,
-      yes: false,
-    });
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    expectFreshPostUpdateDoctor({ yes: false, workspaceSuggestions: true });
     const freshDoctorCall = vi
       .mocked(runExec)
-      .mock.calls.find(([, args]) => args.includes("doctor"));
+      .mock.calls.find(
+        ([, args]) => args[0] === "/tmp/openclaw-entry.mjs" && args.includes("doctor"),
+      );
     expect(freshDoctorCall?.[1]).toEqual([
       "/tmp/openclaw-entry.mjs",
       "doctor",
@@ -7340,13 +7351,14 @@ describe("update-cli", () => {
       },
     });
     expect(lastReplaceConfigCall()?.baseHash).toBe("post-doctor");
-    expect(vi.mocked(doctorCommand).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+    expect(vi.mocked(runExec).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       loadInstalledPluginIndexInstallRecords.mock.invocationCallOrder[0] ?? 0,
     );
     expect((lastWriteJsonCall() as { channel?: string } | undefined)?.channel).toBe("beta");
   });
 
   it("updateFinalizeCommand restores channels from the RPC pre-update config payload", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
     const tempDir = createCaseDir("openclaw-rpc-finalize");
     const sourceConfigPath = path.join(tempDir, "source-config.json");
     const preUpdateConfig = {
@@ -7389,6 +7401,7 @@ describe("update-cli", () => {
   });
 
   it("updateFinalizeCommand reapplies requested channel against post-doctor config", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
     const preDoctorConfig = { update: { channel: "stable" } } as OpenClawConfig;
     const postDoctorConfig = { update: { channel: "beta" } } as OpenClawConfig;
     const preDoctorSnapshot = configSnapshot(preDoctorConfig, {
@@ -7417,6 +7430,7 @@ describe("update-cli", () => {
   });
 
   it("updateFinalizeCommand converges on the effective channel from env without persisting update.channel", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
     const noChannelConfig = {} as OpenClawConfig;
     const noChannelSnapshot = configSnapshot(noChannelConfig, {
       parsed: baseSnapshot.parsed,

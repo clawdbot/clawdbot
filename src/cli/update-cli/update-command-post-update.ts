@@ -53,6 +53,7 @@ import {
   resolveUpdatedGatewayRestartPort,
   restoreWindowsTaskAutoStartOrExit,
   shouldPrepareUpdatedInstallRestart,
+  stripGatewayServiceMarkerEnv,
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
@@ -428,6 +429,9 @@ export async function finishUpdate(params: {
           serviceState.command,
           params.ownedManagedUpdateEnv ?? process.env,
         );
+        if (gatewayServiceInstallEnv) {
+          gatewayServiceInstallEnv = stripGatewayServiceMarkerEnv(gatewayServiceInstallEnv);
+        }
         gatewayPort = resolveUpdatedGatewayRestartPort({
           config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
           processEnv: process.env,

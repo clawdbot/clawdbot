@@ -83,20 +83,6 @@ function writeChatQueueForScope(
   chatOutboxOwner(host).replace(host, scope, queue);
 }
 
-function setTransientQueuedMessageProjection(
-  host: TestChatHost,
-  sessionKey: string,
-  item: ChatQueueItem,
-): boolean {
-  const owner = chatOutboxOwner(host);
-  const scope = resolveStoredChatOutboxScope(host, sessionKey, item.agentId);
-  if (!owner.durable(host, item.id)) {
-    return false;
-  }
-  owner.projectLive(host, scope, item.id, item);
-  return true;
-}
-
 function requireChatMessageCache(host: ChatHost): ChatMessageCache {
   if (!host.chatMessagesBySession) {
     throw new Error("Expected chat message cache");
@@ -6074,15 +6060,13 @@ describe("handleSendChat", () => {
 
     expect(host.chatQueue[0]?.sendState).toBe("sending");
     expect(host.lastError).toBeNull();
-    await waitForFast(() => expect(listStoredChatOutboxes(host)).toStrictEqual([]), {
-      timeout: 1_000,
-    });
+    await flushChatQueueForEvent(host);
     expect(historyRequests).toBeGreaterThanOrEqual(3);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.lastError).toBeNull();
   });
 
-  it("marks an acknowledged live send unconfirmed after history stays missing", async () => {
+  it("keeps an acknowledged live send pending while its connection stays current", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const host = makeChatHost({
@@ -6107,48 +6091,8 @@ describe("handleSendChat", () => {
     await flushChatQueueForEvent(host);
 
     expect(host.chatQueue[0]).toMatchObject({
-      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
-      sendState: "unconfirmed",
-      text: "history never catches up",
-    });
-    // The parked bubble's inline footer owns the outcome; no pane banner.
-    expect(host.lastError).toBeNull();
-  });
-
-  it("starts a fresh confirmation grace after the prior outbox scope is removed", async () => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": () => idleChatHistory(),
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "live send payload");
-          const runId = String(payload.idempotencyKey);
-          return Promise.resolve({ runId, status: "started" });
-        },
-      },
-    });
-
-    await handleSendChat(host, "reuse this delivery version");
-    host.chatRunId = null;
-    await flushChatQueueForEvent(host);
-
-    const item = expectDefined(host.chatQueue[0], "queued live send");
-    const sessionKey = expectDefined(item.sessionKey, "queued session key");
-    expect(removeQueuedMessage(host, item.id)).toBe("removed");
-
-    now = 5_500;
-    expect(admitQueuedMessageForSession(host, sessionKey, item)).toBe(true);
-    expect(setTransientQueuedMessageProjection(host, sessionKey, item)).toBe(true);
-    await flushChatQueueForEvent(host);
-
-    now = 6_001;
-    await flushChatQueueForEvent(host);
-
-    expect(host.chatQueue[0]).toMatchObject({
-      id: item.id,
       sendState: "sending",
-      text: "reuse this delivery version",
+      text: "history never catches up",
     });
     expect(host.lastError).toBeNull();
   });

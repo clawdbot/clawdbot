@@ -1809,7 +1809,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         const reasoningEffort =
           classification.kind === "override" ? classification.override.reasoningEffort : undefined;
         if (!reasoningEffort) {
-          return;
+          // `off` omits the startup override; Codex has no live control to unset effort.
+          throw new AcpRuntimeError(
+            "ACP_BACKEND_UNSUPPORTED_CONTROL",
+            "Clearing Codex reasoning effort on an existing session is unsupported. Choose a supported explicit effort; the current effort is unchanged.",
+          );
         }
         await delegate.setConfigOption({
           ...input,

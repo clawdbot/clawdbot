@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createSandboxedEditTool,
@@ -13,16 +13,20 @@ import { createApplyPatchTool } from "./apply-patch.js";
 import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("leading-@ paths on a real remote sandbox filesystem bridge", () => {
-  it.runIf(process.platform !== "win32")(
-    "preserves remote-only literal files, shorthand, journal authority, and patch targets",
+describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)", (fixture) => {
+  // The shell fixture runs remote GNU utilities locally; the portable fixture
+  // exercises the same tool scenario without requiring that local environment.
+  it.runIf(fixture === "portable" || process.platform === "linux")(
+    "preserves literal files, shorthand, journal authority, patch targets, and stat failures",
     async () => {
-      const stateDir = tempDirs.make("openclaw-at-remote-");
+      const stateDir = await fs.realpath(tempDirs.make("openclaw-at-remote-"));
       const hostRoot = path.join(stateDir, "host");
       const remoteRoot = path.join(stateDir, "remote");
+      const containerWorkdir = fixture === "portable" ? "/remote-workspace" : remoteRoot;
       await fs.mkdir(hostRoot);
       await fs.mkdir(remoteRoot);
       await fs.writeFile(path.join(remoteRoot, "@notes.md"), "literal original", "utf8");
@@ -36,26 +40,65 @@ describe("leading-@ paths on a real remote sandbox filesystem bridge", () => {
         overrides: {
           workspaceDir: hostRoot,
           agentWorkspaceDir: hostRoot,
-          containerWorkdir: remoteRoot,
+          containerWorkdir,
           workspaceAccess: "rw",
         },
       });
-      const bridge = createRemoteShellSandboxFsBridge({
+      const remoteBridge = createRemoteShellSandboxFsBridge({
         sandbox,
         runtime: {
-          remoteWorkspaceDir: remoteRoot,
-          remoteAgentWorkspaceDir: remoteRoot,
+          remoteWorkspaceDir: containerWorkdir,
+          remoteAgentWorkspaceDir: containerWorkdir,
           runRemoteShellScript: createLocalRemoteShellScriptRunner(),
         },
       });
+      const resolvePath = remoteBridge.resolvePath.bind(remoteBridge);
+      const bridge =
+        fixture === "portable"
+          ? {
+              ...createSandboxFsBridgeFromResolver((filePath, cwd) => {
+                const resolved = resolvePath({ filePath, cwd });
+                return { ...resolved, hostPath: path.join(remoteRoot, resolved.relativePath) };
+              }),
+              // Only backing operations see hostPath. Public resolution must keep
+              // path policy on asynchronous remote stat, including on Windows.
+              resolvePath,
+            }
+          : remoteBridge;
       const guard = (tool: ReturnType<typeof createSandboxedReadTool>) =>
         wrapToolWorkspaceRootGuardWithOptions(tool, hostRoot, {
-          containerWorkdir: remoteRoot,
+          containerWorkdir,
           bridge,
         });
       const readTool = guard(createSandboxedReadTool({ root: hostRoot, bridge }));
       const writeTool = guard(createSandboxedWriteTool({ root: hostRoot, bridge }));
       const editTool = guard(createSandboxedEditTool({ root: hostRoot, bridge }));
+
+      const statError = new Error("remote stat unavailable");
+      const stat = bridge.stat.bind(bridge);
+      const statFailure = vi
+        .spyOn(bridge, "stat")
+        .mockImplementation((params) =>
+          resolvePath(params).relativePath === "@notes.md"
+            ? Promise.reject(statError)
+            : stat(params),
+        );
+      try {
+        await expect(
+          writeTool.execute("remote-at-stat-error", {
+            path: "@notes.md",
+            content: "must not replace either file",
+          }),
+        ).rejects.toBe(statError);
+        await expect(fs.readFile(path.join(remoteRoot, "@notes.md"), "utf8")).resolves.toBe(
+          "literal original",
+        );
+        await expect(fs.readFile(path.join(remoteRoot, "notes.md"), "utf8")).resolves.toBe(
+          "sibling original",
+        );
+      } finally {
+        statFailure.mockRestore();
+      }
 
       await expect(readTool.execute("remote-at-read", { path: "@notes.md" })).resolves.toEqual(
         expect.objectContaining({
@@ -132,6 +175,7 @@ describe("leading-@ paths on a real remote sandbox filesystem bridge", () => {
       await expect(fs.stat(path.join(hostRoot, "@notes.md"))).rejects.toMatchObject({
         code: "ENOENT",
       });
+      await expect(fs.readdir(hostRoot)).resolves.toEqual([]);
     },
   );
 });

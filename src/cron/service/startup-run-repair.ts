@@ -44,6 +44,7 @@ export function markInterruptedStartupRun(params: {
   taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
+  recoverInterruptedOneShot?: boolean;
   deferredNotifications?: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
@@ -76,6 +77,7 @@ export function markInterruptedStartupRun(params: {
   job.state.lastFailureNotificationDeliveryStatus = "not-requested";
   job.state.lastFailureNotificationDeliveryError = undefined;
   job.state.nextRunAtMs = replacementAtMs;
+  job.state.startupCatchupAtMs = undefined;
   job.updatedAtMs = nowMs;
 
   const alertConfig = resolveFailureAlert(params.state, job);
@@ -104,7 +106,13 @@ export function markInterruptedStartupRun(params: {
     deferredNotifications: params.deferredNotifications,
   });
 
-  if (job.schedule.kind === "at" && replacementAtMs === undefined) {
+  // Live owner reclamation consumes an already-started one-shot. Only startup
+  // recovery may replay it; an operator's distinct replacement stays scheduled.
+  if (
+    job.schedule.kind === "at" &&
+    replacementAtMs === undefined &&
+    !params.recoverInterruptedOneShot
+  ) {
     job.enabled = false;
   }
 
@@ -138,6 +146,7 @@ export function restoreFinalizedStartupRun(params: {
   }
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
   const scheduleOwnership = replacementAtMs === undefined ? "current" : "stale";
+  job.state.startupCatchupAtMs = undefined;
   if (params.triggerEval?.fired === false) {
     applyTriggerNoFireResult(
       state,

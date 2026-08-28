@@ -16,7 +16,7 @@ import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 /** Reclaim free pages from one agent session SQLite database. */
 export function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
-  options: { env?: NodeJS.ProcessEnv; migrateOlderSchema?: boolean } = {},
+  options: { env?: NodeJS.ProcessEnv; operation?: "import-finalize" } = {},
 ): DoctorSessionSqliteCompactReport {
   const databaseOptions = resolveTargetSqliteOptions(target, options.env);
   const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
@@ -50,7 +50,7 @@ export function compactDoctorSessionSqliteTarget(
       );
     }
   };
-  if (options.migrateOlderSchema) {
+  if (options.operation === "import-finalize") {
     migrateOpenClawAgentDatabaseForMaintenance({
       agentId: databaseOptions.agentId,
       pathname: sqlitePath,
@@ -59,6 +59,7 @@ export function compactDoctorSessionSqliteTarget(
   }
 
   const compact = compactDoctorSqliteFile({
+    operation: options.operation,
     afterSuccess: () => {
       requireQuarantineCleared();
       ensureOpenClawAgentDatabasePermissions(sqlitePath, databaseOptions);

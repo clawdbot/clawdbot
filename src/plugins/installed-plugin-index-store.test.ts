@@ -7,9 +7,9 @@ import {
   acquireStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../infra/startup-migration-checkpoint.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
@@ -20,12 +20,14 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./installed-plugin-index-records.js";
 import {
-  readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
-  resolveInstalledPluginIndexStorePath,
   restorePersistedInstalledPluginIndexIfCurrent,
   writePersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndexWithLeaseSync,
+} from "./installed-plugin-index-store-write.js";
+import {
+  readPersistedInstalledPluginIndex,
+  resolveInstalledPluginIndexStorePath,
 } from "./installed-plugin-index-store.js";
 import {
   resolveInstalledPluginIndexPolicyHash,

@@ -6,7 +6,7 @@ import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-pr
 
 const writePersistedInstalledPluginIndexWithLeaseSync = vi.hoisted(() => vi.fn());
 
-vi.mock("../plugins/installed-plugin-index-store.js", () => ({
+vi.mock("../plugins/installed-plugin-index-store-write.js", () => ({
   writePersistedInstalledPluginIndexWithLeaseSync,
 }));
 

@@ -488,6 +488,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
     toolExecutionAllow: params.toolExecutionAllow,
+    // Authorized prompt enrichment needs the exact prepared turn policy identity.
+    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,

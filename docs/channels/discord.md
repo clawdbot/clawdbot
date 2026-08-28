@@ -437,6 +437,7 @@ Example:
 
     Multi-account precedence:
 
+    - Omitted account `dmPolicy` and `groupPolicy` inherit the channel root. Explicit account policies win; with neither scope set, defaults remain `pairing` and `allowlist` respectively.
     - `channels.discord.accounts.default.allowFrom` applies only to the `default` account.
     - For one account, `allowFrom` takes precedence over legacy `dm.allowFrom`.
     - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` and legacy `dm.allowFrom` are unset.

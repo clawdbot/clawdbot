@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -42,6 +43,15 @@ const learnMoreRoutes = [
   "talk",
 ] as const;
 
+const settingsGuidanceLinks: ReadonlyArray<{
+  route: string;
+  container: string;
+  section?: string;
+}> = [
+  { route: "cloud-workers", container: ".page-subtitle" },
+  { route: "mcp", section: "Configured servers", container: ".settings-section__desc" },
+];
+
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
@@ -58,6 +68,36 @@ const actionSectionCases = [
   { route: "model-providers", heading: "Default models" },
 ] as const;
 
+const settingsRowRoutes = [
+  "profile",
+  "appearance",
+  "lobsterdex",
+  "notifications",
+  "connection",
+  "channels",
+  "communications",
+  "talk",
+  "devices",
+  "cloud-workers",
+  "agents",
+  "ai-agents",
+  "labs",
+  "model-setup",
+  "model-providers",
+  "mcp",
+  "memory",
+  "automation",
+  "security",
+  "secrets",
+  "approvals",
+  "infrastructure",
+  "updates",
+  "advanced",
+  "plugins",
+  "about",
+  "debug",
+] as const satisfies readonly RouteId[];
+
 const responsiveViewports = [
   { width: 390, height: 844 },
   { width: 768, height: 1024 },
@@ -66,6 +106,183 @@ const responsiveViewports = [
 ] as const;
 
 suite.define(() => {
+  it("uses the shared tab system for Communications without duplicate section help", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const config = {
+      messages: { queueLimit: 5, responsePrefix: "[OpenClaw]" },
+      tts: { auto: "off" },
+    };
+    const schema = {
+      type: "object",
+      properties: {
+        messages: {
+          type: "object",
+          title: "Messages",
+          properties: {
+            queueLimit: { type: "integer", title: "Queue limit", minimum: 0 },
+            responsePrefix: { type: "string", title: "Response prefix" },
+          },
+        },
+        tts: {
+          type: "object",
+          title: "Voice",
+          properties: {
+            auto: {
+              type: "string",
+              title: "Automatic speech",
+              enum: ["off", "always", "inbound", "tagged"],
+            },
+          },
+        },
+      },
+    };
+    await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          path: "~/.openclaw/openclaw.json",
+          exists: true,
+          raw: `${JSON.stringify(config, null, 2)}\n`,
+          hash: "communications-config-hash",
+          appliedConfigHash: "communications-config-hash",
+          valid: true,
+          config,
+          issues: [],
+        },
+        "config.schema": {
+          schema,
+          uiHints: {
+            messages: {
+              label: "Messages",
+              docsUrl: "https://docs.openclaw.ai/concepts/messages",
+            },
+            "messages.queueLimit": { advanced: false },
+            "messages.responsePrefix": { advanced: true },
+            tts: { label: "Voice", docsUrl: "https://docs.openclaw.ai/tts" },
+          },
+          version: "communications-layout",
+          generatedAt: new Date(0).toISOString(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/communications`);
+      await waitForControlUiRoute(page, {
+        pathname: "/settings/communications",
+        routeId: "communications",
+      });
+
+      expect(await page.locator(".page-subtitle").textContent()).toBe(
+        "Messages and text-to-speech settings.",
+      );
+      expect(await page.locator("wa-tab-group.config-sections-hub-tabs").count()).toBe(1);
+      expect((await page.locator("wa-tab").allTextContents()).map((label) => label.trim())).toEqual(
+        ["Messages", "Voice"],
+      );
+      expect(await page.locator(".settings-section__help-button").count()).toBe(0);
+      const spacing = await page.evaluate(() => {
+        const subtitle = document.querySelector<HTMLElement>(".page-subtitle");
+        const tabs = document.querySelector<HTMLElement>("wa-tab-group.config-sections-hub-tabs");
+        const section = document.querySelector<HTMLElement>(".settings-section");
+        if (!subtitle || !tabs || !section) {
+          throw new Error("Communications layout did not render");
+        }
+        return {
+          aboveTabs: tabs.getBoundingClientRect().top - subtitle.getBoundingClientRect().bottom,
+          belowTabs: section.getBoundingClientRect().top - tabs.getBoundingClientRect().bottom,
+        };
+      });
+      expect(spacing.aboveTabs).toBeGreaterThan(0);
+      expect(Math.abs(spacing.belowTabs - spacing.aboveTabs)).toBeLessThanOrEqual(1);
+
+      const advanced = page.locator("details.config-advanced-disclosure");
+      await expect.poll(() => advanced.count()).toBe(1);
+      await expect.poll(() => advanced.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => advanced.locator("summary").textContent())
+        .toContain("Advanced settings");
+      if (proofEnabled) {
+        await mkdir(proofDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(proofDir, "communications-messages.png"),
+        });
+      }
+
+      await advanced.locator("summary").click();
+      await expect.poll(() => advanced.getAttribute("open")).not.toBeNull();
+      await expect.poll(() => page.getByText("Response prefix", { exact: true }).count()).toBe(1);
+      if (proofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(proofDir, "communications-advanced-expanded.png"),
+        });
+      }
+
+      await page.locator("#config-sections-tab-tts").click();
+      await page.waitForFunction(() =>
+        document.querySelector("#config-sections-tab-tts")?.hasAttribute("active"),
+      );
+      expect(await page.locator("#config-sections-tab-tts").getAttribute("active")).not.toBeNull();
+      expect(await page.locator(".settings-section__help-button").count()).toBe(0);
+      if (proofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(proofDir, "communications-voice.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("binds every settings row subtitle directly to its title", async () => {
+    await suite.withPage(
+      { colorScheme: "dark", locale: "en-US", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        await installMockGateway(page);
+        let auditedPairCount = 0;
+
+        for (const route of settingsRowRoutes) {
+          const pathname = pathForRoute(route);
+          await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+          await waitForControlUiRoute(page, {
+            pathname,
+            routeId: route,
+          });
+
+          const titleDescriptionPairs = page.locator(
+            ".settings-row__text > .settings-row__title + .settings-row__desc",
+          );
+          const gaps = await titleDescriptionPairs.evaluateAll((descriptions) =>
+            descriptions.map((description) => {
+              const title = description.previousElementSibling;
+              if (!(title instanceof HTMLElement)) {
+                throw new Error("settings row description is missing its title");
+              }
+              const titleBox = title.getBoundingClientRect();
+              const descriptionBox = description.getBoundingClientRect();
+              return Math.round(descriptionBox.y - titleBox.y - titleBox.height);
+            }),
+          );
+          auditedPairCount += gaps.length;
+          expect(gaps, `${route} title/subtitle gaps`).toEqual(gaps.map(() => 0));
+        }
+
+        expect(auditedPairCount).toBeGreaterThan(0);
+      },
+    );
+  });
+
   it("keeps settings introductions, section headings, and Learn more links on one layout system", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
@@ -137,6 +354,26 @@ suite.define(() => {
             await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
           ).toBe("none");
         }
+      }
+
+      for (const guidanceLink of settingsGuidanceLinks) {
+        await page.goto(`${suite.server.baseUrl}settings/${guidanceLink.route}`);
+        await waitForControlUiRoute(page, {
+          pathname: `/settings/${guidanceLink.route}`,
+          routeId: guidanceLink.route,
+        });
+        const root = guidanceLink.section
+          ? page.locator(".settings-section").filter({
+              has: page.getByRole("heading", { name: guidanceLink.section, exact: true }),
+            })
+          : page;
+        const link = (guidanceLink.container ? root.locator(guidanceLink.container) : root)
+          .getByRole("link", { name: "Learn more", exact: true })
+          .first();
+        await link.waitFor();
+        expect(await link.evaluate((element) => getComputedStyle(element).textDecorationLine)).toBe(
+          "none",
+        );
       }
 
       for (const viewport of responsiveViewports) {

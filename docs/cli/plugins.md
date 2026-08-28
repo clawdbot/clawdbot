@@ -227,6 +227,8 @@ third-party packages, and non-npm sources are not rewritten.
 
     Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer, so manifest validation, operator install policy, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
 
+    Reinstalling the same Git source and ref without `--force` refuses an existing managed checkout, even if the repository now declares a different plugin id. Use `openclaw plugins update <id>` for a tracked upgrade, or `openclaw plugins install git:<repo>@<ref> --force` to intentionally reinstall the same plugin id. `--force` does not migrate an existing install record to a different plugin id.
+
     After installing from git, use `openclaw plugins inspect <id> --runtime --json` to verify runtime registrations such as gateway methods and CLI commands. If the plugin registered a CLI root with `api.registerCli`, run that command directly through the OpenClaw root CLI, for example `openclaw demo-plugin ping`.
 
   </Accordion>
@@ -404,6 +406,8 @@ For runtime hook debugging:
 ### Plugin index
 
 Plugin install metadata is machine-managed state, not user config. Installs and updates write it to the shared SQLite state database under the active OpenClaw state directory. The `config_machine_state` value keyed by `plugins.installedIndex` stores durable `installRecords` metadata, including records for broken or missing plugin manifests, plus a manifest-derived cold registry cache used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
+
+An unreadable index is not invalid data. Permission, lock, and other read errors stop fallback, migration, and refresh with the original error. Restore database access, then rerun `openclaw plugins registry` to inspect the state before attempting repair. Do not delete the `plugins.installedIndex` row unless inspection succeeds and confirms invalid install records; a failed read alone does not justify deletion.
 
 `plugins.installs` is a retired authored-config surface. Runtime and update commands read only the SQLite machine-state plugin index. Run `openclaw doctor --fix` to import legacy config records into the index and remove the retired key before normal runtime use.
 

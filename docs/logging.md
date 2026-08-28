@@ -317,6 +317,10 @@ it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
 
 Transcript redaction does not replace the live arguments used to execute tools.
+Canonical assistant tool-call IDs and matching tool-result IDs remain unchanged
+so stored history can correlate with live tool events. This exemption applies
+only to protocol metadata; the same values in arguments, results, or nested
+payloads still pass through redaction.
 
 Model-visible tool-result text uses narrower assignment matching so source code
 remains intact. Registered secrets and explicit credential forms, including

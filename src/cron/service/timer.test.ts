@@ -7,7 +7,6 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/servic
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
 import { loadCronStore } from "../../cron/store.js";
-import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
@@ -313,60 +312,6 @@ describe("cron service timer seam coverage", () => {
       startedAt: emittedStartedAt,
       status: "succeeded",
     });
-  });
-
-  it("finalizes quiet trigger tasks only after cron state persists", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const job = {
-      ...createDueIsolatedAgentJob({ now }),
-      trigger: { script: "json({ fire: false })" },
-    };
-    await writeCronStoreSnapshot({ storePath, jobs: [job] });
-    let terminalStatePersisted = false;
-    let finalizedAfterPersist = false;
-    const finalize = taskExecutor.finalizeTaskRunByRunIdCore;
-    const finalizeSpy = vi
-      .spyOn(taskExecutor, "finalizeTaskRunByRunIdCore")
-      .mockImplementation((params) => {
-        const persistedJob = openOpenClawStateDatabase()
-          .db.prepare(
-            "SELECT json_extract(state_json, '$.runningAtMs') AS runningAtMs, json_extract(state_json, '$.nextRunAtMs') AS nextRunAtMs FROM cron_jobs WHERE store_key = ? AND job_id = ?",
-          )
-          .get(cronStoreKey(storePath), job.id) as {
-          runningAtMs: number | null;
-          nextRunAtMs: number | null;
-        };
-        terminalStatePersisted =
-          persistedJob.runningAtMs === null && (persistedJob.nextRunAtMs ?? 0) > now;
-        finalizedAfterPersist = terminalStatePersisted;
-        return finalize(params);
-      });
-    const state = createCronServiceState({
-      storePath,
-      cronEnabled: true,
-      cronConfig: { triggers: { enabled: true } },
-      log: logger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      evaluateCronTrigger: vi.fn(async () => ({ kind: "evaluated" as const, fire: false })),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-
-    try {
-      await onTimer(state);
-      expect(finalizedAfterPersist).toBe(true);
-      const task = findCronTaskByBaseRunId(`cron:${job.id}:${now}`);
-      expect(task).toMatchObject({ status: "succeeded" });
-      expect(task?.detail).toEqual({
-        storeKey: cronStoreKey(storePath),
-        triggerFired: false,
-        triggerStateChanged: false,
-      });
-    } finally {
-      finalizeSpy.mockRestore();
-    }
   });
 
   it.each(["command", "script", "systemEvent", "heartbeat", "skillCollectionReview"] as const)(

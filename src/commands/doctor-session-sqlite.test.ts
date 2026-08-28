@@ -916,6 +916,69 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
   });
 
+  it.each(["NONE", "FULL", "INCREMENTAL"] as const)(
+    "finalizes imports from auto_vacuum=%s without unnecessary repacking",
+    async (autoVacuum) => {
+      const { sqlitePath, store } = await createImportedStoreForCompaction();
+      fs.writeFileSync(store.storePath, "{}\n");
+      const database = nodeSqlite.openNodeSqliteDatabase(sqlitePath);
+      let freelistBefore: number;
+      try {
+        database.exec(`PRAGMA auto_vacuum = ${autoVacuum}; VACUUM;
+          CREATE TABLE cleanup_payload (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+          CREATE TABLE cleanup_discard (body BLOB);
+          BEGIN;`);
+        const insert = database.prepare("INSERT INTO cleanup_payload VALUES (?, ?)");
+        for (let index = 0; index < 1000; index++) {
+          insert.run(index, "x".repeat(1000));
+        }
+        // Keep partially filled pages as well as completely freed pages: only full
+        // compaction should repack the former when pointer maps already exist.
+        database.exec(`COMMIT; UPDATE cleanup_payload SET body = 'keep';
+          INSERT INTO cleanup_discard VALUES (zeroblob(1048576));
+          DELETE FROM cleanup_discard; PRAGMA wal_checkpoint(TRUNCATE);`);
+        freelistBefore = Number(database.prepare("PRAGMA freelist_count").get()?.freelist_count);
+      } finally {
+        database.close();
+      }
+      const imported = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "import",
+        store: store.storePath,
+      });
+      expect(imported.totals.issues).toBe(0);
+      const cleanup = expectDefined(imported.targets[0]?.compact, "import cleanup");
+      expect(cleanup.freelistAfterPages).toBe(0);
+      if (autoVacuum !== "FULL") {
+        expect(freelistBefore).toBeGreaterThan(0);
+        expect(cleanup.reclaimedBytes).toBeGreaterThan(0);
+      }
+      const compacted = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "compact",
+        store: store.storePath,
+      });
+      expect(compacted.totals.issues).toBe(0);
+      const packed = expectDefined(compacted.targets[0]?.compact, "explicit compaction");
+      if (autoVacuum === "NONE") {
+        expect(packed.dbSizeAfterBytes).toBe(cleanup.dbSizeAfterBytes);
+      } else {
+        expect(packed.dbSizeAfterBytes).toBeLessThan(cleanup.dbSizeAfterBytes);
+      }
+      const after = nodeSqlite.openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      try {
+        expect(after.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
+        expect(after.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(after.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(after.prepare("SELECT id, body FROM cleanup_payload ORDER BY id").all()).toEqual(
+          Array.from({ length: 1000 }, (_, id) => ({ id, body: "keep" })),
+        );
+      } finally {
+        after.close();
+      }
+    },
+  );
+
   it("compacts migrated agent SQLite databases and reports reclaimed pages", async () => {
     const store = createLegacyStore({
       transcriptLines: [

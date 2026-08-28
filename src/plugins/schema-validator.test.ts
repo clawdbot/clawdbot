@@ -1,7 +1,15 @@
 /** Covers plugin schema validation for manifests and exported config schemas. */
 import { Format } from "typebox/format";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
+
+// Config validation is a CLI startup dependency; codecs and value transforms are not.
+vi.mock("typebox/compile", () => {
+  throw new Error("schema validation must not load the TypeBox value-transform compiler");
+});
+vi.mock("typebox/value", () => {
+  throw new Error("schema validation must not load TypeBox value transforms");
+});
 
 const jsonSchemaThenKeyword = ["the", "n"].join("");
 

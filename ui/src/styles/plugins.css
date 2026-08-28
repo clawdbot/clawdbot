@@ -19,7 +19,8 @@
 }
 
 .plugins-hub-header + .settings-workspace {
-  margin-top: var(--space-2);
+  /* The settings page already contributes the lower half of the tab rhythm. */
+  margin-top: 0;
 }
 
 @media (max-width: 400px) {
@@ -390,21 +391,7 @@ h3.plugins-subheader {
 }
 
 .plugins-remove {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  padding: 7px;
   color: var(--muted);
-}
-
-.plugins-remove svg {
-  width: 100%;
-  height: 100%;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .plugins-remove:hover:not(:disabled) {
