@@ -7,6 +7,7 @@ import { getFreePort } from "../../scripts/lib/gateway-bench-probes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { resetLogger } from "../logging/logger.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -89,14 +90,17 @@ describe("Gateway concurrent HTTP streams", () => {
       await fs.rename(`${controlPath}.next`, controlPath);
     };
     const requestBodies = async () => {
-      const raw = await fs.readFile(requestLogPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") {
+      const raw = await fs.readFile(requestLogPath, "utf8").catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
           return "";
         }
         throw error;
       });
       return raw.trim()
-        ? raw.trim().split("\n").map((line) => JSON.parse(line).body as string)
+        ? raw
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line).body as string)
         : [];
     };
     try {
@@ -182,11 +186,13 @@ describe("Gateway concurrent HTTP streams", () => {
           expect(response.status).toBe(200);
           const wire = await response.text();
           expect(wire.match(/^data: \[DONE\]$/gm)).toHaveLength(1);
-          return wire.split("\n").flatMap((line) =>
-            line.startsWith("data: ") && line !== "data: [DONE]"
-              ? [JSON.parse(line.slice(6)) as StreamFrame]
-              : [],
-          );
+          return wire
+            .split("\n")
+            .flatMap((line) =>
+              line.startsWith("data: ") && line !== "data: [DONE]"
+                ? [JSON.parse(line.slice(6)) as StreamFrame]
+                : [],
+            );
         })();
         streams.push({ item, settled: Promise.allSettled([pending]).then(([result]) => result!) });
         // Reserve each scripted response in arrival order, but hold both provider
@@ -213,8 +219,9 @@ describe("Gateway concurrent HTTP streams", () => {
           .map((frame) => frame.delta ?? frame.choices?.[0]?.delta?.content ?? "")
           .join("");
         expect(text).toBe(item.marker);
-        const terminals = frames.filter((frame) =>
-          frame.type === "response.completed" || frame.choices?.[0]?.finish_reason === "stop",
+        const terminals = frames.filter(
+          (frame) =>
+            frame.type === "response.completed" || frame.choices?.[0]?.finish_reason === "stop",
         );
         expect(terminals).toHaveLength(1);
         const result = await client.request<{ status: string }>("agent.wait", {

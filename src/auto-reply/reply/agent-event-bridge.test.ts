@@ -41,6 +41,45 @@ describe("agent event delivery bridge", () => {
     expect(deliveredB).toEqual(["b1"]);
   });
 
+  test("keeps stream delivery order when a later global listener emits another event", async () => {
+    registerAgentRunContext("run-nested", { sessionKey: "session-nested" });
+    const delivered: string[] = [];
+    const bridge = textBridge("run-nested", delivered);
+    const stopGlobal = onAgentEvent((evt) => {
+      if (evt.runId === "run-nested" && evt.data.text === "outer") {
+        emitAgentEvent({ runId: "run-nested", stream: "assistant", data: { text: "inner" } });
+      }
+    });
+    try {
+      emitAgentEvent({ runId: "run-nested", stream: "assistant", data: { text: "outer" } });
+      await bridge.drain();
+      expect(delivered).toEqual(["outer", "inner"]);
+    } finally {
+      stopGlobal();
+      bridge.unsubscribe();
+    }
+  });
+
+  test("delivers the current event before a later global listener unsubscribes the bridge", async () => {
+    registerAgentRunContext("run-unsubscribe", { sessionKey: "session-unsubscribe" });
+    const delivered: string[] = [];
+    const bridge = textBridge("run-unsubscribe", delivered);
+    const stopGlobal = onAgentEvent((evt) => {
+      if (evt.runId === "run-unsubscribe") {
+        bridge.unsubscribe();
+      }
+    });
+    try {
+      emitAgentEvent({ runId: "run-unsubscribe", stream: "assistant", data: { text: "first" } });
+      emitAgentEvent({ runId: "run-unsubscribe", stream: "assistant", data: { text: "second" } });
+      await bridge.drain();
+      expect(delivered).toEqual(["first"]);
+    } finally {
+      stopGlobal();
+      bridge.unsubscribe();
+    }
+  });
+
   test("subscribes into its run's bucket rather than the global listener set", () => {
     registerAgentRunContext("run-scope", { sessionKey: "session-scope" });
     const order: string[] = [];
