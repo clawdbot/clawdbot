@@ -4690,6 +4690,253 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("defers rollover of a legacy pending-reset tombstone while the same session has an active run", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "active-tombstone-session";
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-active-tombstone-archive-");
+      const sessionKey = "agent:main:telegram:dm:active-tombstone-user";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      // Older releases persisted updatedAt=0 as an explicit pending reset marker;
+      // evaluateSessionFreshness reports it as { fresh: false } with no staleReason.
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: 0,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello while active",
+          RawBody: "hello while active",
+          CommandBody: "hello while active",
+          From: "user-active-tombstone",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.previousSessionEntry).toBeUndefined();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rolls over a legacy pending-reset tombstone normally once the active run completes", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "completed-tombstone-session";
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-completed-tombstone-archive-");
+      const sessionKey = "agent:main:telegram:dm:completed-tombstone-user";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: 0,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      // The previous run already exited; complete() releases the session lane so
+      // the registry no longer reports an active operation for this session.
+      replyRunRegistry
+        .begin({
+          sessionKey,
+          sessionId: existingSessionId,
+          resetTriggered: false,
+        })
+        .complete();
+
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello after run finished",
+          RawBody: "hello after run finished",
+          CommandBody: "hello after run finished",
+          From: "user-completed-tombstone",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the legacy pending-reset marker through deferral until the active run completes", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "deferred-then-completed-tombstone-session";
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-deferred-tombstone-sequence-");
+      const sessionKey = "agent:main:telegram:dm:deferred-tombstone-sequence-user";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: 0,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
+      const initTurn = (body: string) =>
+        initSessionState({
+          ctx: {
+            Body: body,
+            RawBody: body,
+            CommandBody: body,
+            From: "user-deferred-tombstone-sequence",
+            To: "bot",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            Provider: "telegram",
+            Surface: "telegram",
+          },
+          cfg,
+          commandAuthorized: true,
+        });
+
+      // While the run is active the rollover is deferred, and the persisted
+      // entry must keep updatedAt=0 so the pending reset is not silently consumed.
+      const deferred = await initTurn("hello while active");
+      expect(deferred.isNewSession).toBe(false);
+      expect(deferred.previousSessionEntry).toBeUndefined();
+      expect(readSessionStoreFast(storePath)[sessionKey]?.updatedAt).toBe(0);
+
+      // Once the run completes, the next initialization observes the retained
+      // tombstone and performs the required one-time reset.
+      operation.complete();
+      const rolledOver = await initTurn("hello after run finished");
+      expect(rolledOver.isNewSession).toBe(true);
+      expect(rolledOver.resetTriggered).toBe(false);
+      expect(rolledOver.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      const storedUpdatedAt = readSessionStoreFast(storePath)[sessionKey]?.updatedAt;
+      expect(storedUpdatedAt).toBeGreaterThan(0);
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-arm the pending-reset marker when an explicit reset lands during an active run", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "explicit-reset-tombstone-session";
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-explicit-reset-tombstone-");
+      const sessionKey = "agent:main:telegram:dm:explicit-reset-tombstone-user";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: 0,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
+      const initTurn = (body: string) =>
+        initSessionState({
+          ctx: {
+            Body: body,
+            RawBody: body,
+            CommandBody: body,
+            From: "user-explicit-reset-tombstone",
+            To: "bot",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            Provider: "telegram",
+            Surface: "telegram",
+          },
+          cfg,
+          commandAuthorized: true,
+        });
+
+      // An explicit /new is not an implicit rollover: it proceeds even while the
+      // old run is active, and the fresh session must not be persisted with the
+      // legacy updatedAt=0 marker.
+      const explicitReset = await initTurn("/new");
+      expect(explicitReset.isNewSession).toBe(true);
+      expect(explicitReset.resetTriggered).toBe(true);
+      expect(readSessionStoreFast(storePath)[sessionKey]?.updatedAt).toBeGreaterThan(0);
+
+      // After the old run completes, the next init must not perform a spurious
+      // rollover of the session the explicit reset just created.
+      operation.complete();
+      const nextTurn = await initTurn("hello after explicit reset");
+      expect(nextTurn.isNewSession).toBe(false);
+      expect(nextTurn.previousSessionEntry).toBeUndefined();
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not defer stale boundary append for the current turn's queued reservation", async () => {
     vi.useFakeTimers();
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
