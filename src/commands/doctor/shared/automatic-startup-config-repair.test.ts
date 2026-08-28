@@ -1,10 +1,15 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnvOverride } from "../../../config/test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
 import { VERSION } from "../../../version.js";
 import {
   isStartupConfigRepairResult,
   planStartupConfigRepair,
+  resolveStartupConfigSnapshot,
 } from "./automatic-startup-config-repair.js";
 
 function invalidSnapshot(params: {
@@ -122,6 +127,28 @@ describe("automatic startup config repair", () => {
         sourceConfig: { ...repaired, session: { reset: { mode: "idle" } } },
       }),
     ).toBe(false);
+  });
+
+  it("previews repairable snapshots without touching the shared state database", async () => {
+    // Backup discovery and gateway pre-bootstrap resolve before state-database admission;
+    // a broken store (here: a directory at the canonical path) must not break the preview.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-repair-preview-"));
+    try {
+      await fs.mkdir(path.join(root, "state", "openclaw.sqlite"), { recursive: true });
+      await withEnvOverride({ OPENCLAW_STATE_DIR: root }, async () => {
+        const snapshot = invalidSnapshot({
+          config: { session: { idleMinutes: 45 } } as OpenClawConfig,
+          issuePaths: ["session.idleMinutes"],
+        });
+        const resolved = resolveStartupConfigSnapshot(snapshot);
+        expect(resolved?.valid).toBe(true);
+        expect(resolved?.sourceConfig.session).toEqual({
+          reset: { mode: "idle", idleMinutes: 45 },
+        });
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it.each([

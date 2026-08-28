@@ -6,8 +6,12 @@ import {
 import { replaceConfigFile } from "../../../config/config.js";
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
-import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
+import {
+  validateConfigObjectRaw,
+  validateConfigObjectWithPlugins,
+} from "../../../config/validation.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
 
@@ -17,33 +21,21 @@ type StartupConfigRepairPlan = {
   changes: string[];
 };
 
-/** Admits only complete, deterministic single-file legacy migrations for startup. */
-export function planStartupConfigRepair(
+function admitStartupConfigRepairSnapshot(snapshot: ConfigFileSnapshot): boolean {
+  return (
+    !snapshot.valid &&
+    snapshot.exists &&
+    snapshot.raw !== null &&
+    (snapshot.includedPaths?.length ?? 0) === 0 &&
+    !containsConfigIncludeDirective(snapshot.parsed)
+  );
+}
+
+function buildStartupConfigRepairPlan(
   snapshot: ConfigFileSnapshot,
-): StartupConfigRepairPlan | null {
-  if (
-    snapshot.valid ||
-    !snapshot.exists ||
-    snapshot.raw === null ||
-    (snapshot.includedPaths?.length ?? 0) > 0 ||
-    containsConfigIncludeDirective(snapshot.parsed)
-  ) {
-    return null;
-  }
-
-  const { next: config, changes } = applyLegacyDoctorMigrations(snapshot.sourceConfig, {
-    authoredRaw: snapshot.parsed,
-    resolvedRaw: snapshot.sourceConfig,
-  });
-  if (
-    !config ||
-    isDeepStrictEqual(config, snapshot.sourceConfig) ||
-    !validateConfigObjectWithPlugins(config).ok ||
-    findDoctorLegacyConfigIssues(config, config).length > 0
-  ) {
-    return null;
-  }
-
+  config: OpenClawConfig,
+  changes: string[],
+): StartupConfigRepairPlan {
   return {
     config,
     changes,
@@ -60,8 +52,63 @@ export function planStartupConfigRepair(
   };
 }
 
+/** Admits only complete, deterministic single-file legacy migrations for startup. */
+export function planStartupConfigRepair(
+  snapshot: ConfigFileSnapshot,
+): StartupConfigRepairPlan | null {
+  if (!admitStartupConfigRepairSnapshot(snapshot)) {
+    return null;
+  }
+
+  const { next: config, changes } = applyLegacyDoctorMigrations(snapshot.sourceConfig, {
+    authoredRaw: snapshot.parsed,
+    resolvedRaw: snapshot.sourceConfig,
+  });
+  if (
+    !config ||
+    isDeepStrictEqual(config, snapshot.sourceConfig) ||
+    !validateConfigObjectWithPlugins(config).ok ||
+    findDoctorLegacyConfigIssues(config, config).length > 0
+  ) {
+    return null;
+  }
+
+  return buildStartupConfigRepairPlan(snapshot, config, changes);
+}
+
+/**
+ * State-free repairable preview for callers that run before the shared state database
+ * may be touched (gateway pre-bootstrap selection, backup discovery). It skips plugin
+ * doctor contracts and plugin validation, so it can admit a snapshot the full planner
+ * later refuses — the preflight committer and canonical-write matcher stay authoritative,
+ * and a refused commit keeps today's fail-closed startup refusal.
+ */
+function planStartupConfigRepairPreview(
+  snapshot: ConfigFileSnapshot,
+): StartupConfigRepairPlan | null {
+  if (!admitStartupConfigRepairSnapshot(snapshot)) {
+    return null;
+  }
+
+  const { next: config, changes } = applyLegacyDoctorMigrations(
+    snapshot.sourceConfig,
+    { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
+    { pluginContracts: false },
+  );
+  if (
+    !config ||
+    isDeepStrictEqual(config, snapshot.sourceConfig) ||
+    !validateConfigObjectRaw(config).ok ||
+    findLegacyConfigIssues(config, config).length > 0
+  ) {
+    return null;
+  }
+
+  return buildStartupConfigRepairPlan(snapshot, config, changes);
+}
+
 export function resolveStartupConfigSnapshot(snapshot: ConfigFileSnapshot) {
-  return snapshot.valid ? snapshot : planStartupConfigRepair(snapshot)?.snapshot;
+  return snapshot.valid ? snapshot : planStartupConfigRepairPreview(snapshot)?.snapshot;
 }
 
 /** Matches only the canonical writer result for a previously admitted startup repair. */
