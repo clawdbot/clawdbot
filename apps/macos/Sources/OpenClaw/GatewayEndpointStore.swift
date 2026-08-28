@@ -994,24 +994,24 @@ extension GatewayEndpointStore {
                 ?? GatewayRemoteConfig.resolveUrlString(root: root)
                 ?? "",
             remoteTarget: sshRouteIdentity?.target ?? "")
+        // Ambient env credentials are process-wide, not proof for this newly
+        // selected Gateway. A discovery route always resolves auth from config.
+        let credentialEnv = isRemote && GatewayDiscoveryPreferences
+            .preferredGatewayOwnsRoute(deviceAuthGatewayID) ? [:] : env
 
         let source = SourceSnapshot(
             routingGeneration: app.generation,
             mode: SourceMode(mode),
-            token: mode == .unconfigured
-                ? nil
-                : self.resolveGatewayToken(
-                    isRemote: isRemote,
-                    root: root,
-                    env: env,
-                    launchdSnapshot: launchdSnapshot),
-            password: mode == .unconfigured
-                ? nil
-                : self.resolveGatewayPassword(
-                    isRemote: isRemote,
-                    root: root,
-                    env: env,
-                    launchdSnapshot: launchdSnapshot),
+            token: mode == .unconfigured ? nil : self.resolveGatewayToken(
+                isRemote: isRemote,
+                root: root,
+                env: credentialEnv,
+                launchdSnapshot: launchdSnapshot),
+            password: mode == .unconfigured ? nil : self.resolveGatewayPassword(
+                isRemote: isRemote,
+                root: root,
+                env: credentialEnv,
+                launchdSnapshot: launchdSnapshot),
             deviceAuthGatewayID: deviceAuthGatewayID,
             localPort: self.resolveGatewayPort(root: root, env: env, profile: profile),
             localHost: self.resolveLocalGatewayHost(

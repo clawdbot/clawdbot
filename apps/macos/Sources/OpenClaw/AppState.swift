@@ -94,6 +94,7 @@ final class AppState {
 
     @ObservationIgnored private var gatewayConfigSyncState = GatewayConfigSyncState.current
     @ObservationIgnored private var gatewayConfigSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingDiscoveryCredentialReset = false
     @ObservationIgnored private(set) var gatewayRoutingGeneration: UInt64 = 0
     #if DEBUG
     @ObservationIgnored private var gatewayConfigSyncEnabledForTesting = false
@@ -709,6 +710,14 @@ final class AppState {
 }
 
 extension AppState {
+    /// Discovery can replace the active endpoint. Persist its route and remove
+    /// both credential kinds in one write before reconnecting.
+    func clearRemoteCredentialsForDiscoverySelection() {
+        self.pendingDiscoveryCredentialReset = true
+        self.remoteToken = ""
+        _ = self.syncGatewayConfigNow()
+    }
+
     private func markGatewayConfigDirty(_ fields: Set<GatewayConfigField>) {
         guard !self.isInitializing, !self.isApplyingGatewayConfig else { return }
         self.dirtyGatewayConfigFields.formUnion(fields)
@@ -1175,7 +1184,8 @@ extension AppState {
     private static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft,
-        remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate = .preserve)
+        remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate = .preserve,
+        clearRemoteCredentials: Bool = false)
         -> (root: [String: Any], changed: Bool)
     {
         var root = currentRoot
@@ -1226,6 +1236,10 @@ extension AppState {
                 &remote,
                 key: "tlsFingerprint",
                 value: fingerprint) || remoteChanged
+        }
+        if clearRemoteCredentials {
+            if remote.removeValue(forKey: "token") != nil { remoteChanged = true }
+            if remote.removeValue(forKey: "password") != nil { remoteChanged = true }
         }
         if remoteChanged {
             if remote.isEmpty {
@@ -1330,9 +1344,11 @@ extension AppState {
         let synced = Self.syncedGatewayRoot(
             currentRoot: currentRoot,
             draft: draft,
-            remoteTLSFingerprintUpdate: remoteTLSFingerprintUpdate)
+            remoteTLSFingerprintUpdate: remoteTLSFingerprintUpdate,
+            clearRemoteCredentials: self.pendingDiscoveryCredentialReset)
         guard synced.changed else {
             self.acknowledgeGatewayConfigPersistence(draft.dirtyFields, root: currentRoot)
+            self.pendingDiscoveryCredentialReset = false
             self.setGatewayConfigSyncState(.current)
             return true
         }
@@ -1342,6 +1358,7 @@ extension AppState {
             return false
         }
         self.acknowledgeGatewayConfigPersistence(draft.dirtyFields, root: synced.root)
+        self.pendingDiscoveryCredentialReset = false
         self.lastConfigFingerprint = Self.configFingerprint(synced.root)
         self.setGatewayConfigSyncState(.current)
         NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)

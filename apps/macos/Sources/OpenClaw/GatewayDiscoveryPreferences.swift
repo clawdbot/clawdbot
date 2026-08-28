@@ -4,6 +4,12 @@ enum GatewayDiscoveryPreferences {
     private static let preferredStableIDKey = "gateway.preferredStableID"
     private static let legacyPreferredStableIDKey = "bridge.preferredStableID"
     private static let preferredRouteBindingKey = "gateway.preferredStableIDRouteBinding.v1"
+    static func preferredGatewayOwnsRoute(_ routeBinding: String?) -> Bool {
+        guard self.preferredStableID() != nil,
+              let routeBinding = self.normalized(routeBinding)
+        else { return false }
+        return self.preferredRouteBinding() == routeBinding
+    }
 
     static func preferredStableID() -> String? {
         let defaults = AppDefaults.standard

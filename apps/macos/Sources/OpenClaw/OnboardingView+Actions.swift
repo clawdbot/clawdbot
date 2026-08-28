@@ -46,10 +46,10 @@ extension OnboardingView {
         }
         defaultsToLocalGateway = false
         preferredGatewayID = gateway.stableID
-        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: state)
-
+        // Establish the selected mode before resolving a credential binding.
+        // The selection helper treats non-remote state as intentionally uncredentialed.
         state.connectionMode = .remote
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: state)
+        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: state)
         probeConfiguredGatewayForDashboard()
     }
 
