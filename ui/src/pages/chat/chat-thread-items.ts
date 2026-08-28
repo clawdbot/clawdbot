@@ -499,7 +499,13 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
     return null;
   }
   const senderLabel = ["user", "assistant"].includes(parts.role) ? parts.senderLabel : "";
-  return JSON.stringify([parts.role, senderLabel, parts.senderKey ?? "", parts.senderSession, text]);
+  return JSON.stringify([
+    parts.role,
+    senderLabel,
+    parts.senderKey ?? "",
+    parts.senderSession,
+    text,
+  ]);
 }
 
 export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
