@@ -48,6 +48,7 @@ suite.define(() => {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
+            "projects.add",
             "projects.list",
             "projects.searchRemote",
             "sessions.create",
