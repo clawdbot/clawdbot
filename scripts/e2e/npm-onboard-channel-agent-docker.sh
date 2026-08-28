@@ -110,6 +110,7 @@ echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
 if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
+  -e OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE="$USE_SOURCE_PLUGIN_PACKAGE" \
   -e "OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES=$JSON_ARTIFACT_MAX_BYTES" \
   -e "OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES=$STATUS_TEXT_MAX_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
@@ -176,6 +177,7 @@ dump_debug_logs() {
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
     /tmp/openclaw-codex-plugin-install.log \
+    /tmp/openclaw-channel-plugin-install.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-channels-status.json \
     /tmp/openclaw-channels-status.err \
@@ -206,15 +208,22 @@ if [ -d "$package_root/dist/extensions/$CHANNEL" ]; then
   CHANNEL_PACKAGE_MODE="bundled"
 else
   CHANNEL_PACKAGE_MODE="external"
-  echo "$CHANNEL is not packaged with core OpenClaw; expecting channel selection to install it on demand."
+  echo "$CHANNEL is not packaged with core OpenClaw; its plugin must be installed before channel configuration."
 fi
 
-if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
-  echo "Installing reviewed Codex runtime companion: @openclaw/codex@$candidate_version"
-  openclaw plugins install "npm:@openclaw/codex@$candidate_version" \
-    --pin \
-    --accept-capabilities \
+# Older packages own their automatic setup; consent support, not a version,
+# establishes whether this fixture must explicitly preinstall required plugins.
+plugin_install_help="$(openclaw plugins install --help)"
+fixture_consent="$(printf '%s' "$plugin_install_help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)"
+if [ -n "$fixture_consent" ]; then
+  codex_install_args=(codex)
+  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+    codex_install_args=("npm:@openclaw/codex@$candidate_version" --pin)
+  fi
+  # Published packages use the official catalog's source selection;
+  # mounted candidates use only the exact companion verified above.
+  openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${codex_install_args[@]}" \
     >/tmp/openclaw-codex-plugin-install.log 2>&1
 fi
 
@@ -237,6 +246,17 @@ openclaw onboard --non-interactive --accept-risk \
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-state "$HOME"
 
 openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
+
+if [ "$CHANNEL_PACKAGE_MODE" = "external" ] && [ -n "$fixture_consent" ]; then
+  channel_install_args=("$CHANNEL")
+  if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
+    # Use the same source fixture selected and mounted by the host, not a
+    # published replacement. --force acknowledges only this reviewed archive.
+    channel_install_args=(npm-pack:/tmp/openclaw-channel-plugin.tgz --force)
+  fi
+  openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${channel_install_args[@]}" \
+    >/tmp/openclaw-channel-plugin-install.log 2>&1
+fi
 
 echo "Configuring $CHANNEL..."
 openclaw_e2e_run_logged channel-add "$OPENCLAW_E2E_CLI_BIN" channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}"
