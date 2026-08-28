@@ -129,7 +129,7 @@ ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upg
 prepare_diagnostics_capture() {
   # A previous attempt must never be published as this container's failure.
   if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] ||
-    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json"; then
+    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json"; then
     echo "Upgrade survivor diagnostics missing: private capture setup failed." >&2
     return 0
   fi
@@ -631,7 +631,7 @@ if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
   update_args+=(--no-restart)
 fi
 set +e
-openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 openclaw "${update_args[@]}" >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.json" 2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.err"
+openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs" openclaw "${update_args[@]}" >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.json" 2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.err"
 update_status=$?
 set -e
 if [ "$update_status" -ne 0 ]; then

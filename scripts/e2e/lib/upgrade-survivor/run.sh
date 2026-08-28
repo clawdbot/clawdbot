@@ -48,6 +48,7 @@ if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-vol
 fi
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
+export OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT="$ARTIFACT_ROOT"
 export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
 RUNTIME_ROOT="$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT"
 STATE_HOME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT:-$RUNTIME_ROOT/state-home}"
@@ -1426,6 +1427,7 @@ update_candidate() {
   if [ "$ROOT_MANAGED_VPS" != "1" ]; then
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
+  update_env+=("NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs")
   local update_status=0
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR" || update_status=$?
   if [ "$update_status" -ne 0 ]; then

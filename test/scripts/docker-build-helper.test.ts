@@ -1,11 +1,15 @@
 // Docker Build Helper tests cover docker build helper script behavior.
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -192,6 +196,47 @@ function runSurvivorDiagnostics(
     ],
     { encoding: "utf8", env: { ...process.env, ...env } },
   );
+}
+
+function survivorPostCoreFixture() {
+  const workDir = realpathSync(tempDirs.make("openclaw-survivor-post-core-"));
+  const artifacts = join(workDir, "artifacts");
+  const resultDir = join(workDir, "openclaw-update-post-core-fixture");
+  mkdirSync(artifacts);
+  mkdirSync(resultDir);
+  const resultPath = join(resultDir, "plugins.json");
+  return {
+    workDir,
+    artifacts,
+    resultDir,
+    resultPath,
+    preloadOptions: `--no-warnings --import=${pathToFileURL(join(process.cwd(), UPGRADE_SURVIVOR_DIAGNOSTICS_PATH)).href}`,
+    env: {
+      ...process.env,
+      HOME: workDir,
+      TMPDIR: workDir,
+      OPENCLAW_STATE_DIR: workDir,
+      OPENCLAW_CONFIG_PATH: join(workDir, "absent"),
+      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+      OPENCLAW_UPDATE_POST_CORE: "1",
+      OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath,
+      NODE_OPTIONS: "--no-warnings",
+    },
+  };
+}
+
+function copySurvivorCaptureClosure(workDir: string) {
+  const library = join(workDir, "lib");
+  mkdirSync(join(library, "upgrade-survivor"), { recursive: true });
+  for (const name of [
+    "plugin-index-sqlite.mjs",
+    "env-limits.mjs",
+    "text-file-utils.mjs",
+    "upgrade-survivor/diagnostics.mjs",
+  ]) {
+    writeFileSync(join(library, name), readFileSync(join("scripts/e2e/lib", name)));
+  }
+  return join(library, "upgrade-survivor", "diagnostics.mjs");
 }
 
 function renderRepoShell(
@@ -3504,6 +3549,525 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     },
   );
 
+  it.each([
+    ["warning", 0],
+    ["error", 0],
+    ["error", 78],
+  ] as const)(
+    "retains the original post-core %s result separately from exit %i",
+    (status, code) => {
+      const { workDir, artifacts, resultDir, env, preloadOptions } = survivorPostCoreFixture();
+      const result = {
+        status,
+        changed: false,
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: {
+          changed: false,
+          outcomes: [
+            {
+              pluginId: "example",
+              status: "error",
+              message: "review required token=POST_CORE_SECRET",
+              currentVersion: "1.0.0",
+              nextVersion: "2.0.0",
+            },
+          ],
+        },
+        warnings: [
+          {
+            pluginId: "example",
+            reason: "review required",
+            message: "token=POST_CORE_SECRET",
+            guidance: [],
+          },
+        ],
+        integrityDrifts: [],
+        credentials: "PRIVATE_RESULT_EXTRA",
+      };
+      const childPath = join(workDir, "cli.mjs");
+      writeFileSync(
+        childPath,
+        `import fs from "node:fs";
+fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(result))});
+process.stdout.write("original stdout\\n");
+process.exit(${code});
+`,
+      );
+      const child = spawnSync(process.execPath, [childPath, "update", "--json"], {
+        env: { ...env, NODE_OPTIONS: preloadOptions },
+        encoding: "utf8",
+      });
+      expect(child.status, child.stderr).toBe(code);
+      expect(child.stdout).toBe("original stdout\n");
+      // The historical parent removes the handoff directory before attempting restart.
+      rmSync(resultDir, { recursive: true });
+      expect(existsSync(join(artifacts, "diagnostics", "post-core.json"))).toBe(true);
+      const captured = runSurvivorDiagnostics("capture", artifacts, ["update-candidate", "1"], env);
+      expect(captured.status, captured.stderr).toBe(0);
+      const uploaded = join(workDir, "public");
+      const published = runSurvivorDiagnostics("publish", artifacts, [uploaded], env);
+      expect(published.status, published.stderr).toBe(0);
+      const text = readFileSync(join(uploaded, "failure.json"), "utf8");
+      expect(text).not.toContain("POST_CORE_SECRET");
+      expect(text).not.toContain("PRIVATE_RESULT_EXTRA");
+      expect(JSON.parse(text).postCore).toMatchObject({
+        availability: "captured",
+        childExitCode: code,
+        result: {
+          status,
+          npm: {
+            outcomes: [{ pluginId: "example", currentVersion: "1.0.0", nextVersion: "2.0.0" }],
+          },
+        },
+      });
+    },
+  );
+
+  it.each([
+    "doctor",
+    "worker",
+    "missing-context",
+    "missing",
+    "invalid",
+    "wrong-file",
+    "outside-tmp",
+    "symlink",
+    "hardlink",
+    "oversize",
+    "blocked-output",
+    "sigterm",
+  ])(
+    "leaves post-core capture unavailable for %s without changing the child outcome",
+    (scenario) => {
+      const { workDir, artifacts, resultPath, env, preloadOptions } = survivorPostCoreFixture();
+      const complete = JSON.stringify({
+        status: "error",
+        changed: false,
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: false, outcomes: [] },
+        integrityDrifts: [],
+      });
+      writeFileSync(
+        resultPath,
+        scenario === "invalid"
+          ? "{"
+          : scenario === "oversize"
+            ? complete + " ".repeat(256 * 1024)
+            : complete,
+      );
+      if (scenario === "missing") {
+        rmSync(resultPath);
+      }
+      if (scenario === "missing-context") {
+        env.OPENCLAW_UPDATE_POST_CORE = "";
+      }
+      if (scenario === "wrong-file") {
+        env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH = join(dirname(resultPath), "source-config.json");
+      }
+      if (scenario === "outside-tmp") {
+        env.TMPDIR = artifacts;
+      }
+      if (scenario === "symlink" || scenario === "hardlink") {
+        const outside = join(workDir, "private-result.json");
+        writeFileSync(outside, complete);
+        rmSync(resultPath);
+        (scenario === "symlink" ? symlinkSync : linkSync)(outside, resultPath);
+      }
+      if (scenario === "blocked-output") {
+        symlinkSync(workDir, join(artifacts, "diagnostics"));
+      }
+      const childPath = join(workDir, "child.mjs");
+      writeFileSync(
+        childPath,
+        scenario === "worker"
+          ? `
+import { isMainThread, Worker } from "node:worker_threads";
+if (isMainThread) await new Promise((resolve) => new Worker(new URL(import.meta.url), { argv: ["update"] }).once("exit", resolve));
+process.exit(78);
+`
+          : scenario === "sigterm"
+            ? 'process.kill(process.pid, "SIGTERM");'
+            : "process.exit(78);",
+      );
+      const child = spawnSync(
+        process.execPath,
+        [childPath, ["doctor", "worker"].includes(scenario) ? "doctor" : "update"],
+        { env: { ...env, NODE_OPTIONS: preloadOptions }, encoding: "utf8" },
+      );
+      expect(child.status, child.stderr).toBe(scenario === "sigterm" ? null : 78);
+      expect(child.signal).toBe(scenario === "sigterm" ? "SIGTERM" : null);
+      expect(child.stdout).toBe("");
+      expect(existsSync(join(artifacts, "diagnostics", "post-core.json"))).toBe(false);
+      if (scenario === "blocked-output") {
+        rmSync(join(artifacts, "diagnostics"));
+      }
+      // An ordinary CLI respawn with no result must not consume the complete slot.
+      if (scenario === "missing") {
+        writeFileSync(resultPath, complete);
+        expect(
+          spawnSync(process.execPath, [childPath, "update"], {
+            env: { ...env, NODE_OPTIONS: preloadOptions },
+          }).status,
+        ).toBe(78);
+        expect(existsSync(join(artifacts, "diagnostics", "post-core.json"))).toBe(true);
+        return;
+      }
+      const capture = runSurvivorDiagnostics("capture", artifacts, ["update-candidate", "1"], env);
+      expect(capture.status, capture.stderr).toBe(0);
+      const published = runSurvivorDiagnostics(
+        "publish",
+        artifacts,
+        [join(workDir, "public")],
+        env,
+      );
+      expect(published.status, published.stderr).toBe(0);
+      const report = JSON.parse(readFileSync(join(workDir, "public", "failure.json"), "utf8"));
+      expect(report.postCore).toEqual({
+        availability: "unavailable",
+        reason: "No complete exit snapshot; original outcome unknown",
+      });
+    },
+  );
+
+  it.each([UPGRADE_SURVIVOR_RUN_SCRIPT, UPGRADE_SURVIVOR_DOCKER_E2E_PATH])(
+    "scopes the passive preload to the original update invocation in %s",
+    (scriptPath) => {
+      const { workDir, artifacts, env } = survivorPostCoreFixture();
+      const source = readFileSync(scriptPath, "utf8");
+      const published = scriptPath === UPGRADE_SURVIVOR_RUN_SCRIPT;
+      const artifactSetup = published
+        ? source.slice(
+            source.indexOf("ARTIFACT_ROOT="),
+            source.indexOf("export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="),
+          )
+        : 'ARTIFACT_ROOT="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"';
+      const update = published
+        ? source.slice(
+            source.indexOf("update_candidate() {"),
+            source.indexOf("\nassert_root_managed_vps_cli_usable()"),
+          ) + "\nupdate_candidate\nlane_exit=$?"
+        : extractUpgradeSurvivorPayload(source)
+            .split('echo "Running package update against the mounted tarball..."')[1]!
+            .split('if [ "$update_status" -ne 0 ]; then')[0]! + "\nlane_exit=$update_status";
+      const bin = join(workDir, "bin");
+      writeExecutables(bin, {
+        openclaw: `#!${process.execPath}
+const fs = require("node:fs"), path = require("node:path"), { spawnSync } = require("node:child_process");
+fs.appendFileSync(path.join(process.env.TMPDIR,"invocations.jsonl"), JSON.stringify({argv:process.argv.slice(2), options:process.env.NODE_OPTIONS, artifactRoot:process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT})+"\\n");
+if (process.env.OPENCLAW_UPDATE_POST_CORE === "1") {
+  fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, JSON.stringify({status:"error",changed:false,sync:{changed:false,switchedToBundled:[],switchedToNpm:[],warnings:[],errors:[]},npm:{changed:false,outcomes:[]},integrityDrifts:[]}));
+  process.exit(0);
+}
+if (process.argv[2] !== "update") process.exit(0);
+const resultDir = fs.mkdtempSync(path.join(process.env.TMPDIR,"openclaw-update-post-core-"));
+const child = spawnSync(process.execPath, [__filename,"update","--json"], {env:{...process.env, OPENCLAW_UPDATE_POST_CORE:"1",OPENCLAW_UPDATE_POST_CORE_RESULT_PATH:path.join(resultDir,"plugins.json")}});
+if (child.status !== 0) process.exit(90);
+fs.rmSync(resultDir,{recursive:true});
+process.exit(78);
+`,
+      });
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+${artifactSetup}
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+openclaw_e2e_print_log() { :; }
+candidate_update_spec() { printf "%s" "$OPENCLAW_CURRENT_PACKAGE_TGZ"; }
+COMMAND_TIMEOUT=900s
+command_timeout=900s
+ROOT_MANAGED_VPS=0
+UPDATE_RESTART_MODE=auto-auth
+baseline_spec=openclaw@2026.7.1-2
+candidate_version=2026.8.1
+CANDIDATE_KIND=tarball
+UPDATE_JSON="$ARTIFACT_ROOT/update.json"
+UPDATE_ERR="$ARTIFACT_ROOT/update.err"
+POST_UPDATE_VALIDATE_JSON="$ARTIFACT_ROOT/post-update-validate.json"
+POST_UPDATE_VALIDATE_ERR="$ARTIFACT_ROOT/post-update-validate.err"
+${update}
+test "$NODE_OPTIONS" = --no-warnings || exit 91
+exit "$lane_exit"
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...env,
+            OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: published ? undefined : artifacts,
+            OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(artifacts, "summary.json"),
+            PATH: `${bin}:${process.env.PATH}`,
+            OPENCLAW_UPDATE_POST_CORE: "",
+            OPENCLAW_CURRENT_PACKAGE_TGZ: join(workDir, "candidate.tgz"),
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(78);
+      const snapshot = JSON.parse(
+        readFileSync(join(artifacts, "diagnostics", "post-core.json"), "utf8"),
+      );
+      expect(snapshot).toMatchObject({ childExitCode: 0, result: { status: "error" } });
+      const calls = readFileSync(join(workDir, "invocations.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls[0].argv).toEqual([
+        "update",
+        "--tag",
+        join(workDir, "candidate.tgz"),
+        "--yes",
+        "--json",
+      ]);
+      expect(calls[1].options).toBe(calls[0].options);
+      expect(calls[0].options).toContain("--no-warnings --import=");
+      expect(calls.map((call) => call.artifactRoot)).toEqual(calls.map(() => artifacts));
+      for (const call of calls.slice(2)) {
+        expect(call.options).toBe("--no-warnings");
+      }
+    },
+  );
+
+  it.each(["sqlite", "wal", "historical"])(
+    "captures persisted plugin identity without changing application data (%s)",
+    (storage) => {
+      const { workDir, artifacts, env } = survivorPostCoreFixture();
+      const state = join(workDir, "state-root");
+      const root = join(state, "npm", "example");
+      mkdirSync(join(root, "dist"), { recursive: true });
+      const doctorBytes = Buffer.from([0x2f, 0x2f, 0xff, 0x0a]);
+      writeFileSync(join(root, "dist", "doctor-contract-api.js"), doctorBytes);
+      writeFileSync(join(root, "doctor-contract-api.ts"), "PRIVATE_CODE_PAYLOAD");
+      writeFileSync(join(root, "contract-api.js"), "throw new Error('must not execute')");
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({
+          name: "@example/plugin",
+          version: "1.0.0",
+          credentials: "PRIVATE_PACKAGE_FIELD",
+        }),
+      );
+      writeFileSync(
+        join(root, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "example",
+          version: "1.0.0",
+          configSchema: { secret: "PRIVATE_MANIFEST_FIELD" },
+        }),
+      );
+      writeFileSync(
+        join(state, "openclaw.json"),
+        JSON.stringify({
+          credentials: "PRIVATE_CONFIG_FIELD",
+          plugins: { installs: { secret: "PRIVATE_CONFIG_RECORD" } },
+        }),
+      );
+      const missingRoot = join(state, "npm", "missing");
+      mkdirSync(missingRoot);
+      const index = {
+        installRecords: {
+          example: {
+            resolvedVersion: "2.0.0",
+            integrity: "sha512-recorded",
+            credentials: "PRIVATE_RECORD_FIELD",
+          },
+        },
+        plugins: [
+          {
+            pluginId: "example",
+            rootDir: root,
+            packageVersion: "2.0.0",
+            enabled: true,
+            origin: "global",
+            doctorContractHash: "a".repeat(64),
+            credentials: "PRIVATE_INDEX_FIELD",
+          },
+          { pluginId: "missing", rootDir: missingRoot, doctorContractHash: "b".repeat(64) },
+        ],
+        credentials: "PRIVATE_INDEX_TOP_LEVEL",
+      };
+      if (storage !== "historical") {
+        const dbPath = join(state, "state", "openclaw.sqlite");
+        mkdirSync(dirname(dbPath), { recursive: true });
+        const writer = spawnSync(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            `import { DatabaseSync } from "node:sqlite";
+import { writePluginInstallIndexForE2E } from "./scripts/e2e/lib/plugin-index-sqlite.mjs";
+${
+  storage === "wal"
+    ? `writePluginInstallIndexForE2E({}, { stateDir: ${JSON.stringify(state)} });
+const db = new DatabaseSync(${JSON.stringify(dbPath)});
+db.exec("PRAGMA journal_mode=WAL; BEGIN; SELECT value_json FROM config_machine_state;");`
+    : ""
+}
+writePluginInstallIndexForE2E(${JSON.stringify(index)}, { stateDir: ${JSON.stringify(state)} });
+${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
+          ],
+          { encoding: "utf8" },
+        );
+        expect(writer.status, writer.stderr).toBe(storage === "wal" ? null : 0);
+        expect(writer.signal).toBe(storage === "wal" ? "SIGKILL" : null);
+        if (storage === "wal") {
+          expect(existsSync(`${dbPath}-wal`)).toBe(true);
+          expect(existsSync(`${dbPath}-shm`)).toBe(true);
+        }
+      } else {
+        mkdirSync(join(state, "plugins"));
+        writeFileSync(join(state, "plugins", "installs.json"), JSON.stringify(index));
+      }
+      const stateFiles = () =>
+        readdirSync(state, { recursive: true, withFileTypes: true })
+          .filter((entry) => entry.isFile() && entry.name !== "openclaw.sqlite-shm")
+          .map((entry) => {
+            const file = join(entry.parentPath, entry.name);
+            const stat = statSync(file);
+            return [
+              file,
+              stat.mtimeMs,
+              stat.ctimeMs,
+              stat.size,
+              createHash("sha256").update(readFileSync(file)).digest("hex"),
+            ];
+          });
+      const before = stateFiles();
+      const shmIdentity = () => {
+        const stat = statSync(join(state, "state", "openclaw.sqlite-shm"));
+        return [stat.dev, stat.ino, stat.size, stat.nlink];
+      };
+      const shmBefore = storage === "wal" ? shmIdentity() : undefined;
+      const capturePath = copySurvivorCaptureClosure(workDir);
+      const captured = spawnSync(
+        process.execPath,
+        [capturePath, "capture", artifacts, "update-candidate", "1"],
+        {
+          env: {
+            ...env,
+            OPENCLAW_STATE_DIR: state,
+            OPENCLAW_CONFIG_PATH: join(state, "openclaw.json"),
+          },
+          encoding: "utf8",
+          cwd: workDir,
+        },
+      );
+      expect(captured.status, captured.stderr).toBe(0);
+      expect(stateFiles()).toEqual(before);
+      if (storage === "wal") {
+        expect(shmIdentity()).toEqual(shmBefore);
+      }
+      const published = runSurvivorDiagnostics("publish", artifacts, [join(workDir, "public")]);
+      expect(published.status, published.stderr).toBe(0);
+      const text = readFileSync(join(workDir, "public", "failure.json"), "utf8");
+      expect(text).not.toContain("PRIVATE_");
+      const identity = JSON.parse(text).pluginIdentity;
+      expect(identity.availability).toBe("observed");
+      expect(identity.reader).toContain("historical fallback");
+      expect(identity.evidence).toContain("not observed loaded modules");
+      expect(identity.plugins[0]).toMatchObject({
+        pluginId: "example",
+        packageVersion: "2.0.0",
+        enabled: true,
+        origin: "global",
+        package: { version: "1.0.0" },
+        manifest: { id: "example", version: "1.0.0" },
+        recorded: { resolvedVersion: "2.0.0", integrity: "sha512-recorded" },
+        versionMatchesIndex: false,
+        versionMatchesRecord: false,
+        doctor: {
+          path: "dist/doctor-contract-api.js",
+          sha256: createHash("sha256").update(doctorBytes).digest("hex"),
+          matchesRecorded: false,
+        },
+      });
+      expect(identity.plugins[1].doctor).toMatchObject({
+        path: null,
+        sha256: null,
+        observation: "no current artifact found",
+      });
+      expect(readdirSync(join(workDir, "public"))).toEqual(["failure.json"]);
+    },
+  );
+
+  it.each([
+    "index-symlink",
+    "index-hardlink",
+    "index-oversize",
+    "index-cap",
+    "root-symlink",
+    "doctor-symlink",
+    "doctor-hardlink",
+    "doctor-oversize",
+  ])("refuses unsafe plugin identity input (%s)", (scenario) => {
+    const { workDir, artifacts, env } = survivorPostCoreFixture();
+    const state = join(workDir, "state-root");
+    const root = join(state, "plugin");
+    mkdirSync(root, { recursive: true });
+    mkdirSync(join(state, "plugins"));
+    const indexPath = join(state, "plugins", "installs.json");
+    const doctorPath = join(root, "doctor-contract-api.js");
+    const outside = join(workDir, "private-source");
+    writeFileSync(outside, "PRIVATE_UNSAFE_PLUGIN_SENTINEL");
+    writeFileSync(
+      indexPath,
+      JSON.stringify({
+        installRecords: {},
+        plugins: Array.from({ length: scenario === "index-cap" ? 129 : 1 }, () => ({
+          pluginId: "example",
+          rootDir: root,
+          doctorContractHash: "a".repeat(64),
+        })),
+      }),
+    );
+    if (scenario.startsWith("index-") && scenario !== "index-cap") {
+      rmSync(indexPath);
+      if (scenario === "index-oversize") {
+        writeFileSync(indexPath, " ".repeat(1024 * 1024 + 1));
+      } else {
+        (scenario === "index-symlink" ? symlinkSync : linkSync)(outside, indexPath);
+      }
+    } else if (scenario === "root-symlink") {
+      rmSync(root, { recursive: true });
+      symlinkSync(workDir, root);
+    } else if (scenario.startsWith("doctor-")) {
+      if (scenario === "doctor-oversize") {
+        writeFileSync(doctorPath, " ".repeat(256 * 1024 + 1) + "PRIVATE_OVERSIZE_PLUGIN");
+      } else {
+        (scenario === "doctor-symlink" ? symlinkSync : linkSync)(outside, doctorPath);
+      }
+    }
+    const captured = runSurvivorDiagnostics("capture", artifacts, ["update-candidate", "1"], {
+      ...env,
+      OPENCLAW_STATE_DIR: state,
+    });
+    expect(captured.status, captured.stderr).toBe(0);
+    const published = runSurvivorDiagnostics("publish", artifacts, [join(workDir, "public")]);
+    expect(published.status, published.stderr).toBe(0);
+    const text = readFileSync(join(workDir, "public", "failure.json"), "utf8");
+    expect(text).not.toContain("PRIVATE_");
+    const report = JSON.parse(text);
+    if (scenario.startsWith("index-")) {
+      expect(report.pluginIdentity.availability).toBe("unknown");
+      expect(report.omissions["plugin identity"]).toBeDefined();
+    } else {
+      expect(report.pluginIdentity.plugins[0].doctor.sha256).toBeNull();
+      expect(report.pluginIdentity.plugins[0].doctor.observation).toContain("unsafe");
+    }
+  });
+
   it.each([UPGRADE_SURVIVOR_RUN_SCRIPT, UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
     "retains a failed service child and only sanitized diagnostics from %s",
     async (scriptPath) => {
@@ -3699,8 +4263,7 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     );
     // Mirror the container's dependency closure: this copy has no app source,
     // package, loader, or node_modules beside it.
-    const capturePath = join(workDir, "capture.mjs");
-    writeFileSync(capturePath, readFileSync(UPGRADE_SURVIVOR_DIAGNOSTICS_PATH, "utf8"));
+    const capturePath = copySurvivorCaptureClosure(workDir);
     const fixtureEnv = {
       ...process.env,
       HOME: workDir,
@@ -3745,7 +4308,9 @@ printf '%s\n' "$status" >"$TMPDIR/status"
         const workDir = tempDirs.make("openclaw-survivor-exit-diagnostics-");
         const artifacts = join(workDir, "artifacts");
         mkdirSync(artifacts);
-        if (blocked) writeFileSync(join(artifacts, "diagnostics"), "not a directory");
+        if (blocked) {
+          writeFileSync(join(artifacts, "diagnostics"), "not a directory");
+        }
         const result = spawnSync(
           "bash",
           [
@@ -3810,6 +4375,10 @@ exit ${exitCode}
           join(artifacts, "diagnostics", "raw.json"),
           '{"stale":"PRIVATE_STALE_SENTINEL"}',
         );
+        writeFileSync(
+          join(artifacts, "diagnostics", "post-core.json"),
+          '{"stale":"PRIVATE_POST_CORE_SENTINEL"}',
+        );
         writeFileSync(join(workDir, "candidate.tgz"), "unused by fake Docker");
         writeFileSync(
           join(registry, "prepublish-plugin-registry.json"),
@@ -3822,6 +4391,7 @@ if [ "$1" = run ]; then
   printf "%s\\n" "$@" >"$TMPDIR/docker-args"
   test ! -e "$TMPDIR/public"
   test ! -e "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR/diagnostics/raw.json"
+  test ! -e "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR/diagnostics/post-core.json"
   if [ "${capturePresent}" = true ]; then
     printf "startup failure token=HOST_PUBLICATION_SECRET\\n" >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR/update.err"
     ${shellQuote(process.execPath)} ${shellQuote(join(process.cwd(), UPGRADE_SURVIVOR_DIAGNOSTICS_PATH))} capture "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR" update-candidate ${exitCode}

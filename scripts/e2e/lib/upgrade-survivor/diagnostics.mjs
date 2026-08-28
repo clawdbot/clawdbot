@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
 // the redactor; neither candidate code nor raw fixture data owns uploads.
 const inputLimit = 256 * 1024;
+const indexLimit = 1024 * 1024;
 const outputLimit = 16 * 1024;
 const privateLimit = 8 * 1024 * 1024;
 const publicLimit = 512 * 1024;
+const entryLimit = 128;
 const logNames = [
   "baseline-install.log",
   "install.log",
@@ -33,30 +36,53 @@ const reasons = [
 ];
 const omissions = {};
 
-function readOwned(root, relative, label, limit = inputLimit) {
-  try {
-    if (!root || fs.lstatSync(root).isSymbolicLink()) {
+function ownedPath(root, relative) {
+  if (!root || fs.lstatSync(root).isSymbolicLink()) {
+    throw new Error();
+  }
+  let file = fs.realpathSync(root);
+  for (const part of relative.split(path.sep)) {
+    if (!part || part === "." || part === "..") {
       throw new Error();
     }
-    let file = fs.realpathSync(root);
-    for (const part of relative.split(path.sep)) {
-      if (!part || part === "." || part === "..") {
-        throw new Error();
-      }
-      file = path.join(file, part);
-      if (fs.lstatSync(file).isSymbolicLink()) {
-        throw new Error();
-      }
+    file = path.join(file, part);
+    if (fs.lstatSync(file).isSymbolicLink()) {
+      throw new Error();
     }
-    const fd = fs.openSync(
-      file,
-      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
-    );
+  }
+  return file;
+}
+
+function openOwned(root, relative) {
+  const file = ownedPath(root, relative);
+  const fd = fs.openSync(
+    file,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  const stat = fs.fstatSync(fd);
+  if (!stat.isFile() || stat.nlink !== 1) {
+    fs.closeSync(fd);
+    throw new Error();
+  }
+  return { fd, stat, file };
+}
+
+function sameFileIdentity(before, after) {
+  return ["dev", "ino", "size", "nlink"].every((key) => before[key] === after[key]);
+}
+
+function unchangedFile(before, after) {
+  return (
+    sameFileIdentity(before, after) &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs
+  );
+}
+
+function readOwned(root, relative, label, limit = inputLimit, binary = false) {
+  try {
+    const { fd, stat } = openOwned(root, relative);
     try {
-      const stat = fs.fstatSync(fd);
-      if (!stat.isFile() || stat.nlink !== 1) {
-        throw new Error();
-      }
       // Never truncate before redaction, including a short read or growing log.
       const bytes = Buffer.alloc(limit + 1);
       const length = fs.readSync(fd, bytes, 0, bytes.length, 0);
@@ -64,17 +90,327 @@ function readOwned(root, relative, label, limit = inputLimit) {
         omissions[label] = reasons[1];
         return null;
       }
-      if (length !== stat.size || fs.fstatSync(fd).size !== length) {
+      if (length !== stat.size || !unchangedFile(stat, fs.fstatSync(fd))) {
         omissions[label] = reasons[2];
         return null;
       }
-      return bytes.subarray(0, length).toString("utf8");
+      const complete = bytes.subarray(0, length);
+      return binary ? complete : complete.toString("utf8");
     } finally {
       fs.closeSync(fd);
     }
   } catch {
     omissions[label] = reasons[0];
     return null;
+  }
+}
+
+function boundedList(value) {
+  if (!Array.isArray(value) || value.length > entryLimit) {
+    throw new Error();
+  }
+  return value;
+}
+
+function textFields(value, fields, sanitize) {
+  return Object.fromEntries(
+    fields
+      .filter((key) => value?.[key] !== undefined)
+      .map((key) => {
+        if (typeof value[key] !== "string") {
+          throw new Error();
+        }
+        return [key, sanitize(value[key], "post-core/plugin identity")];
+      }),
+  );
+}
+
+function postCoreResult(value, sanitize = (text) => text) {
+  if (
+    !["ok", "warning", "skipped", "error"].includes(value?.status) ||
+    typeof value.changed !== "boolean" ||
+    typeof value.sync?.changed !== "boolean" ||
+    typeof value.npm?.changed !== "boolean"
+  ) {
+    throw new Error();
+  }
+  const sync = { changed: value.sync.changed };
+  for (const key of ["switchedToBundled", "switchedToNpm", "warnings", "errors"]) {
+    sync[key] = boundedList(value.sync[key]).map(
+      (text) => textFields({ text }, ["text"], sanitize).text,
+    );
+  }
+  return {
+    status: value.status,
+    changed: value.changed,
+    ...textFields(value, ["reason"], sanitize),
+    sync,
+    warnings: boundedList(value.warnings ?? []).map((warning) =>
+      textFields(warning, ["pluginId", "reason", "message"], sanitize),
+    ),
+    npm: {
+      changed: value.npm.changed,
+      outcomes: boundedList(value.npm.outcomes).map((outcome) => {
+        if (!["updated", "unchanged", "skipped", "error"].includes(outcome?.status)) {
+          throw new Error();
+        }
+        const projected = textFields(
+          outcome,
+          ["pluginId", "message", "warning", "code", "currentVersion", "nextVersion"],
+          sanitize,
+        );
+        projected.status = outcome.status;
+        if (outcome.channelFallback) {
+          projected.channelFallback = textFields(
+            outcome.channelFallback,
+            ["requestedSpec", "usedSpec", "reason", "message"],
+            sanitize,
+          );
+        }
+        return projected;
+      }),
+    },
+    integrityDrifts: boundedList(value.integrityDrifts).map((drift) =>
+      textFields(
+        drift,
+        [
+          "pluginId",
+          "spec",
+          "expectedIntegrity",
+          "actualIntegrity",
+          "resolvedSpec",
+          "resolvedVersion",
+          "action",
+        ],
+        sanitize,
+      ),
+    ),
+  };
+}
+
+function armPostCoreCapture() {
+  if (
+    !isMainThread ||
+    process.argv[2] !== "update" ||
+    process.env.OPENCLAW_UPDATE_POST_CORE !== "1"
+  ) {
+    return;
+  }
+  try {
+    const tmp = process.env.TMPDIR;
+    const resultPath = process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+    const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
+    if (
+      !tmp ||
+      !resultPath ||
+      !artifactRoot ||
+      !path.isAbsolute(tmp) ||
+      !path.isAbsolute(resultPath)
+    ) {
+      return;
+    }
+    const relative = path.relative(tmp, resultPath);
+    if (!/^openclaw-update-post-core-[A-Za-z0-9_-]+\/plugins\.json$/.test(relative)) {
+      return;
+    }
+    ownedPath(tmp, path.dirname(relative));
+    if (fs.lstatSync(artifactRoot).isSymbolicLink()) {
+      return;
+    }
+    // The old parent can SIGTERM and delete this file without joining. No signal
+    // handler or keepalive: only a complete result at normal exit occupies the slot.
+    process.once("exit", (code) => {
+      try {
+        const raw = readOwned(tmp, relative, "post-core");
+        if (raw === null) {
+          return;
+        }
+        const result = JSON.parse(raw);
+        postCoreResult(result);
+        writeReport(
+          artifactRoot,
+          path.join(artifactRoot, "diagnostics"),
+          "post-core.json",
+          { childExitCode: code, result },
+          inputLimit + 1024,
+        );
+      } catch {
+        // Instrumentation must preserve stdout and the original process outcome.
+      }
+    });
+  } catch {
+    // Missing/unsafe context is unavailable evidence, never product failure.
+  }
+}
+
+async function pluginIdentities(stateRoot, artifactRoot) {
+  const unavailable = {
+    availability: "unknown",
+    evidence: "persisted index + current bytes; not observed loaded modules",
+    reader: "SQLite or historical fallback; missing/error is not absence",
+    plugins: [],
+  };
+  const handles = [];
+  try {
+    // The existing reader opens SQLite read-only. Fence every file it may read;
+    // disable its config fallback rather than consulting failed-state CLI/config.
+    for (const relative of [
+      "state/openclaw.sqlite",
+      "state/openclaw.sqlite-wal",
+      "state/openclaw.sqlite-shm",
+      "plugins/installs.json",
+    ]) {
+      try {
+        const handle = openOwned(stateRoot, relative);
+        handles.push(handle);
+        if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
+          throw new Error();
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+    const { readPluginInstallIndex } = await import("../plugin-index-sqlite.mjs");
+    const index = readPluginInstallIndex({ stateDir: stateRoot, configPath: null });
+    for (const { fd, stat, file } of handles) {
+      // SQLite readers update SHM read marks: its cache timestamps are not
+      // durable index mutations. Keep file identity checks on every source.
+      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
+      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
+        throw new Error();
+      }
+    }
+    if (Buffer.byteLength(JSON.stringify(index)) > indexLimit || !Array.isArray(index.plugins)) {
+      throw new Error();
+    }
+    const plugins = boundedList(index.plugins)
+      .map((entry) => {
+        const root = entry.rootDir;
+        if (typeof root !== "string" || !path.isAbsolute(root)) {
+          throw new Error();
+        }
+        const boundary = [stateRoot, artifactRoot].find(
+          (base) =>
+            base &&
+            !path.relative(base, root).startsWith("..") &&
+            !path.isAbsolute(path.relative(base, root)),
+        );
+        if (!boundary) {
+          return { pluginId: entry.pluginId, observation: "root outside owned boundary" };
+        }
+        const rootRelative = path.relative(boundary, root);
+        const recordOwner = entry.installOwnerAmbiguous
+          ? null
+          : (entry.installOwner ?? entry.pluginId);
+        const identity = Object.assign(
+          textFields(entry, ["pluginId", "packageVersion", "rootDir", "origin"], (text) => text),
+          {
+            enabled: typeof entry.enabled === "boolean" ? entry.enabled : null,
+            recordOwner,
+            recorded: textFields(
+              recordOwner === null
+                ? undefined
+                : (index.installRecords?.[recordOwner] ?? entry.installRecord),
+              ["version", "resolvedVersion", "integrity", "npmIntegrity"],
+              (text) => text,
+            ),
+          },
+        );
+        const fingerprint = (relative, recordedSha256, jsonFields = []) => {
+          const bytes = readOwned(
+            boundary,
+            path.join(rootRelative, relative),
+            "plugin identity",
+            inputLimit,
+            true,
+          );
+          const sha256 = bytes === null ? null : createHash("sha256").update(bytes).digest("hex");
+          const result = {
+            path: relative,
+            sha256,
+            recordedSha256: recordedSha256 ?? null,
+            matchesRecorded: sha256 && recordedSha256 ? sha256 === recordedSha256 : null,
+            observation: bytes === null ? "missing or unsafe current artifact" : "current bytes",
+          };
+          if (bytes !== null && jsonFields.length) {
+            try {
+              Object.assign(
+                result,
+                textFields(JSON.parse(bytes.toString("utf8")), jsonFields, (text) => text),
+              );
+            } catch {
+              result.observation = "invalid JSON; identity unavailable";
+            }
+          }
+          return result;
+        };
+        const packagePathMatches = entry.packageJson?.path === "package.json";
+        const manifestPathMatches = entry.manifestPath === path.join(root, "openclaw.plugin.json");
+        identity.package = fingerprint(
+          "package.json",
+          packagePathMatches ? entry.packageJson.hash : undefined,
+          ["name", "version"],
+        );
+        identity.package.recordedPathMatches = entry.packageJson?.path ? packagePathMatches : null;
+        identity.manifest = fingerprint(
+          "openclaw.plugin.json",
+          manifestPathMatches ? entry.manifestHash : undefined,
+          ["id", "version"],
+        );
+        identity.manifest.recordedPathMatches = entry.manifestPath ? manifestPathMatches : null;
+        identity.versionMatchesIndex =
+          identity.package.version && entry.packageVersion
+            ? identity.package.version === entry.packageVersion
+            : null;
+        identity.versionMatchesRecord =
+          identity.package.version &&
+          (identity.recorded.resolvedVersion ?? identity.recorded.version)
+            ? identity.package.version ===
+              (identity.recorded.resolvedVersion ?? identity.recorded.version)
+            : null;
+        identity.doctor = {
+          path: null,
+          sha256: null,
+          recordedSha256: entry.doctorContractHash ?? null,
+          matchesRecorded: null,
+          observation: "no current artifact found",
+        };
+        // Packaged resolver order from src/plugins/doctor-contract-artifact.ts:
+        // basename, JS before TS extension, then root before dist. Never import code.
+        for (const basename of ["doctor-contract-api", "contract-api"]) {
+          for (const extension of [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"]) {
+            for (const dir of ["", "dist"]) {
+              const relative = path.join(dir, `${basename}${extension}`);
+              try {
+                ownedPath(boundary, path.join(rootRelative, relative));
+              } catch (error) {
+                if (error.code === "ENOENT") {
+                  continue;
+                }
+                Object.assign(identity.doctor, {
+                  path: relative,
+                  observation: "unsafe artifact; selection unavailable",
+                });
+                return identity;
+              }
+              identity.doctor = fingerprint(relative, entry.doctorContractHash);
+              return identity;
+            }
+          }
+        }
+        return entry.doctorContractHash ? identity : null;
+      })
+      .filter(Boolean);
+    return { ...unavailable, availability: plugins.length ? "observed" : "unknown", plugins };
+  } catch {
+    omissions["plugin identity"] = reasons[3];
+    return unavailable;
+  } finally {
+    for (const { fd } of handles) {
+      fs.closeSync(fd);
+    }
   }
 }
 
@@ -135,10 +471,20 @@ function writeReport(artifactRoot, directory, name, report, limit) {
   }
   // Root-managed containers must leave the private snapshot readable by the
   // host runner. Its directory stays outside the workflow's upload roots.
-  fs.writeFileSync(path.join(directory, name), serialized, { flag: "wx", mode: 0o644 });
+  // Publish the complete file exclusively; partial writes cannot take the
+  // post-core slot from a later CLI respawn with a complete result.
+  const temporary = path.join(directory, `.${name}.${process.pid}.tmp`);
+  const fd = fs.openSync(temporary, "wx", 0o644);
+  try {
+    fs.writeFileSync(fd, serialized);
+    fs.linkSync(temporary, path.join(directory, name));
+  } finally {
+    fs.closeSync(fd);
+    fs.unlinkSync(temporary);
+  }
 }
 
-function capture(artifactRoot, phase, exitStatus, signal = "") {
+async function capture(artifactRoot, phase, exitStatus, signal = "") {
   const report = {
     ...phaseResult(phase, Number(exitStatus), signal || null),
     logs: {},
@@ -153,6 +499,26 @@ function capture(artifactRoot, phase, exitStatus, signal = "") {
         : readOwned(artifactRoot, name, name);
   }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
+  report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
+  report.postCore = {
+    availability: "unavailable",
+    reason: "No complete exit snapshot; original outcome unknown",
+  };
+  const postCore = readOwned(
+    artifactRoot,
+    "diagnostics/post-core.json",
+    "post-core",
+    inputLimit + 1024,
+  );
+  if (postCore !== null) {
+    try {
+      const snapshot = JSON.parse(postCore);
+      postCoreResult(snapshot.result);
+      report.postCore = { availability: "captured", ...snapshot };
+    } catch {
+      omissions["post-core"] = reasons[3];
+    }
+  }
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (stateRoot && configPath) {
     const config = readOwned(stateRoot, path.relative(stateRoot, configPath), "config");
@@ -216,6 +582,9 @@ export function publishDiagnostics(artifactRoot, destination, redactSensitiveTex
       inputBytesPerFile: inputLimit,
       outputBytesPerLog: outputLimit,
       reportBytes: publicLimit,
+      entriesPerCollection: entryLimit,
+      indexJsonBytes: indexLimit,
+      indexSourceBytesPerFile: 64 * 1024 * 1024,
     },
     logs: {},
     service: {},
@@ -230,6 +599,8 @@ export function publishDiagnostics(artifactRoot, destination, redactSensitiveTex
     "service unit",
     "service environment",
     "child exit",
+    "post-core",
+    "plugin identity",
   ]) {
     if (reasons.includes(snapshot.omissions?.[label])) {
       omissions[label] = snapshot.omissions[label];
@@ -277,6 +648,71 @@ export function publishDiagnostics(artifactRoot, destination, redactSensitiveTex
     }
     report.config.sha256 = snapshot.config.sha256;
   }
+  report.postCore = {
+    availability: "unavailable",
+    reason: "No complete exit snapshot; original outcome unknown",
+  };
+  if (snapshot.postCore?.availability === "captured") {
+    try {
+      const code = snapshot.postCore.childExitCode;
+      if (!Number.isInteger(code) || code < 0 || code > 255) {
+        throw new Error();
+      }
+      report.postCore = {
+        availability: "captured",
+        childExitCode: code,
+        result: postCoreResult(snapshot.postCore.result, sanitize),
+      };
+    } catch {
+      omissions["post-core"] = reasons[3];
+    }
+  }
+  report.pluginIdentity = {
+    availability: "unknown",
+    evidence: "persisted index + current bytes; not observed loaded modules",
+    reader: "SQLite or historical fallback; missing/error is not absence",
+    plugins: [],
+  };
+  if (snapshot.pluginIdentity?.availability === "observed") {
+    try {
+      const plugins = boundedList(snapshot.pluginIdentity.plugins).map((entry) => {
+        const identity = textFields(
+          entry,
+          ["pluginId", "packageVersion", "rootDir", "origin", "observation"],
+          sanitize,
+        );
+        identity.recordOwner =
+          entry.recordOwner == null ? null : sanitize(entry.recordOwner, "plugin identity");
+        for (const key of ["enabled", "versionMatchesIndex", "versionMatchesRecord"]) {
+          identity[key] = typeof entry[key] === "boolean" ? entry[key] : null;
+        }
+        identity.recorded = textFields(
+          entry.recorded,
+          ["version", "resolvedVersion", "integrity", "npmIntegrity"],
+          sanitize,
+        );
+        for (const key of ["package", "manifest", "doctor"]) {
+          const value = entry[key];
+          identity[key] = textFields(value, ["id", "name", "version", "observation"], sanitize);
+          identity[key].path = value?.path == null ? null : sanitize(value.path, "plugin identity");
+          for (const field of ["sha256", "recordedSha256"]) {
+            identity[key][field] =
+              typeof value?.[field] === "string" && /^[a-f0-9]{64}$/.test(value[field])
+                ? value[field]
+                : null;
+          }
+          identity[key].matchesRecorded =
+            typeof value?.matchesRecorded === "boolean" ? value.matchesRecorded : null;
+          identity[key].recordedPathMatches =
+            typeof value?.recordedPathMatches === "boolean" ? value.recordedPathMatches : null;
+        }
+        return identity;
+      });
+      report.pluginIdentity = { ...report.pluginIdentity, availability: "observed", plugins };
+    } catch {
+      omissions["plugin identity"] = reasons[3];
+    }
+  }
   writeReport(artifactRoot, destination, "failure.json", report, publicLimit);
   if (Object.keys(omissions).length) {
     process.stderr.write(
@@ -291,9 +727,11 @@ if (import.meta.main) {
     if (mode !== "capture") {
       throw new Error();
     }
-    capture(artifactRoot, phase, exitStatus, signal);
+    await capture(artifactRoot, phase, exitStatus, signal);
   } catch {
     process.stderr.write("Upgrade survivor diagnostics missing: safe capture failed.\n");
     process.exitCode = 1;
   }
+} else {
+  armPostCoreCapture();
 }
