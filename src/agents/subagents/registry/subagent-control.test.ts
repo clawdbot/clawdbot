@@ -4,19 +4,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  SessionAccessScope,
-  SessionEntryPatchContext,
-  SessionEntryPatchOptions,
-} from "../../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
+  patchSessionEntryCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
+import { callGateway as callGatewayMock } from "../../../gateway/call.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -28,14 +25,13 @@ import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-c
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   buildControlledSubagentRunsReadContext,
-  testing,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   killSubagentRunAdmin,
   listControlledSubagentRuns,
   sendControlledSubagentMessage,
   steerControlledSubagentRun,
-} from "./subagent-control.test-support.js";
+} from "./subagent-control.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -50,6 +46,32 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type GatewayCaller = typeof import("../../../gateway/call.js").callGateway;
+type ControlRuntime = typeof import("./subagent-control.runtime.js");
+type ControlTestDeps = ControlRuntime & {
+  callGateway: GatewayCaller;
+};
+
+const controlRuntimeMocks = vi.hoisted(() => ({
+  abortEmbeddedAgentRun: vi.fn<ControlRuntime["abortEmbeddedAgentRun"]>(() => false),
+  isEmbeddedAgentRunActive: vi.fn<ControlRuntime["isEmbeddedAgentRunActive"]>(() => false),
+  clearSessionQueues: vi.fn<ControlRuntime["clearSessionQueues"]>(() => ({
+    followupCleared: 0,
+    laneCleared: 0,
+    keys: [],
+  })),
+}));
+
+vi.mock("./subagent-control.runtime.js", () => controlRuntimeMocks);
+
+vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
+  return { ...actual, patchSessionEntryCore: vi.fn(actual.patchSessionEntryCore) };
+});
+
+const { patchSessionEntryCore: patchCanonicalSessionEntry } = await vi.importActual<
+  typeof import("../../../config/sessions/session-accessor.js")
+>("../../../config/sessions/session-accessor.js");
 
 vi.mock("../../../gateway/call.js", () => ({
   callGateway: vi.fn(),
@@ -158,45 +180,36 @@ vi.mock("../../run-wait.js", () => {
   };
 });
 
-function setSubagentControlDepsForTest(
-  overrides: Parameters<typeof testing.setDepsForTest>[0] = {},
-) {
-  // Tests use real JSON store mutation to catch persisted cleanup/kill state,
-  // while swapping process-owned queues and embedded-run aborts for fakes.
-  testing.setDepsForTest({
-    abortEmbeddedAgentRun: () => false,
-    isEmbeddedAgentRunActive: () => false,
-    clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-    patchSessionEntryCore: async (
-      scope: SessionAccessScope,
-      patcher: (
-        entry: SessionEntry,
-        context: SessionEntryPatchContext,
-      ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
-      options: SessionEntryPatchOptions = {},
-    ) => {
-      if (!scope.storePath) {
-        return null;
-      }
-      const store = JSON.parse(fs.readFileSync(scope.storePath, "utf-8")) as Record<
-        string,
-        SessionEntry
-      >;
-      const entry = store[scope.sessionKey];
-      if (!entry) {
-        return null;
-      }
-      const patch = await patcher(entry, { existingEntry: { ...entry } });
-      if (!patch) {
-        return entry;
-      }
-      const next = options.replaceEntry ? (patch as SessionEntry) : { ...entry, ...patch };
-      store[scope.sessionKey] = next;
-      fs.writeFileSync(scope.storePath, JSON.stringify(store, null, 2), "utf-8");
-      return next;
-    },
-    ...overrides,
-  });
+function setSubagentControlDepsForTest(overrides: Partial<ControlTestDeps> = {}) {
+  controlRuntimeMocks.abortEmbeddedAgentRun.mockReset();
+  controlRuntimeMocks.isEmbeddedAgentRunActive.mockReset();
+  controlRuntimeMocks.clearSessionQueues.mockReset();
+  vi.mocked(callGatewayMock).mockReset();
+  // Default to the canonical store; individual race tests replace only their fault boundary.
+  vi.mocked(patchSessionEntryCore).mockReset();
+  if (overrides.abortEmbeddedAgentRun) {
+    controlRuntimeMocks.abortEmbeddedAgentRun.mockImplementation(overrides.abortEmbeddedAgentRun);
+  }
+  if (overrides.isEmbeddedAgentRunActive) {
+    controlRuntimeMocks.isEmbeddedAgentRunActive.mockImplementation(
+      overrides.isEmbeddedAgentRunActive,
+    );
+  }
+  if (overrides.clearSessionQueues) {
+    controlRuntimeMocks.clearSessionQueues.mockImplementation(overrides.clearSessionQueues);
+  }
+  if (overrides.callGateway) {
+    vi.mocked(callGatewayMock).mockImplementation(overrides.callGateway);
+  }
+}
+
+function mockSessionPatchForStore(storePath: string, implementation: typeof patchSessionEntryCore) {
+  // Registry timing writes use a different store; a fault must not fabricate entries there.
+  vi.mocked(patchSessionEntryCore).mockImplementation((scope, patcher, options) =>
+    scope.storePath === storePath
+      ? implementation(scope, patcher, options)
+      : patchCanonicalSessionEntry(scope, patcher, options),
+  );
 }
 
 let tempRoot = "";
@@ -263,7 +276,6 @@ afterEach(() => {
 describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    testing.setDepsForTest();
   });
 
   it("rejects follow-up messages for collector runs", async () => {
@@ -635,7 +647,6 @@ describe("sendControlledSubagentMessage", () => {
 describe("killSubagentRunAdmin", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    testing.setDepsForTest();
   });
 
   it("kills a subagent by session key without requester ownership checks", async () => {
@@ -673,6 +684,7 @@ describe("killSubagentRunAdmin", () => {
     }
     expect(result.runId).toBe("run-worker");
     expect(result.sessionKey).toBe(childSessionKey);
+    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun).toBe(true);
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeTypeOf(
       "number",
     );
@@ -1009,12 +1021,12 @@ describe("killSubagentRunAdmin", () => {
         });
         return true;
       },
-      patchSessionEntryCore: async (_scope, patcher) => {
-        const current = { sessionId: "sess-abort-lifecycle-race", updatedAt: Date.now() };
-        const patch = await patcher(current, { existingEntry: { ...current } });
-        abortedLastRunWrites.push(patch?.abortedLastRun === true);
-        return patch ? { ...current, ...patch } : current;
-      },
+    });
+    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
+      const current = { sessionId: "sess-abort-lifecycle-race", updatedAt: Date.now() };
+      const patch = await patcher(current, { existingEntry: { ...current } });
+      abortedLastRunWrites.push(patch?.abortedLastRun === true);
+      return patch ? { ...current, ...patch } : current;
     });
 
     const result = await killSubagentRunAdmin({
@@ -1076,12 +1088,12 @@ describe("killSubagentRunAdmin", () => {
         });
         return true;
       },
-      patchSessionEntryCore: async (_scope, patcher) => {
-        const current = { sessionId: "sess-completion-race", updatedAt: Date.now() };
-        const patch = await patcher(current, { existingEntry: { ...current } });
-        abortedLastRunWrites.push(patch?.abortedLastRun === true);
-        return patch ? { ...current, ...patch } : current;
-      },
+    });
+    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
+      const current = { sessionId: "sess-completion-race", updatedAt: Date.now() };
+      const patch = await patcher(current, { existingEntry: { ...current } });
+      abortedLastRunWrites.push(patch?.abortedLastRun === true);
+      return patch ? { ...current, ...patch } : current;
     });
 
     const result = await killSubagentRunAdmin({
@@ -1151,36 +1163,36 @@ describe("killSubagentRunAdmin", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => true,
       abortEmbeddedAgentRun: () => true,
-      patchSessionEntryCore: async (scope, patcher) => {
-        if (!scope.storePath) {
-          return null;
-        }
-        const current = loadSessionEntry({
-          storePath: scope.storePath,
-          sessionKey: scope.sessionKey,
-          clone: false,
+    });
+    mockSessionPatchForStore(storePath, async (scope, patcher) => {
+      if (!scope.storePath) {
+        return null;
+      }
+      const current = loadSessionEntry({
+        storePath: scope.storePath,
+        sessionKey: scope.sessionKey,
+        clone: false,
+      });
+      if (!current) {
+        return null;
+      }
+      const patch = await patcher(current, { existingEntry: { ...current } });
+      if (scope.sessionKey === childSessionKey) {
+        abortedLastRunWrites.push(patch?.abortedLastRun === true);
+      }
+      if (scope.sessionKey === descendantSessionKey) {
+        const endedAt = Date.now();
+        Object.assign(run, {
+          endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+          completion: { required: false, resultText: "done", capturedAt: endedAt },
         });
-        if (!current) {
-          return null;
-        }
-        const patch = await patcher(current, { existingEntry: { ...current } });
-        if (scope.sessionKey === childSessionKey) {
-          abortedLastRunWrites.push(patch?.abortedLastRun === true);
-        }
-        if (scope.sessionKey === descendantSessionKey) {
-          const endedAt = Date.now();
-          Object.assign(run, {
-            endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-            completion: { required: false, resultText: "done", capturedAt: endedAt },
-          });
-          Object.assign(run.execution, {
-            status: "terminal" as const,
-            endedAt,
-            outcome: { status: "ok" as const },
-          });
-        }
-        return patch ? { ...current, ...patch } : current;
-      },
+        Object.assign(run.execution, {
+          status: "terminal" as const,
+          endedAt,
+          outcome: { status: "ok" as const },
+        });
+      }
+      return patch ? { ...current, ...patch } : current;
     });
 
     const result = await killSubagentRunAdmin({
@@ -1230,10 +1242,8 @@ describe("killSubagentRunAdmin", () => {
         run.pauseReason = "sessions_yield";
         return true;
       },
-      patchSessionEntryCore: async () => {
-        return null;
-      },
     });
+    mockSessionPatchForStore(storePath, async () => null);
 
     const result = await killSubagentRunAdmin({
       cfg: cfgWithSessionStore(storePath),
@@ -1472,7 +1482,6 @@ describe("killSubagentRunAdmin", () => {
 describe("killControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    testing.setDepsForTest();
   });
 
   it("does not mutate the live session when the caller passes a stale run entry", async () => {
@@ -1669,13 +1678,13 @@ describe("killControlledSubagentRun", () => {
       isEmbeddedAgentRunActive: () => false,
       abortEmbeddedAgentRun: abort,
       clearSessionQueues: clearQueues,
-      patchSessionEntryCore: async (_scope, patcher) => {
-        markPersistenceStarted();
-        await persistenceRelease;
-        const current = { sessionId: "sess-persist-generation-race", updatedAt: Date.now() };
-        const patch = await patcher(current, { existingEntry: { ...current } });
-        return patch ? { ...current, ...patch } : current;
-      },
+    });
+    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
+      markPersistenceStarted();
+      await persistenceRelease;
+      const current = { sessionId: "sess-persist-generation-race", updatedAt: Date.now() };
+      const patch = await patcher(current, { existingEntry: { ...current } });
+      return patch ? { ...current, ...patch } : current;
     });
 
     const pendingKill = killControlledSubagentRun({
@@ -1821,17 +1830,15 @@ describe("killControlledSubagentRun", () => {
     });
     addSubagentRunForTests(entry);
     const patches: Array<Partial<SessionEntry> | null> = [];
-    setSubagentControlDepsForTest({
-      patchSessionEntryCore: async (_scope, patcher) => {
-        const replacement: SessionEntry = {
-          sessionId: "sess-kill-session-patch-reset",
-          lifecycleRevision: "revision-after-reset",
-          updatedAt: Date.now(),
-        };
-        const patch = await patcher(replacement, { existingEntry: { ...replacement } });
-        patches.push(patch);
-        return patch ? { ...replacement, ...patch } : replacement;
-      },
+    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
+      const replacement: SessionEntry = {
+        sessionId: "sess-kill-session-patch-reset",
+        lifecycleRevision: "revision-after-reset",
+        updatedAt: Date.now(),
+      };
+      const patch = await patcher(replacement, { existingEntry: { ...replacement } });
+      patches.push(patch);
+      return patch ? { ...replacement, ...patch } : replacement;
     });
 
     await expect(
@@ -2276,15 +2283,13 @@ describe("killControlledSubagentRun", () => {
     });
     const abortedLastRunWrites: boolean[] = [];
     let persistenceWrites = 0;
-    setSubagentControlDepsForTest({
-      patchSessionEntryCore: async (_scope, patcher) => {
-        const current = { sessionId, updatedAt: 1, abortedLastRun: true };
-        const patch = await patcher(current, { existingEntry: { ...current } });
-        if (patch) {
-          abortedLastRunWrites.push(patch.abortedLastRun === true);
-        }
-        return patch ? { ...current, ...patch } : current;
-      },
+    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
+      const current = { sessionId, updatedAt: 1, abortedLastRun: true };
+      const patch = await patcher(current, { existingEntry: { ...current } });
+      if (patch) {
+        abortedLastRunWrites.push(patch.abortedLastRun === true);
+      }
+      return patch ? { ...current, ...patch } : current;
     });
     subagentRegistryTesting.setDepsForTest({
       persistSubagentRunsToDiskOrThrow: () => {
@@ -2327,7 +2332,6 @@ describe("killControlledSubagentRun", () => {
 describe("killAllControlledSubagentRuns", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    testing.setDepsForTest();
   });
 
   it("continues bulk cancellation after one registry persistence failure", async () => {
@@ -2629,7 +2633,6 @@ describe("killAllControlledSubagentRuns", () => {
 describe("steerControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    testing.setDepsForTest();
   });
 
   it("rejects steering collector runs", async () => {

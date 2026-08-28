@@ -168,7 +168,6 @@ const { buildCommandTestParams } = await import("./commands-spawn.test-harness.j
 const { AcpSessionManager, testing: acpManagerTesting } =
   await import("../../acp/control-plane/manager.js");
 const { resolveEffectiveResetTargetSessionKey } = await import("./acp-reset-target.js");
-const { testing: acpResetTargetTesting } = await import("./acp-reset-target.test-support.js");
 const { createTaskRecord } = await import("../../tasks/task-registry.js");
 const { resetTaskRegistryForTests } = await import("../../tasks/task-runtime.test-helpers.js");
 const { configureTaskRegistryRuntime } = await import("../../tasks/task-registry.store.js");
@@ -930,9 +929,6 @@ describe("/acp command", () => {
     acpManagerTesting.resetAcpSessionManagerForTests();
     resetTaskRegistryForTests({ persist: false });
     configureInMemoryTaskRegistryStoreForTests();
-    acpResetTargetTesting.setDepsForTest({
-      getSessionBindingService: () => createAcpCommandSessionBindingService() as never,
-    });
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.callGatewayMock.mockReset().mockResolvedValue({ ok: true });
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);

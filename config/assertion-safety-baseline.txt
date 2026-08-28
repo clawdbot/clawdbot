@@ -2035,7 +2035,6 @@ src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/announce/subagent-announce-output.ts	8
 src/agents/subagents/completion/subagent-completion-admission.store.ts	2
 src/agents/subagents/registry/subagent-control-messaging.ts	2
-src/agents/subagents/registry/subagent-control.ts	1
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-helpers.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
@@ -2156,8 +2155,7 @@ src/auto-reply/heartbeat-filter.ts	4
 src/auto-reply/heartbeat-tool-response.ts	3
 src/auto-reply/reply-payload.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
-src/auto-reply/reply/abort.ts	1
-src/auto-reply/reply/acp-reset-target.ts	3
+src/auto-reply/reply/acp-reset-target.ts	2
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
