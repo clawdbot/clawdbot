@@ -14,7 +14,7 @@ import {
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";

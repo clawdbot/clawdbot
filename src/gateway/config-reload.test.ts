@@ -34,6 +34,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
   getSkillsSnapshotVersion,
@@ -55,6 +56,7 @@ import {
   startGatewayConfigReloader,
 } from "./config-reload.js";
 import { commitGatewayConfigWrite } from "./server-methods/config-write-flow.js";
+import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -579,6 +581,75 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it.each([
+    [{}, { agents: { defaults: { mediaMaxMb: 4 } } }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, {}],
+    [{ agents: {} }, { agents: { defaults: { mediaMaxMb: 4 } } }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: {} }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: { defaults: { mediaMaxMb: 1 } } }],
+  ])("refreshes every channel when the global media limit changes: %j → %j", (prev, next) => {
+    const paths = diffGatewayReloadPaths(prev, next);
+    expect(paths).toContain("agents.defaults.mediaMaxMb");
+    const plan = buildGatewayReloadPlan(paths);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
+  });
+
+  it("global media refresh subsumes scoped restarts without affecting other agent settings", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.mattermost.accounts.alpha.enabled",
+      "agents.defaults.mediaMaxMb",
+    ]);
+    expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
+    expect(buildGatewayReloadPlan(["agents.defaults.model"]).restartChannels).toEqual(new Set());
+  });
+
+  it.each([
+    { registration: { restartPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "restart" },
+    { registration: { hotPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "hot" },
+    { registration: { noopPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "none" },
+  ])("preserves an explicit plugin media reload policy: $kind", ({ registration, kind }) => {
+    const path = "agents.defaults.mediaMaxMb";
+    setActivePluginRegistry({
+      ...registry,
+      reloads: [
+        ...registry.reloads,
+        { pluginId: "policy-owner", pluginName: "Policy owner", registration, source: "test" },
+      ],
+    });
+    expect(resolveConfigReloadMetadata(path).kind).toBe(kind);
+    const plan = buildGatewayReloadPlan([path]);
+    expect(plan.restartGateway).toBe(kind === "restart");
+    expect(plan.restartChannels).toEqual(new Set());
+  });
+
+  it.each([
+    {
+      reload: { configPrefixes: ["agents.defaults.mediaMaxMb"] },
+      kind: "hot",
+      channels: ["telegram"],
+    },
+    {
+      reload: { configPrefixes: [], noopPrefixes: ["agents.defaults.mediaMaxMb"] },
+      kind: "none",
+      channels: [],
+    },
+  ])("preserves an explicit channel media reload policy: $kind", ({ reload, kind, channels }) => {
+    const path = "agents.defaults.mediaMaxMb";
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", plugin: { ...telegramPlugin, reload }, source: "test" },
+        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+      ]),
+    );
+    expect(resolveConfigReloadMetadata(path).kind).toBe(kind);
+    const plan = buildGatewayReloadPlan([path]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(channels));
+  });
+
   const mattermostAccountConfig = {
     channels: {
       mattermost: {
@@ -694,12 +765,18 @@ describe("buildGatewayReloadPlan", () => {
     ]);
 
     setActivePluginRegistry(emptyRegistry);
+    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
+      new Set(),
+    );
     expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
       restartGateway: true,
       restartChannels: new Set(),
     });
 
     setActivePluginRegistry(channelOnlyRegistry);
+    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
+      new Set(["telegram"]),
+    );
     expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
       restartGateway: false,
       restartChannels: new Set(["telegram"]),
@@ -1036,13 +1113,14 @@ describe("startGatewayConfigReloader include files", () => {
     await symlink(includePath, includeLinkPath);
     const configIo = createConfigIO({
       configPath,
-      env: {},
+      env: { HOME: rootDir, OPENCLAW_STATE_DIR: rootDir },
       homedir: () => rootDir,
       observe: false,
       pluginValidation: "skip",
       logger: { error: vi.fn(), warn: vi.fn() },
     });
     const initialSnapshot = await configIo.readConfigFileSnapshot();
+    expect(initialSnapshot.valid, JSON.stringify(initialSnapshot.issues)).toBe(true);
     const onHotReload = vi.fn(async () => "applied" as const);
     let signalWatcherReady!: () => void;
     const watcherReady = new Promise<void>((resolve) => {
@@ -1677,7 +1755,7 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("carries an RPC write receipt through real option and listener copies until commit", async () => {
+  it("applies an RPC write receipt inside its originating gateway root", async () => {
     const root = tempDirs.make("openclaw-config-receipt-");
     const configPath = nodePath.join(root, "openclaw.json");
     const initialConfig = {
@@ -1707,10 +1785,11 @@ describe("startGatewayConfigReloader", () => {
         runtimeConfig: OpenClawConfig,
         ownership: GatewayConfigReloadTransactionOwnership,
       ) => {
+        const competingRootCount = getActiveGatewayRootWorkCount({ excludeCurrent: true });
         markHotReloadStarted();
         await hotReloadGate;
         ownership.markRuntimeCommitted(runtimeConfig, plan);
-        return "applied" as const;
+        return { status: "applied" as const, competingRootCount };
       },
     );
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -1745,34 +1824,49 @@ describe("startGatewayConfigReloader", () => {
           onNoopConfigCommit: async (plan, runtimeConfig, ownership) => {
             ownership.markRuntimeCommitted(runtimeConfig, plan);
           },
-          onHotReload,
+          onHotReload: async (plan, runtimeConfig, ownership) =>
+            (await onHotReload(plan, runtimeConfig, ownership)).status,
           onRestart: async () => {
             throw new Error("unexpected restart");
           },
+          runTransaction: runWithGatewayIndependentRootWorkAdmission,
           log,
           watchPath: configPath,
         });
 
         try {
-          const prepared = await readConfigFileSnapshotForWrite();
-          const writeResult = await commitGatewayConfigWrite({
-            snapshot: prepared.snapshot,
-            writeOptions: prepared.writeOptions,
-            nextConfig,
-            awaitRuntimeApplication: true,
+          const request = tryBeginGatewayRootWorkAdmission();
+          if (!request) {
+            throw new Error("expected gateway request admission");
+          }
+          const writeResult = await request.run(async () => {
+            const prepared = await readConfigFileSnapshotForWrite();
+            return await commitGatewayConfigWrite({
+              snapshot: prepared.snapshot,
+              writeOptions: prepared.writeOptions,
+              nextConfig,
+              awaitRuntimeApplication: true,
+            });
           });
-          let settled = false;
-          void writeResult.application?.then(() => {
-            settled = true;
-          });
+          try {
+            let settled = false;
+            void writeResult.application?.then(() => {
+              settled = true;
+            });
 
-          await vi.advanceTimersByTimeAsync(0);
-          await hotReloadStarted;
-          expect(onHotReload).toHaveBeenCalledOnce();
-          expect(settled).toBe(false);
+            await vi.advanceTimersByTimeAsync(0);
+            await hotReloadStarted;
+            expect(onHotReload).toHaveBeenCalledOnce();
+            expect(settled).toBe(false);
 
-          releaseHotReload();
-          await expect(writeResult.application).resolves.toBe("applied");
+            releaseHotReload();
+            await expect(writeResult.application).resolves.toBe("applied");
+            await expect(onHotReload.mock.results[0]?.value).resolves.toMatchObject({
+              competingRootCount: 0,
+            });
+          } finally {
+            request.release();
+          }
         } finally {
           await reloader.stop();
         }
@@ -3229,9 +3323,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
     const { watcher, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
-    const superseded = new Error("config reload superseded by a newer runtime config source");
-    superseded.name = "GatewayConfigReloadSupersededError";
-    onRestart.mockRejectedValueOnce(superseded);
+    onRestart.mockRejectedValueOnce(new GatewayConfigReloadSupersededError());
 
     watcher.emit("change");
     await vi.runAllTimersAsync();

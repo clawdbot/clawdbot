@@ -4,7 +4,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { makeChatHost } from "../chat-host.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import {
+  handleChatScrollTakeover,
+  saveChatSessionScrollPosition,
+  scheduleCommittedChatScroll,
+} from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
 import { renderChatThread } from "./chat-thread.ts";
@@ -49,8 +55,11 @@ function stubMcpAppLifecycle(
   return { app: Object.assign(app, lifecycle), ...lifecycle };
 }
 
-async function mountTestTranscript(paneId: string, initialRows: readonly TestContentRow[]) {
-  const transcript = createTestTranscript();
+async function mountTestTranscript(
+  paneId: string,
+  initialRows: readonly TestContentRow[],
+  transcript = createTestTranscript(),
+) {
   const container = document.body.appendChild(document.createElement("div"));
   let currentSession: ChatTranscriptSession;
   container.addEventListener("focusin", (event) => currentSession.handleFocusIn(event));
@@ -71,7 +80,14 @@ async function mountTestTranscript(paneId: string, initialRows: readonly TestCon
   transcript.hostConnected();
   renderRows(initialRows);
   await flushDeferredRowPrune();
-  return { container, renderRows, transcript };
+  return {
+    container,
+    renderRows,
+    transcript,
+    get session() {
+      return currentSession;
+    },
+  };
 }
 
 function mcpRangeRows(appContent: unknown): TestContentRow[] {
@@ -614,65 +630,357 @@ describe("chat transcript controller", () => {
     transcript.hostDisconnected();
   });
 
-  it.each([
-    { label: "end-pinned", distanceFromEnd: 0, expectedCalls: 1 },
-    { label: "scrolled away", distanceFromEnd: 100, expectedCalls: 0 },
-  ])(
-    "$label transcript preserves its resize anchor",
-    async ({ distanceFromEnd, expectedCalls }) => {
-      transcriptDomState.measuredRowHeight = 240;
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const messages = Array.from({ length: 12 }, (_, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `message ${index}`,
-        timestamp: index + 1,
-      }));
-      const props = threadProps(
-        `pane-height-resize-${distanceFromEnd}`,
-        "agent:main:resize",
-        messages,
+  it.each([true, false])(
+    "leaves height-resize follow to page policy with reader lock=%s",
+    async (locked) => {
+      const flushFrames = stubAnimationFrames();
+      const policy = makeChatHost({ chatHasAutoScrolled: true });
+      const onViewportResize = vi.fn(() =>
+        scheduleCommittedChatScroll(policy, false, false, { source: "resize" }),
       );
-      render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
-      await flushDeferredRowPrune();
-
-      const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
-      expect(scrollElement).not.toBeNull();
-      const virtualizer = (
-        transcript as unknown as {
-          sessionVirtualizer: {
-            virtualizerController: {
-              getVirtualizer: () => {
-                scrollOffset: number | null;
-                getTotalSize: () => number;
-                scrollToEnd: (options?: { behavior?: ScrollBehavior }) => void;
-              };
-            };
-          };
-        }
-      ).sessionVirtualizer.virtualizerController.getVirtualizer();
-      const scrollToEnd = vi.spyOn(virtualizer, "scrollToEnd");
-      const emitViewportResize = (height: number) => {
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: vi.fn(),
+          updateComplete: Promise.resolve(true),
+        },
+        { onViewportResize, onReaderScroll: () => handleChatScrollTakeover(policy) },
+      );
+      const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+        kind: "content",
+        key: `row:${index}`,
+        content: html`<div>row ${index}</div>`,
+      }));
+      const { container } = await mountTestTranscript(`height-resize-${locked}`, rows, transcript);
+      try {
+        const total = transcriptSize(container);
+        Object.defineProperties(container, {
+          clientHeight: { configurable: true, value: 600 },
+          // Real container padding leaves the reader 88px above the actual end,
+          // even though the virtual rows alone appear to be end-pinned.
+          scrollHeight: { configurable: true, value: total + 88 },
+        });
+        const scrollTo = vi.fn();
+        container.scrollTo = scrollTo;
+        policy.chatScrollElement = () => container;
+        policy.chatScrollToEnd = (options) => transcript.scrollToEnd(options);
         for (const observer of resizeObservers) {
-          if (scrollElement && observer.observes(scrollElement)) {
-            observer.emit(800, height);
+          observer.emitTarget(container, 800, 600);
+        }
+        container.scrollTop = total - 600;
+        container.dispatchEvent(new Event("scroll"));
+        if (locked) {
+          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -88 }));
+        }
+        expect(policy.chatFollowLocked).toBe(locked);
+        scrollTo.mockClear();
+
+        for (const height of [560, 640]) {
+          Object.defineProperty(container, "clientHeight", { configurable: true, value: height });
+          for (const observer of resizeObservers) {
+            observer.emitTarget(container, 800, height);
           }
+          // The observer only reports geometry; follow waits for the policy frame.
+          expect(scrollTo).not.toHaveBeenCalled();
+          flushFrames();
+          if (locked) {
+            expect(scrollTo).not.toHaveBeenCalled();
+            expect(container.scrollTop).toBe(total - 600);
+          } else {
+            expect(scrollTo).toHaveBeenLastCalledWith({
+              top: total + 88 - height,
+              behavior: "auto",
+            });
+          }
+          scrollTo.mockClear();
+        }
+        expect(onViewportResize).toHaveBeenCalledTimes(2);
+        expect(policy.chatFollowLocked).toBe(locked);
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
+  it("keeps a reader above the padded real end stationary when a rendered row grows", async () => {
+    transcriptDomState.measuredRowHeight = 120;
+    const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+      kind: "content",
+      key: `row:${index}`,
+      content: html`<div>row ${index}</div>`,
+    }));
+    const { container, renderRows, transcript } = await mountTestTranscript(
+      "padded-row-resize",
+      rows,
+    );
+    try {
+      const total = transcriptSize(container);
+      container.style.padding = "28px 0 56px";
+      container.scrollTo = (options?: ScrollToOptions | number) => {
+        if (typeof options === "object") {
+          container.scrollTop = options.top ?? container.scrollTop;
         }
       };
-
-      emitViewportResize(600);
-      scrollToEnd.mockClear();
-      expect(virtualizer.getTotalSize()).toBeGreaterThan(700);
-      virtualizer.scrollOffset = Math.max(0, virtualizer.getTotalSize() - 600 - distanceFromEnd);
-      emitViewportResize(560);
-
-      expect(scrollToEnd).toHaveBeenCalledTimes(expectedCalls);
-      if (expectedCalls > 0) {
-        expect(scrollToEnd).toHaveBeenCalledWith({ behavior: "auto" });
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, value: total + 84 },
+      });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
       }
+      container.scrollTop = container.scrollHeight - container.clientHeight - 44;
+      container.dispatchEvent(new Event("scroll"));
+      const readerOffset = container.scrollTop;
+      expect(Math.max(total - container.clientHeight - readerOffset, 0)).toBe(0);
+      const row = expectDefined(
+        container.querySelector<HTMLElement>('[data-index="11"]'),
+        "last row",
+      );
+      expect(observedElements.has(row)).toBe(true);
+
+      Object.defineProperty(row, "offsetHeight", { configurable: true, value: 192 });
+      Object.defineProperty(container, "scrollHeight", {
+        configurable: true,
+        value: total + 84 + 72,
+      });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(row, 800, 192);
+      }
+      renderRows(rows);
+      expect(transcriptSize(container)).toBe(total + 72);
+      expect(container.scrollTop).toBe(readerOffset);
+    } finally {
       transcript.hostDisconnected();
+    }
+  });
+
+  it.each([false, true])(
+    "keeps disclosure anchoring only without reader interruption=%s",
+    async (interrupt) => {
+      const host = Object.assign(document.body.appendChild(document.createElement("div")), {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
+      });
+      const transcript = new ChatTranscriptController(host);
+      const rows: TestContentRow[] = [
+        {
+          kind: "content",
+          key: "disclosure",
+          content: html`<button aria-expanded="false">Expand</button>`,
+        },
+      ];
+      const { container } = await mountTestTranscript(`disclosure-${interrupt}`, rows, transcript);
+      host.append(container);
+      container.className = "sidebar-region__right-runtime";
+      try {
+        const row = transcriptRows(container)[0]!;
+        let rowTop = 100;
+        row.getBoundingClientRect = () => new DOMRect(0, rowTop, 800, 100);
+        container.scrollTop = 300;
+        container.querySelector("button")!.click();
+        rowTop = 160;
+        transcript.hostUpdated();
+        expect(container.scrollTop).toBe(300);
+        if (interrupt) {
+          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+          container.scrollTop = 200;
+          rowTop = 260;
+          container.dispatchEvent(new Event("scroll"));
+        }
+        container.dispatchEvent(
+          new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
+            bubbles: true,
+            detail: { widthChanged: false },
+          }),
+        );
+        expect(container.scrollTop).toBe(interrupt ? 200 : 360);
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
+  it("preserves saved reader restoration when initial rows include typing", async () => {
+    const paneId = "restore-initial-typing";
+    saveChatSessionScrollPosition(paneId, `agent:main:${paneId}`, {
+      scrollTop: 420,
+      anchorToEnd: false,
+    });
+    const rows: TestContentRow[] = [
+      { kind: "content", key: "history", content: html`<div>History</div>` },
+      { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
+    ];
+    const { container, transcript } = await mountTestTranscript(paneId, rows);
+    try {
+      // The saved offset initially encounters an unmeasurable DOM. Once the
+      // viewport commits, automatic typing follow must not have retired it.
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, value: 2000 },
+      });
+      transcript.hostUpdated();
+      expect(container.scrollTop).toBe(420);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
+  it.each([0, 8, 50])(
+    "follows appended typing only within 8px of the real end (distance=%s)",
+    async (distance) => {
+      const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+        kind: "content",
+        key: `row:${index}`,
+        content: html`<div>row ${index}</div>`,
+      }));
+      const { container, renderRows, transcript } = await mountTestTranscript(
+        `typing-distance-${distance}`,
+        rows,
+      );
+      try {
+        const total = transcriptSize(container);
+        Object.defineProperties(container, {
+          clientHeight: { configurable: true, value: 600 },
+          scrollHeight: { configurable: true, value: total + 84 },
+        });
+        for (const observer of resizeObservers) {
+          observer.emitTarget(container, 800, 600);
+        }
+        container.scrollTop = container.scrollHeight - container.clientHeight - distance;
+        container.dispatchEvent(new Event("scroll"));
+        const readerOffset = container.scrollTop;
+        const scrollTo = vi.fn();
+        container.scrollTo = scrollTo;
+        renderRows([
+          ...rows,
+          { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
+        ]);
+        if (distance <= 8) {
+          expect(scrollTo).toHaveBeenCalledWith({ top: total + 84 - 600, behavior: "auto" });
+        } else {
+          expect(scrollTo).not.toHaveBeenCalled();
+          expect(container.scrollTop).toBe(readerOffset);
+        }
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
+  it("cancels typing follow before later geometry can retarget the reader", async () => {
+    const flushFrames = stubAnimationFrames();
+    const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+      kind: "content",
+      key: `row:${index}`,
+      content: html`<div>row ${index}</div>`,
+    }));
+    const { container, renderRows, transcript } = await mountTestTranscript(
+      "typing-interrupt",
+      rows,
+    );
+    try {
+      const total = transcriptSize(container);
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, value: total + 88 },
+      });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
+      }
+      container.scrollTop = total + 88 - 600;
+      container.dispatchEvent(new Event("scroll"));
+      // Reader movement can reach the DOM before the offset observer runs.
+      container.scrollTop -= 100;
+      const readerOffset = container.scrollTop;
+      const scrollTo = vi.fn();
+      container.scrollTo = scrollTo;
+      renderRows([
+        ...rows,
+        { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
+      ]);
+      expect(scrollTo).toHaveBeenCalled();
+      scrollTo.mockClear();
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      expect
+        .soft(scrollTo)
+        .toHaveBeenCalledExactlyOnceWith({ top: readerOffset, behavior: "instant" });
+      container.scrollTop -= 100;
+      container.dispatchEvent(new Event("scroll"));
+      scrollTo.mockClear();
+      Object.defineProperty(container, "scrollHeight", { configurable: true, value: total + 188 });
+      flushFrames();
+      expect(scrollTo).not.toHaveBeenCalled();
+      expect(container.scrollTop).toBe(readerOffset - 100);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
+  it.each(["none", "idle at end", "wheel", "new reveal"] as const)(
+    "keeps only the current deferred message reveal after %s",
+    async (interruption) => {
+      const update = createDeferred<boolean>();
+      const transcript = new ChatTranscriptController({
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: update.promise,
+      });
+      const rows: TestContentRow[] = ["first", "second"].map((id) => ({
+        kind: "content",
+        key: id,
+        content: html`<div class="chat-bubble" data-entry-id=${id}>${id}</div>`,
+      }));
+      const { container, session } = await mountTestTranscript(
+        `reveal-${interruption}`,
+        rows,
+        transcript,
+      );
+      try {
+        Object.defineProperties(container, {
+          clientHeight: { configurable: true, value: 600 },
+          scrollHeight: { configurable: true, value: interruption === "idle at end" ? 600 : 2000 },
+        });
+        const scrollTo = vi.fn();
+        container.scrollTo = scrollTo;
+        const bubbles = [...container.querySelectorAll<HTMLElement>(".chat-bubble")];
+        const reveals = bubbles.map((bubble) => (bubble.scrollIntoView = vi.fn()));
+        session.syncMessageRows(
+          new Map([
+            ["first", "first"],
+            ["second", "second"],
+          ]),
+        );
+        if (interruption === "idle at end") {
+          vi.useFakeTimers();
+        }
+        expect(transcript.revealMessage("first")).toBe(true);
+        scrollTo.mockClear();
+        if (interruption === "wheel") {
+          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+          expect.soft(scrollTo).toHaveBeenCalledExactlyOnceWith({
+            top: container.scrollTop,
+            behavior: "instant",
+          });
+        } else if (interruption === "idle at end") {
+          container.dispatchEvent(new Event("scroll"));
+          vi.advanceTimersByTime(150);
+        } else if (interruption === "new reveal") {
+          expect(transcript.revealMessage("second")).toBe(true);
+        }
+        update.resolve(true);
+        await update.promise;
+        expect(reveals[0]).toHaveBeenCalledTimes(
+          ["none", "idle at end"].includes(interruption) ? 1 : 0,
+        );
+        expect(reveals[1]).toHaveBeenCalledTimes(interruption === "new reveal" ? 1 : 0);
+      } finally {
+        transcript.hostDisconnected();
+        vi.useRealTimers();
+      }
     },
   );
 

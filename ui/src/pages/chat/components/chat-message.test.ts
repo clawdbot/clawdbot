@@ -867,6 +867,34 @@ describe("grouped chat rendering", () => {
     expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
   });
 
+  it.each([
+    { state: "failed", label: "Not sent" },
+    { state: "unconfirmed", label: "Delivery unconfirmed" },
+  ] as const)("shows a $state footer with its diagnostic and retry action", ({ state, label }) => {
+    const container = document.createElement("div");
+    const onRetryQueuedMessage = vi.fn();
+    renderGroupedMessage(
+      container,
+      createUserMessage("Attempted message", {
+        __openclaw: {
+          id: "attempted-send",
+          kind: "pending-send",
+          state,
+          error: "Delivery diagnostic",
+        },
+      }),
+      "user",
+      { onRetryQueuedMessage },
+    );
+
+    const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
+    expect(status.dataset.sendState).toBe(state);
+    expect(status.title).toBe("Delivery diagnostic");
+    expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(`· ${label} · Retry`);
+    status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
+    expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
+  });
+
   it("orders peer footer actions after the sender name and timestamp", () => {
     const container = document.createElement("div");
     const message = createUserMessage("Peer footer order.");
@@ -1392,9 +1420,7 @@ describe("grouped chat rendering", () => {
       },
       1_000_000,
     );
-    const meta = cached.querySelector<HTMLDetailsElement>("details.msg-meta");
-    expect(meta?.open).toBe(false);
-    const summary = meta?.querySelector<HTMLElement>(".msg-meta__summary");
+    const summary = cached.querySelector<HTMLButtonElement>(".msg-meta__summary");
     const time = summary?.querySelector<HTMLTimeElement>(".chat-group-timestamp");
     expect(time).not.toBeNull();
     expect(time?.title).toBe("");
@@ -1429,35 +1455,38 @@ describe("grouped chat rendering", () => {
     expect(withCost.querySelector(".msg-meta__cost")?.textContent).toContain("$0.12");
   });
 
-  it("previews message context from the timestamp and pins it on click", () => {
+  it("dismisses message context when the neighboring reply tooltip opens", async () => {
+    vi.useFakeTimers();
+    const provider = document.createElement("openclaw-tooltip-provider");
     const container = document.createElement("div");
+    provider.append(container);
+    document.body.append(provider);
     renderAssistantMessage(
       container,
       createAssistantMessage("Done", {
         usage: { input: 12_000, output: 300 },
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-luna",
         timestamp: 1000,
       }),
-      { contextWindow: 100_000 },
+      { contextWindow: 100_000, onReply: vi.fn() },
     );
 
-    const details = container.querySelector<HTMLDetailsElement>("details.msg-meta")!;
-    const summary = details.querySelector<HTMLElement>("summary")!;
-    const pointerEnter = new Event("pointerenter");
-    Object.defineProperty(pointerEnter, "pointerType", { value: "mouse" });
-    details.dispatchEvent(pointerEnter);
-    expect(details.open).toBe(true);
-
-    details.dispatchEvent(new Event("pointerleave"));
-    expect(details.open).toBe(false);
-
-    details.dispatchEvent(pointerEnter);
-    summary.click();
-    details.dispatchEvent(new Event("pointerleave"));
-    expect(details.open).toBe(true);
-
-    summary.click();
-    expect(details.open).toBe(false);
+    try {
+      await Promise.all(
+        [...container.querySelectorAll("openclaw-tooltip")].map((tip) => tip.updateComplete),
+      );
+      const summary = container.querySelector<HTMLElement>(".msg-meta__summary")!;
+      summary.click();
+      const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn")!;
+      reply.focus();
+      const replyTooltip = reply.closest("openclaw-tooltip")!;
+      await Promise.resolve();
+      expect(replyTooltip.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(true);
+      const metadata = summary.closest("openclaw-tooltip")!;
+      expect(metadata.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(false);
+    } finally {
+      provider.remove();
+    }
   });
 
   it("uses the largest single assistant call for grouped context usage", () => {
@@ -1482,7 +1511,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑214.5k");
   });
 
-  it("renders relative labels while preserving absolute message and streaming timestamps", () => {
+  it("renders relative labels while preserving absolute message and settled stream timestamps", () => {
     vi.useFakeTimers();
     const timestamp = Date.UTC(2026, 3, 24, 18, 30);
     vi.setSystemTime(timestamp + 5 * 60 * 1000);
@@ -1499,9 +1528,9 @@ describe("grouped chat rendering", () => {
         {
           kind: "stream",
           key: `stream:${timestamp}`,
-          text: "Working",
+          text: "Done",
           startedAt: timestamp,
-          isStreaming: true,
+          isStreaming: false,
         },
       ]),
       container,
@@ -1538,7 +1567,7 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("uses the earliest segment timestamp for a multi-segment stream footer", () => {
+  it("uses the earliest segment timestamp for a settled multi-segment stream footer", () => {
     const container = document.createElement("div");
 
     render(
@@ -1551,7 +1580,7 @@ describe("grouped chat rendering", () => {
           startedAt: 10,
           isStreaming: false,
         },
-        { kind: "stream", key: "stream:s:live", text: "third", startedAt: 30, isStreaming: true },
+        { kind: "stream", key: "stream-seg:s:2", text: "third", startedAt: 30, isStreaming: false },
       ]),
       container,
     );
@@ -1682,6 +1711,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Working…",
     );
+    expect(container.querySelector(".chat-group-footer")).toBeNull();
 
     renderAssistantMessage(container, message, {
       turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
@@ -1693,6 +1723,7 @@ describe("grouped chat rendering", () => {
       "Done in 5 seconds",
     );
     expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
+    expect(container.querySelector(".chat-group-footer")).not.toBeNull();
   });
 
   it.each([
@@ -1806,7 +1837,7 @@ describe("grouped chat rendering", () => {
     expect(group?.classList.contains("chat-group--working")).toBe(false);
     expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
-    expect(container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
+    expect(container.querySelector(".chat-group-footer")).toBeNull();
     expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
@@ -2440,6 +2471,63 @@ describe("grouped chat rendering", () => {
     expect(activity.textContent).not.toContain("read_file");
     expect(activity.textContent).not.toContain("run_command");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("counts one exec and one wait across completed history, live snapshots, and separated activity groups", () => {
+    const container = document.createElement("div");
+    const messages: TestMessage[] = [];
+    const toolMessages: TestMessage[] = [];
+    for (const [index, name] of ["exec", "wait"].entries()) {
+      const toolCallId = `call-${name}`;
+      const args = name === "exec" ? { command: "echo ready" } : { runId: "cell-1" };
+      const call = { type: "toolcall", name, id: toolCallId, arguments: args };
+      const result = { type: "toolresult", name, id: toolCallId, text: `${name} finished` };
+      messages.push(
+        createAssistantMessage([call], { runId: "run-count", timestamp: index * 10 + 1 }),
+      );
+      messages.push(
+        createToolResultMessage(toolCallId, name, `${name} finished`, {
+          runId: "run-count",
+          timestamp: index * 10 + 2,
+        }),
+      );
+      toolMessages.push(
+        createAssistantMessage([call, result], {
+          runId: "run-count",
+          toolCallId,
+          timestamp: index * 10 + 1,
+          __openclawToolStreamLive: true,
+          __openclawToolStreamResultReceived: true,
+        }),
+      );
+    }
+    messages.push(
+      createToolResultMessage("call-wait", "wait", "wait finished", {
+        runId: "run-count",
+        timestamp: 30,
+      }),
+    );
+    const items = buildCachedChatItems({
+      paneId: "counting",
+      sessionKey: "main",
+      runId: "run-count",
+      messages,
+      toolMessages,
+      streamSegments: [{ text: "Resuming the cell", ts: 8, itemId: "between", runId: "run-count" }],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+    const groups = items.filter((item) => item.kind === "group");
+    expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
+    render(
+      renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true }),
+      container,
+    );
+    expect(container.querySelector(".chat-activity-group__label")?.textContent?.trim()).toBe(
+      "Ran a command, used Wait",
+    );
+    expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(2);
   });
 
   it("keeps a persisted tool review icon-only until its command activity expands", () => {

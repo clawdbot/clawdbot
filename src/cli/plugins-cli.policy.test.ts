@@ -163,8 +163,9 @@ describe("plugins cli policy mutations", () => {
 
       await runPluginsCommand(["plugins", "enable", "alpha", "--accept-capabilities"]);
 
-      const { computeDeclaredSurfaceHash, resolvePluginArtifactDeclaredSurface } =
+      const { resolvePluginArtifactDeclaredSurface } =
         await import("../plugins/capability-consent.js");
+      const { computeDeclaredSurfaceHash } = await import("../plugins/capability-summary.js");
       const acceptedRecord =
         writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mock.calls[0]?.[0]?.alpha;
       expect(acceptedRecord?.acceptedSurfaceHash).toBe(

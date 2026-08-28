@@ -127,20 +127,38 @@ workspace from becoming a writable bridge between guests. Maintainer sessions
 and other sessions without a role-required sandbox keep their configured scope
 and workspace access.
 
-The Gateway records the creator's sandbox requirement once when the session is
-created. Existing sessions are unaffected, and role changes, session sharing,
-maintainer participation, and `sessions.patch` cannot remove or replace the
-requirement. A person whose role requires sandboxing cannot start a run in an
-existing host-execution session, even when explicitly invited. Required sessions
+The Gateway records the authenticated creator and their sandbox requirement
+together before a new session first runs, including chat, Talk, recovery,
+forks, checkpoint branches, cron, outbound messages, and spawned children.
+Delegated child work inherits a required parent's original creator and sandbox
+policy, even after role changes. Recovery and branching requested by another
+person use that person's own role rather than the source session's policy.
+
+Required creation provenance is immutable. Role changes, sharing, participation,
+`sessions.patch`, whole-entry replacement, legacy imports, and canonical-key
+repair cannot remove or replace an existing required stamp. Blocked persisted
+overwrites emit a `session-sqlite` warning; inspect them with
+[`openclaw logs --follow`](/cli/logs). Existing unstamped sessions and new sessions
+whose creator does not require sandboxing retain their existing behavior.
+
+A person whose role requires sandboxing cannot start a run in an existing
+host-execution session, even when explicitly invited. Required sessions
 fail if their sandbox backend is unavailable or provisioning fails; they never
 fall back to the Gateway or a node. `/elevated`, `exec` host overrides, and
 configured host targets cannot bypass this restriction. The agent's managed
 GitHub identity is not injected into sandboxed execution: `GH_CONFIG_DIR` is
 absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
 
-The role's `scopes` list intersects scopes granted through connection auth,
-identity grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP
-requests. It cannot grant scopes the connection did not already receive.
+The role's `scopes` list caps scopes granted through connection auth, identity
+grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP requests.
+The ceiling uses the normal scope implications: `operator.admin` permits every
+operator scope, and `operator.write` permits `operator.read` and `operator.talk`.
+It only filters existing grants; it cannot add scopes the connection did not
+already receive.
+This includes plugin HTTP requests and WebSocket upgrades: without a scope
+header, ordinary Gateway-authenticated plugin routes start with only
+`operator.write`, then apply the role ceiling. Read-only and empty roles
+therefore receive no runtime scopes on that default path.
 Control UI plugin grants carry the authenticated profile inside a signed
 cookie; plugin HTTP requests reapply the profile's current role ceiling and
 reject grants without a matching durable identity when roles are enabled.
@@ -212,6 +230,10 @@ dispatch so authorization failures have one canonical structured response:
 - The top-level `fs.listDir` RPC needs `operator.write` for Gateway-host
   requests and `operator.admin` when `nodeId` targets a node. Its handler limits
   non-admin Gateway-host browsing to configured agent workspaces.
+- `plugins.sessionAction` requires every scope declared in the selected action's
+  `requiredScopes`; omitted or empty lists default to `operator.write`.
+  `operator.write` satisfies `operator.read` and `operator.talk`. Other scopes
+  require an exact match, or `operator.admin`.
 - `sessions.create` needs `operator.write` for ordinary creation, including a
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
@@ -287,15 +309,24 @@ An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
 
-A connected limited Control UI can file that same pending request through its
-**Request admin** banner without attempting a broader reconnect. The banner can
-collapse into a persistent **Limited access** chip that reopens the action. The request is
-bound to the signed device identity on the live connection. Approval still
+A connected limited Control UI can file that same pending request through
+**Inbox > System > Limited access > Request admin** without attempting a broader
+reconnect. The request is bound to the signed device identity on the live connection. Approval still
 comes from `device.pair.approve` and therefore requires `operator.pairing` plus
 authority for every requested scope. After approval rotates the operator token,
 the Gateway returns the new token only to that device's live waiter; the browser
 stores it before reconnecting. Canceling the wait or disconnecting before
 approval falls back to the ordinary pairing repair flow on the next connection.
+
+A role with only `operator.admin` permits the Control UI's full operator scope
+request. Approval is still required; the role ceiling does not grant device
+scopes on its own.
+
+Requests outside the authenticated person's assigned role ceiling are denied,
+not queued for device approval. The Gateway checks the current role again after
+approval, before returning the token, so a role demotion during the wait still
+blocks an out-of-role result. The Control UI shows the denial and administrator
+guidance without **Retry**; an administrator must change the role first.
 
 The explicit exception is the administrator-capable Control UI owner profile
 issued directly on the Gateway host by `openclaw dashboard` or graphical

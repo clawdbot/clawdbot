@@ -61,7 +61,7 @@ import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./h
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import { hasDirectSessionRun, isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
-import { resetChatScroll, scheduleChatScroll } from "./scroll.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -271,7 +271,6 @@ async function sendQueuedChatMessage(
     if (prepared.queueMode !== "steer" || !host.chatRunId) {
       resetToolStream(host);
     }
-    resetChatScroll(host);
     setChatError(host, null);
     reconcileChatRunLifecycle(host, {
       clearRunStatus: true,

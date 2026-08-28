@@ -15,11 +15,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  buildSessionTranscriptProjection,
+  visitSessionTranscriptProjection,
   extractTranscriptIndexEntry,
   hasTranscriptMessage,
   shouldProjectActiveEvent,
-  type SessionTranscriptProjectionSourceRow,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import {
@@ -390,23 +389,15 @@ export function deleteSessionTranscriptIndexInTransaction(
  * rows, indexes the resolved active branch, and resets the watermark to the
  * same append parent the accessor's next append will resolve.
  */
-function rebuildSessionTranscriptIndexInTransaction(
-  db: DatabaseSync,
-  sessionId: string,
-  rows: readonly SessionTranscriptProjectionSourceRow[],
-): void {
-  const projection = buildSessionTranscriptProjection({
-    rows,
-    sessionId,
-    sourceTranscriptUpdatedAt: null,
-  });
+function rebuildSessionTranscriptIndexInTransaction(db: DatabaseSync, sessionId: string): void {
   deleteFtsRows(db, sessionId);
   deleteActiveEventRows(db, sessionId);
-  for (const entry of projection.ftsRows) {
-    insertFtsRow(db, sessionId, entry);
-  }
-  for (const row of projection.activeRows) {
-    insertActiveEventRow(db, { ...row, sessionId });
+  const projection = visitSessionTranscriptProjection(db, sessionId, {
+    activeRow: (row) => insertActiveEventRow(db, { ...row, sessionId }),
+    ftsRow: (entry) => insertFtsRow(db, sessionId, entry),
+  });
+  if (!projection) {
+    return;
   }
   writeWatermark(
     db,
@@ -443,23 +434,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
   if (!sessionTranscriptIndexNeedsReconcile(db, sessionId)) {
     return false;
   }
-  const rows = executeSqliteQuerySync(
-    db,
-    getIndexKysely(db)
-      .selectFrom("transcript_events")
-      .select(["event_json", "seq", "created_at"])
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "asc"),
-  ).rows;
-  rebuildSessionTranscriptIndexInTransaction(
-    db,
-    sessionId,
-    rows.map((row) => ({
-      event: JSON.parse(row.event_json) as unknown,
-      seq: row.seq,
-      createdAt: row.created_at,
-    })),
-  );
+  rebuildSessionTranscriptIndexInTransaction(db, sessionId);
   return true;
 }
 

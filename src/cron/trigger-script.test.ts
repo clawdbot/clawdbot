@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
@@ -11,6 +15,7 @@ type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
 type PrepareParams = Parameters<NonNullable<EvaluatorDeps["prepareRuntime"]>>[0];
 
 const beforeToolCallTesting = { BEFORE_TOOL_CALL_HOOK_CONTEXT };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function completed(params: { value: unknown; output?: unknown[] }): CodeModeHeadlessResult {
   return {
@@ -69,6 +74,52 @@ function createCronTriggerEvaluator(deps: EvaluatorDeps) {
 }
 
 describe("cron trigger script evaluator", () => {
+  it.each(["trigger", "payload"] as const)(
+    "does not scaffold an implicit ACP workspace during %s execution (#92015)",
+    async (mode) => {
+      const parentRepo = tempDirs.make("openclaw-cron-acp-workspace-");
+      expect(spawnSync("git", ["init", "-q"], { cwd: parentRepo }).status).toBe(0);
+      const workspaceDir = path.join(parentRepo, ".openclaw", "workspace");
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          entries: {
+            codex: { runtime: { type: "acp", acp: { agent: "codex", cwd: parentRepo } } },
+          },
+        },
+        plugins: { enabled: false },
+      };
+      const runtime = createCronScriptRuntime({
+        config,
+        runHeadless: vi.fn(async () =>
+          completed({ value: mode === "trigger" ? { fire: false } : { notify: "ok" } }),
+        ),
+      });
+
+      if (mode === "trigger") {
+        await runtime.evaluateTrigger({
+          jobId: "acp-workspace-trigger",
+          agentId: "codex",
+          script: "return { fire: false }",
+          state: null,
+          toolsAllow: [],
+        });
+      } else {
+        await runtime.executePayload({
+          jobId: "acp-workspace-payload",
+          agentId: "codex",
+          script: "return { notify: 'ok' }",
+          state: null,
+          toolsAllow: [],
+        });
+      }
+
+      expect(fs.existsSync(path.join(workspaceDir, "AGENTS.md"))).toBe(false);
+      expect(fs.existsSync(path.join(workspaceDir, ".git"))).toBe(false);
+      expect(spawnSync("git", ["add", "-A"], { cwd: parentRepo }).status).toBe(0);
+    },
+  );
+
   it("prefers a valid returned value and injects trigger state", async () => {
     const runHeadless = vi.fn(async (_params: HeadlessParams) =>
       completed({

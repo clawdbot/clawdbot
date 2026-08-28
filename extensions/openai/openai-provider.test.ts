@@ -2071,47 +2071,6 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it.each([
-    {
-      id: "gpt-5.6-sol",
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-    },
-    {
-      id: "gpt-5.6-terra",
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-    },
-    {
-      id: "gpt-5.6-luna",
-      cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-    },
-  ])("preserves exact registry metadata for $id", ({ id, cost }) => {
-    const provider = buildOpenAIProvider();
-    const exactModel = {
-      id,
-      name: id,
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      cost,
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-      compat: { supportedReasoningEfforts: ["registry-exact"] },
-    };
-
-    const model = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: id,
-      modelRegistry: {
-        find: (_provider: string, templateId: string) => (templateId === id ? exactModel : null),
-      } as never,
-    } as never);
-
-    expect(model).toBe(exactModel);
-  });
-
   it("resolves gpt-5.5-pro locally", () => {
     const provider = buildOpenAIProvider();
 

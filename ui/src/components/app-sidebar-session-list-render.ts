@@ -23,6 +23,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -65,22 +66,26 @@ function renderSessionSection(params: {
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
   const label = personOwner
     ? personOwner.label || personOwner.id
-    : section.groups
-      ? t("chat.sidebar.groups")
-      : section.work
-        ? t("chat.sidebar.coding")
-        : group
-          ? group
-          : t("chat.sidebar.otherSessions");
+    : section.project
+      ? section.project.name
+      : section.groups
+        ? t("chat.sidebar.groups")
+        : section.work
+          ? t("chat.sidebar.coding")
+          : group
+            ? group
+            : t("chat.sidebar.otherSessions");
   const zone = personOwner
     ? "person"
-    : section.groups
-      ? "groups"
-      : section.work
-        ? "coding"
-        : group
-          ? "category"
-          : "threads";
+    : section.project
+      ? "project"
+      : section.groups
+        ? "groups"
+        : section.work
+          ? "coding"
+          : group
+            ? "category"
+            : "threads";
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -94,7 +99,10 @@ function renderSessionSection(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
-  const sectionDropEnabled = groupWriteAccess.allowed && !personOwner;
+  // Person/project sections are derived, not stored: dropping a session on
+  // them cannot persist anything, so they take no drags at all.
+  const derivedSection = Boolean(personOwner || section.project);
+  const sectionDropEnabled = groupWriteAccess.allowed && !derivedSection;
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -129,7 +137,7 @@ function renderSessionSection(params: {
       ${section.renderHeader
         ? renderSidebarSessionSectionHeader({
             sectionId: section.id,
-            draggable: !personOwner,
+            draggable: !derivedSection,
             disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
             onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
             onFinishDrag: () => host.finishSidebarSectionDrag(),
@@ -145,6 +153,7 @@ function renderSessionSection(params: {
                 class="sidebar-session-group-toggle"
                 aria-expanded=${String(!collapsed)}
                 aria-label=${label}
+                title=${section.project?.path ?? nothing}
                 @click=${() => host.toggleSection(section.id)}
               >
                 <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
@@ -188,21 +197,17 @@ function renderSessionSection(params: {
               </button>
               ${group
                 ? html`
-                    <button
-                      type="button"
-                      class="sidebar-session-group-actions sidebar-new-session"
-                      title=${newSessionAccess.allowed
-                        ? t("sessionsView.newSessionInGroup", { group })
-                        : newSessionAccess.reason}
-                      aria-label=${t("sessionsView.newSessionInGroup", { group })}
-                      ?disabled=${!newSessionAccess.allowed}
-                      @click=${(event: MouseEvent) => {
-                        event.stopPropagation();
-                        host.openNewSession({ group });
-                      }}
-                    >
-                      ${icons.plus}
-                    </button>
+                    ${renderNewSessionLink({
+                      basePath: host.basePath,
+                      agentId: host.expandedAgentId(),
+                      target: { group },
+                      className: "sidebar-session-group-actions sidebar-new-session",
+                      label: t("sessionsView.newSessionInGroup", { group }),
+                      disabledReason: newSessionAccess.allowed
+                        ? undefined
+                        : newSessionAccess.reason,
+                      onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+                    })}
                     <button
                       type="button"
                       class="sidebar-session-group-actions"
@@ -437,18 +442,14 @@ function renderSessionListToolbar(host: SidebarSessionListHost) {
       >
         ${icons.listFilter}
       </button>
-      <button
-        type="button"
-        class="sidebar-session-toolbar__button sidebar-new-session"
-        title=${newSessionAccess.allowed
-          ? t("chat.runControls.newSession")
-          : newSessionAccess.reason}
-        aria-label=${t("chat.runControls.newSession")}
-        ?disabled=${!newSessionAccess.allowed}
-        @click=${() => host.openNewSession()}
-      >
-        ${icons.plus}
-      </button>
+      ${renderNewSessionLink({
+        basePath: host.basePath,
+        agentId: host.expandedAgentId(),
+        className: "sidebar-session-toolbar__button sidebar-new-session",
+        label: t("chat.runControls.newSession"),
+        disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+      })}
     </div>
   `;
 }

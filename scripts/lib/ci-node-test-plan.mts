@@ -21,7 +21,12 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { boundaryTestFiles, isUnitConfigTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
+import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { listTrackedTestFiles } from "./list-test-files.mts";
+import {
+  resolveVitestPretestBuildMode,
+  type VitestPretestBuildMode as NodeTestPretestBuildMode,
+} from "./vitest-build-prerequisites.mts";
 
 type NodeTestShardGroup = {
   shard_name: string;
@@ -58,15 +63,6 @@ type NodeTestPlanOptions = {
 };
 
 type CompactNodeTestPlanMode = "pull-request" | "push";
-type NodeTestPretestBuildMode = "private-qa" | "runtime";
-
-const PRETEST_RUNTIME_BUILD_FILES = new Set([
-  "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
-]);
-
-function resolvePretestBuildMode(paths: readonly string[]): NodeTestPretestBuildMode | undefined {
-  return paths.some((file) => PRETEST_RUNTIME_BUILD_FILES.has(file)) ? "runtime" : undefined;
-}
 
 type PolicyTestWatch = {
   ownerGlobs?: readonly string[];
@@ -137,7 +133,7 @@ type CompactNodeTestShard = Omit<NodeTestShard, "configs" | "groups"> & {
   groups: NodeTestShardGroup[];
 };
 
-type NodeTestSplitShard = Omit<NodeTestShard, "checkName" | "runner"> & {
+type NodeTestSplitShard = Omit<NodeTestShard, "checkName" | "runner" | "pretestBuildMode"> & {
   includeExternalConfigs?: boolean;
   runner?: string;
 };
@@ -211,14 +207,8 @@ const AGENTIC_GATEWAY_CORE_STRIPES = 3;
 const CORE_RUNTIME_MEDIA_UI_STRIPES = 3;
 const CORE_UNIT_SRC_SECURITY_STRIPES = 3;
 const UNIT_FAST_NODE_TEST_STRIPES = 2;
-// Advisory runtime estimates (seconds) per split shard: median [shard:*]
-// begin->end wall across nine successful hosted compact runs (31684307744,
-// 31683213137, 31682494259, 31682258389, 31681118857, 31680010311,
-// 31678309660, 31678086868, 31677305067). Admission and 4-vCPU striping
-// retain these weights so the bounded job count and runner advisory stay fixed.
-// agentic-commands-agent-channel uses the sole post-#122955 sample from run
-// 31684307744 because that landing removed a 79.5s test. Unknown shards fall
-// back to a per-file estimate.
+// Cold-start fallback when committed CI measurements are missing. Refresh
+// config/ci-test-timings.json with pnpm ci:timings:refit, not these literals.
 const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 30],
   ["agentic-agents-core-isolated", 18],
@@ -670,7 +660,9 @@ function applyCompactGroupWorkerPins(group: NodeTestShardGroup): NodeTestShardGr
 }
 
 function estimateDefaultCompactGroupSeconds(group: NodeTestShardGroup): number {
-  const hint = COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name);
+  const hint =
+    readCompactGroupTimings("blacksmith")[group.shard_name] ??
+    COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name);
   if (hint !== undefined) {
     return hint;
   }
@@ -710,6 +702,7 @@ function estimateCompactGroupSeconds(
     return defaultSeconds;
   }
   return (
+    readCompactGroupTimings("github")[group.shard_name] ??
     COMPACT_GITHUB_GROUP_SECONDS_HINTS.get(group.shard_name) ??
     Math.round(defaultSeconds * COMPACT_GITHUB_GROUP_SECONDS_SCALE)
   );
@@ -1588,19 +1581,12 @@ function createToolingSplitShards(): NodeTestSplitShard[] {
       listCompactToolingTestFiles(),
       COMPACT_TOOLING_NODE_TEST_GROUPS,
       stripeFileWeight,
-    ).map((includePatterns, index) => {
-      const pretestBuildMode = resolvePretestBuildMode(includePatterns);
-      const shard: NodeTestSplitShard = {
-        shardName: `core-tooling-${index + 1}`,
-        configs: [TOOLING_CONFIG],
-        includePatterns,
-        requiresDist: false,
-      };
-      if (pretestBuildMode) {
-        shard.pretestBuildMode = pretestBuildMode;
-      }
-      return shard;
-    }),
+    ).map((includePatterns, index) => ({
+      shardName: `core-tooling-${index + 1}`,
+      configs: [TOOLING_CONFIG],
+      includePatterns,
+      requiresDist: false,
+    })),
     {
       shardName: "core-tooling-isolated",
       configs: ["test/vitest/vitest.tooling-docker.config.ts", TOOLING_ISOLATED_CONFIG],
@@ -1908,6 +1894,10 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
           return [];
         }
 
+        const pretestBuildMode = resolveVitestPretestBuildMode([
+          { configs: splitConfigs, includePatterns: splitShard.includePatterns },
+        ]);
+
         return [
           {
             checkName: formatNodeTestShardCheckName(splitShard.shardName),
@@ -1915,9 +1905,7 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
             configs: splitConfigs,
             ...(splitShard.env ? { env: splitShard.env } : {}),
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
-            ...(splitShard.pretestBuildMode
-              ? { pretestBuildMode: splitShard.pretestBuildMode }
-              : {}),
+            ...(pretestBuildMode ? { pretestBuildMode } : {}),
             runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
           },
@@ -1925,11 +1913,13 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
       });
     }
 
+    const pretestBuildMode = resolveVitestPretestBuildMode([{ configs }]);
     return [
       {
         checkName: formatNodeTestShardCheckName(shard.name),
         shardName: shard.name,
         configs,
+        ...(pretestBuildMode ? { pretestBuildMode } : {}),
         runner: DEFAULT_NODE_TEST_RUNNER,
         requiresDist: DIST_DEPENDENT_NODE_SHARD_NAMES.has(shard.name),
       },

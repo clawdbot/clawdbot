@@ -20,7 +20,11 @@ import {
 } from "../../app/context.ts";
 import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { renderDocsLink, renderSettingsPage } from "../../components/settings-ui.ts";
+import {
+  renderLearnMoreLink,
+  renderSettingsPage,
+  renderSettingsPageHeader,
+} from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -356,10 +360,6 @@ class ApprovalsPage extends OpenClawLightDomElement {
   override render() {
     const body = renderSettingsPage(
       html`
-        <p class="settings-page__intro">
-          ${t("approvalHistory.description")}
-          ${renderDocsLink(APPROVALS_DOCS_URL, t("common.learnMore"))}
-        </p>
         ${!this.connected
           ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
           : nothing}
@@ -385,9 +385,11 @@ class ApprovalsPage extends OpenClawLightDomElement {
       { wide: true },
     );
     return html`
-      <section class="content-header">
-        <div><div class="page-title">${titleForRoute("approvals")}</div></div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("approvals"),
+        subtitle: html`${t("approvalHistory.description")}
+        ${renderLearnMoreLink(APPROVALS_DOCS_URL)}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

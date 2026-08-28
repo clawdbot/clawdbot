@@ -6,6 +6,25 @@ export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGro
   return raw === "none" || raw === "person" ? raw : "project";
 }
 
+// Canonicalize a checkout path for grouping: strip trailing separators so
+// `/repo` and `/repo/` key one section, then mirror Claude Code desktop by
+// folding any cwd at or under `.claude/worktrees/<name>` into the origin repo
+// (the lazy prefix picks the outermost repo root). Returns null when nothing
+// project-like remains (filesystem roots, bare worktree parents).
+export function foldWorktreeCheckoutPath(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  return match ? match[1] || null : trimmed;
+}
+
+/** Basename shown for a checkout path in project sections. */
+export function checkoutDisplayName(path: string): string {
+  return path.split(/[\\/]/).findLast(Boolean) ?? path;
+}
+
 type CatalogProjectGroup = {
   kind: "custom" | "project" | "person";
   key: string;
@@ -51,16 +70,9 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       continue;
     }
     // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
-    // session roots; after trimming they fall to the ungrouped flat tail by design.
-    let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");
-    if (!projectPath) {
-      ungrouped.push(session);
-      continue;
-    }
-    // Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
-    // folds into the origin repo; the lazy prefix picks the outermost repo root.
-    const worktreeMatch = projectPath.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-    projectPath = worktreeMatch?.[1] ?? projectPath;
+    // session roots; after canonicalization they fall to the ungrouped flat tail.
+    const trimmedPath = session.cwd?.trim();
+    const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
     if (!projectPath) {
       ungrouped.push(session);
       continue;
@@ -71,7 +83,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         kind: "project",
         key: `project:${projectPath}`,
         legacySectionKey: projectPath,
-        label: projectPath.split(/[\\/]/).at(-1) || projectPath,
+        label: checkoutDisplayName(projectPath),
         title: projectPath,
         sessions: [],
       };

@@ -1,5 +1,7 @@
 // Covers TUI event handler routing for keyboard and backend events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as failoverClassifier from "../agents/failover/classify.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -1734,6 +1736,77 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).not.toHaveBeenCalled();
   });
 
+  it("reports only the latest reset after all queued history reloads settle", async () => {
+    const first = createDeferred<TuiHistoryLoadResult>();
+    const second = createDeferred<TuiHistoryLoadResult>();
+    const { state, chatLog, loadHistory, handleSessionsChangedEvent, dispose } =
+      createHandlersHarness({ state: { activeChatRunId: null } });
+    loadHistory.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    try {
+      handleSessionsChangedEvent({ reason: "reset", sessionId: "session-1", updatedAt: 20 });
+      handleSessionsChangedEvent({ reason: "reset", sessionId: "session-1", updatedAt: 30 });
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+      first.resolve({ loaded: true, runOutcome: { state: "completed" } });
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
+      expect(chatLog.addSystem).not.toHaveBeenCalled();
+
+      state.activeChatRunId = "newly-adopted-run";
+      second.resolve({ loaded: true, runOutcome: { state: "active", runId: "newly-adopted-run" } });
+      await vi.waitFor(() =>
+        expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("session agent:main:main reset"),
+      );
+      expect(state.activeChatRunId).toBe("newly-adopted-run");
+    } finally {
+      dispose();
+    }
+  });
+
+  it.each(["session", "global agent", "new lifecycle", "dispose"])(
+    "discards a reset receipt retired by %s while history loads",
+    async (retirement) => {
+      const history = createDeferred<TuiHistoryLoadResult>();
+      const { state, chatLog, loadHistory, handleSessionsChangedEvent, dispose } =
+        createHandlersHarness({
+          state: {
+            currentSessionKey: retirement === "global agent" ? "global" : "agent:main:main",
+            activeChatRunId: null,
+          },
+        });
+      loadHistory.mockReturnValueOnce(history.promise);
+      handleSessionsChangedEvent({ reason: "reset", agentId: "main", sessionId: "session-1" });
+      if (retirement === "session") {
+        state.currentSessionKey = "agent:main:other";
+      } else if (retirement === "global agent") {
+        state.currentAgentId = "work";
+      } else if (retirement === "new lifecycle") {
+        handleSessionsChangedEvent({ reason: "new", sessionId: "replacement" });
+      } else {
+        dispose();
+      }
+      history.resolve({ loaded: true, runOutcome: { state: "completed" } });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(chatLog.addSystem).not.toHaveBeenCalled();
+      dispose();
+    },
+  );
+
+  it("reports an observed reset even when its history reload fails", async () => {
+    const { chatLog, loadHistory, handleSessionsChangedEvent, dispose } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+    loadHistory.mockRejectedValueOnce(new Error("history unavailable"));
+    try {
+      handleSessionsChangedEvent({ reason: "reset", sessionId: "session-1" });
+      await vi.waitFor(() =>
+        expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("session agent:main:main reset"),
+      );
+    } finally {
+      dispose();
+    }
+  });
+
   it("reloads the selected session for an identity-only legacy batch invalidation", () => {
     const { state, loadHistory, handleSessionsChangedEvent } = createHandlersHarness({
       state: { activeChatRunId: null, currentSessionId: "session-1" },
@@ -2721,6 +2794,25 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     await vi.waitFor(() => expect(chatLog.addSystem).toHaveBeenCalledTimes(2));
     expect(loadHistory).toHaveBeenCalledTimes(1);
     expect(chatLog.addSystem).toHaveBeenLastCalledWith("run error: provider exploded");
+  });
+
+  it("renders non-auth failures without invoking provider classification", () => {
+    const classify = vi
+      .spyOn(failoverClassifier, "classifyFailoverReason")
+      .mockImplementation(() => {
+        throw new Error("provider classification must not block non-auth error rendering");
+      });
+    try {
+      const { chatLog, handleChatEvent } = createHandlersHarness({ localMode: true });
+      handleChatEvent({
+        runId: "run-provider-error",
+        state: "error",
+        errorMessage: "fixture provider failed",
+      });
+      expect(chatLog.addSystem).toHaveBeenCalledWith("run error: fixture provider failed");
+    } finally {
+      classify.mockRestore();
+    }
   });
 
   it("shows a concise /auth hint for local auth failures", () => {

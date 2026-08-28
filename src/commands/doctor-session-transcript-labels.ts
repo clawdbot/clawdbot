@@ -11,11 +11,11 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import {
   readOnlySqliteTranscriptSessionIds,
-  readOnlySqliteTranscriptSnapshot,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+  readOnlySqliteTranscriptRepairSnapshot,
+} from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript labels";
 
@@ -213,7 +213,11 @@ export async function noteSessionTranscriptLabelHealth(params: {
       const sessionIds = readOnlySqliteTranscriptSessionIds(sqlitePath);
       for (const sessionId of sessionIds) {
         // Read transcript in read-only mode (detection phase).
-        const readResult = readOnlySqliteTranscriptSnapshot(sqlitePath, sessionId);
+        const readResult = readOnlySqliteTranscriptRepairSnapshot(
+          sqlitePath,
+          sessionId,
+          normalizeLegacyInboundContextLabels,
+        );
         if (!readResult.ok) {
           const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
           note(

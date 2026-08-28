@@ -8,6 +8,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI transcript disclosure anchoring",
@@ -164,12 +165,22 @@ suite.define(() => {
           });
           await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
           await page.locator(".chat-scroll-to-bottom").click();
-          await page.waitForFunction(() => {
+          await page.waitForFunction((pointerInterruption) => {
             const scroller = document.querySelector<HTMLElement>(
               ".chat-pane-cache__pane--active .chat-thread",
             );
-            return scroller && scroller.scrollTop > 0;
-          });
+            const recoveredRow = scroller
+              ?.querySelector<HTMLElement>('.chat-bubble[data-entry-id="sizing-message-1"]')
+              ?.closest<HTMLElement>(".chat-virtual-row");
+            return (
+              scroller &&
+              scroller.scrollTop > 0 &&
+              (!pointerInterruption ||
+                (recoveredRow &&
+                  recoveredRow.getBoundingClientRect().bottom <=
+                    scroller.getBoundingClientRect().top))
+            );
+          }, interruption === "pointer");
           const during = await thread.evaluate((element) => ({
             top: element.scrollTop,
             max: element.scrollHeight - element.clientHeight,
@@ -198,6 +209,7 @@ suite.define(() => {
             expect(interruptedOffset).toBeGreaterThan(0);
             expect(interruptedOffset).toBeLessThan(during.max);
           }
+          const interruptedAnchor = await captureTopVisibleVirtualRow(thread);
           const fullText = Array.from(
             { length: 5 },
             (_, index) =>
@@ -230,14 +242,22 @@ suite.define(() => {
               gap: next.getBoundingClientRect().top - rect.bottom,
             };
           });
+          const finalAnchor = await captureTopVisibleVirtualRow(thread);
           await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
           await fs.writeFile(
             path.join(artifactDir, "interrupted-scroll.json"),
-            JSON.stringify({ initial, during, final }, null, 2),
+            JSON.stringify(
+              { initial, during, interruptedOffset, interruptedAnchor, final, finalAnchor },
+              null,
+              2,
+            ),
           );
           if (interruption === "pointer") {
+            // Growth above the reader legitimately adjusts scrollTop; the visible
+            // row must stay anchored regardless of where the pointer stopped scrolling.
+            expect(finalAnchor.key).toBe(interruptedAnchor.key);
             expect(
-              Math.abs((await thread.evaluate((element) => element.scrollTop)) - interruptedOffset),
+              Math.abs(finalAnchor.viewportTop - interruptedAnchor.viewportTop),
             ).toBeLessThanOrEqual(1);
           }
           expect(final.key).toBe(initial.key);

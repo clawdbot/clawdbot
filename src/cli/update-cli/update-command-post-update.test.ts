@@ -7,6 +7,8 @@ import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   completePluginUpdate: vi.fn(),
+  leaseActive: false,
+  loadPluginRecords: vi.fn(),
   markSentinelFailure: vi.fn(async () => undefined),
   printResult: vi.fn(),
   readConfig: vi.fn(),
@@ -30,7 +32,17 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   readGatewayServiceState: mocks.readServiceState,
 }));
 vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (_params: unknown, callback: () => unknown) => callback(),
+  withPluginLifecycleLease: async (_params: unknown, callback: () => unknown) => {
+    mocks.leaseActive = true;
+    try {
+      return await callback();
+    } finally {
+      mocks.leaseActive = false;
+    }
+  },
+}));
+vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: mocks.loadPluginRecords,
 }));
 vi.mock("./update-command-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-config.js")>()),
@@ -223,6 +235,8 @@ describe("retireStandaloneGitWrapper", () => {
 describe("successful update finalization ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.leaseActive = false;
+    mocks.loadPluginRecords.mockResolvedValue({});
     mocks.readConfig.mockResolvedValue(validConfigSnapshot);
     mocks.updatePlugins.mockResolvedValue(successfulPluginUpdate);
     mocks.completePluginUpdate.mockResolvedValue({
@@ -267,6 +281,77 @@ describe("successful update finalization ordering", () => {
     }
   });
 
+  it("releases the plugin lifecycle lease before fresh doctor completion", async () => {
+    const pluginInstallRecords = {
+      demo: {
+        source: "npm",
+        spec: "@acme/demo",
+        installPath: "/tmp/demo",
+      },
+    };
+    const ownedManagedUpdateEnv = {
+      ...process.env,
+      OPENCLAW_LIFECYCLE_TEST_MARKER: "owned",
+    };
+    mocks.readConfig.mockImplementationOnce(async () => {
+      expect(mocks.leaseActive).toBe(true);
+      expect(process.env.OPENCLAW_LIFECYCLE_TEST_MARKER).toBe("owned");
+      return validConfigSnapshot;
+    });
+    mocks.loadPluginRecords.mockImplementationOnce(async () => {
+      expect(mocks.leaseActive).toBe(true);
+      expect(process.env.OPENCLAW_LIFECYCLE_TEST_MARKER).toBe("owned");
+      return pluginInstallRecords;
+    });
+    mocks.updatePlugins.mockImplementationOnce(
+      async (params: { pluginInstallRecords: unknown }) => {
+        expect(mocks.leaseActive).toBe(true);
+        expect(process.env.OPENCLAW_LIFECYCLE_TEST_MARKER).toBe("owned");
+        expect(params.pluginInstallRecords).toBe(pluginInstallRecords);
+        return successfulPluginUpdate;
+      },
+    );
+    mocks.completePluginUpdate.mockImplementationOnce(async () => {
+      expect(mocks.leaseActive).toBe(false);
+      expect(process.env.OPENCLAW_LIFECYCLE_TEST_MARKER).toBe("owned");
+      return {
+        pluginUpdate: successfulPluginUpdate,
+        configSnapshot: validConfigSnapshot,
+      };
+    });
+
+    await finishUpdate({
+      result: {
+        status: "ok",
+        mode: "npm",
+        root: "/tmp/openclaw-update",
+        steps: [],
+        durationMs: 1,
+      },
+      root: "/tmp/openclaw-update",
+      installKindChanged: false,
+      configSnapshot: validConfigSnapshot,
+      requestedChannel: null,
+      storedChannel: null,
+      channel: "stable",
+      downgradeRisk: false,
+      shouldRestart: false,
+      opts: {},
+      showProgress: false,
+      ownedManagedUpdateEnv,
+      controlPlaneUpdateSentinelMeta: {},
+      preUpdatePluginInstallRecords: {},
+      startedAt: Date.now(),
+      updateStepTimeoutMs: 1_000,
+    } as unknown as FinishUpdateParams);
+
+    expect(mocks.readConfig).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginRecords).toHaveBeenCalledOnce();
+    expect(mocks.updatePlugins).toHaveBeenCalledOnce();
+    expect(mocks.completePluginUpdate).toHaveBeenCalledOnce();
+    expect(mocks.leaseActive).toBe(false);
+  });
+
   it("marks and prints an error without persisting success when retirement fails", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-finalize-failure-"));
     const previousRoot = path.join(home, "old-root");
@@ -302,9 +387,15 @@ describe("successful update finalization ordering", () => {
     }
   });
 
-  it("removes inherited operator overrides from the managed install environment", async () => {
+  it("removes operator overrides and process identity from the managed install environment", async () => {
     const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
-    const managedEnvironment = { ANTHROPIC_API_KEY: "managed-provider", MANAGED_VALUE: "base" };
+    const managedEnvironment = {
+      ANTHROPIC_API_KEY: "managed-provider",
+      MANAGED_VALUE: "base",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
+    };
     const effectiveEnvironment = {
       ...managedEnvironment,
       ANTHROPIC_API_KEY: "drop-in-provider",
@@ -353,6 +444,9 @@ describe("successful update finalization ordering", () => {
       expect(installEnv?.OPENCLAW_PROFILE).toBeUndefined();
       expect(installEnv?.OPENCLAW_STATE_DIR).toBeUndefined();
       expect(installEnv?.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      expect(installEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+      expect(installEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
+      expect(installEnv?.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     } finally {
       vi.unstubAllEnvs();
     }

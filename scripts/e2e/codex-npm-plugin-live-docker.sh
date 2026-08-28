@@ -343,7 +343,7 @@ if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
 fi
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
-openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs configure "$MODEL_REF"
 

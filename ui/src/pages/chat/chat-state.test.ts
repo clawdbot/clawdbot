@@ -139,44 +139,51 @@ describe("canonical session message recovery", () => {
     });
   });
 
-  it("retires live commentary when its durable row arrives during an active run", () => {
-    const runId = "active-run";
-    const itemId = "commentary-1";
-    const text = "Checking the workspace.";
-    const { state } = createSessionEventState({
-      connected: false,
-      chatMessages: [],
-      chatRunId: runId,
-      chatStream: null,
-      chatStreamSegments: [{ text, ts: 1, runId, itemId }],
-      chatToolMessages: [],
-    });
+  it.each(["active-run", undefined])(
+    "retires durable mirrored commentary owned by %s",
+    (ownerRunId) => {
+      const runId = "active-run";
+      const itemId = "commentary-1";
+      const text = "Checking the workspace.";
+      const { state } = createSessionEventState({
+        connected: false,
+        chatMessages: [],
+        chatRunId: runId,
+        chatStream: null,
+        chatStreamSegments: [{ text, ts: 1, runId, itemId }],
+        chatToolMessages: [],
+      });
 
-    applySessionMessagePayload(
-      state,
-      {
-        sessionKey: state.sessionKey,
-        messageId: "commentary-message-1",
-        messageSeq: 1,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text }],
-          idempotencyKey: `codex-app-server:thread:turn:commentary:${itemId}`,
-          timestamp: 1,
-          openclawStreamFallback: {
-            replacementText: text,
-            source: "segment",
-            itemId,
+      applySessionMessagePayload(
+        state,
+        {
+          sessionKey: state.sessionKey,
+          messageId: "commentary-message-1",
+          messageSeq: 1,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            idempotencyKey: `codex-app-server:thread:turn:commentary:${itemId}`,
+            __openclaw: {
+              mirrorOrigin: "codex-app-server",
+              ...(ownerRunId ? { runId: ownerRunId } : {}),
+            },
+            timestamp: 1,
+            openclawStreamFallback: {
+              replacementText: text,
+              source: "segment",
+              itemId,
+            },
           },
         },
-      },
-      true,
-      { kind: "history-delta" },
-    );
+        true,
+        { kind: "history-delta" },
+      );
 
-    expect(state.chatStreamSegments).toEqual([]);
-    expect(renderedTranscript(state)).toEqual([{ role: "assistant", text }]);
-  });
+      expect(state.chatStreamSegments).toEqual([]);
+      expect(renderedTranscript(state)).toEqual([{ role: "assistant", text }]);
+    },
+  );
 
   it("retires the complete transient projection when the durable terminal arrives", () => {
     const runId = "active-run";

@@ -19,7 +19,7 @@ import {
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
-import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
+import { refreshPluginRegistry } from "../plugins/plugin-registry-refresh.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
   type StaleLocalBundledPluginInstallRecord,

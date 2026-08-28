@@ -95,11 +95,7 @@ import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibi
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 
-export {
-  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-};
+export { OPENCLAW_DATABASE_SCHEMA_DOCS_URL, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS };
 export type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -136,7 +132,7 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 }
 
 /** Reject a fresh shared-state open after known corruption until repair clears it. */
-export function assertOpenClawStateDatabaseFreshOpenAllowed(
+function assertOpenClawStateDatabaseFreshOpenAllowed(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   const env = options.env ?? process.env;
@@ -721,18 +717,10 @@ export function runOpenClawStateWriteTransaction<T>(
  * Read-only callers use this to avoid opening a connection per call; it never
  * creates, repairs, or registers a handle.
  */
-export function getOpenClawStateDatabaseIfOpen(
+function getOpenClawStateDatabaseIfOpen(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase | undefined {
   return stateDbCache.getOpenClawStateDatabaseIfOpenAtPath(resolveDatabasePath(options));
-}
-
-/** Evict an exact cached shared-state owner after a proven corruption read. */
-export function evictOpenClawStateDatabaseAfterCorruption(
-  database: OpenClawStateDatabase,
-  error: unknown,
-): boolean {
-  return stateDbCache.evictOpenClawStateDatabaseAfterCorruption(database, error);
 }
 
 /** Close one cached shared state database handle by exact pathname. */

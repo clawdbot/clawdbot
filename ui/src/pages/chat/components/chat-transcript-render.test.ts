@@ -169,7 +169,7 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it("reveals touched metadata across stored and live groups within one transcript", async () => {
+  it("keeps live metadata absent while revealing stored metadata within each transcript", async () => {
     const firstTranscript = createTestTranscript();
     const secondTranscript = createTestTranscript();
     const firstContainer = document.body.appendChild(document.createElement("div"));
@@ -207,6 +207,7 @@ describe("chat transcript rendering", () => {
     touchPointerUp(streamBubble);
     expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
     expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+    expect(streamGroup.querySelector(".chat-group-footer")).toBeNull();
 
     touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
     expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);

@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createCommandError } from "../../process/command-error.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import { createCrustaceanSlug } from "../session-slug.js";
@@ -72,6 +73,8 @@ const WORKTREE_CREATE_LEASE_SCOPE = "core:managed-worktrees:create";
 const WORKTREE_OWNER_LEASE_SCOPE = "core:managed-worktrees:owner";
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 const WORKTREE_CREATE_LEASE_WAIT_MS = 5 * 60_000;
+// Materializing a checkout gets extra time without extending other Git commands or setup.
+const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 
 /** Removal aborted because snapshot loss was not permitted. */
 export class WorktreeSnapshotError extends Error {
@@ -133,10 +136,6 @@ type ManagedWorktreeGcParams = {
 /** Returns the default no-limit policy for age-based managed-worktree cleanup. */
 export function resolveWorktreeCleanupLimits(): WorktreeCleanupLimits {
   return {};
-}
-
-function resultMessage(result: GitResult): string {
-  return (result.stderr || result.stdout).trim().split("\n").slice(-12).join("\n");
 }
 
 function validateName(name: string): string {
@@ -275,9 +274,11 @@ async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branc
   const deletedBranch = await runGit(repoRoot, ["branch", "-D", branch]);
   await runGit(repoRoot, ["worktree", "prune"]);
   if (removed.code !== 0 || deletedBranch.code !== 0) {
-    throw new Error(
-      `failed to clean up worktree creation: ${resultMessage(removed) || resultMessage(deletedBranch)}`,
-    );
+    const failure =
+      removed.code !== 0
+        ? commandError("git worktree remove", removed)
+        : commandError("git branch -D", deletedBranch);
+    throw new Error(`failed to clean up worktree creation: ${failure.message}`);
   }
 }
 
@@ -316,7 +317,9 @@ async function canResetFailedWorktreeAdd(
   branch: string,
   failure: GitResult,
 ): Promise<boolean> {
-  const message = resultMessage(failure);
+  // Keep retry evidence unchanged: diagnostic rendering/truncation must never
+  // grant cleanup or retry authority.
+  const message = (failure.stderr || failure.stdout).trim().split("\n").slice(-12).join("\n");
   const createdBranch = message.includes(`Preparing worktree (new branch '${branch}')`);
   if (message.includes("unable to checkout working tree") || createdBranch) {
     return true;
@@ -336,24 +339,35 @@ async function canResetFailedWorktreeAdd(
   return branchExists.code === 1;
 }
 
-async function runSetupScript(repoRoot: string, worktreePath: string): Promise<void> {
+async function runSetupScript(
+  repoRoot: string,
+  worktreePath: string,
+  params: CreateManagedWorktreeParams,
+): Promise<void> {
   const setupScript = path.join(repoRoot, ".openclaw", "worktree-setup.sh");
   const stat = await fs.stat(setupScript).catch(() => undefined);
   if (!stat?.isFile() || (stat.mode & 0o111) === 0) {
     return;
   }
+  const timeoutMs = 120_000;
+  params.onProgress?.("setup");
+  // Checkout may outlive its caller. Revalidate before starting repository code,
+  // then retain process ownership through cancellation and rollback.
+  params.signal?.throwIfAborted();
+  params.commitGuard?.();
   const result = await runCommandWithTimeout([setupScript], {
-    timeoutMs: 120_000,
+    timeoutMs,
     cwd: worktreePath,
+    signal: params.signal,
+    killProcessTree: true,
     env: {
       OPENCLAW_SOURCE_TREE_PATH: repoRoot,
       OPENCLAW_WORKTREE_PATH: worktreePath,
     },
   });
+  params.signal?.throwIfAborted();
   if (result.code !== 0) {
-    throw new Error(
-      `worktree setup failed${resultMessage(result) ? `:\n${resultMessage(result)}` : ""}`,
-    );
+    throw createCommandError("worktree setup", result, { timeoutMs });
   }
 }
 
@@ -622,6 +636,7 @@ export class ManagedWorktreeService {
   }
 
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
+    params.signal?.throwIfAborted();
     const repository = await resolveRepository(params.repoRoot);
     if (params.ownerId) {
       const ownerKind = params.ownerKind ?? "manual";
@@ -636,6 +651,7 @@ export class ManagedWorktreeService {
           waitMs: WORKTREE_CREATE_LEASE_WAIT_MS,
           leaseLabel: "managed worktree owner lease",
           operationLabel: "agents.worktrees.create.owner-lease",
+          signal: params.signal,
         },
         async () => {
           const existing = findLiveRegistryWorktreeByOwner(this.env, ownerKind, ownerId);
@@ -674,6 +690,7 @@ export class ManagedWorktreeService {
         waitMs: WORKTREE_CREATE_LEASE_WAIT_MS,
         leaseLabel: "managed worktree creation lease",
         operationLabel: "agents.worktrees.create.lease",
+        signal: params.signal,
       },
       async () => await this.createForRepository(params, repository, allocationName),
     );
@@ -684,6 +701,8 @@ export class ManagedWorktreeService {
     repository: Awaited<ReturnType<typeof resolveRepository>>,
     inferredName: string,
   ): Promise<ManagedWorktreeRecord> {
+    params.signal?.throwIfAborted();
+    params.onProgress?.("checkout");
     const root = path.join(await this.worktreesRoot(), repository.fingerprint);
     const name = validateName(
       params.name ??
@@ -732,32 +751,45 @@ export class ManagedWorktreeService {
     if (branchExists.code !== 1) {
       throw commandError("git show-ref --verify", branchExists);
     }
-    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+    // Default-base resolution fetches remote refs; it is an effect, not just discovery.
+    params.signal?.throwIfAborted();
     params.commitGuard?.();
+    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
     await fs.mkdir(root, { recursive: true });
+    params.signal?.throwIfAborted();
+    params.commitGuard?.();
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
     const runRepositorySetup = params.runSetupScript !== false;
     const worktreeAddArgs = () => ["worktree", "add", "-b", branch, "--", worktreePath, gitBase];
-    let added = await runGit(repository.repoRoot, worktreeAddArgs());
+    let added = await runGit(repository.repoRoot, worktreeAddArgs(), {
+      timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+    });
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
         throw commandError("git worktree add", added);
       }
       await resetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch);
+      params.signal?.throwIfAborted();
+      params.commitGuard?.();
       gitBase = "HEAD";
       recordBase = "HEAD";
-      added = await runGit(repository.repoRoot, worktreeAddArgs());
+      added = await runGit(repository.repoRoot, worktreeAddArgs(), {
+        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+      });
     }
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
     let provisionedPaths: string[];
     try {
+      params.signal?.throwIfAborted();
+      params.commitGuard?.();
       provisionedPaths = await provisionIncludedFiles(repository.sourceRoot, worktreePath);
       if (runRepositorySetup) {
-        await runSetupScript(repository.sourceRoot, worktreePath);
+        await runSetupScript(repository.sourceRoot, worktreePath, params);
       }
+      params.signal?.throwIfAborted();
       params.commitGuard?.();
     } catch (error) {
       try {
@@ -1065,13 +1097,11 @@ export class ManagedWorktreeService {
     }
     const parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
     await fs.mkdir(path.dirname(record.path), { recursive: true });
-    await requireGit(record.repoRoot, [
-      "worktree",
-      "add",
-      "--detach",
-      record.path,
-      record.snapshotRef,
-    ]);
+    await requireGit(
+      record.repoRoot,
+      ["worktree", "add", "--detach", record.path, record.snapshotRef],
+      { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
+    );
     let branchCreated = false;
     let restoredProvisionedPaths: string[];
     try {
@@ -1092,10 +1122,13 @@ export class ManagedWorktreeService {
         ? await runGit(record.repoRoot, ["branch", "-D", record.branch])
         : undefined;
       if (removed.code !== 0 || (branchDeleted && branchDeleted.code !== 0)) {
-        throw new Error(
-          `${String(error)}\nrestore cleanup failed: ${resultMessage(removed) || (branchDeleted ? resultMessage(branchDeleted) : "")}`,
-          { cause: error },
-        );
+        const failure =
+          branchDeleted && removed.code === 0
+            ? commandError("git branch -D", branchDeleted)
+            : commandError("git worktree remove", removed);
+        throw new Error(`${String(error)}\nrestore cleanup failed: ${failure.message}`, {
+          cause: error,
+        });
       }
       throw error;
     }

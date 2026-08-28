@@ -7,6 +7,7 @@ import {
   type ChatItem,
   type ChatQueueItem,
   type MessageGroup,
+  accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
@@ -66,11 +67,7 @@ import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
-import {
-  buildLiveRenderedToolRefs,
-  buildToolStreamIdentity,
-  removeLiveToolBlocksFromHistory,
-} from "./tool-stream-identity.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 export type BuildChatItemsProps = {
   paneId: string;
@@ -102,14 +99,11 @@ export type BuildChatItemsProps = {
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
-  const liveToolRefs = buildLiveRenderedToolRefs(tools);
-  const history = props.messages
-    .filter(
-      (message) =>
-        !isAssistantHeartbeatAckForDisplay(message) &&
-        (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
-    )
-    .map((message) => removeLiveToolBlocksFromHistory(message, liveToolRefs));
+  const history = props.messages.filter(
+    (message) =>
+      !isAssistantHeartbeatAckForDisplay(message) &&
+      (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
+  );
   const historyKeys = buildMessageKeys(history);
   const toolKeys = buildMessageKeys(tools, history.length);
   const liftedCanvasSources = tools.flatMap((message, index) => {
@@ -482,7 +476,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           text,
         );
       }
-      if (visibleText.length > 0) {
+      if (visibleText.length > 0 && segment.persisted !== true) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
         const streamItem: ChatItem = {
           kind: "stream",
@@ -632,7 +626,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     ));
   if (props.stream !== null) {
     const text = sanitizeStreamText(props.stream);
-    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    const prefix = accumulatedStreamText(segments, sanitizeStreamText);
+    const visibleText = trimAccumulatedStreamPrefix(text, prefix);
     if (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
       const liveProgress = resolveProgress();
       const liveRunId = props.runId ?? liveProgress.runId;

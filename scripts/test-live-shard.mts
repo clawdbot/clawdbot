@@ -241,6 +241,7 @@ function isExtensionMediaLiveTest(file: string) {
     file === "extensions/music-generation-providers.live.test.ts" ||
     file === "extensions/minimax/minimax.live.test.ts" ||
     file === "extensions/openai/openai-tts.live.test.ts" ||
+    file === "extensions/tts-local-cli/speech-provider.live.test.ts" ||
     file === "extensions/video-generation-providers.live.test.ts" ||
     file === "extensions/volcengine/tts.live.test.ts" ||
     file === "extensions/vydra/vydra.live.test.ts"

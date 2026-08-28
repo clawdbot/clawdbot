@@ -1136,7 +1136,6 @@ describe("renderWorkboard", () => {
       expect(launcher).toBeInstanceOf(HTMLButtonElement);
       launcher?.focus();
       launcher?.click();
-      await nextFrame();
 
       const modal = container.querySelector("openclaw-modal-dialog");
       const { dialog } = await getRenderedModalDialog(container);
@@ -1172,7 +1171,8 @@ describe("renderWorkboard", () => {
     try {
       renderInto(container, props);
       container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .primary")?.click();
-      await nextFrame();
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
 
       const select = container.querySelector<HTMLElement & { open: boolean }>(
         ".workboard-draft .workboard-select",
@@ -1211,7 +1211,6 @@ describe("renderWorkboard", () => {
       expect(launcher).toBeInstanceOf(HTMLButtonElement);
       launcher?.focus();
       launcher?.click();
-      await nextFrame();
 
       const modal = container.querySelector("openclaw-modal-dialog");
       const { dialog } = await getRenderedModalDialog(container);
@@ -1249,7 +1248,8 @@ describe("renderWorkboard", () => {
       );
       launcher?.focus();
       launcher?.click();
-      await nextFrame();
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
 
       const titleInput = container.querySelector<HTMLInputElement>(".workboard-draft__title");
       expect(document.activeElement).toBe(titleInput);
@@ -1286,7 +1286,8 @@ describe("renderWorkboard", () => {
       );
       launcher?.focus();
       launcher?.click();
-      await nextFrame();
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
 
       state.detailCardId = null;
       renderInto(container, props);

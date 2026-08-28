@@ -8,7 +8,6 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import {
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -22,6 +21,7 @@ import type {
   SessionEntryStatus,
   SessionEntrySummary,
   SessionTranscriptInstance,
+  SessionTranscriptInstanceListOptions,
   SessionEntryTargetPatchScope,
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
@@ -386,18 +386,25 @@ export function listSessionEntriesByStatus(
 /** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
 export function listSessionTranscriptInstances(
   scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+  options: SessionTranscriptInstanceListOptions = {},
 ): SessionTranscriptInstance[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const currentEntries = new Map(
-    listSessionEntryRows(scope).map((summary) => [summary.sessionKey, summary.entry]),
-  );
-  return listTranscriptInstancesFromDatabase({
-    agentId: resolved.agentId,
-    currentEntries,
-    database,
-    databasePath: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
-  });
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const currentEntries =
+      options.sessionId !== undefined
+        ? {
+            get: (sessionKey: string) =>
+              readExactSessionEntryRowValidated(database, sessionKey)?.entry,
+          }
+        : new Map(
+            listSqliteSessionEntriesFromDatabase(database, resolved, {
+              ...scope,
+              clone: false,
+            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+          );
+    return listTranscriptInstancesFromDatabase({ currentEntries, database, options });
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : [];
 }
 
 /** Reads a session activity timestamp from the additive SQLite session store. */
@@ -582,13 +589,17 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
     const patch = await params.update(cloneSessionEntry(writeBase), {
       existingEntry: existing ? cloneSessionEntry(existing) : undefined,
     });
-    const merged = !patch
+    // A fallback supplies identity, not an existing node's immutable creation policy.
+    const creatingRequiredSession = !existing && patch?.sandbox === "required";
+    const mergeBase = creatingRequiredSession ? undefined : writeBase;
+    const creationPatch = creatingRequiredSession ? { ...writeBase, ...patch } : patch;
+    const merged = !creationPatch
       ? undefined
       : options.replaceEntry
         ? cloneSessionEntry(patch as SessionEntry)
         : options.preserveActivity
-          ? mergeSessionEntryPreserveActivity(writeBase, patch)
-          : mergeSessionEntry(writeBase, patch);
+          ? mergeSessionEntryPreserveActivity(mergeBase, creationPatch)
+          : mergeSessionEntry(mergeBase, creationPatch);
     const next = !merged
       ? undefined
       : options.replaceEntry
@@ -625,7 +636,7 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
           ];
           previousIdentity = createSessionIdentitySnapshot(snapshotRows);
           const selectedPreviousEntry = params.existingEntry(fresh) ?? writeBase;
-          writeSessionEntry(writeDatabase, sessionKey, next, {
+          const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
             previousEntry: selectedPreviousEntry,
           });
           if (params.rehomeWindows) {
@@ -644,7 +655,7 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
             }),
           );
           currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
-          result = cloneSessionEntry(next);
+          result = cloneSessionEntry(persisted.sandbox === "required" ? persisted : next);
         }, toDatabaseOptions(resolved));
         emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
         return { maintenancePlans, result };

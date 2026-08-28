@@ -54,6 +54,7 @@ stopping Talk releases the camera and microphone tracks.
 
 - Always-on overlay while Talk mode is enabled.
 - **Listening &rarr; Thinking &rarr; Speaking** phase transitions.
+- Phase notifications are best-effort: a failed update does not start the local Gateway or restart its tunnel. Starting Talk retains normal connection recovery.
 - On a short pause (silence window), the current transcript is sent.
 - Replies are written to WebChat (same as typing).
 - **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.

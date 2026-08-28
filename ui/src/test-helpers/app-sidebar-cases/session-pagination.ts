@@ -27,7 +27,7 @@ describe("AppSidebar gateway session pagination", () => {
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       harness.list.mockClear();
       harness.list.mockResolvedValue(changedResult);
@@ -78,7 +78,7 @@ describe("AppSidebar gateway session pagination", () => {
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       await sidebar.sessionData.loadMoreSidebarSessions();
       expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(120);
@@ -114,7 +114,7 @@ describe("AppSidebar gateway session pagination", () => {
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
 
       const pendingRefresh = sidebar.sessionData.refreshSidebarSessions("main");
       const generation = sidebar.sessionData.sessionScopeGeneration;
@@ -157,7 +157,7 @@ describe("AppSidebar gateway session pagination", () => {
       );
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
 
       const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
       context.agentSelection.state.selectedId = "research";
@@ -197,7 +197,7 @@ describe("AppSidebar gateway session pagination", () => {
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
 
       const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
       gateway.publish({ phase: "reconnecting" });
@@ -244,7 +244,7 @@ describe("AppSidebar gateway session pagination", () => {
       );
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       harness.list.mockClear();
 
@@ -431,7 +431,7 @@ describe("AppSidebar gateway session pagination", () => {
       );
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       harness.list.mockClear();
 
@@ -487,7 +487,7 @@ describe("AppSidebar gateway session pagination", () => {
           sessionsStatusFilter: "archived" | "all";
         }
       ).sessionsStatusFilter = statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       await sidebar.updateComplete;
 

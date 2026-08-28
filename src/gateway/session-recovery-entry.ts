@@ -9,16 +9,12 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 export function buildRestartRecoverySuccessorEntry(params: {
   sessionId: string;
   source: InternalSessionEntry;
-  actor?: NonNullable<InternalSessionEntry["createdActor"]>;
+  creation: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
 }): InternalSessionEntry & { sessionId: string } {
   const source = params.source;
   const entry = mergeSessionEntry(undefined, {
     ...inheritSessionSelection(source),
-    ...buildSessionCreationStamp({
-      via: "operator",
-      actor: params.actor,
-      ...(source.sandbox ? { sandbox: source.sandbox } : {}),
-    }),
+    ...buildSessionCreationStamp({ via: "operator", ...params.creation }),
     delivery: normalizeSessionDeliveryState(),
     sessionId: params.sessionId,
     previousSessionId: source.sessionId,

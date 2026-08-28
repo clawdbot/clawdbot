@@ -12,8 +12,6 @@
     "../../src/acp/**/*.test.tsx",
     "../../src/tui/**/*.test.ts",
     "../../src/tui/**/*.test.tsx",
-    "../../src/media/**/*.test.ts",
-    "../../src/media/**/*.test.tsx",
     "../../src/system-agent/**/*.test.ts",
     "../../src/system-agent/**/*.test.tsx",
     "../../src/logging/**/*.test.ts",

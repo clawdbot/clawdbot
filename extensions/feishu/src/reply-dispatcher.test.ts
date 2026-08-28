@@ -24,7 +24,6 @@ const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
-const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -92,9 +91,9 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, getGlobalHookRunner: getGlobalHookRunnerMock };
 });
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   sendMessageFeishu: sendMessageFeishuMock,
-  sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
 }));
 vi.mock("./media.js", () => ({
@@ -109,7 +108,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
-vi.mock("./targets.js", () => ({ resolveReceiveIdType: resolveReceiveIdTypeMock }));
+vi.mock("./targets.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./targets.js")>()),
+  resolveReceiveIdType: resolveReceiveIdTypeMock,
+}));
 vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
@@ -587,7 +589,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       note: "Agent: agent",
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("keeps oversized auto mode plain final text on the chunked message path", async () => {
@@ -659,6 +660,65 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
+  it.each(["static", "streaming fallback"])(
+    "budgets full metadata on every %s card chunk",
+    async (deliveryMode) => {
+      const account = resolveFeishuAccountMock();
+      resolveFeishuAccountMock.mockReturnValue({
+        ...account,
+        configured: true,
+        config: {
+          ...account.config,
+          renderMode: "card",
+          streaming: { mode: deliveryMode === "static" ? "off" : "partial" },
+        },
+      });
+      getFeishuRuntimeMock().channel.text.resolveTextChunkLimit.mockReturnValue(40_000);
+      const create = vi.fn(async (_request: { data: { content: string } }) => ({
+        code: 0,
+        data: { message_id: `om_envelope_${create.mock.calls.length}` },
+      }));
+      createFeishuClientMock.mockReturnValue({ im: { message: { create } } });
+      const actualSend = await vi.importActual<typeof import("./send.js")>("./send.js");
+      sendStructuredCardFeishuMock.mockImplementation(actualSend.sendStructuredCardFeishu);
+      const name = "界".repeat(1_100);
+      const body = "x".repeat(24_576);
+      const { options } = createDispatcherHarness({
+        identity: { name },
+        // Required peer-bot mentions intentionally disable CardKit streaming.
+        ...(deliveryMode === "static"
+          ? { requiredMentionTargets: [{ openId: "ou_peer_bot", name: "Peer Bot", key: "" }] }
+          : {}),
+      });
+      const delivery = await options.deliver(
+        { text: `\`\`\`text\n${body}\n\`\`\`` },
+        { kind: "final" },
+      );
+      if (deliveryMode !== "static") {
+        requireStreamingInstance(0).closeWithResult.mockResolvedValueOnce({
+          visibleReplySent: false,
+        });
+      }
+      await options.onIdle?.();
+      await delivery?.finalization;
+      expect(create.mock.calls.length).toBeGreaterThan(1);
+      const bodies: string[] = [];
+      for (const [request] of create.mock.calls) {
+        const content = request.data.content;
+        expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+        const card = JSON.parse(content);
+        expect(card.header.title.content).toBe(name);
+        expect(card.body.elements[2].content).toBe(`<font color='grey'>Agent: ${name}</font>`);
+        const markdown = card.body.elements[0].content as string;
+        const prefix = `${deliveryMode === "static" ? "<at id=ou_peer_bot></at> " : ""}\`\`\`text\n`;
+        expect(markdown.startsWith(prefix)).toBe(true);
+        expect(markdown.endsWith("\n```")).toBe(true);
+        bodies.push(markdown.slice(prefix.length, -4));
+      }
+      expect(bodies.join("")).toBe(body);
+    },
+  );
+
   it("discards partial streaming preview before oversized final text fallback", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
@@ -695,7 +755,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectMockArgFields(sendMessageFeishuMock, "message send params", {
       text: "tool summary",
     });
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("keeps active auto mode streaming sessions from swallowing tool text", async () => {
@@ -718,7 +777,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(requireStreamingInstance(0).close).toHaveBeenCalledWith("plain final answer", {
       note: "Agent: agent",
     });
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("keeps auto mode plain text on the message path when streaming is disabled", async () => {
@@ -727,7 +785,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(0);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("passes mention-forward targets to non-streaming plain text replies without rewriting body text", async () => {
@@ -815,7 +872,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(0);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
@@ -964,7 +1020,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     expect(requireStreamingInstance(0).close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("strips prose from identity emoji in streaming and static card headers", async () => {
@@ -1036,7 +1091,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("retains each logical payload content when finals coalesce onto one card", async () => {
@@ -1145,7 +1199,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       note: "Agent: agent",
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("skips final text already closed by idle streaming", async () => {
@@ -1178,7 +1231,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
@@ -1211,7 +1263,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(0);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
@@ -1264,7 +1315,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       note: "Agent: agent",
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
     expectMockArgFields(sendMediaFeishuMock, "media send params", {
@@ -1462,7 +1512,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       mediaUrl: "https://example.com/a.png",
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("passes audioAsVoice to media attachments", async () => {

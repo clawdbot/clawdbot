@@ -11,6 +11,7 @@ import {
   ReadResourceRequestSchema,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import { getSessionMcpRequestSignal } from "../agents/agent-bundle-mcp-request-context.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   peekSessionMcpRuntime,
@@ -23,6 +24,7 @@ import {
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -95,13 +97,20 @@ export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): P
     .toSorted();
 }
 
+async function getRequestCatalog(runtime: SessionMcpRuntime) {
+  const signal = getSessionMcpRequestSignal();
+  signal?.throwIfAborted();
+  // A caller can leave the wait, but the session still owns its shared refresh.
+  return racePromiseWithAbortSignal(runtime.getCatalog(), signal);
+}
+
 async function requireCallableTool(
   runtime: SessionMcpRuntime,
   view: McpAppViewLease,
   toolName: string,
 ): Promise<void> {
   await requireMcpAppInteraction(view);
-  const catalog = await runtime.getCatalog();
+  const catalog = await getRequestCatalog(runtime);
   const tool = catalog.tools.find(
     (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
   );
@@ -219,7 +228,7 @@ export async function executeMcpAppOperation(
             view.serverName,
             operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
           ),
-          runtime.getCatalog(),
+          getRequestCatalog(runtime),
         ]);
         const allowed = new Set(
           catalog.tools

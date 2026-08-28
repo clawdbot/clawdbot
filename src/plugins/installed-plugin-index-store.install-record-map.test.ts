@@ -8,10 +8,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 

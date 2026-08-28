@@ -33,7 +33,7 @@ All channels support DM policies and group policies:
 | `disabled`            | Block all group/room messages                          |
 
 <Note>
-`channels.defaults.groupPolicy` sets the default when a provider's `groupPolicy` is unset.
+`channels.defaults.groupPolicy` applies only when the resolved channel policy is unset. The channel schemas listed below default the root to `allowlist`; set `channels.<channel>.groupPolicy` explicitly to choose another policy.
 Pairing codes expire after 1 hour. Pending pairing requests are capped at **3 per account** (scoped by channel and account id).
 If a provider block is missing entirely (`channels.<provider>` absent), runtime group policy falls back to `allowlist` (fail-closed) with a startup warning.
 </Note>
@@ -670,6 +670,13 @@ With remote `imsg` v0.13.4, poll votes must use `pollOptionId`; its `poll.vote` 
 
 </Accordion>
 
+### LINE
+
+LINE is plugin-backed and configured under `channels.line`.
+
+- `channels.line.joinIntro` defaults to `true`. When the bot joins an allowed group or multi-person room, it posts one introduction using the group name when available. LINE exposes no multi-person room name or topic, and its Messaging API cannot read prior messages. Set this option to `false` to disable introductions, or use `channels.line.accounts.<accountId>.joinIntro` for an account-specific override. Introductions happen once per room and never run in one-to-one user chats; see [group join introductions](/channels#group-join-introductions).
+- Full LINE configuration, webhook setup, and access policy are documented in [LINE](/channels/line).
+
 ### Matrix
 
 Matrix is plugin-backed and configured under `channels.matrix`.
@@ -707,6 +714,7 @@ Matrix is plugin-backed and configured under `channels.matrix`.
 - `channels.matrix.network.dangerouslyAllowPrivateNetwork` allows private/internal homeservers. `proxy` and this network opt-in are independent controls.
 - `channels.matrix.defaultAccount` selects the preferred account in multi-account setups.
 - `channels.matrix.autoJoin` defaults to `"off"`, so invited rooms and fresh DM-style invites are ignored until you set `autoJoin: "allowlist"` with `autoJoinAllowlist` or `autoJoin: "always"`.
+- `channels.matrix.joinIntro` defaults to `true`. When the bot actually joins an allowed group room, it posts one introduction using the room name, topic, and up to 100 readable recent messages. A failed history read leaves a metadata-only introduction. Set this option to `false` to disable introductions, or use `channels.matrix.accounts.<accountId>.joinIntro` for an account-specific override. Introductions happen once per room; unaccepted invites, startup room snapshots, membership updates that leave the bot joined, and direct rooms do not trigger them. See [group join introductions](/channels#group-join-introductions).
 - `channels.matrix.execApprovals`: Matrix-native exec approval delivery and approver authorization.
   - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
   - `approvers`: Matrix user IDs (e.g. `@owner:example.org`) allowed to approve exec requests.
@@ -769,6 +777,8 @@ IRC is plugin-backed and configured under `channels.irc`.
 
 Run multiple accounts per channel (each with its own `accountId`):
 
+This pattern applies to channels that support `accounts`. Microsoft Teams uses only the channel-level `channels.msteams` configuration.
+
 ```json5
 {
   channels: {
@@ -791,6 +801,8 @@ Run multiple accounts per channel (each with its own `accountId`):
 - `default` is used when `accountId` is omitted (CLI + routing).
 - Env tokens only apply to the **default** account.
 - Base channel settings apply to all accounts unless overridden per account.
+- For Discord, Google Chat, iMessage, Signal, Slack, Telegram, and WhatsApp, an omitted account `groupPolicy` or `dmPolicy` inherits the channel policy. An explicit account value wins, including `allowlist` or `pairing`. With no applicable policy configured, group access stays `allowlist` and DMs use `pairing`.
+- WhatsApp also inherits shared settings from `accounts.default` before falling back to the channel root; Google Chat uses shared `accounts.default` settings below root settings. See the channel pages for these exceptions and collection-merging rules.
 - Use `bindings[].match.accountId` to route each account to a different agent.
 - If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw promotes account-scoped top-level single-account values into the channel account map first so the original account keeps working. Most channels move them into `channels.<channel>.accounts.default`; Matrix can preserve an existing matching named/default target instead.
 - Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
@@ -798,7 +810,7 @@ Run multiple accounts per channel (each with its own `accountId`):
 
 ### Other plugin channels
 
-Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, LINE, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Twitch, and Zalo).
+Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Twitch, and Zalo).
 See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating

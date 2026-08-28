@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import {
   loadInstalledPluginIndex,
   resolveInstalledPluginIndexPolicyHash,

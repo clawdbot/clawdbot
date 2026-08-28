@@ -626,38 +626,18 @@ class FakeWorkerGateway {
     terminal: "done" | "error" = "done",
   ): void {
     const chunk = "x".repeat(40);
-    this.send(socket, {
-      type: "event",
-      event: "worker.inference.event",
-      payload: {
-        ...this.identity(identity),
-        seq: 1,
-        event: {
-          type: "start",
-          resolvedModel: { api: "openai-responses", ...MODEL_REF },
-          timestamp: Date.now(),
-        },
-      },
-    } satisfies WorkerInferenceEventFrame);
-    this.send(socket, {
-      type: "event",
-      event: "worker.inference.event",
-      payload: {
-        ...this.identity(identity),
-        seq: 2,
-        event: { type: "text_start", contentIndex: 0 },
-      },
-    } satisfies WorkerInferenceEventFrame);
+    this.sendInferenceEvent(socket, identity, 1, {
+      type: "start",
+      resolvedModel: { api: "openai-responses", ...MODEL_REF },
+      timestamp: Date.now(),
+    });
+    this.sendInferenceEvent(socket, identity, 2, { type: "text_start", contentIndex: 0 });
     for (let index = 0; index < chunkCount; index += 1) {
-      this.send(socket, {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: index + 3,
-          event: { type: "text_delta", contentIndex: 0, delta: chunk },
-        },
-      } satisfies WorkerInferenceEventFrame);
+      this.sendInferenceEvent(socket, identity, index + 3, {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: chunk,
+      });
     }
     const text = chunk.repeat(chunkCount);
     if (terminal === "error") {
@@ -677,37 +657,17 @@ class FakeWorkerGateway {
   }
 
   private sendEmptyTerminalTurn(socket: WebSocket, identity: WorkerInferenceStartParams): void {
-    this.send(socket, {
-      type: "event",
-      event: "worker.inference.event",
-      payload: {
-        ...this.identity(identity),
-        seq: 1,
-        event: {
-          type: "start",
-          resolvedModel: { api: "openai-responses", ...MODEL_REF },
-          timestamp: Date.now(),
-        },
-      },
-    } satisfies WorkerInferenceEventFrame);
-    this.send(socket, {
-      type: "event",
-      event: "worker.inference.event",
-      payload: {
-        ...this.identity(identity),
-        seq: 2,
-        event: { type: "text_start", contentIndex: 0 },
-      },
-    } satisfies WorkerInferenceEventFrame);
-    this.send(socket, {
-      type: "event",
-      event: "worker.inference.event",
-      payload: {
-        ...this.identity(identity),
-        seq: 3,
-        event: { type: "text_delta", contentIndex: 0, delta: "discarded draft" },
-      },
-    } satisfies WorkerInferenceEventFrame);
+    this.sendInferenceEvent(socket, identity, 1, {
+      type: "start",
+      resolvedModel: { api: "openai-responses", ...MODEL_REF },
+      timestamp: Date.now(),
+    });
+    this.sendInferenceEvent(socket, identity, 2, { type: "text_start", contentIndex: 0 });
+    this.sendInferenceEvent(socket, identity, 3, {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "discarded draft",
+    });
     this.sendTerminal(socket, identity, 4, assistantMessage([], "stop"));
   }
 
@@ -716,51 +676,18 @@ class FakeWorkerGateway {
     identity: WorkerInferenceStartParams,
     stopReason: "stop" | "length" = "stop",
   ): void {
-    const events: WorkerInferenceEventFrame[] = [
-      {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: 1,
-          event: {
-            type: "start",
-            resolvedModel: { api: "openai-responses", ...MODEL_REF },
-            timestamp: Date.now(),
-          },
-        },
-      },
-      {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: 2,
-          event: { type: "text_start", contentIndex: 0 },
-        },
-      },
-      {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: 3,
-          event: { type: "text_delta", contentIndex: 0, delta: "worker reply" },
-        },
-      },
-      {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: 4,
-          event: { type: "text_end", contentIndex: 0 },
-        },
-      },
-    ];
-    for (const event of events) {
-      this.send(socket, event);
-    }
+    this.sendInferenceEvent(socket, identity, 1, {
+      type: "start",
+      resolvedModel: { api: "openai-responses", ...MODEL_REF },
+      timestamp: Date.now(),
+    });
+    this.sendInferenceEvent(socket, identity, 2, { type: "text_start", contentIndex: 0 });
+    this.sendInferenceEvent(socket, identity, 3, {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "worker reply",
+    });
+    this.sendInferenceEvent(socket, identity, 4, { type: "text_end", contentIndex: 0 });
     this.sendTerminal(
       socket,
       identity,
@@ -812,51 +739,23 @@ class FakeWorkerGateway {
   ): void {
     const { args, toolCallId, toolName } = tool;
     const encodedArgs = JSON.stringify(args);
-    const events: WorkerInferenceEventFrame[] = [
-      {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: 1,
-          event: {
-            type: "start",
-            resolvedModel: { api: "openai-responses", ...MODEL_REF },
-            timestamp: Date.now(),
-          },
-        },
-      },
-      {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: 2,
-          event: { type: "toolcall_start", contentIndex: 0, id: toolCallId, toolName },
-        },
-      },
-      {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: 3,
-          event: { type: "toolcall_delta", contentIndex: 0, delta: encodedArgs },
-        },
-      },
-      {
-        type: "event",
-        event: "worker.inference.event",
-        payload: {
-          ...this.identity(identity),
-          seq: 4,
-          event: { type: "toolcall_end", contentIndex: 0 },
-        },
-      },
-    ];
-    for (const event of events) {
-      this.send(socket, event);
-    }
+    this.sendInferenceEvent(socket, identity, 1, {
+      type: "start",
+      resolvedModel: { api: "openai-responses", ...MODEL_REF },
+      timestamp: Date.now(),
+    });
+    this.sendInferenceEvent(socket, identity, 2, {
+      type: "toolcall_start",
+      contentIndex: 0,
+      id: toolCallId,
+      toolName,
+    });
+    this.sendInferenceEvent(socket, identity, 3, {
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: encodedArgs,
+    });
+    this.sendInferenceEvent(socket, identity, 4, { type: "toolcall_end", contentIndex: 0 });
     this.sendTerminal(
       socket,
       identity,
@@ -866,6 +765,20 @@ class FakeWorkerGateway {
         "toolUse",
       ),
     );
+  }
+
+  private sendInferenceEvent(
+    socket: WebSocket,
+    identity: WorkerInferenceStartParams,
+    seq: number,
+    event: WorkerInferenceEventFrame["payload"]["event"],
+  ): void {
+    const frame: WorkerInferenceEventFrame = {
+      type: "event",
+      event: "worker.inference.event",
+      payload: { ...this.identity(identity), seq, event },
+    };
+    this.send(socket, frame);
   }
 
   private sendTerminal(

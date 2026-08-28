@@ -416,8 +416,10 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
   <Accordion title="api.runtime.hooks">
     Dispatch isolated agent turns for untrusted external-content triggers, such
     as an email watcher. Unlike `api.runtime.subagent.run(...)`, hook dispatch
-    wraps external content, serializes runs for the same session, and uses the
-    Gateway hook execution lane and completion reporting.
+    wraps external content, serializes runs for the same session, and reports
+    completion through the Gateway. Plugin turns share the cron execution
+    budget without requiring the HTTP hooks endpoint. When HTTP hooks are
+    enabled, one slot in that shared budget remains reserved for HTTP work.
 
     ```typescript
     const result = await api.runtime.hooks.dispatchHookAgentTurn({
@@ -458,6 +460,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       sessionKey: "agent:main:subagent:search-helper",
       message: "Expand this query into focused follow-up searches.",
       toolsAlsoAllow: ["my_plugin_progress"],
+      promptMode: "minimal", // optional bounded subagent prompt
       provider: "openai", // optional override
       model: "gpt-5.6-sol", // optional override
       deliver: false,
@@ -488,6 +491,8 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     </Warning>
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
+
+    `promptMode: "minimal"` selects the bounded subagent prompt instead of the full conversation prompt. The plugin runtime exposes only this mode; omission keeps the full prompt. Use `disableTools: true` as well when the run must have an exact empty tool surface.
 
     `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the canonical requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.
 

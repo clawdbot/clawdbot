@@ -49,6 +49,7 @@ import type {
   GatewayHotReloadApplicationStatus,
   GatewayHotReloadStatus,
 } from "./config-reload-status.types.js";
+import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 
 export type { GatewayReloadPlan } from "./config-reload-plan.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
@@ -134,17 +135,6 @@ type PreparedGatewayConfigCandidate = {
   reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
 };
 
-class GatewayConfigReloadSupersededError extends Error {
-  constructor() {
-    super("config reload superseded by a newer config write");
-    this.name = "GatewayConfigReloadSupersededError";
-  }
-}
-
-function isGatewayConfigReloadSupersededError(error: unknown): boolean {
-  return error instanceof Error && error.name === "GatewayConfigReloadSupersededError";
-}
-
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   return {
     plugins: {
@@ -181,6 +171,8 @@ export function startGatewayConfigReloader(opts: {
   onRuntimeConfigCommitted?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
   /** Publishes the resolved source-config revision accepted by the active runtime. */
   onConfigRevisionApplied?: (hash: string) => void;
+  /** Reads the same restart owner that fences publication of the applied revision. */
+  hasOutstandingGatewayRestart?: () => boolean;
   /** Retires rejected lifecycle work after any newer config transaction is accepted. */
   onConfigAccepted?: (
     nextConfig: OpenClawConfig,
@@ -426,7 +418,7 @@ export function startGatewayConfigReloader(opts: {
       // transaction. Only downstream signal delivery may coalesce.
       await opts.onRestart(plan, nextConfig, ownership, sourceConfig);
     } catch (err) {
-      if (isGatewayConfigReloadSupersededError(err)) {
+      if (err instanceof GatewayConfigReloadSupersededError) {
         opts.log.info(`config restart superseded: ${String(err)}`);
       } else {
         opts.log.error(`config restart failed: ${String(err)}`);
@@ -474,6 +466,12 @@ export function startGatewayConfigReloader(opts: {
     authoredConfig?: unknown,
     application?: RuntimeConfigWriteApplicationClaim,
   ) => {
+    const settleRuntimeApplication = (status: GatewayHotReloadApplicationStatus = "applied") => {
+      // A watcher replay must not turn recovery-owned runtime work into a success receipt.
+      application?.settle(
+        opts.hasOutstandingGatewayRestart?.() ? "applied-restart-required" : status,
+      );
+    };
     // Reprepare against the current accepted env owner. A managed write can
     // finish preflight while another watcher transaction accepts first.
     const preparedCandidate =
@@ -700,7 +698,7 @@ export function startGatewayConfigReloader(opts: {
         publishedSource?.commit?.();
       }
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
-      application?.settle("applied");
+      settleRuntimeApplication();
       return;
     }
 
@@ -751,7 +749,7 @@ export function startGatewayConfigReloader(opts: {
       assertCurrent();
       await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
-      application?.settle("applied");
+      settleRuntimeApplication();
       return;
     }
     if (followUp.requiresRestart) {
@@ -788,7 +786,7 @@ export function startGatewayConfigReloader(opts: {
     assertCurrent();
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
-    application?.settle(applicationStatus);
+    settleRuntimeApplication(applicationStatus);
     if (plan.reloadPlugins) {
       // The committed reload republished the metadata snapshot generation.
       markPluginMetadataRefreshApplied();
@@ -806,12 +804,12 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const runAcceptedTransaction = async (run: () => Promise<void>) => {
-    if (opts.runTransaction) {
-      await opts.runTransaction(run);
-      return;
-    }
-    await run();
+  const runAcceptedTransaction = async (
+    run: () => Promise<void>,
+    application?: RuntimeConfigWriteApplicationClaim,
+  ) => {
+    const runTransaction = application?.runTransaction ?? opts.runTransaction;
+    await (runTransaction ? runTransaction(run) : run());
   };
 
   const acceptCurrentRuntimeEcho = async (
@@ -899,7 +897,7 @@ export function startGatewayConfigReloader(opts: {
               activeInProcessConfig = null;
             }
             await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
-          });
+          }, pendingWrite.application);
         } catch (err) {
           if (lastAppliedWriteHash === pendingWrite.persistedHash) {
             lastAppliedWriteHash = null;
@@ -980,7 +978,7 @@ export function startGatewayConfigReloader(opts: {
               watcherIntentCameFromPendingWrite = false;
             }
             await promoteAcceptedSnapshot(snapshot, "in-process-write");
-          });
+          }, intentCandidate.application);
         } catch (err) {
           if (lastAppliedWriteHash === intentCandidate.persistedHash) {
             lastAppliedWriteHash = null;
@@ -1106,7 +1104,7 @@ export function startGatewayConfigReloader(opts: {
       });
       await acceptWatchedPaths(snapshot.includedPaths ?? []);
     } catch (err) {
-      const superseded = isGatewayConfigReloadSupersededError(err);
+      const superseded = err instanceof GatewayConfigReloadSupersededError;
       const transferredToWatcher =
         superseded && attemptedCandidate !== null && watcherIntentCandidate === attemptedCandidate;
       if (!transferredToWatcher) {

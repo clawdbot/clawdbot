@@ -28,19 +28,19 @@ import { VERSION } from "../version.js";
 import { installBundledPluginSource } from "./bundled-install.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import {
-  computeDeclaredSurfaceHash,
   prepareManagedPluginArtifactConsentHandler,
-  formatPluginCapabilityConsentRequired,
-  resolveAcceptedSurfaceCurrent,
   resolvePendingPluginCapabilityReview,
   resolvePluginCapabilityConsent,
-  resolvePluginInstallRecordIntegrity,
   resolvePluginInstallRecordTrust,
   type PluginCapabilityConsentAcknowledgment,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
+  computeDeclaredSurfaceHash,
+  formatPluginCapabilityConsentRequired,
+  resolveAcceptedSurfaceCurrent,
+  resolvePluginInstallRecordIntegrity,
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
@@ -174,7 +174,6 @@ type ManagedPluginInstallRequest =
       source: "clawhub";
       packageName: string;
       version?: string;
-      acknowledgeClawHubRisk?: boolean;
       acknowledgeInstallPolicyWarning?: true;
       acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
     }
@@ -217,8 +216,9 @@ export type ManagedPluginSourceInstallRequest =
       expectedIntegrity?: string;
       /** Host-validated official catalog provenance for release-cohort resolution. */
       trustedSourceLinkedOfficialInstall?: true;
-      acknowledgeClawHubRisk?: boolean;
-      onClawHubRisk?: NonNullable<Parameters<typeof installPluginFromClawHub>[0]["onClawHubRisk"]>;
+      confirmInstall?: NonNullable<
+        Parameters<typeof installPluginFromClawHub>[0]["confirmInstall"]
+      >;
     }
   | {
       source: "bundled";
@@ -1663,8 +1663,7 @@ async function installResolvedManagedPluginSource(
         mode: request.mode,
         ...(request.expectedPluginId ? { expectedPluginId: request.expectedPluginId } : {}),
         ...(request.expectedIntegrity ? { expectedIntegrity: request.expectedIntegrity } : {}),
-        ...(request.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-        ...(request.onClawHubRisk ? { onClawHubRisk: request.onClawHubRisk } : {}),
+        ...(request.confirmInstall ? { confirmInstall: request.confirmInstall } : {}),
       }),
       {
         expectedPluginId: request.expectedPluginId,
@@ -1736,7 +1735,6 @@ function resolveManagedClawHubInstallRequest(params: {
     ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
     ...(expectedPluginId ? { expectedPluginId } : {}),
     ...(expectedIntegrity ? { expectedIntegrity } : {}),
-    ...(params.request.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
   };
 }
 

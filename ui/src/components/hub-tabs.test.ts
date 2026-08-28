@@ -59,6 +59,7 @@ describe("renderHubTabs", () => {
 
   it("selects only enabled tabs from direct user activation", () => {
     const onSelect = vi.fn();
+    const onActivate = vi.fn();
     const container = document.createElement("div");
     render(
       renderHubTabs({
@@ -72,6 +73,7 @@ describe("renderHubTabs", () => {
         ariaLabel: "Example sections",
         panelId: "example-panel",
         onSelect,
+        onActivate,
       }),
       container,
     );
@@ -92,6 +94,7 @@ describe("renderHubTabs", () => {
 
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith("second");
+    expect(onActivate).toHaveBeenCalledWith(container.querySelector("#example-tab-second"));
     expect(container.querySelector("wa-tab-group")?.getAttribute("activation")).toBe("manual");
   });
 

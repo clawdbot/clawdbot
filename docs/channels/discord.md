@@ -437,6 +437,7 @@ Example:
 
     Multi-account precedence:
 
+    - Omitted account `dmPolicy` and `groupPolicy` inherit the channel root. Explicit account policies win; with neither scope set, defaults remain `pairing` and `allowlist` respectively.
     - `channels.discord.accounts.default.allowFrom` applies only to the `default` account.
     - For one account, `allowFrom` takes precedence over legacy `dm.allowFrom`.
     - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` and legacy `dm.allowFrom` are unset.
@@ -1272,6 +1273,7 @@ Notes:
 - `voice.followUsers` lets the bot join, move, and leave Discord voice with selected users. See [Follow users in voice](#follow-users-in-voice).
 - `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`) and strongly prefers consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`). In that default `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
 - Realtime voice buffers generated audio when Discord playback temporarily falls behind and tolerates brief provider or network gaps. Normal backpressure does not cancel the response, and queued answers wait until Discord finishes playing the previous answer, even if its provider response or audio encoder has already finished.
+- If the realtime provider ends the session, OpenClaw leaves the voice channel and clears its connected status. Check the `realtime session failed terminally` log, then use `/vc join` to reconnect. Temporary provider reconnects do not end the Discord voice session.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
 - `stt-tts` replies remain active until Discord finishes playing them; long responses are not cut off by a fixed one-minute playback deadline.
 - In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2.1 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2.1"` and `voice.model: "openai/gpt-5.6-sol"`.

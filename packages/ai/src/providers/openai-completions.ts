@@ -11,7 +11,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
@@ -208,6 +208,7 @@ export const streamOpenAICompletions: StreamFunction<
           provisionalCommentaryTags,
           signal: options?.signal,
           emitReasoning: shouldEmitReasoning,
+          strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),

@@ -20,9 +20,11 @@ import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js
 import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-policy.js";
 import type { AgentTool } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import {
-  withFileMutationQueue,
-  withFileMutationQueues,
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+  withFileMutationQueueKeysResolution,
 } from "./sessions/tools/file-mutation-queue.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
@@ -186,33 +188,58 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     }
 
     if (hunk.kind === "add") {
-      const target = await resolvePatchPath(hunk.path, options);
-      await withFileMutationQueue(target.resolved, async () => {
-        await assertPatchParentPath(hunk.path, options);
-        await ensureDir(target.resolved, fileOps);
-        await createPatchTarget({
-          target,
-          contents: hunk.contents,
-          ops: fileOps,
-          hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
-        });
-      });
+      const targetResolution = resolvePatchPath(hunk.path, options);
+      await withFileMutationQueueKeyResolution(
+        targetResolution.then((target) => target.queueKey),
+        async () => {
+          const target = await targetResolution;
+          await assertPatchParentPath(hunk.path, options);
+          await ensureDir(target.resolved, fileOps);
+          await createPatchTarget({
+            target,
+            contents: hunk.contents,
+            ops: fileOps,
+            hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
+          });
+        },
+      );
+      const target = await targetResolution;
       recordSummary(summary, seen, "added", target.display);
       continue;
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
-      await withFileMutationQueue(target.resolved, () => fileOps.remove(target.resolved));
+      const targetResolution = resolvePatchPath(
+        hunk.path,
+        options,
+        PATH_ALIAS_POLICIES.unlinkTarget,
+      );
+      await withFileMutationQueueKeyResolution(
+        targetResolution.then((target) => target.queueKey),
+        async () => {
+          const target = await targetResolution;
+          await fileOps.remove(target.resolved);
+        },
+      );
+      const target = await targetResolution;
       recordSummary(summary, seen, "deleted", target.display);
       continue;
     }
 
-    const target = await resolvePatchPath(hunk.path, options);
-    const moveTarget = hunk.movePath ? await resolvePatchPath(hunk.movePath, options) : undefined;
-    await withFileMutationQueues(
-      [target.resolved, ...(moveTarget ? [moveTarget.resolved] : [])],
+    const targetResolution = resolvePatchPath(hunk.path, options);
+    const moveTargetResolution = hunk.movePath
+      ? resolvePatchPath(hunk.movePath, options)
+      : undefined;
+    await withFileMutationQueueKeysResolution(
+      Promise.all([
+        targetResolution.then((target) => target.queueKey),
+        ...(moveTargetResolution
+          ? [moveTargetResolution.then((moveTarget) => moveTarget.queueKey)]
+          : []),
+      ]),
       async () => {
+        const target = await targetResolution;
+        const moveTarget = moveTargetResolution ? await moveTargetResolution : undefined;
         const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
           readFile: (pathLocal) => fileOps.readFile(pathLocal),
         });
@@ -318,13 +345,13 @@ async function assertPatchParentPath(rawFilePath: string, options: ApplyPatchOpt
   if (!parent || parent === ".") {
     return;
   }
-  await assertSandboxPath({
+  const checked = await assertSandboxPath({
     filePath: parent,
     cwd: options.cwd,
     root: options.root ?? options.cwd,
   });
   await assertNoExistingParentAliases({
-    parentPath: resolvePathFromInput(parent, options.cwd),
+    parentPath: checked.resolved,
     rootPath: options.root ?? options.cwd,
   });
 }
@@ -362,7 +389,7 @@ async function resolvePatchPath(
   rawFilePath: string,
   options: ApplyPatchOptions,
   aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
-): Promise<{ resolved: string; display: string }> {
+): Promise<{ resolved: string; queueKey: string; display: string }> {
   if (options.sandbox) {
     const filePath = await preserveAtPrefixedRelativePath(
       rawFilePath,
@@ -384,6 +411,13 @@ async function resolvePatchPath(
     }
     return {
       resolved: resolved.hostPath ?? resolved.containerPath,
+      queueKey: await resolveSandboxFileMutationQueueKey({
+        bridge: options.sandbox.bridge,
+        root: options.sandbox.root,
+        filePath,
+        cwd: options.cwd,
+        signal: options.signal,
+      }),
       display: resolved.relativePath || resolved.containerPath,
     };
   }
@@ -403,6 +437,7 @@ async function resolvePatchPath(
     : resolvePathFromInput(filePath, options.cwd);
   return {
     resolved,
+    queueKey: await resolveFileMutationQueueKey(resolved),
     display: toDisplayPath(resolved, options.cwd),
   };
 }

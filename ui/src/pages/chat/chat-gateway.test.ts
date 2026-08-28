@@ -12,6 +12,10 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
+  visibleAssistantStreamParts,
+  visibleCurrentAssistantStreamTail,
+} from "./stream-reconciliation.ts";
+import {
   authoritativeHistoryAppliedForRun,
   reconcileAuthoritativeTerminalHistory,
   rememberAuthoritativeTerminal,
@@ -661,6 +665,13 @@ describe("handleChatGatewayEvent", () => {
       expected: "Live reply",
     },
     {
+      name: "appends an incremental-only delta to the rolled-over cumulative baseline",
+      previous: null,
+      segments: [{ text: "Live", ts: 1, runId: "run-1", boundaryRunId: "steer-run" }],
+      delta: " reply",
+      expected: "Live reply",
+    },
+    {
       name: "uses the cumulative snapshot when a missed delta would make append stale",
       previous: "Hello",
       delta: "!",
@@ -682,8 +693,13 @@ describe("handleChatGatewayEvent", () => {
       replace: true,
       expected: "Alpha",
     },
-  ])("$name", ({ previous, delta, snapshot, replace, expected }) => {
-    const state = createState({ sessionKey: "main", chatRunId: "run-1", chatStream: previous });
+  ])("$name", ({ previous, segments, delta, snapshot, replace, expected }) => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: previous,
+      ...(segments ? { chatStreamSegments: segments } : {}),
+    });
     const payload: ChatEventPayload = {
       runId: "run-1",
       sessionKey: "main",
@@ -3397,10 +3413,20 @@ describe("loadChatHistory retry handling", () => {
       }
     }
     expect(state.chatRunId).toBe("run-1");
-    expect(state.chatStream).toBe(expectedStream);
+    expect(state.chatStream).toBe(stream);
+    expect(visibleCurrentAssistantStreamTail(state, () => false)).toBe(expectedStream);
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual(remainingTools.map((index) => tools[index]));
-    expect(state.chatStreamSegments).toEqual(remainingSegments);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: false,
+        isHiddenStreamText: () => false,
+      }).map(({ text, timestamp, toolCallId }) => ({
+        text,
+        ts: timestamp,
+        toolCallId,
+      })),
+    ).toEqual(remainingSegments);
     expect(state.toolStreamById.size).toBe(remainingTools.length);
     expect(state.toolStreamOrder).toEqual(
       remainingTools.map((index) => String(tools[index]?.toolCallId)),
@@ -3494,7 +3520,12 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBe("Still answering.");
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual([]);
-    expect(state.chatStreamSegments).toEqual([]);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: false,
+        isHiddenStreamText: () => false,
+      }),
+    ).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
@@ -3532,7 +3563,12 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([]);
-    expect(state.chatStreamSegments).toEqual([]);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: false,
+        isHiddenStreamText: () => false,
+      }),
+    ).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
@@ -3656,7 +3692,12 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([liveToolMessage]);
-    expect(state.chatStreamSegments).toEqual([]);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: false,
+        isHiddenStreamText: () => false,
+      }),
+    ).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
     expect(state.toolStreamOrder).toEqual(["call_current"]);
   });

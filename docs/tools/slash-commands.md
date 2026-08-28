@@ -492,10 +492,9 @@ and official-catalog installs do not need a provenance acknowledgement. Arbitrar
 git, archive, `npm-pack:`, and local path sources show a provenance warning and
 require a trailing `--force` after you review the source. This flag acknowledges
 the source and permits replacement of an existing install; it does not bypass
-`security.installPolicy` or installer security checks. ClawHub releases with
-risk warnings still require the separate shell-only
-`--acknowledge-clawhub-risk` flag. Marketplace, linked, and pinned installs also
-remain shell-only.
+`security.installPolicy` or installer security checks. ClawHub Review outcomes
+are printed informationally; blocked releases remain non-installable.
+Marketplace, linked, and pinned installs remain shell-only.
 
 When `/plugins install` or `/plugins enable` requires capability consent, it
 returns the plugin's declared capabilities and an exact retry command. Review

@@ -155,6 +155,16 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
   };
 }
 
+it("renders shared skeletons while initial usage is loading", () => {
+  const container = document.createElement("div");
+  const props = createUsageProps();
+  render(renderUsage(createUsageProps({ data: { ...props.data, loading: true } })), container);
+
+  const blocks = container.querySelectorAll(".usage-skeleton-block");
+  expect(blocks).toHaveLength(3);
+  expect([...blocks].every((block) => block.classList.contains("skeleton"))).toBe(true);
+});
+
 describe("renderUsage", () => {
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = document.createElement("div");

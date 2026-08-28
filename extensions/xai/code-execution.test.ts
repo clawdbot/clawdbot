@@ -67,11 +67,7 @@ function firstFetchInit(mockFetch: ReturnType<typeof installCodeExecutionFetch>)
 }
 
 function firstAuthorizationHeader(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
-  const headers = firstFetchInit(mockFetch).headers;
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
-    throw new Error("expected code_execution request headers");
-  }
-  return (headers as Record<string, string>).Authorization;
+  return new Headers(firstFetchInit(mockFetch).headers).get("Authorization");
 }
 
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {

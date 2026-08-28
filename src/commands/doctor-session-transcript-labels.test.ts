@@ -14,10 +14,10 @@ import { appendTranscriptEventsInTransaction } from "../config/sessions/session-
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
@@ -31,6 +31,7 @@ const note = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
+import { probeTranscriptHealthMemory } from "./doctor-session-transcript-health.memory.test-support.js";
 import { noteSessionTranscriptLabelHealth } from "./doctor-session-transcript-labels.js";
 
 const AGENT_ID = "main";
@@ -64,7 +65,7 @@ function appendTranscriptFixture(
   events: readonly TranscriptEvent[],
   scope: { sessionId?: string; sessionKey?: string } = {},
 ): OpenClawAgentDatabase {
-  runOpenClawAgentWriteTransaction((database) => {
+  agentDatabase.runOpenClawAgentWriteTransaction((database) => {
     expect(
       appendTranscriptEventsInTransaction(
         database,
@@ -212,10 +213,18 @@ describe("doctor SQLite session transcript label migration", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await waitForSessionTranscriptIndexReconcile({ agentId: AGENT_ID, env: state.env });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
+  });
+
+  it("checks healthy large transcripts under a 256 MiB heap without changing bytes", async () => {
+    expect(await probeTranscriptHealthMemory(state.stateDir, "labels")).toMatchObject({
+      scenario: "labels",
+      eventCount: 4096,
+    });
   });
 
   it("detects and idempotently rewrites legacy labels in user events", async () => {
@@ -284,6 +293,33 @@ describe("doctor SQLite session transcript label migration", () => {
 
     expect(readTranscriptSnapshot(database, SESSION_ID).rows).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("rejects a sibling change between detection and label repair", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const database = seedLegacyLabelTranscript(databaseOptions);
+    const before = readTranscriptEventRows(database, SESSION_ID);
+    const transaction = agentDatabase.runOpenClawAgentWriteTransaction;
+    vi.spyOn(agentDatabase, "runOpenClawAgentWriteTransaction").mockImplementationOnce(
+      (write, options, transactionOptions) => {
+        transaction((db) => {
+          db.db
+            .prepare(
+              "UPDATE transcript_events SET event_json = '{}' WHERE session_id = ? AND seq = 2",
+            )
+            .run(SESSION_ID);
+        }, databaseOptions);
+        return transaction(write, options, transactionOptions);
+      },
+    );
+    await runTranscriptLabelHealth(state, true);
+    expect(readTranscriptEventRows(database, SESSION_ID)).toEqual(
+      before.map((row) => ({ seq: row.seq, eventJson: row.seq === 2 ? "{}" : row.eventJson })),
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("transcript changed while preparing rewrite"),
+      "Session transcript labels",
+    );
   });
 
   it("preserves the bare Context header when migrating active-memory blocks", async () => {
@@ -415,34 +451,49 @@ describe("doctor SQLite session transcript label migration", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("rewrites legacy inbound-context blocks copied into an assistant message", async () => {
-    // Shipped label-based strippers removed inbound-context blocks from assistant content too
-    // (chat-sanitize display, replay-history assistant path, session-cost-usage). The marker-only
-    // runtime relies on this migration to re-mark them; a user-role-only migration would leave legacy
-    // assistant echoes unmarked and leak/replay them after upgrade.
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
-    const assistantEcho = [
-      "Conversation info (untrusted metadata):",
-      "```json",
-      '{"channel":"discord"}',
-      "```",
-      "",
-      "Sure, here is the answer.",
-    ].join("\n");
-    const database = seedMessageTranscript(databaseOptions, [
-      { id: "assistant-echo", content: assistantEcho, role: "assistant" },
-    ]);
-    await runTranscriptLabelHealth(state, true);
+  it.each([false, true])(
+    "rewrites assistant labels including JSON Unicode escapes (escaped=%s)",
+    async (escaped) => {
+      // Shipped label-based strippers removed inbound-context blocks from assistant content too
+      // (chat-sanitize display, replay-history assistant path, session-cost-usage). The marker-only
+      // runtime relies on this migration to re-mark them; a user-role-only migration would leave legacy
+      // assistant echoes unmarked and leak/replay them after upgrade.
+      const databaseOptions = { agentId: AGENT_ID, env: state.env };
+      const assistantEcho = [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"channel":"discord"}',
+        "```",
+        "",
+        "Sure, here is the answer.",
+      ].join("\n");
+      const database = seedMessageTranscript(databaseOptions, [
+        { id: "assistant-echo", content: assistantEcho, role: "assistant" },
+      ]);
+      if (escaped) {
+        const row = readTranscriptEventRows(database, SESSION_ID)[1]!;
+        agentDatabase.runOpenClawAgentWriteTransaction((db) => {
+          db.db
+            .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?")
+            .run(
+              row.eventJson.replaceAll("Conversation info", "\\u0043onversation info"),
+              SESSION_ID,
+              row.seq,
+            );
+        }, databaseOptions);
+      }
+      await runTranscriptLabelHealth(state, true);
 
-    const repaired = readTranscriptSnapshot(database, SESSION_ID);
-    const content = findMessageContent(repaired.events, "assistant-echo");
-    expect(typeof content).toBe("string");
-    // Migrated to the marked form so the marker-only strippers recognize and remove it.
-    expect(content).toContain(`Conversation info: ${INBOUND_CONTEXT_MARKER}`);
-    expect(content).not.toContain("Conversation info (untrusted metadata):");
-    expect(hasInboundMetadataSentinel(content as string)).toBe(true);
-    expect(stripInboundMetadata(content as string)).toBe("Sure, here is the answer.");
-  });
+      const repaired = readTranscriptSnapshot(database, SESSION_ID);
+      const content = findMessageContent(repaired.events, "assistant-echo");
+      expect(typeof content).toBe("string");
+      // Migrated to the marked form so the marker-only strippers recognize and remove it.
+      expect(content).toContain(`Conversation info: ${INBOUND_CONTEXT_MARKER}`);
+      expect(content).not.toContain("Conversation info (untrusted metadata):");
+      expect(hasInboundMetadataSentinel(content as string)).toBe(true);
+      expect(stripInboundMetadata(content as string)).toBe("Sure, here is the answer.");
+    },
+  );
 
   it("preserves seq and created_at during surgical repair (metadata preservation test)", async () => {
     const databaseOptions = { agentId: AGENT_ID, env: state.env };
@@ -474,7 +525,7 @@ describe("doctor SQLite session transcript label migration", () => {
     // Pin an explicitly OLD activity timestamp so we can prove the maintenance rewrite preserves
     // recency instead of jumping the session to repair-time.
     const OLD_UPDATED_AT = 1_000_000;
-    runOpenClawAgentWriteTransaction((db) => {
+    agentDatabase.runOpenClawAgentWriteTransaction((db) => {
       db.db
         .prepare(
           "UPDATE session_windows SET transcript_updated_at = ?, transcript_observed_at = ? WHERE session_id = ?",
@@ -521,7 +572,7 @@ describe("doctor SQLite session transcript label migration", () => {
     // Force the message row to a distinctly OLD created_at, well before repair-time Date.now(). The
     // append-time FTS timestamp still holds the (recent) append value until the repair rebuilds it.
     const OLD_CREATED_AT = 1_000_000;
-    runOpenClawAgentWriteTransaction((db) => {
+    agentDatabase.runOpenClawAgentWriteTransaction((db) => {
       db.db
         .prepare("UPDATE transcript_events SET created_at = ? WHERE session_id = ?")
         .run(OLD_CREATED_AT, SESSION_ID);
@@ -657,72 +708,80 @@ describe("doctor SQLite session transcript label migration", () => {
     expect(after.rows).toEqual(before.rows);
   });
 
-  it("isolates a session with a malformed row without blocking other repairs", async () => {
-    // event_json is self-generated JSON, so a malformed row is only possible via corruption.
-    // We do not engineer intra-session tolerance for it (the shared FTS reconcile in
-    // session-transcript-index.ts parses every row); instead the per-session transaction is
-    // isolated: the corrupted session is skipped with a diagnostic note, and a clean session
-    // in the same run is still repaired. This locks that graceful-degradation contract.
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
-    const CORRUPT_SESSION_ID = "corrupt-sibling-session";
-    const CORRUPT_SESSION_KEY = "agent:main:corrupt-sibling-session";
+  it.each([false, true])(
+    "isolates malformed siblings before or after labels (malformedFirst=%s)",
+    async (malformedFirst) => {
+      // event_json is self-generated JSON, so a malformed row is only possible via corruption.
+      // We do not engineer intra-session tolerance for it (the shared FTS reconcile in
+      // session-transcript-index.ts parses every row); instead the per-session transaction is
+      // isolated: the corrupted session is skipped with a diagnostic note, and a clean session
+      // in the same run is still repaired. This locks that graceful-degradation contract.
+      const databaseOptions = { agentId: AGENT_ID, env: state.env };
+      const CORRUPT_SESSION_ID = "corrupt-sibling-session";
+      const CORRUPT_SESSION_KEY = "agent:main:corrupt-sibling-session";
 
-    // Clean session that must still be repaired.
-    const database = seedLegacyLabelTranscript(databaseOptions);
+      // Clean session that must still be repaired.
+      const database = seedLegacyLabelTranscript(databaseOptions);
 
-    // Corrupt session: one legacy-label user row plus a sibling row we corrupt below.
-    const corruptLegacyContent = [
-      "Conversation info (untrusted metadata):",
-      "```json",
-      '{"chat_type":"direct"}',
-      "```",
-    ].join("\n");
-    seedMessageTranscript(
-      databaseOptions,
-      [
-        { id: "corrupt-legacy-user", content: corruptLegacyContent },
-        { id: "malformed-sibling", content: "response", role: "assistant" },
-      ],
-      { sessionId: CORRUPT_SESSION_ID, sessionKey: CORRUPT_SESSION_KEY },
-    );
+      // Corrupt session: one legacy-label user row plus a sibling row we corrupt below.
+      const corruptLegacyContent = [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"chat_type":"direct"}',
+        "```",
+      ].join("\n");
+      seedMessageTranscript(
+        databaseOptions,
+        malformedFirst
+          ? [
+              { id: "malformed-sibling", content: "response", role: "assistant" },
+              { id: "corrupt-legacy-user", content: corruptLegacyContent },
+            ]
+          : [
+              { id: "corrupt-legacy-user", content: corruptLegacyContent },
+              { id: "malformed-sibling", content: "response", role: "assistant" },
+            ],
+        { sessionId: CORRUPT_SESSION_ID, sessionKey: CORRUPT_SESSION_KEY },
+      );
 
-    // Corrupt the sibling row's event_json in place. transcript_events has no type/id columns,
-    // so match on the encoded event body.
-    runOpenClawAgentWriteTransaction((writeDatabase) => {
-      const changed = writeDatabase.db
-        .prepare(
-          "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND event_json LIKE ?",
-        )
-        .run("{malformed", CORRUPT_SESSION_ID, "%malformed-sibling%");
-      expect(Number(changed.changes)).toBe(1);
-    }, databaseOptions);
+      // Corrupt the sibling row's event_json in place. transcript_events has no type/id columns,
+      // so match on the encoded event body.
+      agentDatabase.runOpenClawAgentWriteTransaction((writeDatabase) => {
+        const changed = writeDatabase.db
+          .prepare(
+            "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND event_json LIKE ?",
+          )
+          .run("{malformed", CORRUPT_SESSION_ID, "%malformed-sibling%");
+        expect(Number(changed.changes)).toBe(1);
+      }, databaseOptions);
 
-    await runTranscriptLabelHealth(state, true);
+      await runTranscriptLabelHealth(state, true);
 
-    // The clean session was repaired.
-    const cleanRepaired = readTranscriptSnapshot(database, SESSION_ID);
-    const cleanContent = findMessageContent(cleanRepaired.events, "legacy-user");
-    expect(cleanContent).toContain("Conversation info:");
-    expect(cleanContent).not.toContain("Conversation info (untrusted metadata):");
+      // The clean session was repaired.
+      const cleanRepaired = readTranscriptSnapshot(database, SESSION_ID);
+      const cleanContent = findMessageContent(cleanRepaired.events, "legacy-user");
+      expect(cleanContent).toContain("Conversation info:");
+      expect(cleanContent).not.toContain("Conversation info (untrusted metadata):");
 
-    // The corrupt session was skipped with a diagnostic note naming it.
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`Failed to rewrite labels for session ${CORRUPT_SESSION_ID}`),
-      "Session transcript labels",
-    );
-    // Only the clean session counts as repaired.
-    expect(note).toHaveBeenCalledWith(
-      "- Rewrote legacy inbound-context labels in 1 session (1 event).",
-      "Session transcript labels",
-    );
+      // The corrupt session was skipped with a diagnostic note naming it.
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining(`Failed to rewrite labels for session ${CORRUPT_SESSION_ID}`),
+        "Session transcript labels",
+      );
+      // Only the clean session counts as repaired.
+      expect(note).toHaveBeenCalledWith(
+        "- Rewrote legacy inbound-context labels in 1 session (1 event).",
+        "Session transcript labels",
+      );
 
-    // The corrupt session was rolled back: legacy label survives, malformed row untouched.
-    // Read raw rows without parsing: readTranscriptSnapshot would throw on the malformed row.
-    const corruptRows = readTranscriptEventRows(database, CORRUPT_SESSION_ID);
-    const corruptLegacyJson = corruptRows.find((row) =>
-      row.eventJson.includes("corrupt-legacy-user"),
-    );
-    expect(corruptLegacyJson?.eventJson).toContain("Conversation info (untrusted metadata):");
-    expect(corruptRows.some((row) => row.eventJson === "{malformed")).toBe(true);
-  });
+      // The corrupt session was rolled back: legacy label survives, malformed row untouched.
+      // Read raw rows without parsing: readTranscriptSnapshot would throw on the malformed row.
+      const corruptRows = readTranscriptEventRows(database, CORRUPT_SESSION_ID);
+      const corruptLegacyJson = corruptRows.find((row) =>
+        row.eventJson.includes("corrupt-legacy-user"),
+      );
+      expect(corruptLegacyJson?.eventJson).toContain("Conversation info (untrusted metadata):");
+      expect(corruptRows.some((row) => row.eventJson === "{malformed")).toBe(true);
+    },
+  );
 });

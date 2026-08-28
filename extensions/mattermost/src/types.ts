@@ -14,6 +14,8 @@ type MattermostNetworkConfig = {
 };
 
 export type MattermostAccountConfig = {
+  /** Megabyte cap for media this channel accepts and delivers. */
+  mediaMaxMb?: number;
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */

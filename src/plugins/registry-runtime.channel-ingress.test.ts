@@ -291,26 +291,29 @@ describe("bundled channel ingress runtime ownership", () => {
     }
   });
 
-  it("mints only for the exact active bundled record", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const external = createRuntimeBuilder({ origin: "workspace" });
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
+  it.each(["workspace", "global"] as const)(
+    "does not mint for %s plugins, only the exact active bundled record",
+    async (origin) => {
+      const cleanup = configureChannelAdmissionEvidenceCollection(true);
+      try {
+        const external = createRuntimeBuilder({ origin });
+        const bundled = createRuntimeBuilder({ origin: "bundled" });
+        const ingress = await resolveIngress("person-a");
 
-      expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "present",
-        invoker: { state: "present", kind: "person" },
-        decisionCoverage: "enforced",
-      });
-    } finally {
-      cleanup();
-    }
-  });
+        expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
+          ingressState: "unknown",
+          invoker: { state: "unknown" },
+        });
+        expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
+          ingressState: "present",
+          invoker: { state: "present", kind: "person" },
+          decisionCoverage: "enforced",
+        });
+      } finally {
+        cleanup();
+      }
+    },
+  );
 
   it("consumes the exact resolution-to-context handoff on its first attempt", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);

@@ -6,6 +6,29 @@
   margin: 0;
 }
 
+.content-header.hub-page-header.plugins-hub-header {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-5);
+  max-height: none;
+}
+
+.plugins-hub-header + .settings-workspace {
+  /* The settings page already contributes the lower half of the tab rhythm. */
+  margin-top: 0;
+}
+
+@media (max-width: 400px) {
+  .content-header.hub-page-header.plugins-hub-header {
+    gap: var(--space-4);
+  }
+}
+
 /* ---------- toolbar ---------- */
 
 .plugins-toolbar {
@@ -368,21 +391,7 @@ h3.plugins-subheader {
 }
 
 .plugins-remove {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  padding: 7px;
   color: var(--muted);
-}
-
-.plugins-remove svg {
-  width: 100%;
-  height: 100%;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .plugins-remove:hover:not(:disabled) {

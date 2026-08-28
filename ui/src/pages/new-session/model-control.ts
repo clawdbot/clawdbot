@@ -589,6 +589,18 @@ export class NewSessionModelControl {
       : undefined;
   }
 
+  // Worker-turn runtimes rank automatic placement by free worker slots;
+  // remote-exec runtimes select by eligible device order and must not be
+  // described as least-busy. Unresolved (auto/default) runtimes fall back to
+  // the worker-turn description, matching the server's default policy.
+  autoPlacementSelectionMode(): "least-busy" | "eligible-order" {
+    const runtime = this.resolveAgentRuntime({
+      agent: this.pendingAgent,
+      context: this.pendingContext,
+    });
+    return runtime?.cloudPlacementExecutionMode === "remote-exec" ? "eligible-order" : "least-busy";
+  }
+
   cloudRuntimeUnsupportedReason(profile?: DraftCloudProfile): string | undefined {
     const runtime = this.resolveAgentRuntime({
       agent: this.pendingAgent,

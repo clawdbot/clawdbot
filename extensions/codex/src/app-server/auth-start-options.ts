@@ -31,9 +31,7 @@ export function withEphemeralCodexAuthStore(params: {
   authProfileId?: string | null;
 }): CodexAppServerStartOptions {
   const { startOptions } = params;
-  const managedCodexCli =
-    startOptions.commandSource === "managed" || startOptions.commandSource === "resolved-managed";
-  if (!managedCodexCli || (!params.preparedAuth && params.authProfileId === null)) {
+  if (!params.preparedAuth && params.authProfileId === null) {
     return startOptions;
   }
   if (

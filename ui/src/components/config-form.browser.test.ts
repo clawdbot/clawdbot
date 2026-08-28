@@ -313,9 +313,11 @@ describe("config form renderer", () => {
       container,
     );
 
-    const headings = Array.from(container.querySelectorAll(".settings-section__heading")).map(
-      (node) => node.textContent?.trim(),
-    );
+    const headings = Array.from(
+      container.querySelectorAll(
+        ".settings-section > .settings-section__header .settings-section__heading",
+      ),
+    ).map((node) => node.textContent?.trim());
     expect(headings).toEqual(["Auth"]);
     // The subsection object emits its fields directly; no nested details block
     // repeats the subsection title inside the group.
@@ -858,10 +860,17 @@ describe("config form renderer", () => {
       "section help button",
     );
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
+    expect(button.querySelector("svg")).not.toBeNull();
+    const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");
+    expect((tooltip as HTMLElement & { content: string }).content).toBe("Help for Gateway");
     const link = expectElement(
       container.querySelector<HTMLAnchorElement>(".settings-section__help-popover a"),
       "section guide link",
     );
+    expect(link.textContent?.trim()).toBe("Learn more");
+    expect(link.classList.contains("learn-more-link")).toBe(true);
+    const popover = expectElement(link.closest("wa-popover"), "section help popover");
+    expect(button.getAttribute("aria-controls")).toBe(popover.id);
     expect(link.getAttribute("href")).toBe("https://docs.openclaw.ai/gateway/configuration");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");

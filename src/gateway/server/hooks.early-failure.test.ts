@@ -5,6 +5,7 @@ import type { AcpRuntime, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { consumeAcpTurnStream } from "../../acp/control-plane/manager.turn-stream.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HookMappingConfig } from "../../config/types.hooks.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
@@ -19,12 +20,15 @@ import {
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { loggingState } from "../../logging/state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveHooksConfig } from "../hooks.js";
+import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "../server-lanes.js";
 
 const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
@@ -66,6 +70,18 @@ function createPluginHookDispatcher(options: { admissionTimeoutMs?: number } = {
     agentStartAdmissionTimeoutMs: options.admissionTimeoutMs,
   });
   return { dispatcher, logHooks };
+}
+
+function queueHookRunner(onStart = vi.fn()) {
+  mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+    async (params: { lane: string; onExecutionStarted?: () => void }) =>
+      await enqueueCommandInLane(params.lane, async () => {
+        params.onExecutionStarted?.();
+        onStart();
+        return { status: "ok", summary: "done" };
+      }),
+  );
+  return onStart;
 }
 
 function createConfig(global: boolean): OpenClawConfig {
@@ -148,6 +164,8 @@ describe("gateway hook early-failure recovery", () => {
 
   beforeEach(() => {
     resetGatewayWorkAdmission();
+    resetCommandQueueStateForTest();
+    applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency({}));
     vi.clearAllMocks();
   });
 
@@ -156,6 +174,7 @@ describe("gateway hook early-failure recovery", () => {
     resetGatewayWorkAdmission();
     loggingState.rawConsole = null;
     resetLogger();
+    resetCommandQueueStateForTest();
   });
 
   afterAll(async () => {
@@ -589,65 +608,69 @@ describe("gateway hook early-failure recovery", () => {
     },
   );
 
-  it("contains plugin email turns without enabling the HTTP hook surface", async () => {
-    const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, hooks: {} } },
-      hooks: {
-        allowedAgentIds: ["main"],
-        allowedSessionKeyPrefixes: ["hook:http:"],
-      },
-    };
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        params.onExecutionStarted?.();
-        return { status: "ok", summary: "done" };
-      },
-    );
-    const { dispatcher, logHooks } = createPluginHookDispatcher();
-    const unsafePluginTurn = {
-      ...pluginHookTurn,
-      allowUnsafeExternalContent: true,
-      sessionMode: "persistent",
-    };
-
-    const result = await dispatcher.dispatchHookAgentTurn(unsafePluginTurn, "imap");
-
-    expect(result).toEqual({ ok: true, runId: expect.any(String) });
-    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "hooks",
-        sessionKey: pluginHookTurn.sessionKey,
-        lane: CommandLane.HookDispatch,
-        job: expect.objectContaining({
-          name: "IMAP fastmail",
-          agentId: "hooks",
-          sessionTarget: "isolated",
-          payload: expect.objectContaining({
-            kind: "agentTurn",
-            message: pluginHookTurn.message,
-            externalContentSource: "email",
-            allowUnsafeExternalContent: undefined,
-          }),
-          delivery: { mode: "none" },
-        }),
-        executionIdentity: {
-          ingress: {
-            kind: "webhook",
-            boundary: "gateway.hooks.plugin",
-            state: "present",
-            rawSourceRef: "imap:IMAP fastmail",
-          },
+  it.each([undefined, false, true])(
+    "contains plugin email turns with HTTP hooks enabled=%s",
+    async (enabled) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { default: true }, hooks: {} } },
+        hooks: {
+          enabled,
+          allowedAgentIds: ["main"],
+          allowedSessionKeyPrefixes: ["hook:http:"],
         },
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(logHooks.info).toHaveBeenCalledWith(
-        expect.stringMatching(/^hook agent run completed /),
-        expect.objectContaining({ name: "IMAP fastmail" }),
-      ),
-    );
-  });
+      };
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config));
+      const onStart = queueHookRunner();
+      const { dispatcher, logHooks } = createPluginHookDispatcher({ admissionTimeoutMs: 100 });
+      const unsafePluginTurn = {
+        ...pluginHookTurn,
+        allowUnsafeExternalContent: true,
+        sessionMode: "persistent",
+      };
+
+      const result = await dispatcher.dispatchHookAgentTurn(unsafePluginTurn, "imap");
+      // Drain a closed lane after the regression fails; expired admission still fences execution.
+      applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(createConfig(false)));
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+      expect(result).toEqual({ ok: true, runId: expect.any(String) });
+      expect(onStart).toHaveBeenCalledOnce();
+      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "hooks",
+          sessionKey: pluginHookTurn.sessionKey,
+          lane: CommandLane.CronNested,
+          job: expect.objectContaining({
+            name: "IMAP fastmail",
+            agentId: "hooks",
+            sessionTarget: "isolated",
+            payload: expect.objectContaining({
+              kind: "agentTurn",
+              message: pluginHookTurn.message,
+              externalContentSource: "email",
+              allowUnsafeExternalContent: undefined,
+            }),
+            delivery: { mode: "none" },
+          }),
+          executionIdentity: {
+            ingress: {
+              kind: "webhook",
+              boundary: "gateway.hooks.plugin",
+              state: "present",
+              rawSourceRef: "imap:IMAP fastmail",
+            },
+          },
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(logHooks.info).toHaveBeenCalledWith(
+          expect.stringMatching(/^hook agent run completed /),
+          expect.objectContaining({ name: "IMAP fastmail" }),
+        ),
+      );
+    },
+  );
 
   it("announces successful plugin hook turns through the existing heartbeat path", async () => {
     mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
@@ -757,25 +780,55 @@ describe("gateway hook early-failure recovery", () => {
     });
   });
 
-  it("preserves plugin hook admission timeout and fences late execution", async () => {
-    const releasePreparation = createDeferred();
-    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
-    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(async () => {
-      await releasePreparation.promise;
-      return { status: "ok", summary: "done" };
-    });
-    const { dispatcher } = createPluginHookDispatcher({ admissionTimeoutMs: 10 });
-
-    try {
-      await expect(dispatcher.dispatchHookAgentTurn(pluginHookTurn, "imap")).resolves.toEqual({
-        ok: false,
-        reason: "hook agent run did not start before admission timeout",
+  it.each([false, true])(
+    "bounds plugin work by cron capacity and fences expired admission=%s",
+    async (expire) => {
+      const config = { agents: createConfig(false).agents };
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config));
+      const releaseCron = createDeferred();
+      const cronRuns = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () =>
+        enqueueCommandInLane(CommandLane.CronNested, async () => await releaseCron.promise),
+      );
+      const onStart = queueHookRunner();
+      const { dispatcher } = createPluginHookDispatcher({
+        admissionTimeoutMs: expire ? 100 : 5_000,
       });
-    } finally {
-      releasePreparation.resolve();
-    }
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-  });
+      const admission = dispatcher.dispatchHookAgentTurn(pluginHookTurn, "imap");
+
+      try {
+        await vi.waitFor(() =>
+          expect(getCommandLaneSnapshot(CommandLane.CronNested)).toMatchObject({
+            activeCount: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+            queuedCount: 1,
+          }),
+        );
+        expect(onStart).not.toHaveBeenCalled();
+        if (!expire) {
+          releaseCron.resolve();
+        }
+        await expect(admission).resolves.toEqual(
+          expire
+            ? {
+                ok: false,
+                reason: "hook agent run did not start before admission timeout",
+              }
+            : { ok: true, runId: expect.any(String) },
+        );
+      } finally {
+        releaseCron.resolve();
+        applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(createConfig(false)));
+        await Promise.all(cronRuns);
+        await admission;
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      }
+      expect(onStart).toHaveBeenCalledTimes(expire ? 0 : 1);
+      expect(getCommandLaneSnapshot(CommandLane.CronNested)).toMatchObject({
+        activeCount: 0,
+        queuedCount: 0,
+      });
+    },
+  );
 
   it("serializes HTTP and plugin turns together while replaying plugin idempotency keys", async () => {
     const releaseHttpRun = createDeferred();

@@ -99,6 +99,10 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     ]);
 
     const settings = menu.locator('wa-dropdown-item[value="command:settings"]');
+    const settingsShortcut = settings.locator(".session-menu__shortcut");
+    expect(
+      await settingsShortcut.evaluate((element) => getComputedStyle(element).fontFamily),
+    ).toMatch(/^system-ui,/u);
     const settingsRestBackground = await settings.evaluate(
       (element) => getComputedStyle(element).backgroundColor,
     );

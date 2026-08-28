@@ -1276,6 +1276,8 @@ struct CommandSessionsScreen: View {
         // New Group editor) alongside the fresh session list.
         self.knownGroups = SessionGroupStore.load()
         let requestsArchived = self.showArchived
+        let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
+        let sourceAgentID = self.appModel.chatDeliveryAgentId
         self.isLoading = true
         self.loadErrorText = nil
         defer { self.isLoading = false }
@@ -1288,7 +1290,9 @@ struct CommandSessionsScreen: View {
             self.sessions = roster.sessions
         } catch {
             guard requestsArchived == self.showArchived else { return }
-            self.sessions = requestsArchived ? [] : await self.appModel.loadCachedChatSessions()
+            self.sessions = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
+                gatewayID: sourceGatewayID,
+                agentID: sourceAgentID)
             self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
         }
     }

@@ -213,6 +213,8 @@ export function cleanTsdownOutputRoots(params: OutputRootParams = {}) {
       ? listExistingDeclarationOutputPaths(cwd, fsImpl, roots)
       : new Set<string>();
   const protectedPaths = new Set([
+    // Vite owns and cleans this subtree; runtime-only builds cannot recreate it.
+    path.resolve(cwd, "dist/control-ui"),
     ...protectedDeclarationPaths,
     ...listExistingPreservedOutputPaths(cwd, env, fsImpl),
   ]);
@@ -261,7 +263,7 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
         fsImpl.rmSync(entryPath, { force: true });
       }
     } catch {
-      // Keep best-effort semantics; protected declaration children can keep a directory non-empty.
+      // Keep best-effort semantics; protected children can keep a directory non-empty.
     }
   }
 }

@@ -10,6 +10,7 @@ import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
   resolveDefaultVitestPool,
+  sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
@@ -105,6 +106,7 @@ const nodeDrivenBrowserLayoutTests = [
   "src/styles/cursor-policy.browser.test.ts",
   "src/styles/chat-file-link-presentation.browser.test.ts",
   "src/styles/chat-github-link-presentation.browser.test.ts",
+  "src/styles/shimmer.browser.test.ts",
   "src/styles/sr-only.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [
@@ -151,6 +153,7 @@ export default defineConfig({
   },
   test: {
     ...sharedUiTestConfig,
+    reporters: sharedVitestConfig.test.reporters,
     projects: [
       defineProject({
         plugins: [controlUiLocaleModulesPlugin()],

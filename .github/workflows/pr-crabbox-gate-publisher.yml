@@ -1,0 +1,88 @@
+name: PR Crabbox Gate Publisher
+run-name: PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.crabbox_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository pull request number
+        required: true
+        type: string
+      head_sha:
+        description: Exact lowercase 40-character pull request head SHA
+        required: true
+        type: string
+      base_sha:
+        description: Exact lowercase 40-character pull request base SHA
+        required: true
+        type: string
+      crabbox_run_id:
+        description: Immutable broker run id
+        required: true
+        type: string
+      crabbox_lease_id:
+        description: Released AWS lease id
+        required: true
+        type: string
+      bootstrap_sha256:
+        description: Trusted canonical bootstrap SHA-256
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pr-crabbox-gate-${{ inputs.pr_number }}-${{ inputs.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Validate AWS proof and publish gate
+    runs-on: ubuntu-24.04
+    environment: qa-live-shared
+    timeout-minutes: 10
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Create organization membership token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-members: read
+
+      - name: Create fallback organization membership token
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-members: read
+
+      - name: Validate immutable Crabbox proof and publish exact-head check
+        env:
+          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
+          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+        run: node scripts/pr-crabbox-gate-publisher.mjs

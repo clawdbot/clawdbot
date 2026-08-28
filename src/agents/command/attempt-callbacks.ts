@@ -19,9 +19,12 @@ type AgentAttemptLifecycleEvent = {
 };
 
 /** Creates callbacks that update lifecycle flags for persistence decisions. */
-export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycleState): {
+export function createAgentAttemptLifecycleCallbacks(
+  state: AgentAttemptLifecycleState,
+  onRuntimeTurnStarted?: () => void | Promise<void>,
+): {
   onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
-  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void;
+  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
 } {
   return {
     onUserMessagePersisted: () => {
@@ -37,7 +40,7 @@ export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycl
         state.lifecycleError = undefined;
         state.lifecycleFinishing = false;
         state.lifecycleEnded = false;
-        return;
+        return onRuntimeTurnStarted?.();
       }
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {
         state.lifecycleError = evt.data.error;

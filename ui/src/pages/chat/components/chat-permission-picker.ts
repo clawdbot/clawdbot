@@ -2,8 +2,10 @@ import { html, nothing } from "lit";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
 import { restorePointerOpenedChatComposerTrigger } from "./chat-picker-overlay.ts";
 
+const PERMISSION_MODES_DOCS_URL = "https://docs.openclaw.ai/gateway/permission-modes";
 const PERMISSION_MODES = ["read-only", "guarded", "workspace", "full"] as const;
 const DEFAULT_PERMISSION_VALUE = "default";
 const PERMISSION_OPTIONS = [null, ...PERMISSION_MODES] as const;
@@ -128,7 +130,16 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
           ${modeLabel(params.mode)}
         </span>
       </button>
-      <div class="chat-controls__popover-title">${t("chat.permissionControls.label")}</div>
+      <div class="chat-controls__popover-title chat-controls__permission-heading">
+        <span>${t("chat.permissionControls.label")}</span>
+        <a
+          class="chat-controls__permission-learn-more learn-more-link"
+          href=${PERMISSION_MODES_DOCS_URL}
+          target=${EXTERNAL_LINK_TARGET}
+          rel=${buildExternalLinkRel()}
+          >${t("common.learnMore")}</a
+        >
+      </div>
       ${PERMISSION_OPTIONS.map((mode, index) => {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;
         const selected = (params.mode ?? null) === mode;

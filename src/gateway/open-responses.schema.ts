@@ -91,23 +91,21 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
 
 const AssistantPhaseSchema = z.enum(["commentary", "final_answer"]);
+const ItemStatusSchema = z.enum(["in_progress", "completed", "incomplete"]);
 
 const MessageItemSchema = z
   .object({
     type: z.literal("message"),
+    id: z.string().optional(),
     role: MessageItemRoleSchema,
     content: z.union([z.string(), z.array(ContentPartSchema)]),
     phase: AssistantPhaseSchema.optional(),
+    status: ItemStatusSchema.optional(),
   })
   .strict()
-  .superRefine((value, ctx) => {
-    if (value.phase !== undefined && value.role !== "assistant") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["phase"],
-        message: "`phase` is only valid on assistant messages.",
-      });
-    }
+  .refine((value) => value.phase === undefined || value.role === "assistant", {
+    path: ["phase"],
+    message: "`phase` is only valid on assistant messages.",
   });
 
 const FunctionCallItemSchema = z
@@ -117,6 +115,7 @@ const FunctionCallItemSchema = z
     call_id: z.string().optional(),
     name: z.string(),
     arguments: z.string(),
+    status: ItemStatusSchema.optional(),
   })
   .strict();
 
@@ -245,26 +244,19 @@ const ResponseStatusSchema = z.enum([
 ]);
 
 const OutputItemSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("message"),
-      id: z.string(),
-      role: z.literal("assistant"),
-      content: z.array(OutputTextContentPartSchema),
-      phase: AssistantPhaseSchema.optional(),
-      status: z.enum(["in_progress", "completed"]).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("function_call"),
-      id: z.string(),
-      call_id: z.string(),
-      name: z.string(),
-      arguments: z.string(),
-      status: z.enum(["in_progress", "completed"]).optional(),
-    })
-    .strict(),
+  // Output items are replayable input; narrow required output fields without
+  // duplicating the supported item shape or dropping assistant phase validation.
+  MessageItemSchema.safeExtend({
+    id: z.string(),
+    role: z.literal("assistant"),
+    content: z.array(OutputTextContentPartSchema),
+    status: z.enum(["in_progress", "completed"]).optional(),
+  }),
+  FunctionCallItemSchema.extend({
+    id: z.string(),
+    call_id: z.string(),
+    status: z.enum(["in_progress", "completed"]).optional(),
+  }),
   z
     .object({
       type: z.literal("reasoning"),

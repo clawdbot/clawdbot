@@ -3,7 +3,7 @@ import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { ChatSendShortcut } from "../../../app/settings.ts";
+import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
@@ -123,7 +123,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSlashCommand?: (command: string) => void;
-  onSend: (followUpModeOverride?: "steer", submissionAction?: Event) => void;
+  onSend: (followUpModeOverride?: ChatFollowUpMode, submissionAction?: Event) => void;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;

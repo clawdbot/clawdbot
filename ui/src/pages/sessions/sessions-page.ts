@@ -25,7 +25,7 @@ import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
@@ -1525,8 +1525,7 @@ class SessionsPage extends OpenClawLightDomElement {
       ${renderSessionsHubHeader({
         active: "sessions",
         title: titleForRoute("sessions"),
-        subtitle: html`${subtitleForRoute("sessions")}
-        ${renderDocsLink(SESSIONS_DOCS_URL, t("common.learnMore"))}`,
+        subtitle: html`${subtitleForRoute("sessions")} ${renderLearnMoreLink(SESSIONS_DOCS_URL)}`,
         actions: renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,

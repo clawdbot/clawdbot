@@ -160,6 +160,8 @@ type AgentHarnessIsolatedCompletionParams = {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
+  outputTextPolicy?: "strict-visible";
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -302,6 +304,8 @@ export type AgentHarnessSessionForkFailureCode =
 
 export type AgentHarnessSessionForkParams = {
   targetKey: string;
+  /** Creator-owned isolation floor resolved by the trusted Gateway request. */
+  sandbox?: "required";
   source: {
     agentId: string;
     sessionId: string;

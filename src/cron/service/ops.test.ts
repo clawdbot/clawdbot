@@ -531,6 +531,7 @@ function createOkIsolatedCronState(params: {
     ...(params.triggersEnabled ? { cronConfig: { triggers: { enabled: true } } } : {}),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
+      delivered: true,
       ...(params.summary === undefined ? {} : { summary: params.summary }),
     })),
     ...(params.onEvent ? { onEvent: params.onEvent } : {}),
@@ -1053,15 +1054,29 @@ describe("cron service ops seam coverage", () => {
   });
 
   it.each([
-    { outcome: "restores", identity: "canonical receipt-keyed", reservationOffsetMs: undefined },
+    { outcome: "restores", identity: "canonical receipt-keyed", receipt: true },
     {
       outcome: "fails closed for",
       identity: "pre-upgrade reservation-keyed",
+      receipt: true,
       reservationOffsetMs: 250,
+    },
+    { outcome: "restores", identity: "canonical receiptless", receipt: false },
+    {
+      outcome: "fails closed for",
+      identity: "receiptless reservation-keyed",
+      receipt: false,
+      reservationOffsetMs: 250,
+    },
+    {
+      outcome: "fails closed for",
+      identity: "receiptless foreign",
+      receipt: false,
+      foreignRunId: "foreign-run",
     },
   ])(
     "$outcome a finalized $identity task run when startup finds its stale marker",
-    async ({ reservationOffsetMs }) => {
+    async ({ outcome, receipt: hasReceipt, reservationOffsetMs, foreignRunId }) => {
       const { storePath } = await makeStorePath();
       const now = Date.parse("2026-03-23T12:00:00.000Z");
       const startedAt = now - 30 * 60_000 + 250;
@@ -1080,14 +1095,15 @@ describe("cron service ops seam coverage", () => {
           agentId: "main",
           startedAtMs: startedAt,
         });
-        const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-          runReceiptStore.claimCronRunReceiptInDatabase({
-            database: db,
-            prepared: preparedReceipt,
-            resolveAgentId: (current) => current.agentId ?? "main",
-          }),
-        );
-        runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
+        const receipt = hasReceipt
+          ? runOpenClawStateWriteTransaction(({ db }) =>
+              runReceiptStore.claimCronRunReceiptInDatabase({
+                database: db,
+                prepared: preparedReceipt,
+                resolveAgentId: (current) => current.agentId ?? "main",
+              }),
+            )
+          : undefined;
         const events: CronEvent[] = [];
         const state = createCronServiceState({
           storePath,
@@ -1100,7 +1116,7 @@ describe("cron service ops seam coverage", () => {
           onEvent: (event) => events.push(structuredClone(event)),
         });
         const taskRunId =
-          reservationOffsetMs === undefined
+          reservationOffsetMs === undefined && foreignRunId === undefined
             ? taskRuns.tryCreateCronTaskRunHandle({ state, job, startedAt, runReceipt: receipt })
                 ?.runId
             : taskExecutor.createRunningTaskRunCore({
@@ -1108,7 +1124,9 @@ describe("cron service ops seam coverage", () => {
                 sourceId: job.id,
                 ownerKey: "",
                 scopeKind: "system",
-                runId: `${createCronExecutionId(job.id, startedAt - reservationOffsetMs)}:legacy-upgrade`,
+                runId:
+                  foreignRunId ??
+                  `${createCronExecutionId(job.id, startedAt - reservationOffsetMs!)}:legacy-upgrade`,
                 agentId: "main",
                 task: job.name,
                 deliveryStatus: "not_applicable",
@@ -1141,6 +1159,9 @@ describe("cron service ops seam coverage", () => {
           },
         });
 
+        if (receipt) {
+          runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
+        }
         await start(state);
 
         expect(findTaskByRunId(taskRunId)).toMatchObject({
@@ -1157,14 +1178,16 @@ describe("cron service ops seam coverage", () => {
           },
         });
         const persisted = await loadCronStore(storePath);
-        const receiptRow = runOpenClawStateWriteTransaction(({ db }) =>
-          db
-            .prepare(
-              "SELECT status, finished_at_ms AS finishedAtMs, error_text AS error FROM cron_run_receipts WHERE receipt_id = ?",
-            )
-            .get(receipt.receiptId),
-        ) as { status: string; finishedAtMs: number; error: string | null };
-        if (reservationOffsetMs !== undefined) {
+        const receiptRow = receipt
+          ? (runOpenClawStateWriteTransaction(({ db }) =>
+              db
+                .prepare(
+                  "SELECT status, finished_at_ms AS finishedAtMs, error_text AS error FROM cron_run_receipts WHERE receipt_id = ?",
+                )
+                .get(receipt.receiptId),
+            ) as { status: string; finishedAtMs: number; error: string | null })
+          : undefined;
+        if (outcome === "fails closed for") {
           expect(persisted.jobs[0]?.state).toMatchObject({
             lastRunAtMs: startedAt,
             lastRunStatus: "error",
@@ -1173,11 +1196,13 @@ describe("cron service ops seam coverage", () => {
             triggerState: { cursor: "old" },
           });
           expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
-          expect(receiptRow).toEqual({
-            status: "interrupted",
-            finishedAtMs: now,
-            error: "cron: job interrupted by owner process exit",
-          });
+          if (receipt) {
+            expect(receiptRow).toEqual({
+              status: "interrupted",
+              finishedAtMs: now,
+              error: "cron: job interrupted because owner is unavailable",
+            });
+          }
           expect(events.filter((event) => event.action === "finished")).toEqual([
             expect.objectContaining({
               jobId: job.id,
@@ -1205,7 +1230,9 @@ describe("cron service ops seam coverage", () => {
         expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
         expect(persisted.jobs[0]?.state.lastError).toBeUndefined();
         expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
-        expect(receiptRow).toEqual({ status: "ok", finishedAtMs: endedAt, error: null });
+        if (receipt) {
+          expect(receiptRow).toEqual({ status: "ok", finishedAtMs: endedAt, error: null });
+        }
         expect(events.filter((event) => event.action === "finished")).toEqual([]);
         stop(state);
       });
@@ -1331,6 +1358,8 @@ describe("cron service ops seam coverage", () => {
           job,
           status: "ok",
           completionStatus: "succeeded",
+          delivered: true,
+          deliveryStatus: "delivered",
           summary: "completed before restart",
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
@@ -1538,6 +1567,7 @@ describe("cron service ops seam coverage", () => {
           job,
           status: "error",
           error: "provider unavailable",
+          failureNotificationDelivery: { status: "unknown" },
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
           nextRunAtMs: now + 30 * 60_000,

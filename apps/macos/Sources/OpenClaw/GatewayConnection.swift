@@ -1522,7 +1522,9 @@ extension GatewayConnection {
         if let phase {
             params["phase"] = AnyCodable(phase)
         }
-        try? await self.requestVoid(method: .talkMode, params: params)
+        // Phase broadcasts report UI state; a failed notification must not start
+        // the Gateway or restart its tunnel. Talk startup owns that recovery.
+        _ = try? await self.request(method: Method.talkMode.rawValue, params: params, retryTransportFailures: false)
     }
 
     // MARK: - VoiceWake

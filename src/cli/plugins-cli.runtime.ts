@@ -32,7 +32,6 @@ import type {
 
 type PluginInstallActionOptions = {
   acceptCapabilities?: boolean;
-  acknowledgeClawHubRisk?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   force?: boolean;
   link?: boolean;
@@ -341,10 +340,10 @@ export async function runPluginsInstallAction(
 
 /** Inspect or refresh the persisted plugin registry index. */
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
-  const { inspectPluginRegistry, refreshPluginRegistry } =
-    await import("../plugins/plugin-registry.js");
+  const { inspectPluginRegistry } = await import("../plugins/plugin-registry.js");
 
   if (opts.refresh) {
+    const { refreshPluginRegistry } = await import("../plugins/plugin-registry-refresh.js");
     return await withPluginLifecycleLease({}, async () => {
       const index = await refreshPluginRegistry({
         config: getRuntimeConfig(),

@@ -639,7 +639,7 @@ suite.define(() => {
 
       // The background hydrate must not take the shared sessions loading
       // flag, which would disable New session for the whole request.
-      const newThread = page.getByRole("button", { name: "New session" }).first();
+      const newThread = page.getByRole("link", { name: "New session" }).first();
       expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");

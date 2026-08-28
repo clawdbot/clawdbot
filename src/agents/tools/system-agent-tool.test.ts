@@ -102,6 +102,46 @@ describe("openclaw tool", () => {
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
+  it("registers delegated proposals but never instructs a chat 'yes'", async () => {
+    const proposalRef: { current?: string } = {};
+    const args = {
+      action: "config_set" as const,
+      path: "agents.defaults.subagents.thinking",
+      value: "high",
+      approved: true,
+    };
+    const tool = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      proposalRef,
+    });
+
+    const result = await tool.execute("t-delegated", args);
+    const text = toolText(result);
+
+    expect(text).toContain("needs-approval:");
+    expect(text).toContain("OpenClaw operator UI");
+    expect(text).toContain("cannot be applied from this chat");
+    expect(text).not.toContain("ask the user to reply yes");
+    expect(proposalRef.current).toBe(
+      hashSystemAgentOperation({
+        kind: "config-set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+      }),
+    );
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    // Out-of-process CLI hosts still mirror the refusal from the marker line.
+    expect(resolveSystemAgentProposalTransition({ args, resultText: text })).toEqual({
+      proposal: proposalRef.current,
+      operation: {
+        kind: "config-set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+      },
+    });
+  });
+
   it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
     const proposalRef: { current?: string } = {};
     const tool = createSystemAgentTool({ surface: "cli", proposalRef });
