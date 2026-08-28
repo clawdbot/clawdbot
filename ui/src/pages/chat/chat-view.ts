@@ -41,6 +41,7 @@ import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import { getChatHistoryLoadState, retryChatHistoryLoad } from "./chat-history.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
+import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   type ChatPlacementStartupNoticeProps,
@@ -326,6 +327,9 @@ export function renderChat(props: ChatProps) {
   const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
   const placementStartup =
     props.placementStartup?.phase === "failed" ? null : props.placementStartup;
+  const queue = props.placementStartup?.initialTurn
+    ? [...props.queue, props.placementStartup.initialTurn]
+    : props.queue;
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
   let chatSection: HTMLElement | null = null;
@@ -345,7 +349,7 @@ export function renderChat(props: ChatProps) {
       runId: props.runId,
       runOutputTokens: props.runOutputTokens,
       runStatus: props.runStatus,
-      queue: props.queue,
+      queue,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
       persistCommentary: props.persistCommentary,
@@ -391,6 +395,16 @@ export function renderChat(props: ChatProps) {
       onHistoryIntent: props.onHistoryIntent,
       onDraftChange: props.onDraftChange,
       onSend: props.onSend,
+      queuedMessageAction: props.placementStartup?.initialTurn
+        ? {
+            id: props.placementStartup.initialTurn.id,
+            label:
+              props.placementStartup.action === "check-delivery"
+                ? t("chat.queue.checkDelivery")
+                : undefined,
+            onAction: props.connected ? props.onRetrySessionPlacementStartup : undefined,
+          }
+        : undefined,
       onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
       onSetReply: props.onSetReply,
       replyMessageAccess: props.replyMessageAccess,
@@ -427,7 +441,13 @@ export function renderChat(props: ChatProps) {
       runError: props.runError,
       workspaceConflict: props.workspaceConflict,
       onDismissWorkspaceConflict: props.onDismissWorkspaceConflict,
-      placementStartup: props.placementStartup,
+      // History can own the bubble before startup observes its receipt. Keep
+      // the banner action reachable when transcript deduplication hides the row.
+      placementStartup:
+        props.placementStartup?.initialTurn &&
+        chatMessagesContainQueuedSend(props.messages, props.placementStartup.initialTurn, true)
+          ? { ...props.placementStartup, initialTurn: undefined }
+          : props.placementStartup,
       onRetrySessionPlacementStartup: props.onRetrySessionPlacementStartup,
     }),
     sending: props.sending,
@@ -564,7 +584,7 @@ export function renderChat(props: ChatProps) {
     props.toolMessages.length === 0 &&
     props.streamSegments.length === 0 &&
     !props.stream &&
-    props.queue.length === 0;
+    queue.length === 0;
   // A failed load with cached content must stay visible without displacing the
   // transcript; only an empty pane may replace the thread with the error panel.
   const renderHistoryFailure = (inline: boolean) =>

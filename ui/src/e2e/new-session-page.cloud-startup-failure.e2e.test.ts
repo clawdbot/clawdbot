@@ -5,6 +5,8 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  pastePng,
+  ONE_PIXEL_PNG_B64,
   pollLocatorText,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
@@ -22,6 +24,7 @@ suite.define(() => {
       });
       const page = await context.newPage();
       const sessionKey = "agent:cloud:failed-startup-e2e";
+      const message = "surface the failed startup";
       const diagnostic = `cloud profile was removed\n${"Enrollment detail. ".repeat(80)}\nFinal startup diagnostic.`;
       const gateway = await installMockGateway(page, {
         defaultAgentId: "cloud",
@@ -66,7 +69,9 @@ suite.define(() => {
           .locator("wa-popover.new-session-page__where-popover")
           .getByRole("button", { name: "Cloud · aws" })
           .click();
-        await page.locator(".new-session-page__message").fill("surface the failed startup");
+        const composer = page.locator(".new-session-page__message");
+        await composer.fill(message);
+        await pastePng(composer);
         await page.getByRole("button", { name: "Start session" }).click();
         await gateway.waitForRequest("sessions.dispatch");
         await waitForCommittedChatRoute(page);
@@ -109,6 +114,32 @@ suite.define(() => {
         expect(page.url()).toContain(controlUiSessionPath(sessionKey));
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
+        const failedGroup = page.locator(".chat-group.user", { hasText: message });
+        await failedGroup.waitFor({ state: "visible" });
+        expect(await failedGroup.locator(".chat-send-status").textContent()).toContain("Not sent");
+        await failedGroup
+          .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
+          .waitFor({ state: "visible" });
+        await page.reload();
+        await failedGroup.waitFor({ state: "visible" });
+        expect(await failedGroup.locator(".chat-send-status").textContent()).toContain("Not sent");
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        await failedGroup.getByRole("button", { name: "Retry queued message" }).click();
+        const retry = await gateway.waitForRequest("sessions.dispatch");
+        expect(retry.params).toMatchObject({ key: sessionKey, profileId: "aws" });
+        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.dispatch", {
+          placement: { state: "active", environmentId: "worker-retry" },
+        });
+        expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
+          params: {
+            key: sessionKey,
+            message,
+            attachments: [{ content: ONE_PIXEL_PNG_B64, fileName: "pixel.png" }],
+          },
+        });
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       } finally {
         await context.close();
       }

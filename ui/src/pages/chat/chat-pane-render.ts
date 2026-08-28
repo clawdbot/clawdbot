@@ -392,7 +392,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
-          !placementStartupPending,
+          placementStartup === null,
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledReasonTone:
         sessionParticipationBlocked && !suggestionViewer && !catalogDisabledReason

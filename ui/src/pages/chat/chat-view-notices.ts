@@ -142,13 +142,14 @@ function renderPlacementStartupError(
   if (status?.phase !== "failed") {
     return nothing;
   }
-  const error = t("newSession.placementStartFailed", {
-    error: status.error ?? t("newSession.createFailed"),
-  });
+  const checking = status.action === "check-delivery";
+  const error = checking
+    ? [t("chat.queue.checkDeliveryHelp"), status.error].filter(Boolean).join("\n\n")
+    : t("newSession.placementStartFailed", { error: status.error ?? t("newSession.createFailed") });
   const retry =
-    status.retryable && onRetry
+    status.retryable && onRetry && !status.initialTurn
       ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
-          ${t("common.retry")}
+          ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
   return renderErrorNotice(error, retry);

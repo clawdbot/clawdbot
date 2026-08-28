@@ -868,32 +868,46 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    { state: "failed", label: "Not sent" },
-    { state: "unconfirmed", label: "Delivery unconfirmed" },
-  ] as const)("shows a $state footer with its diagnostic and retry action", ({ state, label }) => {
-    const container = document.createElement("div");
-    const onRetryQueuedMessage = vi.fn();
-    renderGroupedMessage(
-      container,
-      createUserMessage("Attempted message", {
-        __openclaw: {
-          id: "attempted-send",
-          kind: "pending-send",
-          state,
-          error: "Delivery diagnostic",
+    { state: "failed", label: "Not sent", actionLabel: undefined },
+    { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: undefined },
+    { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: "Check delivery" },
+  ] as const)(
+    "shows a $state footer with its diagnostic and retry action ($actionLabel)",
+    ({ state, label, actionLabel }) => {
+      const container = document.createElement("div");
+      const onRetryQueuedMessage = vi.fn();
+      renderGroupedMessage(
+        container,
+        createUserMessage("Attempted message", {
+          __openclaw: {
+            id: "attempted-send",
+            kind: "pending-send",
+            state,
+            error: "Delivery diagnostic",
+          },
+        }),
+        "user",
+        {
+          onRetryQueuedMessage,
+          queuedMessageAction: actionLabel
+            ? { id: "attempted-send", label: actionLabel }
+            : undefined,
         },
-      }),
-      "user",
-      { onRetryQueuedMessage },
-    );
+      );
 
-    const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
-    expect(status.dataset.sendState).toBe(state);
-    expect(status.title).toBe("Delivery diagnostic");
-    expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(`· ${label} · Retry`);
-    status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
-    expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
-  });
+      const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
+      expect(status.dataset.sendState).toBe(state);
+      expect(status.title).toBe("Delivery diagnostic");
+      expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(
+        `· ${label} · ${actionLabel ?? "Retry"}`,
+      );
+      expect(status.querySelector("button")?.getAttribute("aria-label")).toBe(
+        actionLabel ?? "Retry queued message",
+      );
+      status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
+      expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
+    },
+  );
 
   it("orders peer footer actions after the sender name and timestamp", () => {
     const container = document.createElement("div");

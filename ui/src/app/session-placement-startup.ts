@@ -1,3 +1,4 @@
+import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { SessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
@@ -18,6 +19,8 @@ export type ApplicationPlacementStartupStatus = {
   readonly startedAt: number;
   readonly error?: string;
   readonly retryable?: boolean;
+  readonly initialTurn?: ChatQueueItem;
+  readonly action?: "retry" | "check-delivery";
 };
 
 type PlacementStartupInput = {
@@ -106,7 +109,12 @@ export function createApplicationPlacementStartup(
         return runtime.get(sessionKey);
       }
       const input = preRuntimeEntries.get(sessionKey);
-      return input
+      const gateway = activeDependencies?.gateway;
+      const client = gateway?.snapshot.client;
+      return input &&
+        client?.recoveryScopeReady &&
+        gateway?.connection.gatewayUrl === input.recovery.gatewayUrl &&
+        client.recoveryScope === input.recovery.recoveryScope
         ? {
             sessionKey,
             phase: runtimeError ? "failed" : "pending",
