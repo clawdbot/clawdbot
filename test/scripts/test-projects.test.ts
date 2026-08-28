@@ -1131,6 +1131,98 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("preserves Git membership for large changed and explicit test inventories", () => {
+    withTinyGitRepo(
+      {
+        ".gitignore": "src/runtime.ignored.test.ts\n",
+        "src/runtime.ts": "export const value = 1;\n",
+        "src/runtime.consumer.test.ts": 'import "./runtime.js";\n',
+      },
+      (cwd) => {
+        // Index-only padding reproduces a large checkout without thousands of fixture files.
+        const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], {
+          cwd,
+          encoding: "utf8",
+          input: "",
+        });
+        expect(blob.status).toBe(0);
+        const padding = Array.from(
+          { length: 6_000 },
+          (_, index) =>
+            `100644 ${blob.stdout.trim()}\tsrc/padding/${index}-${"x".repeat(190)}.ts\n`,
+        ).join("");
+        const indexed = spawnSync("git", ["update-index", "--index-info"], {
+          cwd,
+          input: padding,
+        });
+        expect(indexed.status).toBe(0);
+        for (const root of ["extensions", "packages", "ui/src", "ui/config", "test"]) {
+          fs.mkdirSync(path.join(cwd, root), { recursive: true });
+        }
+        fs.writeFileSync(
+          path.join(cwd, "src/runtime.untracked.test.ts"),
+          'import "./runtime.js";\n',
+        );
+        fs.writeFileSync(path.join(cwd, "src/runtime.ignored.test.ts"), 'import "./runtime.js";\n');
+
+        expect(resolveChangedTestTargetPlan(["src/runtime.ts"], { cwd }).targets).toEqual([
+          "src/runtime.consumer.test.ts",
+        ]);
+        const includeFile = path.join(cwd, "include.json");
+        writeVitestIncludeFile(includeFile, ["src/**/*.test.ts"], { cwd });
+        expect(JSON.parse(fs.readFileSync(includeFile, "utf8")).toSorted()).toEqual([
+          "src/runtime.consumer.test.ts",
+          "src/runtime.untracked.test.ts",
+        ]);
+      },
+    );
+  });
+
+  it("follows converging import frontiers without crossing test boundaries", () => {
+    withTinyGitRepo(
+      {
+        "src/value.ts": 'export * from "./left/bridge.js";\n',
+        "src/left/bridge.ts": 'export * from "../value.js";\n',
+        "src/right/bridge.ts": 'export * from "../value.js";\n',
+        "src/other/bridge.ts": "export const unrelated = 1;\n",
+        "src/combined.consumer.test.ts":
+          'import "./left/bridge.js";\nimport("./right/bridge.js");\n',
+        "src/right.consumer.test.ts": 'import "./right/bridge.js";\n',
+        "src/other.consumer.test.ts": 'import "./other/bridge.js";\n',
+        "src/after-test.consumer.test.ts": 'import "./combined.consumer.test.js";\n',
+        "src/value.consumer.live.test.ts": 'import "./value.js";\n',
+      },
+      (cwd) => {
+        expect(resolveChangedTestTargetPlan(["src/value.ts"], { cwd }).targets).toEqual([
+          "src/combined.consumer.test.ts",
+          "src/right.consumer.test.ts",
+        ]);
+      },
+    );
+  });
+
+  it("keeps tooling imports direct while preserving literal file references", () => {
+    withTinyGitRepo(
+      {
+        "scripts/fixture-source.mts": "export const value = 1;\n",
+        "scripts/fixture-bridge.mts": 'export * from "./fixture-source.mjs";\n',
+        "test/scripts/direct.consumer.test.ts": 'import "../../scripts/fixture-source.mjs";\n',
+        "test/scripts/transitive.consumer.test.ts": 'import "../../scripts/fixture-bridge.mjs";\n',
+        "test/scripts/literal.consumer.test.ts": 'const fixture = "scripts/fixture-source.mts";\n',
+        "test/scripts/substring.consumer.test.ts":
+          'const fixture = "scripts/fixture-source.mts.bak";\n',
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(["scripts/fixture-source.mts"], { cwd }).targets,
+        ).toEqual([
+          "test/scripts/direct.consumer.test.ts",
+          "test/scripts/literal.consumer.test.ts",
+        ]);
+      },
+    );
+  });
+
   it("routes many explicit source files through one import-graph-backed owner set", () => {
     let plans: ReturnType<typeof buildVitestRunPlans> = [];
     const files: Record<string, string> = {};
