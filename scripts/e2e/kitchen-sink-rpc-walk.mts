@@ -1217,7 +1217,7 @@ function isRetryableTransientNetworkError(error: unknown, seen = new Set<unknown
   const message =
     candidate instanceof Error ? candidate.message : typeof candidate === "string" ? candidate : "";
   const code = asRecord(candidate).code;
-  const text = `${String(code ?? "")} ${message}`;
+  const text = `${typeof code === "string" ? code : ""} ${message}`;
   if (
     /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/iu.test(text) ||
     /\b(?:fetch failed|socket hang up|connection reset)\b/iu.test(text)
@@ -1980,7 +1980,7 @@ export async function assertOperatorRpcDenied(
   } catch (error) {
     const candidate = asRecord(error);
     const gatewayCode = candidate.gatewayCode;
-    const message = String(candidate.message ?? "");
+    const message = typeof candidate.message === "string" ? candidate.message : "";
     if (gatewayCode === "INVALID_REQUEST" && message.includes("unauthorized role: operator")) {
       return;
     }

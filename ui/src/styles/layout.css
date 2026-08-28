@@ -1891,7 +1891,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-child-session-toggle--running {
-  color: var(--run);
+  color: var(--accent);
 }
 
 .sidebar-child-session-toggle--failed {
@@ -1919,22 +1919,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session__link:hover {
   text-decoration: none;
-}
-
-.sidebar-board-glyph {
-  display: inline-flex;
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--accent) 76%, var(--muted));
-}
-
-.sidebar-board-glyph svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .viewer-facepile {
@@ -2672,9 +2656,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   white-space: nowrap;
 }
 
-/* Keycap hint, not content: the app's quiet mono shortcut idiom (see
-   .chat-question-panel__option kbd), fixed-width so letters and digits share
-   one rail beside the labels. */
+/* Keycap hint, not content: the app's quiet mono shortcut idiom, fixed-width so
+   letters and digits share one rail. Identity-menu chords use the system UI face
+   below because theme body fonts are not guaranteed to cover modifier glyphs. */
 .session-menu__shortcut,
 .chat-controls__model-option-action kbd {
   flex: 0 0 auto;
@@ -2684,6 +2668,15 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   font-size: var(--control-ui-text-xs);
   line-height: 1;
   text-align: center;
+}
+
+.sidebar-identity-menu .session-menu__shortcut {
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI Symbol",
+    sans-serif;
 }
 
 .session-menu__info {
@@ -3415,7 +3408,7 @@ openclaw-sidebar-attention {
 
 openclaw-tooltip.sidebar-hover-tooltip {
   --openclaw-tooltip-max-width: min(340px, calc(100vw - 24px));
-  --openclaw-tooltip-open-animation: openclaw-tooltip-hover-card-in 100ms var(--ease-out);
+  --openclaw-tooltip-open-animation: openclaw-tooltip-hover-card-in 140ms var(--ease-out);
   --openclaw-tooltip-popup-show-duration: 0ms;
   --openclaw-tooltip-popup-hide-duration: 0ms;
 }

@@ -326,18 +326,19 @@ async function executeMainSessionCronJob(
         heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS
           ? maxWaitMs
           : state.deps.nowMs() - waitStartedAt;
-      if (elapsedMs >= maxWaitMs) {
-        requestCronHeartbeat(state, heartbeatWake);
+      const delayMs =
+        heartbeatResult.retryAtMs !== undefined
+          ? Math.max(0, heartbeatResult.retryAtMs - state.deps.nowMs())
+          : heartbeatResult.reason === HEARTBEAT_SKIP_PREEMPTED
+            ? HEARTBEAT_IDLE_RETRY_GRACE_MS
+            : retryDelayMs;
+      // A caller's wait budget cannot shorten the runner's retry deadline.
+      // Hand unfinished work to the wake owner with its original retry facts.
+      if (elapsedMs >= maxWaitMs || delayMs > maxWaitMs - elapsedMs) {
+        requestCronHeartbeat(state, heartbeatWake, heartbeatResult);
         return { status: "ok", summary: text };
       }
-      await waitWithAbort(
-        Math.min(
-          heartbeatResult.reason === HEARTBEAT_SKIP_PREEMPTED
-            ? HEARTBEAT_IDLE_RETRY_GRACE_MS
-            : retryDelayMs,
-          maxWaitMs - elapsedMs,
-        ),
-      );
+      await waitWithAbort(delayMs);
     }
 
     if (heartbeatResult.status === "ran") {

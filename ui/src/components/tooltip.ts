@@ -290,8 +290,8 @@ class Tooltip extends OpenClawLitElement {
       overflow-wrap: anywhere;
     }
 
-    wa-tooltip[open]::part(body) {
-      animation: var(--openclaw-tooltip-open-animation, none);
+    :host(.sidebar-hover-tooltip) wa-tooltip[open]::part(base__popup) {
+      animation: var(--openclaw-tooltip-open-animation);
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -300,7 +300,7 @@ class Tooltip extends OpenClawLitElement {
         --hide-duration: 0ms;
       }
 
-      wa-tooltip[open]::part(body) {
+      :host(.sidebar-hover-tooltip) wa-tooltip[open]::part(base__popup) {
         animation: none;
       }
     }
@@ -308,11 +308,11 @@ class Tooltip extends OpenClawLitElement {
     @keyframes openclaw-tooltip-hover-card-in {
       from {
         opacity: 0;
-        transform: translateY(8px) scale(0.95);
+        transform: scale(0.95);
       }
       to {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: scale(1);
       }
     }
 

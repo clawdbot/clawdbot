@@ -13,7 +13,6 @@ import {
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
-import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
@@ -49,7 +48,6 @@ import {
 import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
 import {
   createTrackedNpmUpdateInstaller,
-  resolveClawHubRiskAcknowledgementOptions,
   resolveRecordedClawHubPackage,
   runPluginUpdateWithClawHubLease,
 } from "./update-claw-lifecycle.js";
@@ -106,8 +104,6 @@ export async function updateNpmInstalledPlugins(params: {
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
@@ -127,7 +123,6 @@ export async function updateNpmInstalledPlugins(params: {
   const installNpmSpecForUpdate = createTrackedNpmUpdateInstaller(() => {
     ranNpmInstaller = true;
   });
-  const clawHubRiskAcknowledgementOptions = resolveClawHubRiskAcknowledgementOptions(params);
   const recordSkippedOutcome = (pluginId: string, message: string) => {
     outcomes.push({ pluginId, status: "skipped", message });
   };
@@ -503,7 +498,6 @@ export async function updateNpmInstalledPlugins(params: {
           installNpmSpecForUpdate,
           logger,
           onIntegrityDrift: params.onIntegrityDrift,
-          clawHubRiskAcknowledgementOptions,
         }),
       );
     const attempt = await runPluginUpdateWithClawHubLease({

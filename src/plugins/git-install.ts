@@ -27,6 +27,7 @@ import {
   type InstallSafetyOverrides,
   type InstallSecurityScanResult,
 } from "./install-security-scan.js";
+import { ensureInstallTargetAvailableForMode, loadPluginInstallRuntime } from "./install-shared.js";
 import {
   attachPluginInstallTransaction,
   isPluginInstallCommitDeferred,
@@ -443,6 +444,14 @@ export async function installPluginFromGitSpec(
   const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
+  const availability = await ensureInstallTargetAvailableForMode({
+    runtime: await loadPluginInstallRuntime(),
+    targetPath: persistentRepoDir,
+    mode: effectiveMode,
+  });
+  if (!availability.ok) {
+    return availability;
+  }
   const stagingRepoDir = params.dryRun ? undefined : persistentRepoDir;
   return await withGitStagingDir(stagingRepoDir, async (tmpDir, stagedRepoIsTargetLocal) => {
     const repoDir = path.join(tmpDir, "repo");

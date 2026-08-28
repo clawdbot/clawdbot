@@ -434,7 +434,6 @@ export const SkillsInstallParamsSchema = Type.Union([
     slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
   }),
   closedObject({
@@ -462,7 +461,6 @@ export const SkillsUpdateParamsSchema = Type.Union([
     slug: Type.Optional(NonEmptyString),
     all: Type.Optional(Type.Boolean()),
     force: Type.Optional(Type.Boolean()),
-    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
   }),
 ]);
 

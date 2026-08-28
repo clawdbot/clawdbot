@@ -225,7 +225,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
       ${sessionHasBoard(mainKey)
         ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
             <span
-              class="sidebar-board-glyph"
+              class="session-row-badge"
               role="img"
               aria-label=${t("sessionsView.dashboardAvailable")}
               >${icons.layoutDashboard}</span

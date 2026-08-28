@@ -162,15 +162,13 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
-    if (!localMode) {
+    // Cold provider classification must not block errors that cannot receive an auth hint.
+    if (!localMode || !isAuthErrorMessage(errorMessage)) {
       return undefined;
     }
     const provider = state.sessionInfo.modelProvider?.trim();
     const failoverReason = classifyFailoverReason(errorMessage, { provider });
     if (failoverReason === "billing" || failoverReason === "rate_limit") {
-      return undefined;
-    }
-    if (!isAuthErrorMessage(errorMessage)) {
       return undefined;
     }
     return provider

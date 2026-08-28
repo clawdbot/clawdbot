@@ -676,7 +676,7 @@ describe("renderPlugins", () => {
     expect(onSetEnabled).not.toHaveBeenCalled();
   });
 
-  it("renders row-local risk acknowledgement and busy state", () => {
+  it("renders a row-local ClawHub install error without a risk retry action", () => {
     const packageName = "@openclaw/calendar-plus";
     const key = clawHubKey(packageName);
     const onInstall = vi.fn();
@@ -701,7 +701,6 @@ describe("renderPlugins", () => {
           [key]: {
             kind: "error",
             text: "Review required.",
-            acknowledge: { packageName, version: "2.0.0" },
           },
         },
         onInstall,
@@ -711,16 +710,8 @@ describe("renderPlugins", () => {
     const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`);
     expect(row?.getAttribute("aria-busy")).toBe("false");
     expect(row?.querySelector('[role="alert"]')?.textContent).toContain("Review required.");
-    row?.querySelector<HTMLButtonElement>(".plugins-row-message button")?.click();
-    expect(onInstall).toHaveBeenCalledWith(
-      {
-        source: "clawhub",
-        packageName,
-        version: "2.0.0",
-        acknowledgeClawHubRisk: true,
-      },
-      key,
-    );
+    expect(row?.querySelector(".plugins-row-message button")).toBeNull();
+    expect(onInstall).not.toHaveBeenCalled();
   });
 
   it("renders install policy findings with cancel and acknowledged retry actions", () => {

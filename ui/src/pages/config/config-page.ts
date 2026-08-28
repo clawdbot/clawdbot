@@ -44,6 +44,7 @@ import {
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
+import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
@@ -181,6 +182,26 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
 
 function configPageTitle(pageId: ConfigPageId): string {
   return titleForRoute(pageId);
+}
+
+function renderConfigPageSubtitle(pageId: ConfigPageId) {
+  switch (pageId) {
+    case "appearance":
+      return html`${t("configView.appearance.intro")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/web/control-ui")}`;
+    case "mcp":
+      return html`${t("mcpPage.intro")} ${renderLearnMoreLink("https://docs.openclaw.ai/tools/mcp")}`;
+    case "security":
+      return html`${t("quickSettings.security.intro")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/gateway/security")}`;
+    case "talk":
+      return html`${t("talkPage.intro")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/nodes/talk")}`;
+    case "updates":
+      return t("updates.page.intro");
+    default:
+      return undefined;
+  }
 }
 
 export function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
@@ -1497,11 +1518,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       ${this.pageId === "memory"
         ? nothing
         : html`
-            <section class="content-header">
-              <div>
-                <div class="page-title">${configPageTitle(this.pageId)}</div>
-              </div>
-            </section>
+            ${renderSettingsPageHeader({
+              title: configPageTitle(this.pageId),
+              subtitle: renderConfigPageSubtitle(this.pageId),
+            })}
           `}
       ${renderSettingsWorkspace(body)}
     `;

@@ -6583,18 +6583,17 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-chat-only-info {
-  display: inline-grid;
-  width: 15px;
-  height: 15px;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
   margin-inline-start: 6px;
-  border: 1px solid color-mix(in srgb, var(--warn) 54%, transparent);
-  border-radius: var(--radius-full);
   color: color-mix(in srgb, var(--warn) 80%, var(--text));
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  place-items: center;
+}
+
+.chat-controls__model-chat-only-info svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .chat-controls__reasoning-panel {

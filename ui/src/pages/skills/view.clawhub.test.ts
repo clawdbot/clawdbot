@@ -390,38 +390,6 @@ describe("renderSkills ClawHub", () => {
     expect(container.querySelectorAll(".md-preview-dialog__panel--message-only")).toHaveLength(1);
   });
 
-  it("renders ClawHub acknowledgement retry actions", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onClawHubInstall = vi.fn();
-
-    render(
-      renderSkills(
-        createProps({
-          clawhubInstallMessage: {
-            kind: "error",
-            text: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-            acknowledgeRef: "github",
-            acknowledgeVersion: "1.2.3",
-          },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
-
-    const retryButton = container.querySelector<HTMLButtonElement>(".callout button");
-    expect(normalizeText(container.querySelector(".callout")!)).toBe(
-      "REVIEW REQUIRED - ClawHub found suspicious behavior. Acknowledge risk and install",
-    );
-    expect(retryButton).toBeInstanceOf(HTMLButtonElement);
-    retryButton!.click();
-
-    expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github", true, "1.2.3");
-  });
-
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
     const container = document.createElement("div");
     document.body.append(container);

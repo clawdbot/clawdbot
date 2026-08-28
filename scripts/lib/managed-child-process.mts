@@ -68,23 +68,12 @@ type ManagedChild = {
 const managedChildren = new Set<ManagedChild>();
 const signalHandlers = new Map<NodeJS.Signals, () => void>();
 
-/**
- * Return conventional shell exit code for a signal.
- *
- * @param {NodeJS.Signals} signal
- * @returns {number}
- */
+/** Return the conventional shell exit code for a signal. */
 export function signalExitCode(signal: NodeJS.Signals) {
   const signalNumber = signalNumberFor(signal);
   return signalNumber ? 128 + signalNumber : 1;
 }
 
-/**
- * @param {import("node:child_process").ChildProcess} child
- * @param {NodeJS.Signals} [signal]
- * @param {ManagedChildTerminationOptions} [options]
- * @returns {{ processTreeState: "indeterminate" | "signaled" | "terminated" } | undefined}
- */
 export function terminateManagedChild(
   child: { kill(signal: NodeJS.Signals): unknown; pid?: number },
   signal: NodeJS.Signals = "SIGTERM",
@@ -244,26 +233,7 @@ export async function waitForManagedProcessGroupExit(
   return inspectManagedProcessGroup(child, groupOptions) !== "live";
 }
 
-/**
- * Run a child command while forwarding termination signals to the managed process group.
- *
- * @param {{
- *   bin: string;
- *   args?: string[];
- *   cwd?: string;
- *   env?: NodeJS.ProcessEnv;
- *   stdio?: import("node:child_process").StdioOptions;
- *   shell?: boolean;
- *   windowsVerbatimArguments?: boolean;
- *   platform?: NodeJS.Platform;
- *   comSpec?: string;
- *   timeoutMs?: number;
- *   requireProcessTreeExit?: boolean;
- *   runTaskkill?: typeof spawnSync;
- *   onReady?: (child: import("node:child_process").ChildProcess) => void;
- * }} options
- * @returns {Promise<number>}
- */
+/** Run a child command while forwarding termination signals to its process group. */
 export async function runManagedCommand({
   bin,
   args = [],
@@ -293,13 +263,22 @@ export async function runManagedCommand({
     platform,
     comSpec,
   });
-  const child = spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
+  // A child can become ready before spawn returns. Catch OS signals first so
+  // their callbacks wait for registration instead of orphaning a detached child.
+  installSignalHandlers();
+  let child: ChildProcess;
+  try {
+    child = spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
+  } catch (error) {
+    removeSignalHandlersIfIdle();
+    throw error;
+  }
   const managedChild: ManagedChild = {
     child,
     forceKillTimer: null,
     receivedSignal: undefined,
   };
-  addManagedChild(managedChild);
+  managedChildren.add(managedChild);
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
   let signalTimeout!: () => void;
   let timedOut = false;
@@ -389,7 +368,8 @@ export async function runManagedCommand({
     if (timeoutTimer) {
       clearTimeout(timeoutTimer);
     }
-    removeManagedChild(managedChild);
+    managedChildren.delete(managedChild);
+    removeSignalHandlersIfIdle();
   }
 }
 
@@ -497,36 +477,6 @@ function createManagedCommandCleanupError(
   });
 }
 
-/**
- * Build the spawn command, args, and options used by managed command execution.
- *
- * @param {{
- *   child: import("node:child_process").ChildProcess;
- *   forceKillTimer: ReturnType<typeof setTimeout> | null;
- *   receivedSignal: string | null;
- * }} managedChild
- */
-function addManagedChild(managedChild: ManagedChild) {
-  managedChildren.add(managedChild);
-  installSignalHandlers();
-}
-
-/**
- * Build a normalized command invocation, including cmd.exe wrapping on Windows.
- *
- * @param {{
- *   child: import("node:child_process").ChildProcess;
- *   forceKillTimer: ReturnType<typeof setTimeout> | null;
- *   receivedSignal: string | null;
- * }} managedChild
- */
-function removeManagedChild(managedChild: ManagedChild) {
-  managedChildren.delete(managedChild);
-  if (managedChildren.size === 0) {
-    removeSignalHandlers();
-  }
-}
-
 function installSignalHandlers() {
   for (const signal of FORWARDED_SIGNALS) {
     if (signalHandlers.has(signal)) {
@@ -538,16 +488,16 @@ function installSignalHandlers() {
   }
 }
 
-function removeSignalHandlers() {
+function removeSignalHandlersIfIdle() {
+  if (managedChildren.size > 0) {
+    return;
+  }
   for (const [signal, handler] of signalHandlers) {
     process.off(signal, handler);
   }
   signalHandlers.clear();
 }
 
-/**
- * @param {NodeJS.Signals} signal
- */
 function forwardSignalToManagedChildren(signal: NodeJS.Signals) {
   for (const managedChild of managedChildren) {
     managedChild.receivedSignal ??= signal;
@@ -558,19 +508,6 @@ function forwardSignalToManagedChildren(signal: NodeJS.Signals) {
   }
 }
 
-/**
- * @param {{
- *   bin: string;
- *   args?: string[];
- *   cwd?: string;
- *   env?: NodeJS.ProcessEnv;
- *   stdio?: import("node:child_process").StdioOptions;
- *   shell?: boolean;
- *   windowsVerbatimArguments?: boolean;
- *   platform?: NodeJS.Platform;
- *   comSpec?: string;
- * }} options
- */
 export function createManagedCommandSpawnSpec({
   bin,
   args = [],
@@ -606,17 +543,6 @@ export function createManagedCommandSpawnSpec({
   };
 }
 
-/**
- * @param {{
- *   bin: string;
- *   args?: string[];
- *   env?: NodeJS.ProcessEnv;
- *   shell?: boolean;
- *   windowsVerbatimArguments?: boolean;
- *   platform?: NodeJS.Platform;
- *   comSpec?: string;
- * }} options
- */
 export function createManagedCommandInvocation({
   bin,
   args = [],

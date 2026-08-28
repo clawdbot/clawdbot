@@ -1,6 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -177,6 +181,69 @@ suite.define(() => {
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDirectory, `${spec.theme}-chat-dark.png`) });
     }
+  });
+
+  it("keeps Phosphor menu modifier glyphs on the system UI stack", async () => {
+    const { page } = await openThemedChat("phosphor", "dark");
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const identity = page.locator(".sidebar-identity-card");
+    await identity.focus();
+    await page.keyboard.press("Enter");
+    const menu = page.locator("wa-dropdown.sidebar-identity-menu");
+    await menu.waitFor();
+    const shortcut = menu
+      .locator('wa-dropdown-item[value="command:settings"]')
+      .locator(".session-menu__shortcut");
+
+    const report = await shortcut.evaluate((element) => ({
+      body: getComputedStyle(document.body).fontFamily,
+      shortcut: getComputedStyle(element).fontFamily,
+      text: element.textContent,
+    }));
+    expect(report.body).toMatch(/^"?JetBrains Mono/u);
+    expect(report.shortcut).toMatch(/^system-ui,/u);
+    const applePlatform = await page.evaluate(() =>
+      /Mac|iPhone|iPad|iPod/u.test(navigator.platform),
+    );
+    expect(report.text).toBe(
+      formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, applePlatform),
+    );
+
+    if (captureUiProof) {
+      await mkdir(proofDirectory, { recursive: true });
+      await page.screenshot({ path: path.join(proofDirectory, "phosphor-settings-shortcut.png") });
+    }
+
+    const modelShortcutFont = await page.evaluate(() => {
+      const action = document.createElement("span");
+      action.className = "chat-controls__model-option-action";
+      const keycap = document.createElement("kbd");
+      action.append(keycap);
+      document.body.append(action);
+      const fontFamily = getComputedStyle(keycap).fontFamily;
+      action.remove();
+      return fontFamily;
+    });
+    expect(modelShortcutFont).toBe(
+      await page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
+      ),
+    );
+
+    const genericMenuShortcutFont = await page.evaluate(() => {
+      const genericShortcut = document.createElement("span");
+      genericShortcut.className = "session-menu__shortcut";
+      genericShortcut.textContent = "C";
+      document.body.append(genericShortcut);
+      const fontFamily = getComputedStyle(genericShortcut).fontFamily;
+      genericShortcut.remove();
+      return fontFamily;
+    });
+    expect(genericMenuShortcutFont).toBe(
+      await page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
+      ),
+    );
   });
 
   it.each([

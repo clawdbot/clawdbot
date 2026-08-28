@@ -1,6 +1,11 @@
 // Chat-owned composer orchestration.
 import { nothing } from "lit";
-import { loadSettings, normalizeChatSendShortcut, patchSettings } from "../../../app/settings.ts";
+import {
+  loadSettings,
+  normalizeChatSendShortcut,
+  patchSettings,
+  type ChatFollowUpMode,
+} from "../../../app/settings.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
@@ -192,11 +197,18 @@ export function renderChatComposer(props: ChatComposerProps) {
     refreshCommands: props.onSlashIntent,
   };
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
-  const steerNowEnabled =
+  // Keyboard and tooltip share the opposite action, including inherited queue modes.
+  const alternateFollowUpMode: ChatFollowUpMode | undefined =
     props.connected &&
     sendShortcut === "enter" &&
     showAbortableUi &&
-    props.followUpMode === "queue";
+    !props.suggestionComposer &&
+    props.followUpMode !== undefined &&
+    props.followUpMode !== "interrupt"
+      ? props.followUpMode === "steer"
+        ? "queue"
+        : "steer"
+      : undefined;
   const gatewayQuestionPrompts =
     props.gatewayQuestionPrompts?.filter(
       (prompt) =>
@@ -312,7 +324,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitDraft: (draft) => commitComposerDraft(props, draft),
     syncDraftAfterSend: syncComposerDraftAfterSend,
     showAbortableUi,
-    steerNowEnabled,
+    alternateFollowUpMode,
   });
 
   const syncComposerValue = (target: HTMLTextAreaElement) => {
@@ -544,7 +556,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
     isBusy,
     followUpMode: props.followUpMode,
-    steerNowEnabled,
+    alternateFollowUpMode,
     suggestionComposer: props.suggestionComposer,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,

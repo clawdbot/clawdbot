@@ -9,13 +9,13 @@ import { parseAbsoluteTimeMs } from "../parse.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
+import { CRON_STUCK_RUN_MS } from "../store/run-receipt-store.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
@@ -496,7 +496,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   const queuedAt = job.state.queuedAtMs;
   if (
     typeof queuedAt === "number" &&
-    Math.abs(nowMs - queuedAt) > STUCK_RUN_MS &&
+    Math.abs(nowMs - queuedAt) > CRON_STUCK_RUN_MS &&
     !ownsCronRunMarker(state, job.id, queuedAt)
   ) {
     state.deps.log.warn(
@@ -510,7 +510,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   const runningAt = job.state.runningAtMs;
   if (
     typeof runningAt === "number" &&
-    Math.abs(nowMs - runningAt) > STUCK_RUN_MS &&
+    Math.abs(nowMs - runningAt) > CRON_STUCK_RUN_MS &&
     !ownsCronRunMarker(state, job.id, runningAt)
   ) {
     state.deps.log.warn(

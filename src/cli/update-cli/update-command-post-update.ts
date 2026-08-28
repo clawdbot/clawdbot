@@ -481,6 +481,7 @@ export async function finishUpdate(params: {
     maybeRestartService({
       shouldRestart: params.shouldRestart && serviceMutationAllowed,
       result: resultWithPostUpdate,
+      channel: params.channel,
       opts: params.opts,
       refreshServiceEnv: refreshGatewayServiceEnv,
       serviceEnv: gatewayServiceEnv,

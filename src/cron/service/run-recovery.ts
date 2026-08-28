@@ -14,7 +14,7 @@ import {
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
   inspectActiveCronRunReceipt,
-  isCronRunReceiptOwnerDefinitelyStale,
+  isCronRunReceiptOwnerStale,
   type CronRunReceiptRecoveryCandidate,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
@@ -101,7 +101,7 @@ function repairInDatabase(params: {
         handle: proposal.receipt,
         status: "interrupted",
         finishedAtMs: state.deps.nowMs(),
-        error: "cron: owner exited after the job row was finalized",
+        error: "cron: owner unavailable after the job row was finalized",
       });
       return { kind: "repaired", notifications: [] };
     }
@@ -116,7 +116,7 @@ function repairInDatabase(params: {
         handle: proposal.receipt,
         status: "interrupted",
         finishedAtMs: state.deps.nowMs(),
-        error: "cron: queued run interrupted by owner process exit",
+        error: "cron: queued run interrupted because owner is unavailable",
       });
     }
     changed = true;
@@ -132,7 +132,7 @@ function repairInDatabase(params: {
           handle: proposal.receipt,
           status: "interrupted",
           finishedAtMs: state.deps.nowMs(),
-          error: "cron: owner exited after run state was already finalized",
+          error: "cron: owner unavailable after run state was already finalized",
         });
         return { kind: "repaired", notifications: [] };
       }
@@ -193,7 +193,7 @@ function repairInDatabase(params: {
         error:
           restored && finalized
             ? finalized.entry.error
-            : "cron: job interrupted by owner process exit",
+            : "cron: job interrupted because owner is unavailable",
       });
     }
     if (restored?.shouldDelete) {
@@ -213,7 +213,7 @@ function repairInDatabase(params: {
         handle: proposal.receipt,
         status: "interrupted",
         finishedAtMs: state.deps.nowMs(),
-        error: "cron: owner exited after run marker retirement",
+        error: "cron: owner unavailable after run marker retirement",
       });
       return { kind: "repaired", notifications };
     }
@@ -288,7 +288,7 @@ export function recoverCronRunProposal(
   // Process liveness is observed before taking SQLite's write lock, but the
   // transaction decides only after proving this exact receipt is still active.
   const proposedReceiptIsStale = proposal.receipt
-    ? isCronRunReceiptOwnerDefinitelyStale(proposal.receipt)
+    ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
     : true;
   const result = runOpenClawStateWriteTransaction(
     (database) => repairInDatabase({ state, database, proposal, proposedReceiptIsStale }),

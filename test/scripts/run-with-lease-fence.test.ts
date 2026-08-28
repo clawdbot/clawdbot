@@ -8,10 +8,11 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SCRIPT = "scripts/mantis/run-with-lease-fence.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const posixIt = process.platform === "win32" ? it.skip : it;
+// Mantis runs on Ubuntu and requires util-linux's setsid for process-group fencing.
+const linuxIt = process.platform === "linux" ? it : it.skip;
 
 describe("run-with-lease-fence", () => {
-  posixIt(
+  linuxIt(
     "stops the active process group after terminal lease loss",
     async () => {
       const root = tempDirs.make("openclaw-lease-fence-");
@@ -63,7 +64,7 @@ describe("run-with-lease-fence", () => {
     20_000,
   );
 
-  posixIt("propagates a clean command exit", () => {
+  linuxIt("propagates a clean command exit", () => {
     const root = tempDirs.make("openclaw-lease-fence-clean-");
     const result = spawnSync(SCRIPT, [path.join(root, "lease.lost"), "--", "/bin/true"], {
       encoding: "utf8",
@@ -73,7 +74,7 @@ describe("run-with-lease-fence", () => {
     expect(result.stderr).toBe("");
   });
 
-  posixIt("passes the caller's stdin through to the fenced command", () => {
+  linuxIt("passes the caller's stdin through to the fenced command", () => {
     // The workflow pipes the agent prompt into the fenced Codex process; a
     // backgrounded child otherwise defaults its stdin to /dev/null, which
     // made the agent fail with an empty prompt.
