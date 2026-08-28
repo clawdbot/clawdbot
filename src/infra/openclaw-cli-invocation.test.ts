@@ -43,6 +43,24 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       command: "/usr/bin/node",
       args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
+      tsxConfigPath: path.join(repoRoot, "tsconfig.json"),
+    });
+  });
+
+  it("pins tsx config when preserving a direct source entry", () => {
+    const sourceEntry = path.join(repoRoot, "src", "entry.ts");
+    expect(
+      resolveCurrentOpenClawCliInvocation(commandArgs, {
+        argv1: sourceEntry,
+        cwd: repoRoot,
+        execArgv: ["--import", trustedTsxLoader],
+        execPath: "/usr/bin/node",
+      }),
+    ).toEqual({
+      command: "/usr/bin/node",
+      args: ["--import", trustedTsxLoader, sourceEntry, ...commandArgs],
+      cwd: repoRoot,
+      tsxConfigPath: path.join(repoRoot, "tsconfig.json"),
     });
   });
 
@@ -122,6 +140,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       command: "/usr/bin/node",
       args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
+      tsxConfigPath: path.join(repoRoot, "tsconfig.json"),
     });
   });
 
@@ -136,6 +155,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       command: "/usr/bin/node",
       args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
+      tsxConfigPath: path.join(repoRoot, "tsconfig.json"),
     });
   });
 });

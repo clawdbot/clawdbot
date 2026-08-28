@@ -19,6 +19,8 @@ export type OpenClawCliInvocation = Readonly<{
   command: string;
   args: string[];
   cwd: string;
+  /** Source-mode tsx needs the checkout's config, independent of the caller's cwd. */
+  tsxConfigPath?: string;
 }>;
 
 /** Keep child CLI launches on the parent's loader/runtime flags without inheriting its debugger. */
@@ -63,17 +65,24 @@ function resolveTrustedTsxLoader(packageRoot: string): string | null {
   }
 }
 
-function buildPackageRootCliArgs(packageRoot: string, execPath: string): string[] {
+function buildPackageRootCliInvocation(
+  packageRoot: string,
+  execPath: string,
+): Pick<OpenClawCliInvocation, "args" | "tsxConfigPath"> {
   const sourceEntry = path.join(packageRoot, "src", "entry.ts");
   if (fs.existsSync(sourceEntry)) {
     const tsxLoader = resolveTrustedTsxLoader(packageRoot);
-    return isBunRuntime(execPath)
-      ? [sourceEntry]
-      : tsxLoader
-        ? ["--import", tsxLoader, sourceEntry]
-        : [path.join(packageRoot, "openclaw.mjs")];
+    if (isBunRuntime(execPath)) {
+      return { args: [sourceEntry] };
+    }
+    if (tsxLoader) {
+      return {
+        args: ["--import", tsxLoader, sourceEntry],
+        tsxConfigPath: path.join(packageRoot, "tsconfig.json"),
+      };
+    }
   }
-  return [path.join(packageRoot, "openclaw.mjs")];
+  return { args: [path.join(packageRoot, "openclaw.mjs")] };
 }
 
 export function resolveCurrentOpenClawCliInvocation(
@@ -100,23 +109,36 @@ export function resolveCurrentOpenClawCliInvocation(
     });
   const invocationCwd =
     packageRoot ?? cwd ?? (entry ? path.dirname(path.resolve(entry)) : path.dirname(execPath));
+  const entryRelativePath =
+    entry && entryPackageRoot
+      ? path.relative(path.resolve(entryPackageRoot), path.resolve(entry))
+      : null;
 
   if (
     entry &&
     entry !== execPath &&
     entryPackageRoot &&
     (OPENCLAW_CLI_ENTRY_BASENAMES.has(path.basename(entry)) ||
-      OPENCLAW_PACKAGE_ENTRY_PATHS.has(
-        path.relative(path.resolve(entryPackageRoot), path.resolve(entry)),
-      ))
+      (entryRelativePath && OPENCLAW_PACKAGE_ENTRY_PATHS.has(entryRelativePath)))
   ) {
-    return { command: execPath, args: [...execArgv, entry, ...args], cwd: invocationCwd };
-  }
-  if (packageRoot) {
     return {
       command: execPath,
-      args: [...buildPackageRootCliArgs(packageRoot, execPath), ...args],
+      args: [...execArgv, entry, ...args],
       cwd: invocationCwd,
+      ...(entryRelativePath === path.join("src", "entry.ts") && !isBunRuntime(execPath)
+        ? { tsxConfigPath: path.join(entryPackageRoot, "tsconfig.json") }
+        : {}),
+    };
+  }
+  if (packageRoot) {
+    const packageInvocation = buildPackageRootCliInvocation(packageRoot, execPath);
+    return {
+      command: execPath,
+      args: [...packageInvocation.args, ...args],
+      cwd: invocationCwd,
+      ...(packageInvocation.tsxConfigPath
+        ? { tsxConfigPath: packageInvocation.tsxConfigPath }
+        : {}),
     };
   }
   return {
