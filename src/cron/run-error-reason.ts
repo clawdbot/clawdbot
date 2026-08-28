@@ -8,7 +8,7 @@ export function resolveCronRunErrorReason(
   provider?: string,
   classification?: CronRunErrorClassification,
 ): FailoverReason | undefined {
-  if (classification?.kind === "permanent") {
+  if (classification?.kind === "permanent" || classification?.kind === "aborted") {
     return undefined;
   }
   if (classification?.kind === "reason") {

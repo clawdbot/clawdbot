@@ -32,7 +32,7 @@ type TransientCronRetryDecision = {
   consecutiveErrors: number;
   retryCategory?: CronRetryOn;
   backoffMs?: number;
-  reason: "transient retry" | "max retries exhausted" | "permanent error";
+  reason: "transient retry" | "max retries exhausted" | "permanent error" | "aborted";
 };
 
 type DisabledHeartbeatOneShotRetryDecision = {
@@ -155,6 +155,13 @@ export function resolveTransientCronRetryDecision(params: {
       retryable: false,
       consecutiveErrors: params.consecutiveErrors ?? 0,
       reason: "permanent error",
+    };
+  }
+  if (params.errorClassification?.kind === "aborted") {
+    return {
+      retryable: false,
+      consecutiveErrors: params.consecutiveErrors ?? 0,
+      reason: "aborted",
     };
   }
   const retryHint = resolveCronExecutionRetryHint({

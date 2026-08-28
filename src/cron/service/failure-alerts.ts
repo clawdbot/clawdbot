@@ -390,11 +390,17 @@ export function maybeEmitFailureAlert(
     failureNotificationDetail?: CronFailureNotificationDetail;
     runAtMs?: number;
     consecutiveCount: number;
+    // A one-shot's terminal disable never gets another failure to cross the
+    // `after` threshold, so it alerts regardless of the configured count.
+    terminalDisable?: boolean;
     deferredNotifications?: DeferredCronNotifications;
   },
 ) {
   const alertConfig = params.alertConfig;
-  if (!alertConfig || params.consecutiveCount < alertConfig.after) {
+  if (
+    !alertConfig ||
+    (params.consecutiveCount < alertConfig.after && params.terminalDisable !== true)
+  ) {
     return;
   }
   // Best-effort delivery suppresses inherited alert noise, not an independently
@@ -439,6 +445,7 @@ export function finalizeCronFailureNotifications(
     };
     completionFailed: boolean;
     autoDisableNotificationOwnsFailure: boolean;
+    oneShotTerminalDisable?: boolean;
     replay?: boolean;
     deferredNotifications?: DeferredCronNotifications;
   },
@@ -457,6 +464,7 @@ export function finalizeCronFailureNotifications(
       failureNotificationDetail: params.result.failureNotificationDetail,
       runAtMs: params.result.startedAt,
       consecutiveCount: params.job.state.consecutiveErrors ?? 0,
+      ...(params.oneShotTerminalDisable === true ? { terminalDisable: true as const } : {}),
       deferredNotifications: params.deferredNotifications,
     });
   } else if (

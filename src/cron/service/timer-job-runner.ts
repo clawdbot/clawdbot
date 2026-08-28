@@ -215,6 +215,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const result: CronCoreRunOutcome = {
       status: "error" as const,
       error,
+      errorClassification: { kind: "aborted" as const },
       ...cronRunAttributionFromExecution(execution),
       diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
