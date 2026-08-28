@@ -119,6 +119,30 @@ describe("managed document chat history", () => {
 });
 
 describe("oversized multimodal chat history", () => {
+  it("redacts Responses input_image data URLs only for stored history", () => {
+    const imageUrl = "DATA:image/png;BASE64,cG5n";
+    const message = {
+      role: "assistant",
+      content: [{ type: "input_image", image_url: imageUrl }],
+    };
+
+    expect(projectChatDisplayMessages([message])).toEqual([message]);
+    expect(
+      projectChatDisplayMessages([message], { redactInlineMedia: true }),
+    ).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(imageUrl, "utf8"),
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps legacy image, audio, and video transcript blocks through every history boundary", async () => {
     const inlineImage = Buffer.from("inline image").toString("base64");
     const inlineAudio = Buffer.from("inline audio").toString("base64");
