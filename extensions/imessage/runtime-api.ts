@@ -18,7 +18,7 @@ export {
   resolveIMessageConfigDefaultTo,
 } from "./src/config-accessors.js";
 export { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./src/normalize.js";
-export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,

@@ -276,7 +276,6 @@
     "!dist/extensions/cloudflare-ai-gateway/**",
     "!dist/extensions/codex/**",
     "!dist/extensions/copilot/**",
-    "!dist/extensions/daytona/**",
     "!dist/extensions/deepinfra/**",
     "!dist/extensions/deepseek/**",
     "!dist/extensions/diagnostics-otel/**",

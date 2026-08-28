@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -61,20 +62,28 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
   }
 
   it("removes an allocated worktree when its commit guard closes during setup", async () => {
-    let checks = 0;
+    const setup = path.join(repo, ".openclaw");
+    await fs.mkdir(setup);
+    const closed = path.join(setup, "authority-closed");
+    await fs.writeFile(
+      path.join(setup, "worktree-setup.sh"),
+      '#!/bin/sh\ntouch "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/authority-closed"\n',
+      { mode: 0o755 },
+    );
     await expect(
       service.create({
         repoRoot: repo,
         name: "closed-authority",
         baseRef: "HEAD",
         commitGuard: () => {
-          checks += 1;
-          if (checks === 2) {
+          if (existsSync(closed)) {
             throw new TypeError("authority closed");
           }
         },
       }),
     ).rejects.toThrow("authority closed");
+
+    expect(existsSync(closed)).toBe(true);
 
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("closed-authority");
     expect(await git(repo, "branch", "--list", "openclaw/closed-authority")).toBe("");

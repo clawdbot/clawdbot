@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
+  SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   type SystemAgentOperation,
 } from "../../system-agent/operations.js";
 import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install-spec.js";
@@ -20,6 +21,8 @@ import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } fr
 export type SystemAgentToolOptions = {
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   surface: "cli" | "gateway";
+  /** Delegated proposals require operator UI approval, never a chat reply. */
+  operatorApprovalOnly?: boolean;
   /**
    * Host-verified consent for THIS turn: true only when the host judged the
    * user's actual message to be an explicit approval. The model-supplied
@@ -487,8 +490,11 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
             options.proposalRef.current = operationHash;
             options.proposalRef.operation = operation;
           }
+          const approvalHint = options.operatorApprovalOnly
+            ? `The proposal is registered for operator approval. Do not request conversational approval. ${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
+            : "The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).";
           return textResult(
-            `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).`,
+            `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. ${approvalHint}`,
             { needsApproval: true },
           );
         }

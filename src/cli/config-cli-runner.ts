@@ -48,7 +48,7 @@ import {
   collectDryRunResolvabilityErrors,
   collectDryRunSchemaErrors,
   collectDryRunStaticErrorsForSkippedExecRefs,
-  collectPluginIntegrationProviderErrors,
+  collectConfigSecretProviderErrors,
   dedupeDryRunErrors,
   formatDryRunFailureMessage,
   loadValidConfigForWrite,
@@ -328,11 +328,9 @@ export async function runConfigOperations(params: {
       const writePath = recordOperation(operation);
       const unsetResult = unsetAtPath(next, operation.setPath);
       if (!unsetResult.removed && operation.inputMode === "unset") {
+        const requestedPath = formatConfigSetPath(operation.requestedPath, operation.pathTokens);
         const runtimeOnly = getAtPath(snapshot.runtimeConfig, operation.setPath).found;
-        const message = formatConfigUnsetMissingPathMessage({
-          path: formatConfigSetPath(operation.requestedPath, operation.pathTokens),
-          runtimeOnly,
-        });
+        const message = formatConfigUnsetMissingPathMessage({ path: requestedPath, runtimeOnly });
         if (options.dryRun && options.json) {
           throw new ConfigSetDryRunValidationError({
             ok: false,
@@ -347,7 +345,7 @@ export async function runConfigOperations(params: {
                 kind: "missing-path",
                 message: runtimeOnly
                   ? message
-                  : `Config path not found: ${formatConfigSetPath(operation.requestedPath, operation.pathTokens)}. Nothing was changed.`,
+                  : `Config path not found: ${requestedPath}. Nothing was changed.`,
               },
             ],
           });
@@ -414,10 +412,11 @@ export async function runConfigOperations(params: {
     "",
     { normalizeRoot: true },
   ).map((line) => line.trim());
-  const pluginIntegrationErrors = collectPluginIntegrationProviderErrors({
-    config: nextConfig,
-    operations: appliedOperations,
-  });
+  const providerErrors = formatConfigIssueLines(
+    await collectConfigSecretProviderErrors({ config: nextConfig, operations: appliedOperations }),
+    "",
+  ).map((message): ConfigSetDryRunError => ({ kind: "schema", message }));
+
   if (options.dryRun) {
     const hasJsonMode = operations.some(({ inputMode }) => inputMode === "json");
     const hasBuilderMode = operations.some(({ inputMode }) => inputMode === "builder");
@@ -446,7 +445,7 @@ export async function runConfigOperations(params: {
     if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
       errors.push(...policyIssueLines.map((message) => ({ kind: "schema" as const, message })));
     }
-    errors.push(...pluginIntegrationErrors);
+    errors.push(...providerErrors);
     if (requiresFullSchemaValidation) {
       errors.push(
         ...collectDryRunSchemaErrors(
@@ -475,9 +474,7 @@ export async function runConfigOperations(params: {
       inputModes: uniqueValues(operations.map(({ inputMode }) => inputMode)),
       checks: {
         schema:
-          requiresFullSchemaValidation ||
-          policyIssueLines.length > 0 ||
-          pluginIntegrationErrors.length > 0,
+          requiresFullSchemaValidation || policyIssueLines.length > 0 || providerErrors.length > 0,
         resolvability: checksRefs || modelRefCheck.refsTotal > 0,
         resolvabilityComplete:
           (checksRefs || modelRefCheck.refsTotal > 0) &&
@@ -528,11 +525,11 @@ export async function runConfigOperations(params: {
   if (policyIssueLines.length > 0) {
     throw new Error(formatPolicyFailure(policyIssueLines));
   }
-  if (pluginIntegrationErrors.length > 0) {
+  if (providerErrors.length > 0) {
     throw new Error(
       [
-        "Config validation failed: plugin-managed SecretRef provider integration is invalid.",
-        ...pluginIntegrationErrors.map((error) => `- ${error.message}`),
+        "Config validation failed: SecretRef provider configuration is invalid.",
+        ...providerErrors.map((error) => `- ${error.message}`),
       ].join("\n"),
     );
   }

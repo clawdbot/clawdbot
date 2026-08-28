@@ -267,7 +267,7 @@ describe("cron service timer seam coverage", () => {
         persistedReservation = (await loadCronStore(storePath)).jobs[0]?.state.runningAtMs;
         liveReservation = state.store?.jobs[0]?.state.runningAtMs;
         liveError = state.store?.jobs[0]?.state.lastError;
-        return { status: "ok" as const };
+        return { status: "ok" as const, delivered: true };
       }),
       onEvent: (event) => {
         if (event.action === "started") {
@@ -821,6 +821,7 @@ describe("cron service timer seam coverage", () => {
       status: "ok" as const,
       summary: "done",
       sessionId: "session-run-1",
+      delivered: true,
       sessionKey: "agent:finn:cron:isolated-agent-job:run:run-1",
       delivery: { intended: { channel: "telegram", to: "42" } },
       model: "gpt-test",
@@ -878,6 +879,7 @@ describe("cron service timer seam coverage", () => {
       status: "ok" as const,
       summary: "done",
       sessionKey: "agent:finn:cron:isolated-agent-job:run:run-1",
+      delivered: true,
     }));
 
     await writeCronStoreSnapshot({

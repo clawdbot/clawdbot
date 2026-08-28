@@ -80,6 +80,10 @@ nested shape.
 
 ### Media delivery with block streaming
 
+With block streaming off, media-bearing assistant messages can still be sent at
+message boundaries, with their captions attached. Preview updates do not count
+as separately delivered captions.
+
 Streaming media must use structured payload fields such as `mediaUrl` or
 `mediaUrls`; streamed text is not parsed as an attachment command. When block
 streaming sends media early, OpenClaw remembers that delivery for the turn. If
@@ -143,7 +147,8 @@ replies**, not final replies or tool summaries.
   `*.streaming.block.enabled: true`.
 - **Stream everything at end:** `blockStreamingBreak: "message_end"` (flush
   once, possibly multiple chunks if very long).
-- **No block streaming:** `blockStreamingDefault: "off"` (only final reply).
+- **No block streaming:** `blockStreamingDefault: "off"` (final text replies;
+  media-bearing messages can still be sent at message boundaries).
 
 Block streaming follows `agents.defaults.blockStreamingDefault` unless a
 channel or account sets `*.streaming.block.enabled` explicitly. QQ Bot has no

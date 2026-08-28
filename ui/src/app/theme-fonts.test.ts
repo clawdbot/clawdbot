@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  applyChatFontSmoothing,
   applyTypefaceOverrides,
   loadTypefaceSpecimens,
   normalizeTypefaceOverride,
@@ -19,6 +20,7 @@ describe("typeface presentation", () => {
       link.remove();
     }
     applyTypefaceOverrides();
+    applyChatFontSmoothing("system");
   });
 
   it.each([
@@ -93,4 +95,16 @@ describe("typeface presentation", () => {
       expect(normalizeTypefaceOverride(value)).toBeUndefined();
     },
   );
+
+  it("opts chat prose into auto smoothing only while the resolved chat face is a serif", () => {
+    const style = document.documentElement.style;
+    for (const serif of ["lora", "fraunces"] as const) {
+      applyChatFontSmoothing(serif);
+      expect(style.getPropertyValue("--chat-font-smoothing")).toBe("auto");
+    }
+    for (const nonSerif of ["instrument-sans", "jetbrains-mono", "system"] as const) {
+      applyChatFontSmoothing(nonSerif);
+      expect(style.getPropertyValue("--chat-font-smoothing")).toBe("");
+    }
+  });
 });

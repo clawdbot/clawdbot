@@ -174,11 +174,19 @@ export function restoreFinalizedStartupRun(params: {
           delivered: entry.delivered,
           deliveryStatus: entry.deliveryStatus,
         }),
+      // Recovery uses the finished run's fact, never the job's possibly edited route.
+      deliveryState: {
+        delivered: entry.delivered,
+        status: entry.deliveryStatus ?? "unknown",
+        error: entry.deliveryError,
+        deliverySuppressionReason: entry.deliverySuppressionReason,
+        failureNotification: entry.failureNotificationDelivery ?? { status: "not-requested" },
+      },
       startedAt,
       endedAt,
     },
     {
-      replayFailureAlertAtMs: endedAt,
+      replay: true,
       scheduleOwnership,
       deferredNotifications: params.deferredNotifications,
     },
@@ -187,14 +195,18 @@ export function restoreFinalizedStartupRun(params: {
   // The finalized row captured post-run state before the stale cron store write.
   job.state.lastDurationMs = entry.durationMs ?? Math.max(0, endedAt - startedAt);
   job.state.lastErrorReason = entry.errorReason;
-  job.state.lastDelivered = entry.delivered;
-  job.state.lastDeliveryStatus = entry.deliveryStatus;
-  job.state.lastDeliveryError = entry.deliveryError;
-  job.state.deliverySuppressionReason = entry.deliverySuppressionReason;
   if (entry.failureNotificationDelivery) {
     job.state.lastFailureNotificationDelivered = entry.failureNotificationDelivery.delivered;
     job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery.status;
     job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery.error;
+    const lastAlert = job.state.lastFailureAlertAtMs;
+    // Recorded alert intent owns its cooldown even if today's route/policy changed.
+    if (
+      entry.failureNotificationDelivery.status !== "not-requested" &&
+      (lastAlert === undefined || lastAlert < endedAt || lastAlert > state.deps.nowMs())
+    ) {
+      job.state.lastFailureAlertAtMs = endedAt;
+    }
   }
   const finalizedNextRunAtMs = replacementAtMs ?? entry.nextRunAtMs;
   job.state.nextRunAtMs =

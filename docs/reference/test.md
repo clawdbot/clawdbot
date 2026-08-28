@@ -81,8 +81,8 @@ reconcile dependencies before the remote wrapper starts.
 
 Maintained JavaScript tooling wrappers and root package commands use tsx's
 in-process transform cache. They skip its shared disk cache before the loader
-starts, and child tooling inherits that policy. This does not relocate or clean
-temporary directories, Node or Vitest caches, or other global caches. Standalone
+starts, and child tooling inherits that policy. This cache policy does not clean
+existing temporary directories, Node or Vitest caches, or other global caches. Standalone
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
@@ -124,6 +124,14 @@ Python helper coverage remains separate, including macOS; these fixture gates
 do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend).
 
 ## Shared test state and process helpers
+
+On POSIX hosts, the Vitest wrapper gives each invocation an owned temporary
+namespace through `TMPDIR`, `TMP`, and `TEMP`. Fallback SQLite state stays available
+across shared-worker files and module resets, then the wrapper removes the namespace
+after its child process group has stopped, including failed test runs. Explicit state
+and artifact paths outside that namespace are unchanged. Windows and raw invocations
+outside the wrapper are unchanged; interrupted wrappers or unverified process-group
+teardown can retain their temporary files. The wrapper never sweeps old PID directories.
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
@@ -232,6 +240,10 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 - `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from the last five successful main CI runs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci#measured-shard-weights) for the daily refresh and sampling rules.
+
+`pnpm test:extensions:memory` profiles built plugin index entries from `dist/extensions` (including nested `dist` output) and package-local `extensions/<id>/dist` output; TypeScript source entries are excluded. Root artifacts take precedence when both builds exist. Selecting an already-built plugin with `--extension <id>` reuses its output without requiring unrelated plugin builds; build the plugin package first if its output is not supplied by `pnpm build`.
+
+Native imports also need the plugin's declared dependencies and a resolvable `openclaw` host package. The profiler does not install or link dependencies: missing dependencies remain import failures in the JSON report and cause a nonzero exit.
 
 ## Benchmarks
 

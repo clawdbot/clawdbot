@@ -45,6 +45,7 @@ import {
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
+import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 const ZERO_USAGE: Usage = {
@@ -149,6 +150,7 @@ export class CodexToolTranscriptProjection {
   private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
   private readonly approvalReviewsByCallId = new Map<string, ToolApprovalReviewState>();
   private readonly rawNativeToolOutputByCallId = new Map<string, string>();
+  private readonly pendingRawPatchOutputIds = new Set<string>();
   private readonly codeModeNativePatchInputsByCallId = new Map<string, string>();
 
   constructor(
@@ -161,6 +163,7 @@ export class CodexToolTranscriptProjection {
       nativePostToolUseRelayEnabled?: boolean;
       prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
       trajectoryRecorder?: CodexTrajectoryRecorder | null;
+      checkpointMessage?: (entry: CodexTranscriptCheckpointEntry) => void;
     } = {},
   ) {}
 
@@ -333,6 +336,7 @@ export class CodexToolTranscriptProjection {
         }
       }
       if (args) {
+        this.pendingRawPatchOutputIds.add(callId);
         this.recordToolCall({ id: callId, name: "apply_patch", arguments: args });
       }
       return;
@@ -344,6 +348,7 @@ export class CodexToolTranscriptProjection {
     ) {
       return;
     }
+    this.pendingRawPatchOutputIds.delete(callId);
     const text =
       typeof item.output === "string"
         ? item.output
@@ -601,12 +606,12 @@ export class CodexToolTranscriptProjection {
     this.callIds.add(params.id);
     this.namesById.set(params.id, params.name);
     this.progress.recordTranscriptCall(params);
-    this.messages.push(
-      attachCodexMirrorIdentity(
-        this.createToolCallMessage(params),
-        `${this.turnId}:tool:${params.id}:call`,
-      ),
+    const message = attachCodexMirrorIdentity(
+      this.createToolCallMessage(params),
+      `${this.turnId}:tool:${params.id}:call`,
     );
+    this.messages.push(message);
+    this.options.checkpointMessage?.({ read: () => message });
   }
 
   private recordToolResult(params: ToolTranscriptResultInput): void {
@@ -615,12 +620,17 @@ export class CodexToolTranscriptProjection {
     }
     this.resultIds.add(params.id);
     this.progress.recordTranscriptResult(params);
-    this.messages.push(
-      attachCodexMirrorIdentity(
-        this.createToolResultMessage(params),
-        `${this.turnId}:tool:${params.id}:result`,
-      ),
+    const message = attachCodexMirrorIdentity(
+      this.createToolResultMessage(params),
+      `${this.turnId}:tool:${params.id}:result`,
     );
+    this.messages.push(message);
+    this.options.checkpointMessage?.({
+      read: () => message,
+      // A linked raw patch output enriches FileChange after item/completed.
+      // Keep that result mutable only until the promised raw output arrives.
+      ready: () => !this.pendingRawPatchOutputIds.has(params.id),
+    });
   }
 
   private recordMissingToolError(

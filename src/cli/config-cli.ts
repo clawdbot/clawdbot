@@ -212,10 +212,9 @@ export async function runConfigUnset(opts: {
       throw new Error("--json can only be used with --dry-run.");
     }
     const pathTokens = parseConcreteConfigPathTokens(opts.path);
-    const parsedPath = pathTokens.map(String);
     await runConfigOperations({
       runtime,
-      operations: [buildUnsetOperation(parsedPath, pathTokens)],
+      operations: [buildUnsetOperation(pathTokens.map(String), pathTokens)],
       options: cliOptions,
       successMode: "set",
     });
@@ -258,7 +257,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
     const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
-    const snapshot = strictlyValidateConfigSnapshotForCli(
+    const snapshot = await strictlyValidateConfigSnapshotForCli(
       read.snapshot,
       read.pluginMetadataSnapshot,
     );

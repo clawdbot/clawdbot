@@ -305,6 +305,7 @@ describe("remote Crabbox AWS gate contract", () => {
     expect(result.stdout).toContain("test/scripts/pr-prepare-gates.test.ts");
     expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_BASE=${"a".repeat(40)}`);
     expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${"b".repeat(40)}`);
+    expect(result.stdout).not.toContain("OPENCLAW_CRABBOX_GATE_WORKFLOW=");
     expect(result.stdout).not.toContain("test/scripts/pr-wrappers.test.ts");
     expect(result.stdout).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
     expect(result.stdout).not.toContain("pnpm test");

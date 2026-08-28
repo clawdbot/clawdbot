@@ -32,14 +32,14 @@ function resolveSelection({ modelRef, useUtilityModel, agentDir }: Record<string
   };
 }
 
-describe("generateConversationLabel", () => {
-  beforeEach(() => {
-    runIsolatedCompletion.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
-    runIsolatedCompletion.mockResolvedValue({ text: "Topic label" });
-  });
+beforeEach(() => {
+  runIsolatedCompletion.mockReset();
+  resolveSimpleCompletionSelectionForAgent.mockReset();
+  resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
+  runIsolatedCompletion.mockResolvedValue({ text: "Topic label" });
+});
 
+describe("generateConversationLabel", () => {
   it.each([
     ["generateConversationLabel", generateConversationLabel],
     ["generateConversationLabelWithFallback", generateConversationLabelWithFallback],
@@ -61,9 +61,11 @@ describe("generateConversationLabel", () => {
           agentDir: "/tmp/agents/billing/agent",
           utilityModelRef: "openai/gpt-mini@work",
           regularModelRef: "openai/gpt-main@work",
+          preferredProfile: "work",
         }),
       ).resolves.toBe("Topic label");
 
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
       expect(runIsolatedCompletion).toHaveBeenCalledWith({
         config: cfg,
         provider: "openai",
@@ -77,6 +79,7 @@ describe("generateConversationLabel", () => {
           "Do not describe your own capabilities or limitations.",
         prompt: userMessage,
         timeoutMs: 15_000,
+        outputTextPolicy: "strict-visible",
         streamParams: { maxTokens: 4_096 },
       });
     },
@@ -138,17 +141,21 @@ describe("generateConversationLabel", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledOnce();
   });
 
-  it("bounds labels without splitting surrogate pairs", async () => {
-    runIsolatedCompletion.mockResolvedValue({ text: `${"a".repeat(11)}😀tail` });
+  it.each([
+    ["bounds without splitting surrogate pairs", `${"a".repeat(11)}😀tail`, 12, "a".repeat(11)],
+    ["hides trailing reasoning", "Invoice follow-up<think>private", 128, "Invoice follow-up"],
+    ["preserves literal code tags", "Debug `<think>` parsing", 128, "Debug `<think>` parsing"],
+  ])("%s", async (_name, text, maxLength, expected) => {
+    runIsolatedCompletion.mockResolvedValue({ text });
 
     await expect(
       generateConversationLabel({
         userMessage: "Message",
         prompt: "Prompt",
         cfg: {},
-        maxLength: 12,
+        maxLength,
       }),
-    ).resolves.toBe("a".repeat(11));
+    ).resolves.toBe(expected);
   });
 });
 
@@ -162,23 +169,6 @@ describe("generateConversationLabelWithFallback", () => {
     regularModelRef: "openai/gpt-main@work",
     preferredProfile: "work",
   };
-
-  beforeEach(() => {
-    runIsolatedCompletion.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
-    runIsolatedCompletion.mockResolvedValue({ text: "Utility title" });
-  });
-
-  it("uses the utility candidate once", async () => {
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBe("Utility title");
-    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-    expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-mini",
-      authProfileId: "work",
-    });
-  });
 
   it("locks an inherited profile onto a same-provider utility ref", async () => {
     await generateConversationLabelWithFallback({ ...params, utilityModelRef: "openai/gpt-mini" });
@@ -216,22 +206,30 @@ describe("generateConversationLabelWithFallback", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps an explicit runtime owner across utility and primary attempts", async () => {
-    runIsolatedCompletion
-      .mockRejectedValueOnce(new Error("utility unavailable"))
-      .mockResolvedValueOnce({ text: "Primary title" });
+  it.each([false, true])(
+    "keeps the runtime owner during fallback (reasoning: %s)",
+    async (reasoning) => {
+      runIsolatedCompletion
+        .mockImplementationOnce(async () => {
+          if (!reasoning) {
+            throw new Error("utility unavailable");
+          }
+          return { text: "<think>private" };
+        })
+        .mockResolvedValueOnce({ text: "Primary title" });
 
-    await expect(
-      generateConversationLabelWithFallback({
-        ...params,
-        agentHarnessRuntimeOverride: "codex",
-      }),
-    ).resolves.toBe("Primary title");
+      await expect(
+        generateConversationLabelWithFallback({
+          ...params,
+          agentHarnessRuntimeOverride: "codex",
+        }),
+      ).resolves.toBe("Primary title");
 
-    expect(
-      runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
-    ).toEqual(["codex", "codex"]);
-  });
+      expect(
+        runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
+      ).toEqual(["codex", "codex"]);
+    },
+  );
 
   it("uses the regular candidate directly when no utility model exists", async () => {
     const { utilityModelRef: _utilityModelRef, ...regularOnlyParams } = params;

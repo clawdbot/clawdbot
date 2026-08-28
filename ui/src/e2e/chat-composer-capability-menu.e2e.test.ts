@@ -182,6 +182,22 @@ function webSearchItem(menu: import("playwright").Locator) {
   return menu.locator('wa-dropdown-item[value="toggle-web-search"]');
 }
 
+// The shared tooltip moves active title hints onto the row or its nested link.
+// Read the reason from the element that owns that accessible description.
+function disabledReason(item: import("playwright").Locator) {
+  return item.evaluate((element) => {
+    const title = element.getAttribute("title");
+    if (title) {
+      return title;
+    }
+    const describedBy =
+      element.getAttribute("aria-describedby") ??
+      element.querySelector("[aria-describedby]")?.getAttribute("aria-describedby");
+    const description = describedBy ? element.ownerDocument.getElementById(describedBy) : null;
+    return description?.textContent?.trim() ?? "";
+  });
+}
+
 suite.define(() => {
   it("renders the root stack, proxies attachments, patches sparse overrides, and clears the pill", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -551,7 +567,7 @@ suite.define(() => {
       await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
       const listIssues = menu.locator('wa-dropdown-item[value="mcp-tool:0"]');
       await expect.poll(() => listIssues.isDisabled()).toBe(true);
-      await expect.poll(() => listIssues.getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => disabledReason(listIssues)).toBe("Loading…");
       await listIssues.evaluate((item) => {
         item
           .closest("wa-dropdown")
@@ -592,12 +608,12 @@ suite.define(() => {
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const clear = menu.locator('wa-dropdown-item[value="clear-overrides"]');
       await expect.poll(() => clear.isDisabled()).toBe(true);
-      await expect.poll(() => clear.getAttribute("title")).toContain("operator.admin access");
+      await expect.poll(() => disabledReason(clear)).toContain("operator.admin access");
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       const docs = menu.getByRole("menuitem", { name: /^Docs/ });
       await expect.poll(() => docs.isDisabled()).toBe(true);
-      await expect.poll(() => docs.getAttribute("title")).toContain("operator.admin access");
+      await expect.poll(() => disabledReason(docs)).toContain("operator.admin access");
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
@@ -605,10 +621,11 @@ suite.define(() => {
         .toBe(true);
       const browse = menu.getByRole("menuitem", { name: "Browse connectors" });
       await expect.poll(() => browse.isDisabled()).toBe(true);
-      await expect.poll(() => browse.getAttribute("title")).toContain("Admin access");
+      await browse.hover();
+      await expect.poll(() => disabledReason(browse)).toContain("Admin access");
       const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
       await expect.poll(() => addServer.isDisabled()).toBe(true);
-      await expect.poll(() => addServer.getAttribute("title")).toContain("Admin access");
+      await expect.poll(() => disabledReason(addServer)).toContain("Admin access");
     });
   });
 
@@ -634,7 +651,7 @@ suite.define(() => {
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const webSearch = webSearchItem(menu);
       await expect.poll(() => webSearch.isDisabled()).toBe(true);
-      await expect.poll(() => webSearch.getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => disabledReason(webSearch)).toBe("Loading…");
       await webSearch.evaluate((item) => {
         item
           .closest("wa-dropdown")
@@ -650,7 +667,7 @@ suite.define(() => {
         }),
       );
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
-      await expect.poll(() => webSearchItem(menu).getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => disabledReason(webSearchItem(menu))).toBe("Loading…");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await gateway.resolveDeferred("config.get", configResponse({}, false));

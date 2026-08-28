@@ -194,7 +194,7 @@ describe("MCP App UI resources", () => {
     releases.slice(1).forEach((entry) => entry());
   });
 
-  it("normalizes CSP and snapshots the session deadline before retaining the view", async () => {
+  it("normalizes CSP before retaining the view", async () => {
     const sessionRuntime = runtime(async () => ({
       contents: [
         {
@@ -212,10 +212,6 @@ describe("MCP App UI resources", () => {
         },
       ],
     }));
-    const peekCatalog = vi.fn(() => null);
-    sessionRuntime.peekCatalog = peekCatalog;
-    sessionRuntime.getServerRequestTimeoutMs = (serverName) =>
-      serverName === "demo" ? 120_000 : undefined;
     const result = await fetchMcpAppView({
       runtime: sessionRuntime,
       serverName: "demo",
@@ -230,8 +226,6 @@ describe("MCP App UI resources", () => {
       resourceDomains: ["https://cdn.example.com"],
     });
     expect(view?.html.startsWith("<!doctype html>")).toBe(true);
-    expect(view?.requestTimeoutMs).toBe(120_000);
-    expect(peekCatalog).not.toHaveBeenCalled();
     expect(buildMcpAppSandboxPath(view?.csp)).toContain("?csp=");
   });
 

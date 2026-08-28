@@ -91,7 +91,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     onSettled?: (position: ChatSessionScrollPosition) => void;
   } | null = null;
   private pendingScrollFrame: number | null = null;
-  private endScrollBehavior: ScrollBehavior | null = null;
+  private scrollCommand: { behavior: ScrollBehavior; target: "end" | "index" } | null = null;
   // Lit calls refs before newly rendered nodes are connected. Resolve the
   // scroll parent lazily or a stable ref can permanently capture null.
   get scrollElement(): HTMLDivElement | null {
@@ -242,20 +242,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           const previousHeight = this.observedHeight;
           const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
           const heightChanged = previousHeight !== null && previousHeight !== rect.height;
-          const scrollOffset = instance.scrollOffset;
-          const wasAtEndBeforeResize =
-            heightChanged &&
-            this.pendingScrollOffset === null &&
-            scrollOffset !== null &&
-            instance.getTotalSize() - previousHeight - scrollOffset <=
-              CHAT_TRANSCRIPT_END_THRESHOLD_PX;
           this.observedWidth = rect.width;
           this.observedHeight = rect.height;
           syncScrollMargin(instance.scrollElement, instance);
           callback(rect);
-          if (wasAtEndBeforeResize) {
-            this.scrollToEnd({ source: "auto" });
-          }
           if (widthChanged) {
             // Keep stale offscreen sizes as estimates — a full measure() wipe
             // has no scroll compensation and teleports the reader. resizeItem
@@ -283,6 +273,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           if (event instanceof PointerEvent && event.target !== element) {
             return;
           }
+          this.pendingInteractionAnchor = null;
           this.cancelScroll();
           this.callbacks.onReaderScroll?.();
         };
@@ -300,11 +291,12 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           const settledAtEnd =
             !scrolling &&
             Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) <= 1;
-          if (settledAtEnd && this.pendingScrollOffset === null) {
-            if (this.endScrollBehavior === "smooth") {
+          // End-idle cannot retire a message reveal still waiting for its DOM commit.
+          if (settledAtEnd && this.scrollCommand?.target === "end") {
+            if (this.scrollCommand.behavior === "smooth") {
               this.cancelScroll();
             } else {
-              this.endScrollBehavior = null;
+              this.scrollCommand = null;
             }
           }
         });
@@ -318,7 +310,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       measureElement: measureVirtualElement,
       rangeExtractor: (range) =>
         extractTranscriptRange(range, this.rowIndexesByKey, this.focusedRowKey),
-      scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
+      // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
+      // scheduleCommittedChatScroll owns end-follow on content changes and source: "resize".
+      // Disable isAtEnd()'s default too; callers must supply an explicit threshold.
+      scrollEndThreshold: -1,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
     if (initialOffset !== null) {
@@ -375,7 +370,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   }
 
   disconnect(): void {
-    this.endScrollBehavior = null;
+    this.scrollCommand = null;
     if (this.pendingRowMeasureFrame !== null) {
       cancelAnimationFrame(this.pendingRowMeasureFrame);
       this.pendingRowMeasureFrame = null;
@@ -464,7 +459,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const distanceFromEnd = (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0);
     return (
       this.pendingScrollOffset !== null ||
-      (this.endScrollBehavior !== null && distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
+      (this.scrollCommand !== null && distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
     );
   }
 
@@ -475,21 +470,21 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       return false;
     }
     this.cancelScroll();
-    this.endScrollBehavior = behavior;
+    this.scrollCommand = { behavior, target: "end" };
     this.virtualizerController.getVirtualizer().scrollToEnd({ behavior });
     return true;
   }
 
   private cancelScroll(): void {
-    if (this.endScrollBehavior === null && !this.pendingScrollOffset) {
+    if (this.scrollCommand === null && !this.pendingScrollOffset) {
       return;
     }
     // Only smooth commands skip row measurements. Replaying ordinary auto
     // scrolling's overscan sizes can move an already settled end anchor.
-    if (this.endScrollBehavior === "smooth") {
+    if (this.scrollCommand?.behavior === "smooth") {
       this.queueConnectedRowMeasure();
     }
-    this.endScrollBehavior = null;
+    this.scrollCommand = null;
     this.pendingScrollOffset = null;
     if (this.pendingScrollFrame !== null) {
       cancelAnimationFrame(this.pendingScrollFrame);
@@ -516,9 +511,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       return false;
     }
     this.cancelScroll();
+    const command = (this.scrollCommand = { behavior: resolveScrollBehavior(), target: "index" });
     this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
     this.host.requestUpdate();
     void this.host.updateComplete.then(() => {
+      if (this.scrollCommand !== command) {
+        return;
+      }
       const bubble = [
         ...(this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-bubble") ?? []),
       ].find((candidate) => candidate.dataset.entryId === messageId);
@@ -528,7 +527,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       this.threadInnerElement
         ?.querySelector(".chat-bubble--reply-target")
         ?.classList.remove("chat-bubble--reply-target");
-      bubble.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "center" });
+      bubble.scrollIntoView?.({ behavior: command.behavior, block: "center" });
       bubble.classList.add("chat-bubble--reply-target");
       bubble.addEventListener(
         "animationend",
@@ -581,7 +580,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const virtualizer = this.virtualizerController.getVirtualizer();
     const typingAdded =
       !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
-    const followTyping = typingAdded && virtualizer.isAtEnd();
+    const followTyping =
+      typingAdded &&
+      !this.pendingScrollOffset &&
+      virtualizer.isAtEnd(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
     this.rowKeys = Object.freeze(nextKeys);
     const rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     this.rowIndexesByKey = rowIndexesByKey;
@@ -598,12 +600,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       rangeExtractor: (range) => extractTranscriptRange(range, rowIndexesByKey, this.focusedRowKey),
     });
     if (followTyping) {
-      virtualizer.scrollToIndex(
-        this.rowIndexesByKey.get("presence:typing") ?? nextKeys.length - 1,
-        {
-          align: "end",
-        },
-      );
+      this.cancelScroll();
+      this.scrollCommand = { behavior: "auto", target: "index" };
+      virtualizer.scrollToIndex(nextKeys.indexOf("presence:typing"), { align: "end" });
     }
   }
 

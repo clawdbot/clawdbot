@@ -402,6 +402,7 @@ export class ChatTurnRouter {
         overview,
         surface: this.options.surface ?? "cli",
         approvalArmed,
+        ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
         session: this.agentSession,
       });
     } catch (error) {
@@ -602,13 +603,20 @@ export class ChatTurnRouter {
     const capture = createCaptureRuntime();
     if (isPersistentSystemAgentOperation(recordedOperation) && !this.options.yes) {
       this.clearPendingProposals();
-      this.pending = recordedOperation;
+      // Validate through the executor before staging; delegated handoff copy must
+      // not turn a forbidden operation into an approvable proposal.
       await executeSystemAgentOperation(recordedOperation, capture, {
         approved: false,
+        operatorApprovalOnly: this.options.operatorApprovalOnly,
         deps: this.commandDeps(),
       });
+      this.pending = recordedOperation;
       return {
-        text: [provenance, capture.read(), approvalQuestion(recordedOperation)]
+        text: [
+          provenance,
+          capture.read(),
+          this.options.operatorApprovalOnly ? undefined : approvalQuestion(recordedOperation),
+        ]
           .filter(Boolean)
           .join("\n\n"),
         action: "none",

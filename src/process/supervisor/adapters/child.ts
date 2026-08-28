@@ -5,6 +5,7 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../../plugin-sdk/windows-spawn.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { onDecodedOutput } from "../../decoded-output.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
@@ -224,13 +225,10 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) =>
     onDecodedOutput(child.stderr, listener, onRaw);
 
-  let waitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  let waitError: unknown;
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
-    | null = null;
-  let rejectWait: ((reason?: unknown) => void) | null = null;
-  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null;
+  const completion = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
+  // Worker errors can precede wait(), including while secret delivery is still pending.
+  void completion.promise.catch(() => {});
+  let waitSettled = false;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
   let hardKillRequested = false;
@@ -257,33 +255,23 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
-    if (waitResult || waitError !== undefined) {
+    if (waitSettled) {
       return;
     }
+    waitSettled = true;
     clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
-    waitResult = value;
-    if (resolveWait) {
-      const resolve = resolveWait;
-      resolveWait = null;
-      rejectWait = null;
-      resolve(value);
-    }
+    completion.resolve(value);
   };
 
-  const rejectPendingWait = (error: unknown) => {
-    if (waitResult || waitError !== undefined) {
+  const rejectPendingWait = (error: Error) => {
+    if (waitSettled) {
       return;
     }
+    waitSettled = true;
     clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
-    waitError = error;
-    if (rejectWait) {
-      const reject = rejectWait;
-      resolveWait = null;
-      rejectWait = null;
-      reject(error);
-    }
+    completion.reject(error);
   };
 
   const scheduleForceKillWaitFallback = (signal: NodeJS.Signals) => {
@@ -385,23 +373,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     }
   }
 
-  const wait = async () => {
-    if (waitResult) {
-      return waitResult;
-    }
-    if (waitError !== undefined) {
-      throw toErrorObject(waitError, "Non-Error thrown");
-    }
-    if (!waitPromise) {
-      waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve, reject) => {
-          resolveWait = resolve;
-          rejectWait = reject;
-        },
-      );
-    }
-    return waitPromise;
-  };
+  const wait = async () => await completion.promise;
 
   // The actual detachment of the spawned child can differ from `useDetached`:
   // when the detached spawn fails, `spawnWithFallback` retries with the

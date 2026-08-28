@@ -211,7 +211,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                     <span class="chat-controls__effort-heading">
                       ${t("chat.modelControls.effort")}
                     </span>
-                    <span class="sr-only">
+                    <span class="chat-controls__effort-value" aria-hidden="true">
                       <span data-chat-thinking-preview-committed>${reasoningValueText}</span>
                       ${sliderStops.map(
                         (stop, index) => html`<span data-chat-thinking-preview-index=${index} hidden

@@ -288,6 +288,7 @@ export function renderSidebarSessionSortMenu(params: {
   }
   const groupingOptions = [
     { grouping: "category", label: t("sessionsView.groupByCategory") },
+    { grouping: "project", label: t("chat.sidebar.catalogGroupByProject") },
     { grouping: "person", label: t("sessionsView.groupByPerson") },
     { grouping: "none", label: t("sessionsView.groupByNone") },
   ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;

@@ -2,12 +2,12 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
-import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
+import { getRecord } from "../../../config/legacy.shared.js";
 import { normalizeAgentModelRefForConfig } from "../../../config/model-input.js";
 import {
   computeModelPolicyAllowlist,
   hasModelPolicyAllowlistMigrationMarker,
-  MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER,
+  materializeModelPolicyAllowlist,
 } from "../../../config/model-policy-allowlist-migration.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 
@@ -420,18 +420,13 @@ export function migrateExplicitDefaultModelAllowPolicy(
   if (!defaultNeedsEvaluation) {
     return;
   }
-  const defaultAllow = collectLegacyDefaultModelAllowRefs(raw);
-  if (defaultAllow) {
-    const mutableDefaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
-    const mutableModelPolicy = ensureRecord(mutableDefaults, "modelPolicy");
-    // The policy builder still retains configured defaults/fallbacks, so copying the
-    // original keys reproduces the legacy effective set, including wildcard expansion.
-    mutableModelPolicy.allow = defaultAllow;
+  const migrated = materializeModelPolicyAllowlist(raw);
+  if (migrated.kind === "deferred") {
+    return;
   }
-  const migrations = ensureRecord(ensureRecord(raw, "meta"), "migrations");
-  migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] = true;
+  Object.assign(raw, migrated.config);
   changes.push(
-    defaultAllow
+    migrated.config.agents?.defaults?.modelPolicy?.allow
       ? "Copied the legacy default model map to agents.defaults.modelPolicy.allow."
       : "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
   );

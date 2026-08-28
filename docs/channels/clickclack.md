@@ -531,8 +531,11 @@ Explicit outbound targets may also carry the `clickclack:` or `cc:` provider pre
 
 Outbound media uses ClickClack's upload API and then attaches the durable upload
 to the created channel message, thread reply, or DM. Local files and supported
-remote media URLs follow OpenClaw's normal media-access policy, with a 64 MiB
-per-file limit. Durable queued sends use separate owner-scoped nonces for each
+remote media URLs follow OpenClaw's normal media-access policy. Set
+`channels.clickclack.mediaMaxMb` to limit each outbound attachment in MiB;
+`accounts.<id>.mediaMaxMb` overrides the root, then `agents.defaults.mediaMaxMb`
+supplies the fallback. The 64 MiB upload ceiling always applies. Images may be
+optimized before sending. Durable queued sends use separate owner-scoped nonces for each
 upload and message part, then retry attachment association with those same
 objects. See [Durable media delivery](#durable-media-delivery) for the server
 contract and recovery behavior.

@@ -556,6 +556,10 @@ Most fields hot-apply without downtime; some hot-applied sections restart just t
 subsystem (channel, cron, heartbeat, health monitor) rather than the whole Gateway. In
 `hybrid` mode, Gateway-restart-required changes are handled automatically.
 
+By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
+attachment limits take effect together. Automatic reloads preserve manually
+stopped accounts; use an explicit channel start to resume those accounts.
+
 | Category            | Fields                                                                  | Gateway restart needed?      |
 | ------------------- | ----------------------------------------------------------------------- | ---------------------------- |
 | Channels            | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels       | No (restarts that channel)   |
@@ -622,6 +626,18 @@ openclaw gateway call config.patch --params '{
 Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a
 config file already exists (a first write with no existing config skips the check).
+
+For hot-applied changes, these RPCs wait until the active Gateway applies the
+exact write. Channel or plugin reloads may defer for unrelated active work. If
+the file watcher takes over the same unapplied write during that wait, the RPC stays pending
+through replay; persistence alone is not an application acknowledgment. Shutdown,
+supersession by different content, or failed application returns `UNAVAILABLE`
+with recovery guidance. `config.set` acknowledges persistence only.
+
+Once a reload has committed, it finishes its model and channel work before a
+newer config is applied. If that work needs restart recovery, the RPC returns
+`UNAVAILABLE`; wait for the Gateway to restart, then use `config.get` to verify
+the active revision.
 
 `config.patch` also accepts `replacePaths`, an array of config paths whose array
 replacement is intentional. If a patch would replace or delete an existing array

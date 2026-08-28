@@ -8,6 +8,7 @@ import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotCore,
   noteRuntimeAuthProfileStorePersistedMutation,
+  prepareRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runtime-snapshots.test-support.js";
@@ -15,7 +16,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   createConfigResolutionFacts,
   getAuthoredConfigSecretRef,
@@ -79,8 +80,8 @@ describe("secret store references", () => {
 
 type PreparedSnapshotOverrides = Omit<
   Partial<PreparedSecretsRuntimeSnapshot>,
-  "authStoreCredentialsRevision" | "webTools"
->;
+  "authStoreCredentialsRevision" | "webTools" | "authStores"
+> & { authStores?: Array<{ agentDir: string; store: RuntimeAuthProfileStore }> };
 
 function preparedSnapshot(
   overrides: PreparedSnapshotOverrides = {},
@@ -88,7 +89,6 @@ function preparedSnapshot(
   return {
     sourceConfig: {},
     config: {},
-    authStores: [],
     authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
     warnings: [],
     webTools: {
@@ -97,6 +97,7 @@ function preparedSnapshot(
       diagnostics: [],
     },
     ...overrides,
+    authStores: prepareRuntimeAuthProfileStoreSnapshots(overrides.authStores ?? []),
   };
 }
 

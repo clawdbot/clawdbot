@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-// Doctor-only import for the retired meeting-capture JSON/JSONL store.
+// Doctor-only repair of transcript projections and the retired JSON/JSONL store.
 import fsSync from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -8,6 +8,13 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
+import {
+  safeTranscriptPathSegment,
+  TRANSCRIPT_PATH_SEGMENT_MAX_BYTES,
+  transcriptSessionExportKey,
+  transcriptSessionSelector,
+} from "../transcripts/store-artifacts.js";
+import { sessionFromRow } from "../transcripts/store-sqlite.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
@@ -412,6 +419,46 @@ export async function migrateLegacyMeetingTranscripts(params: {
     await validateMeetingTranscriptRoot(detected.sourceDir, { allowMissing: true });
     const databaseOptions = { env: { ...env, OPENCLAW_STATE_DIR: params.stateDir } };
     ensureMeetingTranscriptsSchema(databaseOptions);
+    // Repair only oversized ASCII projections before classifying exports. Keep
+    // identity/content intact; a selector conflict rolls back the entire repair.
+    const repaired = runOpenClawStateWriteTransaction(
+      ({ db: database }) => {
+        const db = migrationDb(database);
+        const rows = executeSqliteQuerySync(
+          database,
+          db
+            .selectFrom("meeting_transcript_sessions")
+            .selectAll()
+            .where(({ fn, eb }) =>
+              eb(fn<number>("length", ["session_slug"]), ">", TRANSCRIPT_PATH_SEGMENT_MAX_BYTES),
+            )
+            .orderBy("session_id"),
+        ).rows;
+        for (const row of rows) {
+          const session = sessionFromRow(row);
+          executeSqliteQuerySync(
+            database,
+            db
+              .updateTable("meeting_transcript_sessions")
+              .set({
+                selector: transcriptSessionSelector(session),
+                session_slug: safeTranscriptPathSegment(session.sessionId),
+                export_key: transcriptSessionExportKey(session),
+              })
+              .where("session_id", "=", row.session_id)
+              .where("started_at", "=", row.started_at),
+          );
+        }
+        return rows.length;
+      },
+      databaseOptions,
+      { operationLabel: "meeting-transcripts.oversized-projections" },
+    );
+    if (repaired > 0) {
+      recoveryChanges.push(
+        `Repaired ${repaired} oversized meeting transcript export name${repaired === 1 ? "" : "s"} in SQLite`,
+      );
+    }
     const store = new TranscriptsStore(detected.sourceDir, databaseOptions);
     const resumed = await resumePendingImports({
       env,
@@ -421,7 +468,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       stageDatabase: stage,
     });
     if (resumed) {
-      return resumed;
+      return { changes: [...recoveryChanges, ...resumed.changes], warnings: resumed.warnings };
     }
     const now = params.now?.() ?? Date.now();
     const relativeDirs = await listLegacyMeetingTranscriptArtifactDirs(detected.sourceDir);

@@ -160,6 +160,8 @@ type AgentHarnessIsolatedCompletionParams = {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
+  outputTextPolicy?: "strict-visible";
   streamParams?: {
     maxTokens?: number;
     temperature?: number;

@@ -165,7 +165,7 @@ describe("cron service timer regressions", () => {
           status: "error",
           error: params.firstError ?? "429 rate limit exceeded",
         })
-        .mockResolvedValueOnce({ status: "ok", summary: "done" });
+        .mockResolvedValueOnce({ status: "ok", summary: "done", delivered: true });
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,

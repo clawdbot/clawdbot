@@ -479,10 +479,12 @@ install_companion_plugins() {
     park-companion-install "$OPENCLAW_CONFIG_PATH" "$authored_config"
 
   set +e
-  openclaw plugins install "npm:@openclaw/discord@$package_version" --pin --accept-capabilities
+  openclaw_e2e_fixture_plugin_command openclaw -- \
+    plugins install "npm:@openclaw/discord@$package_version" --pin
   install_status=$?
   if [ "$install_status" -eq 0 ]; then
-    openclaw plugins install "clawhub:@openclaw/whatsapp@$package_version" --accept-capabilities
+    openclaw_e2e_fixture_plugin_command openclaw -- \
+      plugins install "clawhub:@openclaw/whatsapp@$package_version"
     install_status=$?
   fi
   if [ "$install_status" -eq 0 ]; then
@@ -491,7 +493,8 @@ install_companion_plugins() {
     install_status=$?
   fi
   if [ "$install_status" -eq 0 ]; then
-    openclaw plugins install "npm:@openclaw/codex@$package_version" --pin --accept-capabilities
+    openclaw_e2e_fixture_plugin_command openclaw -- \
+      plugins install "npm:@openclaw/codex@$package_version" --pin
     install_status=$?
   fi
   node "$OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER" \

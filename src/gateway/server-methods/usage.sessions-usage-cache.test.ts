@@ -93,6 +93,8 @@ describe("sessions.usage result cache", () => {
     vi.clearAllMocks();
     testApi.sessionsUsageCache.clear();
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+      agentIdBySessionKey: new Map(),
+      durableTargets: [],
       storePath: "(multiple)",
       store: {},
     });
@@ -187,6 +189,11 @@ describe("sessions.usage result cache", () => {
         },
       };
       mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+        agentIdBySessionKey: new Map([
+          ["agent:main:first", "main"],
+          ["agent:main:second", "main"],
+        ]),
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           "agent:main:first": {

@@ -298,30 +298,6 @@ function persistedBoundaryPrefix(state: StreamCausalBoundaryState, terminalText:
   };
 }
 
-export function markChatStreamAfterBoundary(
-  host: StreamRolloverState,
-  options: { runId: string; boundaryRunId: string; timestamp?: number },
-): void {
-  if (
-    host.chatRunId !== options.runId ||
-    latestStreamBoundaryRunId(host) === options.boundaryRunId
-  ) {
-    return;
-  }
-  const previousBoundaryRunId = latestStreamBoundaryRunId(host);
-  host.chatStreamSegments = [
-    ...(host.chatStreamSegments ?? []),
-    {
-      text: "",
-      ts: options.timestamp ?? Date.now(),
-      runId: options.runId,
-      boundaryRunId: options.boundaryRunId,
-      boundaryMarker: true,
-      ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
-    },
-  ];
-}
-
 function replaceTerminalText(
   message: Record<string, unknown>,
   text: string,
@@ -465,6 +441,7 @@ export function rolloverChatStream(
     runId: string;
     boundaryRunId?: string;
     toolCallId?: string;
+    persisted?: true;
     timestamp?: number;
   },
 ): void {
@@ -507,6 +484,7 @@ export function rolloverChatStream(
         ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
         ...(streamBoundaryRunId ? { boundaryRunId: streamBoundaryRunId } : {}),
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+        ...(options.persisted ? { persisted: true } : {}),
       },
     ];
   }

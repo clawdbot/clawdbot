@@ -175,7 +175,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const mediaMaxBytes =
     resolveChannelMediaMaxBytes({
       cfg,
-      resolveChannelLimitMb: () => undefined,
+      resolveChannelLimitMb: () => account.config.mediaMaxMb,
       accountId: account.accountId,
     }) ?? 8 * 1024 * 1024;
   const { groupPolicy, providerMissingFallbackApplied } =

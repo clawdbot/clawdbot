@@ -1,4 +1,6 @@
 // Copilot BYOK proxy tests verify SDK-local transport is guarded outbound fetch.
+import { expectDefined } from "@openclaw/normalization-core";
+import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
@@ -233,6 +235,78 @@ describe("createCopilotByokProxy", () => {
     expect(upstreamSignal?.aborted).toBe(true);
     await responsePromise;
   });
+
+  it.each(["upstream error", "client disconnect", "proxy shutdown"] as const)(
+    "releases an active response stream after %s",
+    async (interruption) => {
+      let source: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const cancel = vi.fn();
+      const release = vi.fn(async () => undefined);
+      let upstreamSignal: AbortSignal | undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          source = controller;
+          controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+        },
+        cancel,
+      });
+      ssrfRuntimeMock.fetchWithSsrFGuard
+        .mockImplementationOnce(async ({ init }: Parameters<typeof fetchWithSsrFGuard>[0]) => {
+          upstreamSignal = init?.signal ?? undefined;
+          return { response: new Response(body), release };
+        })
+        .mockResolvedValueOnce({
+          response: new Response("healthy"),
+          release: vi.fn(async () => undefined),
+        });
+      const proxy = expectDefined(
+        await createCopilotByokProxy(
+          resolveCopilotProvider({
+            model: {
+              provider: "custom-proxy",
+              api: "openai-responses",
+              id: "proxy-model",
+              baseUrl: "https://proxy.example/v1",
+            },
+          }),
+        ),
+        "BYOK proxy",
+      );
+      const endpoint = `${proxy.provider.provider?.baseUrl}/responses`;
+      const disconnect = new AbortController();
+      try {
+        const response = await fetch(endpoint, { signal: disconnect.signal });
+        const reader = expectDefined(response.body, "proxy response body").getReader();
+        expect((await reader.read()).done).toBe(false);
+        const interrupted = reader.read().then(
+          () => false,
+          () => true,
+        );
+        if (interruption === "upstream error") {
+          expectDefined(source, "upstream response controller").error(
+            new Error("upstream stream interrupted"),
+          );
+        } else if (interruption === "client disconnect") {
+          disconnect.abort();
+        } else {
+          await proxy.close();
+        }
+        await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+        expect(await interrupted).toBe(true);
+        expect(upstreamSignal?.aborted).toBe(true);
+        if (interruption !== "upstream error") {
+          expect(cancel).toHaveBeenCalledTimes(1);
+        }
+        if (interruption !== "proxy shutdown") {
+          expect(await (await fetch(endpoint)).text()).toBe("healthy");
+        }
+        reader.releaseLock();
+      } finally {
+        disconnect.abort();
+        await proxy.close();
+      }
+    },
+  );
 
   it("accepts Azure SDK paths that are rebuilt from the proxy origin", async () => {
     ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({
