@@ -3913,6 +3913,7 @@ jobs:
             ${{ steps.health-render.outputs.artifact-path }}/startup-grace.png
             ${{ steps.health-render.outputs.artifact-path }}/stale-socket.png
             ${{ steps.health-render.outputs.artifact-path }}/disabled.png
+            ${{ steps.health-render.outputs.artifact-path }}/probe-permission.png
           if-no-files-found: error
           retention-days: 7
 
