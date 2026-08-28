@@ -15,11 +15,6 @@ import {
   type Mock,
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import {
-  addSubagentRunForTests,
-  resetSubagentRegistryForTests,
-} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
@@ -28,7 +23,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
@@ -212,62 +206,6 @@ describe("sessions_send gateway loopback", () => {
         loadSessionEntry({ sessionKey: missingKey, storePath: testState.sessionStorePath }),
       ).toBe(undefined);
     } finally {
-      testState.sessionStorePath = undefined;
-    }
-  });
-
-  it("denies a stale controller before agent dispatch", async () => {
-    const dir = tempDirs.make("openclaw-sessions-send-stale-controller-");
-    const parentSessionKey = "agent:main:main";
-    const childSessionKey = "agent:main:subagent:stale-controller";
-    const runId = "run-stale-controller";
-    const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
-    testState.sessionStorePath = path.join(dir, "sessions.json");
-    try {
-      await writeSessionStore({
-        entries: {
-          [parentSessionKey]: { sessionId: "sess-parent", updatedAt: Date.now() },
-          [childSessionKey]: {
-            sessionId: "sess-stale-child",
-            updatedAt: Date.now(),
-          },
-        },
-      });
-      addSubagentRunForTests(
-        createSubagentRunRecord({
-          runId,
-          childSessionKey,
-          requesterSessionKey: parentSessionKey,
-          controllerSessionKey: parentSessionKey,
-          requesterDisplayKey: parentSessionKey,
-          createdAt: Date.now() - 3 * 60 * 60 * 1_000,
-          startedAt: Date.now() - 3 * 60 * 60 * 1_000,
-        }),
-      );
-      registerAgentRunContext(runId, { sessionKey: childSessionKey });
-      spy.mockClear();
-
-      const tool = createOpenClawTools({
-        agentSessionKey: parentSessionKey,
-        sandboxed: true,
-        config: { tools: { sessions: { visibility: "tree" } } },
-      }).find((candidate) => candidate.name === "sessions_send");
-      if (!tool) {
-        throw new Error("missing sessions_send tool");
-      }
-      const result = await tool.execute("call-stale-controller", {
-        sessionKey: childSessionKey,
-        message: "must not dispatch",
-      });
-
-      expect(result.details).toMatchObject({
-        status: "forbidden",
-        error: expect.stringContaining("restricted to the current session tree"),
-      });
-      expect(spy).not.toHaveBeenCalled();
-    } finally {
-      clearAgentRunContext(runId);
-      resetSubagentRegistryForTests({ persist: false });
       testState.sessionStorePath = undefined;
     }
   });

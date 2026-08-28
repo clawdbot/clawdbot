@@ -15,10 +15,6 @@ import {
   SHORT_SESSION_ID_RE,
 } from "../../packages/session-url-contract/src/index.js";
 import { listAgentIds } from "../agents/agent-scope.js";
-import {
-  getLatestLiveSubagentRunByChildSessionKey,
-  isSubagentRunLive,
-} from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -82,33 +78,21 @@ function validateSessionAgentExists(
   };
 }
 
-function isResolvedSessionKeyOwnedBySpawner(params: {
+function isResolvedSessionKeyVisible(params: {
+  cfg: OpenClawConfig;
   p: SessionsResolveParams;
-  entry: SessionEntry;
+  store: Record<string, SessionEntry>;
   key: string;
-}): boolean {
-  const spawnedBy = normalizeOptionalString(params.p.spawnedBy);
-  if (!spawnedBy) {
+}) {
+  if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
     return true;
   }
-  if (params.key === spawnedBy) {
-    return false;
-  }
-  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  // Durable navigation lineage outlives display recency and live control.
-  if (parentSessionKey === spawnedBy) {
-    return true;
-  }
-  const run = getLatestLiveSubagentRunByChildSessionKey(params.key, isSubagentRunLive);
-  const liveController = run
-    ? (normalizeOptionalString(run.controllerSessionKey) ??
-      normalizeOptionalString(run.requesterSessionKey))
-    : undefined;
-  // Live control supersedes legacy spawnedBy-only rows. Snapshot state cannot
-  // reach this branch because controller authority requires a current run context.
-  return liveController
-    ? liveController === spawnedBy
-    : !parentSessionKey && normalizeOptionalString(params.entry.spawnedBy) === spawnedBy;
+  return filterAndSortSessionEntries({
+    cfg: params.cfg,
+    store: params.store,
+    now: Date.now(),
+    opts: resolveSessionVisibilityFilterOptions(params.p),
+  }).some(([key]) => key === params.key);
 }
 
 function findVisibleSessionIdMatches(params: {
@@ -242,9 +226,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (entry) {
       if (
         (hasOperatorBoundary(client, cfg) && entryFilter?.(target.canonicalKey, entry) === false) ||
-        !isResolvedSessionKeyOwnedBySpawner({
+        !isResolvedSessionKeyVisible({
+          cfg,
           p,
-          entry,
+          store,
           key: target.canonicalKey,
         })
       ) {

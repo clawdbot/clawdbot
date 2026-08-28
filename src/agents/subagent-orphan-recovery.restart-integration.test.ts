@@ -7,7 +7,6 @@ import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js"
 import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import { resolveSessionKeyFromResolveParams } from "../gateway/sessions-resolve.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -47,8 +46,6 @@ import {
   testing,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
-import type { AgentToolGatewayRequestCaller } from "./tools/in-process-gateway.js";
-import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 function consumeRecoveryAdmission(payload: Record<string, unknown>): SessionWorkAdmissionLease {
   const sessionKey = String(payload.sessionKey);
@@ -109,29 +106,8 @@ function makeRunRecord(overrides: Partial<SubagentRunRecordOverrides>): Subagent
   );
 }
 
-function createResolverGateway(onMethod?: (method: string) => void): AgentToolGatewayRequestCaller {
-  return async ({ method, params }) => {
-    onMethod?.(method);
-    if (method !== "sessions.resolve") {
-      throw new Error(`session access reached gateway method: ${method}`);
-    }
-    const resolved = await resolveSessionKeyFromResolveParams({
-      cfg: getRuntimeConfig(),
-      client: null,
-      p: params as never,
-    });
-    if (!resolved.ok) {
-      throw new Error(resolved.error.message);
-    }
-    return ("missing" in resolved ? { ok: false } : resolved) as never;
-  };
-}
-
 describe("subagent orphan recovery — faithful restart path", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE",
-  ]);
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
 
   beforeEach(async () => {
@@ -258,100 +234,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe(
       String(dispatchAgent.mock.calls[0]?.[0].idempotencyKey),
     );
-  });
-
-  it("keeps durable tree authorization after restart recovery ends", async () => {
-    const now = Date.now();
-    const parentSessionKey = "agent:main:parent-session";
-    const childSessionKey = "agent:main:subagent:recovered-child";
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: tempStateDir!,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      sessionId: "sess-recovered-child",
-      updatedAt: now,
-      abortedLastRun: true,
-      defaultSessionId: "sess-recovered-child",
-      spawnedBy: parentSessionKey,
-      parentSessionKey,
-    });
-    addSubagentRunForTests(
-      makeRunRecord({
-        runId: "run-recovered-child",
-        childSessionKey,
-        requesterSessionKey: parentSessionKey,
-        createdAt: now - 60_000,
-        startedAt: now - 55_000,
-      }),
-    );
-
-    await testing.sweepOnceForTests();
-
-    expect(dispatchAgent).toHaveBeenCalledOnce();
-    const recovered = getSubagentRunByChildSessionKey(childSessionKey);
-    expect(recovered?.runId).toMatch(/^subagent-recovery:/);
-    // The recovered run later finishes and ages out of the child-listing
-    // display window; durable parent lineage must keep authorizing access.
-    recovered!.execution = {
-      ...recovered!.execution,
-      status: "terminal",
-      endedAt: Date.now() - 31 * 60_000,
-    };
-
-    const persisted = (await readSubagentSessionStore(storePath))[childSessionKey];
-    expect(persisted).toMatchObject({ spawnedBy: parentSessionKey, parentSessionKey });
-
-    await expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: getRuntimeConfig(),
-        client: null,
-        p: { key: childSessionKey, spawnedBy: parentSessionKey },
-      }),
-    ).resolves.toMatchObject({ ok: true, key: childSessionKey });
-  });
-
-  it("denies a persisted controller without a live agent run before dispatch", async () => {
-    const now = Date.now();
-    const parentSessionKey = "agent:main:parent";
-    const childSessionKey = "agent:main:subagent:persisted-child";
-    await writeSubagentSessionEntry({
-      stateDir: tempStateDir!,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      sessionId: "sess-persisted-child",
-      updatedAt: now,
-      defaultSessionId: "sess-persisted-child",
-    });
-    const persistedRun = makeRunRecord({
-      runId: "run-persisted-controller",
-      childSessionKey,
-      requesterSessionKey: parentSessionKey,
-      controllerSessionKey: parentSessionKey,
-      requesterDisplayKey: "parent",
-      createdAt: now - 60_000,
-      startedAt: now - 55_000,
-    });
-    persistSubagentRunsToDiskOrThrow(new Map([[persistedRun.runId, persistedRun]]));
-    resetSubagentRegistryForTests({ persist: false });
-    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = "1";
-
-    const gatewayMethods: string[] = [];
-    const callGateway = createResolverGateway((method) => gatewayMethods.push(method));
-    const sendTool = createSessionsSendTool({
-      agentSessionKey: parentSessionKey,
-      config: getRuntimeConfig(),
-      callGateway,
-    });
-    const result = (await sendTool.execute("send-denied", {
-      sessionKey: childSessionKey,
-      message: "must not dispatch",
-    })) as { content?: Array<{ type?: string; text?: string }> };
-    const text = result.content?.find((part) => part.type === "text")?.text ?? "";
-    const payload = JSON.parse(text) as { status?: string; error?: string };
-    expect(payload.status).toBe("forbidden");
-    expect(payload.error).toContain("restricted to the current session tree");
-    expect(gatewayMethods.length).toBeGreaterThan(0);
-    expect(gatewayMethods.every((method) => method === "sessions.resolve")).toBe(true);
   });
 
   it("preserves an accepted response across a consumed-receipt write failure", async () => {

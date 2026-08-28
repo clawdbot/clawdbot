@@ -1,15 +1,8 @@
 // Session resolve tests cover canonical/legacy key lookup, store migration,
 // agent scoping, listed-session selection, and protocol error mapping.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
-import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  registerAgentRunContext,
-  resetAgentRunRegistryForTest,
-  rotateAgentRunRegistryLifecycleGeneration,
-} from "../infra/agent-run-registry.js";
 
 const hoisted = vi.hoisted(() => ({
   listSessionsFromStoreMock: vi.fn(),
@@ -70,18 +63,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   };
 
-  const expectSpawnedByDenied = async () => {
-    await expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { key: canonicalKey, spawnedBy: "controller-1", allowMissing: true },
-      }),
-    ).resolves.toEqual({ ok: true, missing: true });
-  };
-
   beforeEach(() => {
-    subagentRuns.clear();
-    resetAgentRunRegistryForTest();
     hoisted.listSessionsFromStoreMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -95,11 +77,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: targetStore,
     }));
-  });
-
-  afterEach(() => {
-    subagentRuns.clear();
-    resetAgentRunRegistryForTest();
   });
 
   it("hides canonical keys that fail the spawnedBy visibility filter", async () => {
@@ -141,127 +118,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     targetStore = store;
 
     await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-  });
-
-  it.each([
-    {
-      name: "durable parent lineage after display expiry",
-      entry: {
-        spawnedBy: "controller-1",
-        parentSessionKey: "controller-1",
-        endedAt: Date.now() - 3 * 60 * 60 * 1_000,
-      },
-      allowed: true,
-    },
-    {
-      name: "legacy lineage after foreign control ends",
-      entry: { spawnedBy: "controller-1" },
-      run: { controller: "agent:main:other", ended: true },
-      allowed: true,
-    },
-    {
-      name: "legacy lineage during foreign live control",
-      entry: { spawnedBy: "controller-1" },
-      run: { controller: "agent:main:other", contextSessionKey: canonicalKey },
-      allowed: false,
-    },
-    {
-      name: "explicit parent lineage during foreign live control",
-      entry: { parentSessionKey: "controller-1" },
-      run: { controller: "agent:main:other", contextSessionKey: canonicalKey },
-      allowed: true,
-    },
-    {
-      name: "stale legacy lineage conflicting with explicit parent",
-      entry: { spawnedBy: "controller-1", parentSessionKey: "agent:main:other" },
-      allowed: false,
-    },
-    {
-      name: "matching live controller without stored lineage",
-      entry: {},
-      run: { controller: "controller-1", contextSessionKey: canonicalKey },
-      allowed: true,
-    },
-    {
-      name: "matching live requester without an explicit controller",
-      entry: {},
-      run: { controller: "controller-1", contextSessionKey: canonicalKey, requesterOnly: true },
-      allowed: true,
-    },
-    {
-      name: "terminal controller without stored lineage",
-      entry: {},
-      run: { controller: "controller-1", ended: true, contextSessionKey: canonicalKey },
-      allowed: false,
-    },
-    {
-      name: "contextless controller snapshot without stored lineage",
-      entry: {},
-      run: { controller: "controller-1" },
-      allowed: false,
-    },
-    {
-      name: "stale unended controller with current context",
-      entry: {},
-      run: { controller: "controller-1", contextSessionKey: canonicalKey, stale: true },
-      allowed: false,
-    },
-    {
-      name: "controller context bound to another session",
-      entry: {},
-      run: { controller: "controller-1", contextSessionKey: "agent:main:other" },
-      allowed: false,
-    },
-    {
-      name: "controller context from an earlier gateway lifecycle",
-      entry: {},
-      run: { controller: "controller-1", contextSessionKey: canonicalKey, rotateLifecycle: true },
-      allowed: false,
-    },
-  ] satisfies Array<{
-    name: string;
-    entry: Partial<SessionEntry>;
-    run?: {
-      controller: string;
-      contextSessionKey?: string;
-      ended?: boolean;
-      requesterOnly?: boolean;
-      rotateLifecycle?: boolean;
-      stale?: boolean;
-    };
-    allowed: boolean;
-  }>)("$name", async ({ entry, run, allowed }) => {
-    const now = Date.now();
-    targetStore = {
-      [canonicalKey]: { sessionId: "sess-child", updatedAt: now, ...entry },
-    };
-    if (run) {
-      const runId = "run-controller";
-      subagentRuns.set(
-        runId,
-        createSubagentRunRecord({
-          runId,
-          childSessionKey: canonicalKey,
-          requesterSessionKey: run.controller,
-          ...(run.requesterOnly ? {} : { controllerSessionKey: run.controller }),
-          requesterDisplayKey: run.controller,
-          startedAt: run.stale ? now - 3 * 60 * 60 * 1_000 : now - 60_000,
-          ...(run.ended ? { endedAt: now - 30_000 } : {}),
-        }),
-      );
-      if (run.contextSessionKey) {
-        registerAgentRunContext(runId, { sessionKey: run.contextSessionKey });
-      }
-      if (run.rotateLifecycle) {
-        rotateAgentRunRegistryLifecycleGeneration();
-      }
-    }
-
-    if (allowed) {
-      await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-    } else {
-      await expectSpawnedByDenied();
-    }
   });
 
   it("rejects legacy keys with doctor repair guidance", async () => {

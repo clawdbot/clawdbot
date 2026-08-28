@@ -72,8 +72,6 @@ export async function writeSubagentSessionEntry(params: {
   lifecycleRevision?: string;
   agentId: string;
   defaultSessionId: string;
-  spawnedBy?: string;
-  parentSessionKey?: string;
 }): Promise<string> {
   const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
   const current = loadSessionEntry({ storePath, sessionKey: params.sessionKey });
@@ -85,8 +83,6 @@ export async function writeSubagentSessionEntry(params: {
       ? { abortedLastRun: params.abortedLastRun }
       : {}),
     ...(params.lifecycleRevision ? { lifecycleRevision: params.lifecycleRevision } : {}),
-    ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
-    ...(params.parentSessionKey ? { parentSessionKey: params.parentSessionKey } : {}),
   };
   await replaceSessionEntry({ storePath, sessionKey: params.sessionKey }, entry);
   return storePath;

@@ -3,10 +3,7 @@
  *
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
-import {
-  getAgentRunContext,
-  getAgentRunLifecycleGeneration,
-} from "../../../infra/agent-run-registry.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
@@ -34,7 +31,6 @@ import {
   getSubagentRunsSnapshotForRead,
 } from "./subagent-registry-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import { isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -163,15 +159,16 @@ export function listSubagentRunsForRequester(
 }
 
 /** Returns whether a registry entry still has a live agent run context. */
-export function isSubagentRunLive(entry: SubagentRunReadRecord | null | undefined): boolean {
-  if (!entry || !isLiveUnendedSubagentRun(entry)) {
+export function isSubagentRunLive(
+  entry:
+    | { runId: string; execution: Pick<SubagentRunRecord["execution"], "endedAt"> }
+    | null
+    | undefined,
+): boolean {
+  if (!entry || typeof entry.execution.endedAt === "number") {
     return false;
   }
-  const context = getAgentRunContext(entry.runId);
-  return (
-    context?.sessionKey === entry.childSessionKey &&
-    context.lifecycleGeneration === getAgentRunLifecycleGeneration()
-  );
+  return Boolean(getAgentRunContext(entry.runId));
 }
 
 /** Returns the run to display for a child session, using live memory before snapshot state. */
