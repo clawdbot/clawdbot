@@ -522,6 +522,7 @@ export async function gatherDispatchRequest(
     markIdle,
     markInboundDedupeReplayUnsafe,
     acpDispatchSessionKey,
+    boundAcpDispatchSessionKey,
     markProgress,
     sessionStoreEntry,
     notePreparedSession,
