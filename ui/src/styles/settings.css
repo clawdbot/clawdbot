@@ -588,6 +588,68 @@ wa-switch.settings-toggle {
   width: auto;
 }
 
+/* ── Scalar input wrapper (shared by Config + Channel detail forms) ──
+ * Lives here rather than config.css because every schema-driven surface
+ * (config pages and the channel detail forms) renders the same wrapper. */
+
+/* Inline validation/unsupported-node message inside a settings-row. */
+.cfg-field__error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/*
+ * Scalar input wrapper: keeps the control cluster (buttons + input) on one
+ * line while the inline validation error wraps below. Mirrors the JSON
+ * editor's error placement without forcing a column layout on the control.
+ */
+.cfg-scalar-input {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cfg-scalar-input > .settings-input {
+  flex: 1 1 auto;
+}
+
+.cfg-scalar-input > .cfg-field__error {
+  flex: 1 0 100%;
+}
+
+/*
+ * Carry desktop scalar-control sizing through the wrapper so it matches the
+ * direct-child rules above.  Without this the 340px text/secret/phone
+ * and 110px numeric widths are lost because the wrapper inserts an extra level
+ * between .settings-row__control and the input.
+ */
+.settings-row:not(.settings-row--stacked) .cfg-scalar-input > .settings-input,
+.settings-row:not(.settings-row--stacked) .cfg-scalar-input > .settings-secret,
+.settings-row:not(.settings-row--stacked) .cfg-scalar-input > .settings-phone-presentation {
+  width: 340px;
+  flex: 0 1 auto;
+}
+
+.settings-row:not(.settings-row--stacked) .cfg-scalar-input > input[type="number"].settings-input {
+  width: 110px;
+  text-align: center;
+}
+
+/*
+ * Carry stacked-row full-width rules through the wrapper.  Stacked rows
+ * (config form arrays/maps) give sensitive and phone controls full width
+ * via direct-child selectors above; the wrapper inserts an extra level
+ * so those rules must be mirrored here.
+ */
+.settings-row--stacked .cfg-scalar-input > .settings-secret,
+.settings-row--stacked .cfg-scalar-input > .settings-phone-presentation {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
 /* ── Secret input (inset reveal toggle; no trailing button) ── */
 
 /* Stacked rows (config form arrays/maps) give the control full width; the

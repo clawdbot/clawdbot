@@ -20,11 +20,12 @@ import {
   wrapSensitiveControl,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
+import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import {
-  coerceConfigFormNumberString,
-  isConfigFormDecimalNumberString,
-  isConfigFormUnsafeIntegerString,
-} from "./config-form.numeric.ts";
+  coerceTextInputValue,
+  shouldClearOptionalEmpty,
+  stringConstraintMessage,
+} from "./config-form.scalar-coercion.ts";
 import {
   beginScalarEdit,
   finishScalarEdit,
@@ -32,7 +33,6 @@ import {
   scalarEditHintForInput,
   scalarValueBranch,
   syncScalarEditIdentity,
-  type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
 import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
 import {
@@ -57,6 +57,13 @@ const scalarInputState = new WeakMap<
 function setControlValidity(target: HTMLInputElement, message: string): boolean {
   target.setCustomValidity(message);
   target.setAttribute("aria-invalid", String(Boolean(message)));
+  const error = target
+    .closest(".cfg-scalar-input")
+    ?.querySelector<HTMLElement>(".cfg-field__error");
+  if (error) {
+    error.hidden = !message;
+    error.textContent = message;
+  }
   return !message;
 }
 
@@ -105,100 +112,6 @@ function syncScalarInputIdentity(
     presentationIdentity,
     renderedValue,
   });
-}
-
-function coerceTextInputValue(
-  value: string,
-  schema: ConfigNodeRenderParams["schema"],
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
-): string | number | boolean | undefined {
-  const trimmed = value.trim();
-  const variants = schema.anyOf ?? schema.oneOf ?? [];
-  const stringCandidateValid = isSupportedConfigValueValid(schema, value);
-  const currentBranch = editHint ? editHint.branch : scalarValueBranch(currentValue);
-  const booleanCandidate = trimmed === "true" ? true : trimmed === "false" ? false : undefined;
-  if (booleanCandidate !== undefined && isSupportedConfigValueValid(schema, booleanCandidate)) {
-    let booleanBranchValid = false;
-    let explicitBooleanBranchValid = false;
-    for (const variant of variants) {
-      const booleanBranch =
-        schemaType(variant) === "boolean" ||
-        typeof variant.const === "boolean" ||
-        variant.enum?.some((entry) => typeof entry === "boolean");
-      if (!booleanBranch || !isSupportedConfigValueValid(variant, booleanCandidate)) {
-        continue;
-      }
-      booleanBranchValid = true;
-      explicitBooleanBranchValid ||=
-        Object.is(variant.const, booleanCandidate) ||
-        Boolean(variant.enum?.some((entry) => Object.is(entry, booleanCandidate)));
-    }
-    if (
-      booleanBranchValid &&
-      (currentBranch !== "string" || explicitBooleanBranchValid || !stringCandidateValid)
-    ) {
-      return booleanCandidate;
-    }
-  }
-  let numberCandidate: number | undefined;
-  for (const variant of variants) {
-    const type = schemaType(variant);
-    if (type !== "number" && type !== "integer") {
-      continue;
-    }
-    const candidate = coerceConfigFormNumberString(value, type === "integer");
-    if (typeof candidate === "number" && isSupportedConfigValueValid(schema, candidate)) {
-      numberCandidate = candidate;
-      break;
-    }
-  }
-  if (currentBranch === "number") {
-    if (numberCandidate !== undefined) {
-      return numberCandidate;
-    }
-    if (isConfigFormDecimalNumberString(value)) {
-      return stringCandidateValid && isConfigFormUnsafeIntegerString(trimmed) ? value : undefined;
-    }
-  }
-  if (currentBranch === "string" && stringCandidateValid) {
-    return value;
-  }
-  if (numberCandidate !== undefined) {
-    return numberCandidate;
-  }
-  if (stringCandidateValid) {
-    return value;
-  }
-  return value;
-}
-
-function stringConstraintMessage(
-  value: string,
-  schema: ConfigNodeRenderParams["schema"],
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
-): string {
-  return isSupportedConfigValueValid(
-    schema,
-    coerceTextInputValue(value, schema, currentValue, editHint),
-  )
-    ? ""
-    : t("configForm.invalidString");
-}
-
-function shouldClearOptionalEmpty(
-  value: string,
-  schema: ConfigNodeRenderParams["schema"],
-  isRequired: boolean,
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
-): boolean {
-  return (
-    value === "" &&
-    !isRequired &&
-    Boolean(stringConstraintMessage(value, schema, currentValue, editHint))
-  );
 }
 
 function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams["schema"]): string {
@@ -271,6 +184,8 @@ export function renderTextInput(
   const hint = hintForPath(path, hints);
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
+  const errorId = configFieldId(path, "scalar-error");
+  const describedBy = [helpId, errorId].filter(Boolean).join(" ");
   const sensitiveState = getSensitiveRenderState({
     path,
     value,
@@ -369,7 +284,7 @@ export function renderTextInput(
       type=${effectiveInputType}
       class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
       aria-label=${label}
-      aria-describedby=${helpId ?? nothing}
+      aria-describedby=${describedBy || nothing}
       aria-invalid="false"
       placeholder=${placeholder}
       .value=${renderedValue}
@@ -486,6 +401,13 @@ export function renderTextInput(
         </span>
       `
     : wrappedInput;
+  const control = html`
+    <span class="cfg-scalar-input">
+      ${presentedInput}
+      <span id=${errorId} class="cfg-field__error" role="alert" hidden></span>
+    </span>
+  `;
+
   return renderFieldRow({
     label,
     help,
@@ -493,7 +415,7 @@ export function renderTextInput(
     defaultDescription: effectiveRedacted ? nothing : renderSchemaDefaultDescription(schema, value),
     tags,
     showLabel,
-    control: presentedInput,
+    control,
   });
 }
 
@@ -504,6 +426,8 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
   const displayValue = value ?? "";
   const effectiveValue = value !== undefined ? value : schema.default;
+  const errorId = configFieldId(path, "scalar-error");
+  const describedBy = [helpId, errorId].filter(Boolean).join(" ");
   const constraints = numericInputConstraints(schema);
   const numericStep = typeof constraints.step === "number" ? constraints.step : 1;
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
@@ -539,85 +463,86 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
     }
   };
   const control = html`
-    <button
-      type="button"
-      class="btn btn--sm btn--icon"
-      aria-label=${`${label}: -${numericStep}`}
-      ?disabled=${disabled}
-      @click=${() => step(-1)}
-    >
-      −
-    </button>
-    <input
-      ${ref((element) =>
-        syncScalarInputIdentity(
-          element,
-          controlIdentity,
-          sourceIdentity,
-          params.rowIdentity,
-          controlPathKey,
-          "number",
-          renderedValue,
-          revalidate,
-        ),
-      )}
-      type="number"
-      class="settings-input"
-      aria-label=${label}
-      aria-describedby=${helpId ?? nothing}
-      aria-invalid="false"
-      placeholder=${
-        schema.default !== undefined
+    <span class="cfg-scalar-input">
+      <button
+        type="button"
+        class="btn btn--sm btn--icon"
+        aria-label=${`${label}: -${numericStep}`}
+        ?disabled=${disabled}
+        @click=${() => step(-1)}
+      >
+        −
+      </button>
+      <input
+        ${ref((element) =>
+          syncScalarInputIdentity(
+            element,
+            controlIdentity,
+            sourceIdentity,
+            params.rowIdentity,
+            controlPathKey,
+            "number",
+            renderedValue,
+            revalidate,
+          ),
+        )}
+        type="number"
+        class="settings-input"
+        aria-label=${label}
+        aria-describedby=${describedBy || nothing}
+        aria-invalid="false"
+        placeholder=${schema.default !== undefined
           ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : nothing
-      }
-      min=${constraints.min ?? nothing}
-      max=${constraints.max ?? nothing}
-      step=${constraints.step}
-      .value=${renderedValue}
-      ?disabled=${disabled}
-      @keydown=${(event: KeyboardEvent) => {
-        if (
-          value === undefined &&
-          effectiveValue !== undefined &&
-          (event.key === "ArrowUp" || event.key === "ArrowDown")
-        ) {
-          event.preventDefault();
-          step(event.key === "ArrowUp" ? 1 : -1);
-        }
-      }}
-      @input=${(event: Event) => {
-        const target = event.target as HTMLInputElement;
-        applyNumericInputState(
-          target,
-          resolveNumericInputState(target, schema),
-          params,
-          (candidate) => commitScalarValue(target, candidate),
-        );
-      }}
-      @change=${(event: Event) => {
-        const target = event.target as HTMLInputElement;
-        const state = resolveNumericInputState(target, schema);
-        if (state.kind !== "value") {
-          setControlValidity(target, numericStateMessage(state, params.isRequired === true));
-          return;
-        }
-        const normalized = normalizeNumericValue(state.parsed, schema);
-        target.value = formatConfigValueText(normalized);
-        if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
-          commitScalarValue(target, normalized);
-        }
-      }}
-    />
-    <button
-      type="button"
-      class="btn btn--sm btn--icon"
-      aria-label=${`${label}: +${numericStep}`}
-      ?disabled=${disabled}
-      @click=${() => step(1)}
-    >
-      +
-    </button>
+          : nothing}
+        min=${constraints.min ?? nothing}
+        max=${constraints.max ?? nothing}
+        step=${constraints.step}
+        .value=${renderedValue}
+        ?disabled=${disabled}
+        @keydown=${(event: KeyboardEvent) => {
+          if (
+            value === undefined &&
+            effectiveValue !== undefined &&
+            (event.key === "ArrowUp" || event.key === "ArrowDown")
+          ) {
+            event.preventDefault();
+            step(event.key === "ArrowUp" ? 1 : -1);
+          }
+        }}
+        @input=${(event: Event) => {
+          const target = event.target as HTMLInputElement;
+          applyNumericInputState(
+            target,
+            resolveNumericInputState(target, schema),
+            params,
+            (candidate) => commitScalarValue(target, candidate),
+          );
+        }}
+        @change=${(event: Event) => {
+          const target = event.target as HTMLInputElement;
+          const state = resolveNumericInputState(target, schema);
+          if (state.kind !== "value") {
+            setControlValidity(target, numericStateMessage(state, params.isRequired === true));
+            return;
+          }
+          const normalized = normalizeNumericValue(state.parsed, schema);
+          target.value = formatConfigValueText(normalized);
+          if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
+            commitScalarValue(target, normalized);
+          }
+        }}
+      />
+      <button
+        type="button"
+        class="btn btn--sm btn--icon"
+        aria-label=${`${label}: +${numericStep}`}
+        ?disabled=${disabled}
+        @click=${() => step(1)}
+      >
+        +
+      </button>
+      <span id=${errorId} class="cfg-field__error" role="alert" hidden></span>
+    </span>
   `;
 
   return renderFieldRow({

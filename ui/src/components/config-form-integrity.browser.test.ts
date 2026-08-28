@@ -128,7 +128,7 @@ describe("config form integrity", () => {
     expect(endpoint.getAttribute("maxlength")).toBeNull();
     expect(endpoint.pattern).toBe("");
     expect(endpoint.getAttribute("aria-describedby")).toBe(
-      "config-field-s10-006c00610062006f007200610074006f00720079_s8-0065006e00640070006f0069006e0074-description",
+      "config-field-s10-006c00610062006f007200610074006f00720079_s8-0065006e00640070006f0069006e0074-description config-field-s10-006c00610062006f007200610074006f00720079_s8-0065006e00640070006f0069006e0074-scalar-error",
     );
     endpoint.value = "Xlocal-apiY";
     endpoint.dispatchEvent(new Event("input", { bubbles: true }));

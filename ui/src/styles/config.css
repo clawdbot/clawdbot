@@ -800,12 +800,6 @@
    Form specifics layered on settings rows
    =========================================== */
 
-/* Inline validation/unsupported-node message inside a settings-row. */
-.cfg-field__error {
-  font-size: 12px;
-  color: var(--danger);
-}
-
 .cfg-structured-draft {
   display: contents;
 }
