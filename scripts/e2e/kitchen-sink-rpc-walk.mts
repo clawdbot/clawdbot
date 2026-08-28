@@ -24,6 +24,7 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
+import { fixtureCapabilityConsentArgs } from "./lib/package-compat.mjs";
 import { readTextFileTail } from "./lib/text-file-utils.mjs";
 
 type JsonRecord = Record<string, unknown>;
@@ -2754,9 +2755,19 @@ async function main() {
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
+    const installHelp = await runOpenClaw(runner, ["plugins", "install", "--help"], env);
+    if (installHelp.stdoutTruncatedChars > 0) {
+      throw new Error("Plugin fixture help probe output was truncated");
+    }
     await runOpenClaw(
       runner,
-      ["plugins", "install", PLUGIN_SPEC, "--force", "--accept-capabilities"],
+      [
+        "plugins",
+        "install",
+        PLUGIN_SPEC,
+        "--force",
+        ...fixtureCapabilityConsentArgs(installHelp.stdout),
+      ],
       env,
       {
         ...commandResourceOptions,

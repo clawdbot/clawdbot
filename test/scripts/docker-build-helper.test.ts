@@ -94,15 +94,11 @@ const UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH =
   "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 const RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH =
   "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh";
-const RELEASE_PLUGIN_MARKETPLACE_SCENARIO_PATH =
-  "scripts/e2e/lib/release-plugin-marketplace/scenario.sh";
 const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
   "scripts/e2e/lib/release-typed-onboarding/scenario.sh";
 const RELEASE_USER_JOURNEY_DOCKER_E2E_PATH = "scripts/e2e/release-user-journey-docker.sh";
 const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey/scenario.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
-const UPGRADE_SURVIVOR_PACKAGE_SELF_UPGRADE_PATH =
-  "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh";
 const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
 const UPGRADE_SURVIVOR_CONFIG_PARKING_PATH = "scripts/e2e/lib/upgrade-survivor/config-parking.mjs";
@@ -2750,7 +2746,7 @@ docker_e2e_docker_run_cmd run demo
       UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH,
       RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH,
       "scripts/e2e/lib/release-media-memory/scenario.sh",
-      RELEASE_PLUGIN_MARKETPLACE_SCENARIO_PATH,
+      "scripts/e2e/lib/release-plugin-marketplace/scenario.sh",
       "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
       "scripts/e2e/lib/release-user-journey/scenario.sh",
     ];
@@ -2762,90 +2758,6 @@ docker_e2e_docker_run_cmd run demo
     }
     expect(readFileSync(RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH, "utf8")).toContain(
       'openclaw_e2e_run_command node "$baseline_entry" onboard',
-    );
-  });
-
-  it("accepts capabilities for trusted fixture installs without breaking old CLIs", () => {
-    const currentCliInstalls = [
-      [
-        CODEX_MEDIA_PATH_SCENARIO_PATH,
-        'openclaw plugins install "$PLUGIN_SPEC" --force --accept-capabilities',
-      ],
-      [
-        "scripts/e2e/kitchen-sink-rpc-walk.mts",
-        '["plugins", "install", PLUGIN_SPEC, "--force", "--accept-capabilities"]',
-      ],
-      [
-        RELEASE_PLUGIN_MARKETPLACE_SCENARIO_PATH,
-        "openclaw plugins install release-marketplace-plugin@release-fixtures --force --accept-capabilities",
-      ],
-      [
-        RELEASE_PLUGIN_MARKETPLACE_SCENARIO_PATH,
-        "openclaw plugins update release-marketplace-plugin --accept-capabilities",
-      ],
-      [
-        RELEASE_USER_JOURNEY_SCENARIO_PATH,
-        'openclaw plugins install "$plugin_a_dir" --force --accept-capabilities',
-      ],
-      [
-        RELEASE_USER_JOURNEY_SCENARIO_PATH,
-        'openclaw plugins install "$plugin_b_dir" --force --accept-capabilities',
-      ],
-      [
-        RELEASE_USER_JOURNEY_SCENARIO_PATH,
-        'openclaw plugins install "$clickclack_plugin_dir" --force --accept-capabilities',
-      ],
-      [
-        RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH,
-        'openclaw plugins install "$clickclack_plugin_dir" --force --accept-capabilities',
-      ],
-      [
-        LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH,
-        'openclaw plugins install "npm-pack:$plugin_tgz" --force --accept-capabilities',
-      ],
-    ] as const;
-
-    for (const [path, command] of currentCliInstalls) {
-      expect(readFileSync(path, "utf8"), path).toContain(command);
-    }
-
-    const releaseMarketplace = readFileSync(RELEASE_PLUGIN_MARKETPLACE_SCENARIO_PATH, "utf8");
-    expect(releaseMarketplace).toContain(
-      "openclaw plugins update release-marketplace-plugin --dry-run",
-    );
-    expect(releaseMarketplace).not.toContain(
-      "openclaw plugins update release-marketplace-plugin --dry-run --accept-capabilities",
-    );
-
-    const codexNpmPlugin = readFileSync(CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH, "utf8");
-    expectTextToIncludeAll(codexNpmPlugin, [
-      'PLUGIN_INSTALL_HELP_LOG="/tmp/openclaw-codex-plugin-install-help.log"',
-      'openclaw plugins install --help 2>&1 | head -c 65536 >"$PLUGIN_INSTALL_HELP_LOG" || true',
-      'grep -q -- "--accept-capabilities" "$PLUGIN_INSTALL_HELP_LOG"',
-      "PLUGIN_INSTALL_FLAGS+=(--accept-capabilities)",
-      "PLUGIN_INSTALL_FLAGS+=(--dangerously-force-unsafe-install)",
-    ]);
-    expect(codexNpmPlugin).not.toContain("install --help 2>&1 | grep -q");
-
-    const releaseUpgrade = readFileSync(RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH, "utf8");
-    expect(releaseUpgrade).toContain(
-      'openclaw plugins install "$plugin_dir" --force >"$PLUGIN_INSTALL_LOG" 2>&1',
-    );
-    expect(releaseUpgrade).not.toContain(
-      'openclaw plugins install "$plugin_dir" --force --accept-capabilities',
-    );
-    const corruptUpdate = readFileSync(PLUGIN_UPDATE_CORRUPT_SCENARIO_PATH, "utf8");
-    expect(corruptUpdate).toContain(
-      'plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force',
-    );
-    expect(corruptUpdate).not.toContain(
-      'plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force --accept-capabilities',
-    );
-
-    const packageSelfUpgrade = readFileSync(UPGRADE_SURVIVOR_PACKAGE_SELF_UPGRADE_PATH, "utf8");
-    expect(packageSelfUpgrade).toContain('openclaw plugins install "$qa_plugin_source" --link');
-    expect(packageSelfUpgrade).not.toContain(
-      'openclaw plugins install "$qa_plugin_source" --link --accept-capabilities',
     );
   });
 
@@ -4827,7 +4739,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'KITCHEN_SINK_CLI_TIMEOUT="${KITCHEN_SINK_CLI_TIMEOUT:-180s}"',
       "run_kitchen_sink_openclaw_logged()",
       "run_kitchen_sink_openclaw_capture()",
-      'openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$log_file" 2>&1',
       'local log_file="${KITCHEN_SINK_TMP_DIR}/${safe_label}.log"',
     ]);
 
@@ -5951,7 +5862,6 @@ done
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file"',
       "plugins_lifecycle_trace_enabled()",
       "print_plugins_stderr_log()",
-      'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"',
       "Plugin sweep command timed out after %s: %s",
       "Plugin sweep command failed with status %s: %s",
       "Plugin sweep capture timed out after %s: %s",
@@ -6001,7 +5911,6 @@ done
     expectTextToIncludeAll(clawhub, [
       'plugins install "$CLAWHUB_PLUGIN_SPEC"',
       'plugins update "$CLAWHUB_PLUGIN_ID"',
-      "run_plugins_fixture_install_logged install-clawhub",
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT"',
       "clawhub:@openclaw/kitchen-sink",
     ]);

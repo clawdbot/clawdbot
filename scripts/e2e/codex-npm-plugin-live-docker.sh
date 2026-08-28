@@ -259,7 +259,6 @@ POST_UNINSTALL_MODEL_REF="$MODEL_REF"
 SESSION_ID="codex-npm-plugin-live"
 SUCCESS_MARKER="OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK"
 AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS:-420}"
-PLUGIN_INSTALL_HELP_LOG="/tmp/openclaw-codex-plugin-install-help.log"
 PLUGIN_INSTALL_FLAGS=(--force)
 if [ "${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-0}" = "1" ]; then
   PLUGIN_INSTALL_FLAGS+=(--dangerously-force-unsafe-install)
@@ -272,7 +271,6 @@ dump_debug_logs() {
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
     /tmp/openclaw-codex-plugin-registry.log \
-    "$PLUGIN_INSTALL_HELP_LOG" \
     /tmp/openclaw-codex-plugin-install.log \
     /tmp/openclaw-codex-plugin-enable.log \
     /tmp/openclaw-codex-plugins-list.json \
@@ -313,11 +311,6 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
-# Capture before probing: grep -q can SIGPIPE the CLI under pipefail and hide supported flags.
-openclaw plugins install --help 2>&1 | head -c 65536 >"$PLUGIN_INSTALL_HELP_LOG" || true
-if grep -q -- "--accept-capabilities" "$PLUGIN_INSTALL_HELP_LOG"; then
-  PLUGIN_INSTALL_FLAGS+=(--accept-capabilities)
-fi
 
 if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
   registry_port_file=/tmp/openclaw-codex-plugin-registry.port
@@ -350,7 +343,7 @@ if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
 fi
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
-openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs configure "$MODEL_REF"
 
