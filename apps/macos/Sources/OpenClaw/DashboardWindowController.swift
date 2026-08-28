@@ -936,9 +936,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return false
         }
         let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
-        return components.count == 4 &&
+        return components == ["mcp-app-sandbox"] || (components.count == 4 &&
             components[0] == "embed" &&
-            (components[1] == "channel" || components[1] == "thread")
+            (components[1] == "channel" || components[1] == "thread"))
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
