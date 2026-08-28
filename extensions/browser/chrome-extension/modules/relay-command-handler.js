@@ -3,29 +3,49 @@ export function createRelayCommandHandler({
   send,
   attachDebugger,
   detachDebugger,
-  addTabToOpenClawGroup,
+  createTab,
   focusWindowForTab,
   scheduleTabsSync,
   captureAccess,
   requireAccessibleTab,
 }) {
-  return async (message) => {
+  return async (message, isCurrent) => {
     const { seq } = message;
+    const assertCurrent = () => {
+      if (!isCurrent()) {
+        throw new Error("relay connection was replaced or closed");
+      }
+    };
+    const reply = (frame) => {
+      assertCurrent();
+      send(frame);
+    };
+    const requireTab = async (tabId, epoch) => {
+      assertCurrent();
+      const tab = await requireAccessibleTab(tabId, epoch);
+      assertCurrent();
+      return tab;
+    };
     try {
+      assertCurrent();
       switch (message.type) {
         case "ping":
-          send({ type: "pong" });
+          reply({ type: "pong" });
           return;
         case "attach":
-          send({ type: "result", seq, result: await attachDebugger(message.tabId) });
+          reply({
+            type: "result",
+            seq,
+            result: await attachDebugger(message.tabId, assertCurrent),
+          });
           return;
         case "detach":
           await detachDebugger(message.tabId);
-          send({ type: "result", seq, result: {} });
+          reply({ type: "result", seq, result: {} });
           return;
         case "cdp": {
-          const epoch = captureAccess(message.tabId);
-          await requireAccessibleTab(message.tabId, epoch);
+          const epoch = captureAccess(message.tabId, message.method);
+          await requireTab(message.tabId, epoch);
           const target = message.sessionId
             ? { tabId: message.tabId, sessionId: message.sessionId }
             : { tabId: message.tabId };
@@ -34,49 +54,45 @@ export function createRelayCommandHandler({
             message.method,
             message.params ?? {},
           );
-          await requireAccessibleTab(message.tabId, epoch);
-          send({ type: "result", seq, result: result ?? {} });
+          await requireTab(message.tabId, epoch);
+          reply({ type: "result", seq, result: result ?? {} });
           return;
         }
         case "createTab": {
-          const tab = await chrome.tabs.create({
-            url: message.url,
-            active: message.background !== true,
+          await createTab(message, {
+            isCurrent,
+            attachDebugger,
+            handoff: (result) => reply({ type: "result", seq, result }),
           });
-          await addTabToOpenClawGroup(tab.id);
-          if (message.focus === true) {
-            await focusWindowForTab(tab);
-          }
           scheduleTabsSync();
-          send({ type: "result", seq, result: { tabId: tab.id } });
           return;
         }
         case "closeTab": {
           const epoch = captureAccess(message.tabId);
-          await requireAccessibleTab(message.tabId, epoch);
+          await requireTab(message.tabId, epoch);
           await detachDebugger(message.tabId);
-          await requireAccessibleTab(message.tabId, epoch);
+          await requireTab(message.tabId, epoch);
           await chrome.tabs.remove(message.tabId);
-          send({ type: "result", seq, result: {} });
+          reply({ type: "result", seq, result: {} });
           return;
         }
         case "activateTab": {
           const epoch = captureAccess(message.tabId);
-          const tab = await requireAccessibleTab(message.tabId, epoch);
+          const tab = await requireTab(message.tabId, epoch);
           await chrome.tabs.update(message.tabId, { active: true });
-          await requireAccessibleTab(message.tabId, epoch);
+          await requireTab(message.tabId, epoch);
           await focusWindowForTab(tab);
-          await requireAccessibleTab(message.tabId, epoch);
-          send({ type: "result", seq, result: {} });
+          await requireTab(message.tabId, epoch);
+          reply({ type: "result", seq, result: {} });
           return;
         }
         default:
           if (typeof seq === "number") {
-            send({ type: "error", seq, message: `unknown relay command: ${message.type}` });
+            reply({ type: "error", seq, message: `unknown relay command: ${message.type}` });
           }
       }
     } catch (error) {
-      if (typeof seq === "number") {
+      if (typeof seq === "number" && isCurrent()) {
         send({
           type: "error",
           seq,

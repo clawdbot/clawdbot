@@ -473,6 +473,56 @@ describe("ExtensionRelayBridge", () => {
     });
   });
 
+  it.each(["active", "closed client", "replaced extension"])(
+    "binds an atomic creation reply to its current owner: %s",
+    async (lifecycle) => {
+      const bridge = new ExtensionRelayBridge();
+      try {
+        const socket = new FakeSocket();
+        const extension = bridge.attachExtensionSocket(socket);
+        sendHello(extension, []);
+        const client = new FakeSocket();
+        const cdp = bridge.attachCdpClientSocket(client);
+        cdp.onMessage(
+          JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: "" } }),
+        );
+        const command = socket.frames().at(-1);
+        expect(command).toMatchObject({ type: "createTab", url: "about:blank" });
+        extension.onMessage(
+          JSON.stringify({
+            type: "result",
+            seq: command?.seq,
+            result: { tabId: 99, targetId: "created-target" },
+          }),
+        );
+        // Resolve the old promise, then replace its owner before its continuation.
+        if (lifecycle === "closed client") {
+          cdp.onClose();
+        }
+        if (lifecycle === "replaced extension") {
+          sendHello(wireExtension(bridge).handlers, []);
+        }
+        await flush();
+        expect(socket.frames().filter((frame) => frame.type === "attach")).toEqual([]);
+        if (lifecycle === "active") {
+          expect(client.frames().map((frame) => frame.method ?? frame.id)).toEqual([
+            "Target.attachedToTarget",
+            1,
+          ]);
+          expect(client.frames().at(-1)?.result).toEqual({ targetId: "created-target" });
+        } else {
+          expect(client.frames()).toEqual([]);
+          expect(bridge.accessibleTabs()).toEqual([]);
+          expect(socket.frames().filter((frame) => frame.type === "detach")).toEqual(
+            lifecycle === "closed client" ? [expect.objectContaining({ tabId: 99 })] : [],
+          );
+        }
+      } finally {
+        bridge.dispose();
+      }
+    },
+  );
+
   it.each([true, false])(
     "honors an explicit Target.createTarget focus=%s request",
     async (focus) => {
