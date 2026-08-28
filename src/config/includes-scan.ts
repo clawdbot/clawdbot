@@ -9,18 +9,22 @@ import {
   readConfigIncludeFileWithGuards,
   type IncludeResolver,
 } from "./includes.js";
+import { MAX_CONFIG_JSON_NESTING_DEPTH, parseJsonWithNestingGuard } from "./nesting-limit.js";
 import { resolveIncludeRoots } from "./paths.js";
 
 // Include discovery walks nested config objects because include blocks may be embedded.
 function listDirectIncludes(parsed: unknown): string[] {
   const out: string[] = [];
-  const visit = (value: unknown) => {
+  const visit = (value: unknown, depth: number) => {
+    if (depth > MAX_CONFIG_JSON_NESTING_DEPTH) {
+      return;
+    }
     if (!value) {
       return;
     }
     if (Array.isArray(value)) {
       for (const item of value) {
-        visit(item);
+        visit(item, depth + 1);
       }
       return;
     }
@@ -39,10 +43,10 @@ function listDirectIncludes(parsed: unknown): string[] {
       }
     }
     for (const v of Object.values(rec)) {
-      visit(v);
+      visit(v, depth + 1);
     }
   };
-  visit(parsed);
+  visit(parsed, 0);
   return out;
 }
 
@@ -86,7 +90,15 @@ export async function collectIncludePathsRecursive(params: {
           });
         },
         parseJson: (raw) => {
-          const nestedParsed = parseJsonWithJson5Fallback(raw);
+          // Shared parser boundary: the include-permission scanner must not
+          // hand pathological include text to the native parser. Over-limit
+          // raw input is rejected by the nesting guard before any parse, and
+          // the surrounding try/catch reports it via config validation.
+          const nestedParsed = parseJsonWithNestingGuard(
+            raw,
+            `Include file ${openedBasePath ?? "(include)"}`,
+            (text) => parseJsonWithJson5Fallback(text),
+          );
           if (openedBasePath) {
             nestedInclude = { basePath: openedBasePath, parsed: nestedParsed };
           }

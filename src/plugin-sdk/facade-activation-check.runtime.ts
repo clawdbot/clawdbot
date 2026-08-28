@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { configMayNeedPluginAutoEnable } from "../config/plugin-auto-enable.shared.js";
@@ -55,7 +56,14 @@ function readFacadeBoundaryConfigSafely(): {
       return { rawConfig: EMPTY_FACADE_BOUNDARY_CONFIG };
     }
     const raw = fs.readFileSync(configPath, "utf8");
-    const parsed = parseJsonWithJson5Fallback(raw);
+    // Shared parser boundary: the no-snapshot fallback reads the configured
+    // raw file directly, so it must pre-scan nesting before the compatibility
+    // parser runs. A native parser overflow would otherwise escape this
+    // function's catch, bypassing the bounded config contract during plugin
+    // activation.
+    const parsed = parseJsonWithNestingGuard(raw, "Facade boundary config JSON", (text) =>
+      parseJsonWithJson5Fallback(text),
+    );
     const rawConfig =
       parsed && typeof parsed === "object"
         ? (parsed as OpenClawConfig)
@@ -128,7 +136,13 @@ function readBundledPluginManifestRecordFromDir(params: {
     return null;
   }
   try {
-    const raw = parseJsonWithJson5Fallback(fs.readFileSync(manifestPath, "utf8")) as {
+    const manifestText = fs.readFileSync(manifestPath, "utf8");
+    // Shared parser boundary: bundled manifest text must pre-scan nesting
+    // before the compatibility parser runs, matching the bounded contract
+    // used for boundary config reads during activation.
+    const raw = parseJsonWithNestingGuard(manifestText, "Bundled facade manifest JSON", (text) =>
+      parseJsonWithJson5Fallback(text),
+    ) as {
       id?: unknown;
       enabledByDefault?: unknown;
       channels?: unknown;

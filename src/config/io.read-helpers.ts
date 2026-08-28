@@ -29,6 +29,7 @@ import {
   resolveConfigIncludes,
 } from "./includes.js";
 import type { ConfigIoDeps, NormalizedConfigIoDeps, ParseConfigJson5Result } from "./io.types.js";
+import { MAX_CONFIG_JSON_NESTING_DEPTH, parseJsonWithNestingGuard } from "./nesting-limit.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
@@ -106,6 +107,7 @@ export function collectEnvRefPaths(
   value: unknown,
   pathLocal: string,
   output: Map<string, string>,
+  depth = 0,
 ): void {
   if (typeof value === "string") {
     if (containsEnvVarReference(value)) {
@@ -113,22 +115,28 @@ export function collectEnvRefPaths(
     }
     return;
   }
+  if (depth > MAX_CONFIG_JSON_NESTING_DEPTH) {
+    return;
+  }
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
-      collectEnvRefPaths(item, `${pathLocal}[${index}]`, output);
+      collectEnvRefPaths(item, `${pathLocal}[${index}]`, output, depth + 1);
     });
     return;
   }
   if (isRecord(value)) {
     for (const [key, child] of Object.entries(value)) {
-      collectEnvRefPaths(child, pathLocal ? `${pathLocal}.${key}` : key, output);
+      collectEnvRefPaths(child, pathLocal ? `${pathLocal}.${key}` : key, output, depth + 1);
     }
   }
 }
 
-export function containsConfigIncludeDirective(value: unknown): boolean {
+export function containsConfigIncludeDirective(value: unknown, depth = 0): boolean {
+  if (depth > MAX_CONFIG_JSON_NESTING_DEPTH) {
+    return false;
+  }
   if (Array.isArray(value)) {
-    return value.some((item) => containsConfigIncludeDirective(item));
+    return value.some((item) => containsConfigIncludeDirective(item, depth + 1));
   }
   if (!isRecord(value)) {
     return false;
@@ -136,7 +144,7 @@ export function containsConfigIncludeDirective(value: unknown): boolean {
   if (INCLUDE_KEY in value) {
     return true;
   }
-  return Object.values(value).some((item) => containsConfigIncludeDirective(item));
+  return Object.values(value).some((item) => containsConfigIncludeDirective(item, depth + 1));
 }
 
 export function resolveConfigPathForDeps(deps: NormalizedConfigIoDeps): string {
@@ -177,7 +185,10 @@ export function parseConfigJson5(
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, json5) };
+    const parsed = parseJsonWithNestingGuard(raw, "Config JSON", (text) =>
+      parseJsonWithJson5Fallback(text, json5),
+    );
+    return { ok: true, parsed };
   } catch (err) {
     return { ok: false, error: String(err) };
   }

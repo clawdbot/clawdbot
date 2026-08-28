@@ -448,6 +448,20 @@ describe("secrets CLI", () => {
     });
   });
 
+  it("rejects deeply-nested secrets plan files before parsing", async () => {
+    const deepContents = `${"[".repeat(100_000)}${"]".repeat(100_000)}\n`;
+    await withPlanFile(async (planPath) => {
+      await expect(
+        createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runSecretsApply).not.toHaveBeenCalled();
+      expect(runtimeErrors.at(-1)).toContain("nesting depth");
+    }, deepContents);
+  });
+
   it.skipIf(process.platform === "win32")(
     "rejects FIFO secrets plan paths without blocking",
     async () => {

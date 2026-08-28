@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { resolveConfigIncludes, resolveConfigIncludesForTopLevelKey } from "../config/includes.js";
+import { assertBoundedRawJsonNesting } from "../config/nesting-limit.js";
 import { resolveConfigPath, resolveIncludeRoots } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -95,7 +96,12 @@ export function readLoggingConfig(): LoggingConfig | undefined {
       cachedLoggingConfig = { selector, logging: undefined };
       return undefined;
     }
-    const parsed = parseJsonWithJson5Fallback(fs.readFileSync(configPath, "utf8"));
+    const raw = fs.readFileSync(configPath, "utf8");
+    // Bound raw nesting before the parser: V8's JSON.parse recurses natively and a
+    // pathological config (e.g. a 100k-deep array) would overflow the process stack
+    // instead of reaching this function's catch. The raw scan is iterative and safe.
+    assertBoundedRawJsonNesting(raw, "Config JSON");
+    const parsed = parseJsonWithJson5Fallback(raw);
     const allowedRoots = resolveIncludeRoots();
     let includedConfig: unknown;
     try {

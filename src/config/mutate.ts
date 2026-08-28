@@ -41,10 +41,11 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
-import { rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
+import { containsConfigIncludeDirective, rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
+import { parseJsonWithNestingGuard } from "./nesting-limit.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
 import {
@@ -416,19 +417,6 @@ function getSingleTopLevelIncludeTarget(params: {
   );
 }
 
-function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsConfigIncludeDirective(item));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    Object.hasOwn(value, INCLUDE_KEY) ||
-    Object.values(value).some((item) => containsConfigIncludeDirective(item))
-  );
-}
-
 function snapshotProvesBrokenInclude(snapshot: ConfigFileSnapshot, includePath: string): boolean {
   return (
     !snapshot.valid &&
@@ -742,7 +730,14 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     let authoredIncludeValue: unknown;
     let parsedInclude = false;
     try {
-      authoredIncludeValue = parseJsonWithJson5Fallback(previousIncludeRaw);
+      // Shared parser boundary: the prior root-bound include is parsed through
+      // the canonical nesting guard and inspected with the shared bounded
+      // include-directive walk instead of an unbounded local traversal.
+      authoredIncludeValue = parseJsonWithNestingGuard(
+        previousIncludeRaw,
+        `Include file ${includePath}`,
+        (text) => parseJsonWithJson5Fallback(text),
+      );
       parsedInclude = true;
     } catch {
       // A validated replacement is the repair path for a malformed include.

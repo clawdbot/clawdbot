@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
+import { MAX_CONFIG_JSON_NESTING_DEPTH } from "../config/nesting-limit.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { PluginPackageInstall } from "./manifest.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
@@ -318,6 +319,18 @@ function dsseResponse(body: BodyInit | null, init: ResponseInit = {}): Response 
   const headers = new Headers(init.headers);
   headers.set("content-type", "application/vnd.dsse+json");
   return new Response(body, { ...init, headers });
+}
+
+function deeplyNestedJsonText(depth: number): string {
+  return "[".repeat(depth) + "]".repeat(depth);
+}
+
+function buildDeeplyNestedArray(depth: number): unknown {
+  let value: unknown = 0;
+  for (let index = 0; index < depth; index += 1) {
+    value = [value];
+  }
+  return value;
 }
 
 describe("official external plugin catalog", () => {
@@ -2674,6 +2687,91 @@ describe("official external plugin catalog", () => {
       minHostVersion: ">=2026.4.10",
       allowInvalidConfigRecovery: true,
     });
+  });
+
+  it("rejects over-deep hosted catalog response bodies before the native parser runs", async () => {
+    const deepBody = deeplyNestedJsonText(MAX_CONFIG_JSON_NESTING_DEPTH + 1);
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const result = await loadHostedCatalog({
+        catalogConfig: {
+          feeds: {
+            "clawhub-public": {
+              url: "https://clawhub.ai/v1/feeds/plugins",
+              feedId: "clawhub-official",
+              verification: { mode: "unsigned" },
+            },
+          },
+        },
+        fetchImpl: vi.fn(async () => new Response(deepBody, { status: 200 })),
+        snapshotStore: null,
+      });
+
+      expectBundledFallback(result);
+      expect(result.error).toMatch(/nesting depth/i);
+      expect(parseSpy).not.toHaveBeenCalledWith(deepBody);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
+  it("rejects signed hosted catalog responses with over-deep payloads before the native parser runs", async () => {
+    const deepPayloadValue = buildDeeplyNestedArray(MAX_CONFIG_JSON_NESTING_DEPTH + 1);
+    const deepPayloadJson = JSON.stringify(deepPayloadValue);
+    const signed = signedHostedCatalogFeed({
+      feed: deepPayloadValue as unknown as OfficialExternalPluginCatalogFeed,
+    });
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const result = await loadHostedCatalog({
+        feedProfile: "acme",
+        catalogConfig: signedCatalogConfig(signed.publicKeyPem),
+        fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
+        snapshotStore: null,
+      });
+
+      expectBundledFallback(result);
+      expect(parseSpy).not.toHaveBeenCalledWith(deepPayloadJson);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
+  it("keeps over-deep snapshot bodies away from the native parser during monotonicity reads", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-deep-snapshot-"));
+    const url = "https://packages.acme.example/openclaw/feed";
+    const deepBody = deeplyNestedJsonText(MAX_CONFIG_JSON_NESTING_DEPTH + 1);
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: deepBody,
+          monotonic: { sequence: 10, generatedAt: "2026-06-22T00:00:10.000Z" },
+        }),
+      );
+      const snapshot = await snapshotStore.read(url);
+      expect(snapshot?.body).toBe(deepBody);
+      expect(snapshot?.monotonic).toBeUndefined();
+      expect(parseSpy).not.toHaveBeenCalledWith(deepBody);
+
+      const next = signedHostedCatalogFeed({
+        feed: hostedCatalogFeed({ sequence: 11, pluginName: "@openclaw/deep-snapshot-next" }),
+      });
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: next.body,
+          monotonic: { sequence: 11, generatedAt: "2026-06-22T00:00:11.000Z" },
+        }),
+      );
+      expect(parseSpy).not.toHaveBeenCalledWith(deepBody);
+    } finally {
+      parseSpy.mockRestore();
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

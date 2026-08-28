@@ -404,6 +404,9 @@ const config = {
     // are intentionally test-only in the production graph.
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
+    // Focused nesting tests assert the parsed-value guard directly; production
+    // reaches it through parseJsonWithNestingGuard.
+    "src/config/nesting-limit.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],

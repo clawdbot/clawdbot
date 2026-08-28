@@ -6,6 +6,7 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { applyConfigEnvVars } from "./config-env-vars.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
+import { parseJsonWithNestingGuard } from "./nesting-limit.js";
 import { resolveConfigPath, resolveIncludeRoots } from "./paths.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -109,7 +110,12 @@ function readRawGatewayDispatchConfig(options: GatewayDispatchConfigReadOptions 
   }
 
   const raw = fs.readFileSync(configPath, "utf-8");
-  const parsed = parseJsonWithJson5Fallback(raw);
+  // Shared parser boundary: raw nesting is pre-scanned before the compatibility
+  // parser runs, so a pathological dispatch config is rejected cleanly instead
+  // of overflowing the native stack inside JSON.parse/JSON5.parse.
+  const parsed = parseJsonWithNestingGuard(raw, "Gateway dispatch config JSON", (text) =>
+    parseJsonWithJson5Fallback(text),
+  );
   const resolvedIncludes = resolveIncludesForGatewayDispatch(parsed, configPath, env);
   const resolvedConfig = resolveGatewayDispatchEnvVars(resolvedIncludes, env);
   return {

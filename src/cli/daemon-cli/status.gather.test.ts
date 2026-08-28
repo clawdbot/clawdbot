@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_CONFIG_JSON_NESTING_DEPTH } from "../../config/nesting-limit.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
@@ -1096,6 +1097,39 @@ describe("gatherDaemonStatus", () => {
       expect(status.config?.daemon).toBe(status.config?.cli);
       expect(status.gateway?.bindMode).toBe("custom");
       expect(status.gateway?.customBindHost).toBe("10.0.0.5");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects over-deep configs on the fast status path with a bounded nesting error", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
+    const configPath = path.join(tmp, "openclaw.json");
+    const overDeep =
+      "[".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1) + "]".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1);
+    await fs.writeFile(configPath, `{"deep":${overDeep}}`, "utf8");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: tmp,
+        OPENCLAW_CONFIG_PATH: configPath,
+      },
+    });
+
+    try {
+      const status = await gatherStatus({ probe: false });
+
+      expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
+      expect(loadConfigCalls).not.toHaveBeenCalled();
+      expect(status.config?.cli.exists).toBe(true);
+      expect(status.config?.cli.valid).toBe(false);
+      expect(
+        status.config?.cli.issues?.some((issue) =>
+          issue.message.includes("maximum supported nesting depth"),
+        ),
+      ).toBe(true);
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

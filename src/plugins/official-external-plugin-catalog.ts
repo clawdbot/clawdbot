@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
@@ -757,7 +758,7 @@ async function parseHostedCatalogFeedBody(params: {
   trust?: HostedOfficialExternalPluginCatalogTrustState;
   expired?: boolean;
 }> {
-  const raw = JSON.parse(params.body) as unknown;
+  const raw = parseJsonWithNestingGuard(params.body, "hosted catalog feed", JSON.parse) as unknown;
   if (params.verification?.mode === "signed") {
     const { verifyOfficialExternalPluginCatalogSignedEnvelope } =
       await import("./official-external-plugin-catalog-envelope.js");

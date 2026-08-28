@@ -24,6 +24,11 @@
 // followed by letters, numbers, or underscores (all uppercase)
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { isPlainObject } from "../utils.js";
+import {
+  ConfigNestingDepthError,
+  formatConfigNestingDepthMessage,
+  MAX_CONFIG_JSON_NESTING_DEPTH,
+} from "./nesting-limit.js";
 import { parseEnvTemplateSecretRef } from "./types.secrets.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
@@ -178,13 +183,22 @@ function substituteAny(
   env: NodeJS.ProcessEnv,
   path: string,
   opts?: SubstituteOptions,
+  depth = 0,
 ): unknown {
   if (typeof value === "string") {
     return substituteString(value, env, path, opts);
   }
 
+  if (depth > MAX_CONFIG_JSON_NESTING_DEPTH) {
+    throw new ConfigNestingDepthError(
+      formatConfigNestingDepthMessage(`Config value at ${path || "(root)"}`, depth),
+    );
+  }
+
   if (Array.isArray(value)) {
-    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`, opts));
+    return value.map((item, index) =>
+      substituteAny(item, env, `${path}[${index}]`, opts, depth + 1),
+    );
   }
 
   if (isPlainObject(value)) {
@@ -199,7 +213,7 @@ function substituteAny(
         : path
           ? `${path}.${key}`
           : key;
-      result[key] = substituteAny(val, env, childPath, opts);
+      result[key] = substituteAny(val, env, childPath, opts, depth + 1);
     }
     return result;
   }

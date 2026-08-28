@@ -101,4 +101,21 @@ describe("readGatewayDispatchConfig", () => {
     });
     expect(config.gateway?.auth).toMatchObject({ mode: "token", token: "shell-token" });
   });
+
+  it("rejects a deeply-nested dispatch config before parsing it instead of overflowing", () => {
+    const configPath = createTempConfig({
+      "openclaw.json5": "[".repeat(10_000) + "]".repeat(10_000),
+    });
+    const env: NodeJS.ProcessEnv = { OPENCLAW_CONFIG_PATH: configPath };
+
+    let thrown: unknown;
+    try {
+      readGatewayDispatchConfig({ env });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).name).toBe("ConfigNestingDepthError");
+    expect((thrown as Error).message).toContain("Gateway dispatch config JSON");
+  });
 });

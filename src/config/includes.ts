@@ -21,6 +21,12 @@ import { isMissingPathError } from "../infra/errno.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import {
+  ConfigNestingDepthError,
+  formatConfigNestingDepthMessage,
+  MAX_CONFIG_JSON_NESTING_DEPTH,
+  parseJsonWithNestingGuard,
+} from "./nesting-limit.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
@@ -176,9 +182,19 @@ class IncludeProcessor {
     return this.boundary.configRoot.rootDir;
   }
 
-  process(obj: unknown, logicalPath: readonly string[] = []): unknown {
+  process(obj: unknown, logicalPath: readonly string[] = [], structuralDepth = 0): unknown {
+    if (structuralDepth > MAX_CONFIG_JSON_NESTING_DEPTH) {
+      throw new ConfigNestingDepthError(
+        formatConfigNestingDepthMessage(
+          `Config structure at ${logicalPath.join(".") || "(root)"}`,
+          structuralDepth,
+        ),
+      );
+    }
     if (Array.isArray(obj)) {
-      return obj.map((item, index) => this.process(item, [...logicalPath, String(index)]));
+      return obj.map((item, index) =>
+        this.process(item, [...logicalPath, String(index)], structuralDepth + 1),
+      );
     }
 
     if (!isPlainObject(obj)) {
@@ -186,15 +202,16 @@ class IncludeProcessor {
     }
 
     if (!(INCLUDE_KEY in obj)) {
-      return this.processObject(obj, logicalPath);
+      return this.processObject(obj, logicalPath, structuralDepth);
     }
 
-    return this.processInclude(obj, logicalPath);
+    return this.processInclude(obj, logicalPath, structuralDepth);
   }
 
   private processObject(
     obj: Record<string, unknown>,
     logicalPath: readonly string[],
+    structuralDepth: number,
   ): Record<string, unknown> {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
@@ -205,19 +222,23 @@ class IncludeProcessor {
       ) {
         continue;
       }
-      result[key] = this.process(value, [...logicalPath, key]);
+      result[key] = this.process(value, [...logicalPath, key], structuralDepth + 1);
     }
     return result;
   }
 
-  private processInclude(obj: Record<string, unknown>, logicalPath: readonly string[]): unknown {
+  private processInclude(
+    obj: Record<string, unknown>,
+    logicalPath: readonly string[],
+    structuralDepth: number,
+  ): unknown {
     const includeValue = obj[INCLUDE_KEY];
     const otherKeys = Object.keys(obj).filter(
       (key) =>
         key !== INCLUDE_KEY &&
         (logicalPath.length > 0 || !this.rootProjectionKeys || this.rootProjectionKeys.has(key)),
     );
-    const resolved = this.resolveInclude(includeValue, logicalPath);
+    const resolved = this.resolveInclude(includeValue, logicalPath, structuralDepth);
     const included = resolved.value;
     this.resolver.onIncludeResolved?.({
       path: [...logicalPath],
@@ -242,7 +263,7 @@ class IncludeProcessor {
     // Merge included content with sibling keys
     const rest: Record<string, unknown> = {};
     for (const key of otherKeys) {
-      rest[key] = this.process(obj[key], [...logicalPath, key]);
+      rest[key] = this.process(obj[key], [...logicalPath, key], structuralDepth + 1);
     }
     return deepMerge(included, rest);
   }
@@ -250,9 +271,10 @@ class IncludeProcessor {
   private resolveInclude(
     value: unknown,
     logicalPath: readonly string[],
+    structuralDepth: number,
   ): { value: unknown; targetPath?: string; targetPaths?: string[] } {
     if (typeof value === "string") {
-      return this.loadFile(value, logicalPath);
+      return this.loadFile(value, logicalPath, structuralDepth);
     }
 
     if (Array.isArray(value)) {
@@ -263,7 +285,7 @@ class IncludeProcessor {
             String(item),
           );
         }
-        return this.loadFile(item, logicalPath);
+        return this.loadFile(item, logicalPath, structuralDepth);
       });
       const merged = resolvedEntries.reduce<unknown>(
         (current, entry) => deepMerge(current, entry.value),
@@ -284,6 +306,7 @@ class IncludeProcessor {
   private loadFile(
     includePath: string,
     logicalPath: readonly string[],
+    structuralDepth: number,
   ): { value: unknown; targetPath: string } {
     const { resolvedPath, root } = this.resolvePath(includePath);
 
@@ -294,7 +317,7 @@ class IncludeProcessor {
     const parsed = this.parseFile(includePath, resolvedPath, raw);
 
     return {
-      value: this.processNested(resolvedPath, parsed, logicalPath),
+      value: this.processNested(resolvedPath, parsed, logicalPath, structuralDepth),
       targetPath: resolvedPath,
     };
   }
@@ -422,7 +445,10 @@ class IncludeProcessor {
 
   private parseFile(includePath: string, resolvedPath: string, raw: string): unknown {
     try {
-      return this.resolver.parseJson(raw);
+      // Shared parser boundary: pre-scans raw nesting before the parser so a
+      // deeply-nested include file is rejected as an include error instead of
+      // overflowing the native stack.
+      return parseJsonWithNestingGuard(raw, `Include file ${includePath}`, this.resolver.parseJson);
     } catch (err) {
       throw new ConfigIncludeError(
         `Failed to parse include file: ${includePath} (resolved: ${resolvedPath})`,
@@ -436,6 +462,7 @@ class IncludeProcessor {
     resolvedPath: string,
     parsed: unknown,
     logicalPath: readonly string[],
+    structuralDepth: number,
   ): unknown {
     const nested = new IncludeProcessor(
       resolvedPath,
@@ -445,7 +472,7 @@ class IncludeProcessor {
     );
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
-    return nested.process(parsed, logicalPath);
+    return nested.process(parsed, logicalPath, structuralDepth);
   }
 }
 

@@ -1,7 +1,8 @@
 /** Tests bundle manifest parsing for Agent, Codex, Claude, Cursor, and OpenClaw formats. */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_CONFIG_JSON_NESTING_DEPTH } from "../config/nesting-limit.js";
 import {
   AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -769,5 +770,58 @@ describe("bundle manifest parsing", () => {
     });
 
     expect(detectBundleManifestFormat(rootDir)).toBeNull();
+  });
+
+  describe("manifest nesting guard", () => {
+    it.each([
+      {
+        bundleFormat: "agent",
+        manifestRelativePath: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
+      },
+      {
+        bundleFormat: "codex",
+        manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+      },
+      {
+        bundleFormat: "cursor",
+        manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+      },
+    ] as const)(
+      "rejects over-deep $bundleFormat bundle manifests via the shared nesting guard without invoking the parser",
+      ({ bundleFormat, manifestRelativePath }) => {
+        const rootDir = makeTempDir();
+        setupBundleFixture({
+          rootDir,
+          dirs: [path.dirname(manifestRelativePath)],
+          textFiles: {
+            [manifestRelativePath]:
+              "[".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1) +
+              "]".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1) +
+              "\n",
+          },
+        });
+
+        // Prove the guard rejects raw text before any native parser runs.
+        const parseSpy = vi.spyOn(JSON, "parse").mockImplementation(() => {
+          throw new Error("native JSON.parse must not be reached for over-limit manifests");
+        });
+        try {
+          const result = loadBundleManifest({ rootDir, bundleFormat });
+          expect(result.ok).toBe(false);
+          if (!result.ok) {
+            expect(result.error).toContain(
+              `exceeds the maximum supported nesting depth of ${MAX_CONFIG_JSON_NESTING_DEPTH}`,
+            );
+            expect(result.error).toContain("(measured ");
+            expect(result.error).not.toContain(
+              "native JSON.parse must not be reached for over-limit manifests",
+            );
+          }
+          expect(parseSpy).not.toHaveBeenCalled();
+        } finally {
+          parseSpy.mockRestore();
+        }
+      },
+    );
   });
 });

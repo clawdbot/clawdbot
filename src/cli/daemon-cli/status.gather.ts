@@ -10,6 +10,7 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/config.js";
+import { ConfigNestingDepthError, parseJsonWithNestingGuard } from "../../config/nesting-limit.js";
 import { isDefaultInstallIdentity } from "../../config/paths.js";
 import type {
   OpenClawConfig,
@@ -173,14 +174,25 @@ async function readFastStatusConfig(configPath: string): Promise<StatusConfigRea
 
   let parsed: unknown;
   try {
-    parsed = JSON5.parse(raw);
+    // Shared parser boundary: the fast status read must pre-scan nesting
+    // before JSON5.parse so an over-deep config is reported as an invalid
+    // summary instead of failing outside the canonical bounded contract.
+    parsed = parseJsonWithNestingGuard(raw, "Config JSON", (text) => JSON5.parse(text));
   } catch (err) {
     return {
       summary: {
         path: configPath,
         exists: true,
         valid: false,
-        issues: [{ path: "", message: `JSON5 parse failed: ${String(err)}` }],
+        issues: [
+          {
+            path: "",
+            message:
+              err instanceof ConfigNestingDepthError
+                ? err.message
+                : `JSON5 parse failed: ${String(err)}`,
+          },
+        ],
       },
       cfg: {},
       mode: "fast",

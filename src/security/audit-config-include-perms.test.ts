@@ -1,10 +1,22 @@
 // Covers config include-file permission audit findings.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { MAX_CONFIG_JSON_NESTING_DEPTH } from "../config/nesting-limit.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { collectIncludeFilePermFindings } from "./audit-extra.async.js";
+
+// Spy on the JSON5 compatibility parser so audit regressions can prove that
+// over-limit include text never reaches the native parser.
+vi.mock("../utils/parse-json-compat.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../utils/parse-json-compat.js")>();
+  return {
+    ...mod,
+    parseJsonWithJson5Fallback: vi.fn(mod.parseJsonWithJson5Fallback),
+  };
+});
 
 describe("security audit config include permissions", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -88,4 +100,43 @@ describe("security audit config include permissions", () => {
       ]);
     },
   );
+
+  it("handles deeply-nested included files without invoking the parser", async () => {
+    const tmp = tempDirs.make("openclaw-include-perms-nesting-");
+    const stateDir = path.join(tmp, "state");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+
+    const includePath = path.join(stateDir, "deep.json5");
+    const deepRaw =
+      "[".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1) + "]".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1);
+    fs.writeFileSync(includePath, `${deepRaw}\n`, "utf-8");
+
+    const parserSpy = vi.mocked(parseJsonWithJson5Fallback);
+    parserSpy.mockClear();
+
+    const configSnapshot: ConfigFileSnapshot = {
+      path: path.join(stateDir, "openclaw.json"),
+      exists: true,
+      raw: `{ "$include": ${JSON.stringify(includePath)} }\n`,
+      parsed: { $include: includePath },
+      sourceConfig: {} as ConfigFileSnapshot["sourceConfig"],
+      resolved: {} as ConfigFileSnapshot["resolved"],
+      valid: true,
+      runtimeConfig: {} as ConfigFileSnapshot["runtimeConfig"],
+      config: {} as ConfigFileSnapshot["config"],
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+
+    // Controlled outcome: the audit completes without ever handing the
+    // over-limit include text to the native parser.
+    const findings = await collectIncludeFilePermFindings({
+      configSnapshot,
+      platform: "linux",
+    });
+
+    expect(parserSpy).not.toHaveBeenCalled();
+    expect(findings).toBeInstanceOf(Array);
+  });
 });

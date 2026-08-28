@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -95,7 +96,11 @@ function readJsonObject(filePath: string): Record<string, unknown> | undefined {
 
   let parsed: unknown;
   try {
-    parsed = parseJsonWithJson5Fallback(raw);
+    // Shared parser boundary: discovery must reject over-limit manifests
+    // before any native parser runs, mirroring the canonical loader.
+    parsed = parseJsonWithNestingGuard(raw, `plugin manifest ${filePath}`, (text) =>
+      parseJsonWithJson5Fallback(text),
+    );
   } catch (error) {
     log.warn(
       `Ignoring invalid plugin manifest at ${filePath}: failed to parse plugin manifest: ${String(error)}`,

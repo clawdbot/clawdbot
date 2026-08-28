@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import { parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -237,7 +238,14 @@ export function loadPluginManifest(
   };
   let raw: unknown;
   try {
-    raw = parseJsonWithJson5Fallback(fs.readFileSync(opened.fd, "utf-8"));
+    // Shared parser boundary: canonical plugin manifests must never hand raw
+    // text to a native parser before the nesting pre-scan, so an over-limit
+    // manifest fails as a controlled depth error instead of a stack overflow.
+    raw = parseJsonWithNestingGuard(
+      fs.readFileSync(opened.fd, "utf-8"),
+      `plugin manifest ${manifestPath}`,
+      (text) => parseJsonWithJson5Fallback(text),
+    );
   } catch (err) {
     return cacheResult({
       ok: false,

@@ -514,4 +514,32 @@ describe("resolveConfigEnvVars", () => {
       expectResolvedScenarios(scenarios);
     });
   });
+
+  describe("nesting depth guard", () => {
+    function buildDeepValue(depth: number): unknown {
+      let value: unknown = "x";
+      for (let i = 0; i < depth; i += 1) {
+        value = [value];
+      }
+      return value;
+    }
+
+    it("rejects deeply-nested values instead of recursing without bound", () => {
+      const deep = buildDeepValue(600);
+      let thrown: unknown;
+      try {
+        resolveConfigEnvVars(deep, {});
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).name).toBe("ConfigNestingDepthError");
+      expect((thrown as Error).message).toContain("nesting depth");
+    });
+
+    it("substitutes through structures within the supported depth", () => {
+      const supported = buildDeepValue(100);
+      expect(resolveConfigEnvVars(supported, {})).toEqual(supported);
+    });
+  });
 });

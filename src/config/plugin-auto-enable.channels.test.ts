@@ -230,6 +230,49 @@ describe("applyPluginAutoEnable channels", () => {
     );
   });
 
+  it("rejects over-deep external catalog JSON through the shared nesting guard", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    // 520 nesting levels: deep enough to violate the shared 512-level
+    // contract, small enough to pass the 16 MiB size cap so the depth
+    // guard is the only boundary the file can trip.
+    const deepMarker = "over-deep-catalog-marker";
+    const deepText =
+      "[".repeat(520) +
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: { id: deepMarker, preferOver: ["env-primary"] },
+            },
+          },
+        ],
+      }) +
+      "]".repeat(520);
+    fs.writeFileSync(catalogPath, deepText, "utf-8");
+
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const result = materializeEnvCatalogCandidates(stateDir);
+
+      // The shared guard rejects the pathological text before any parser
+      // sees it — the over-deep payload never reaches native JSON.parse.
+      const deepParseCalls = parseSpy.mock.calls.filter(
+        ([text]) => typeof text === "string" && text.includes(deepMarker),
+      );
+      expect(deepParseCalls).toHaveLength(0);
+
+      // Fail-open: the skipped catalog does not stall auto-enable, and a
+      // depth violation is a parse-class failure so it logs no warning.
+      expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
+      expect(logWarnSpy).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
   describe("third-party channel plugins", () => {
     it("activates external channel plugins under plugins.entries when plugin id matches channel id", () => {
       const result = materializePluginAutoEnableCandidates({

@@ -2,6 +2,10 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import {
+  assertBoundedRawJsonNesting,
+  MAX_CONFIG_JSON_NESTING_DEPTH,
+} from "../config/nesting-limit.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
@@ -94,6 +98,14 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
     raw = (await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES)).toString("utf8");
   } finally {
     await file.close();
+  }
+  try {
+    assertBoundedRawJsonNesting(raw, "Secrets plan JSON");
+  } catch (err) {
+    throw new Error(
+      `Secrets plan file exceeds the maximum supported nesting depth of ${MAX_CONFIG_JSON_NESTING_DEPTH}: ${pathname}`,
+      { cause: err },
+    );
   }
   let parsed: unknown;
   try {

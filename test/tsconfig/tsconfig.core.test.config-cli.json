@@ -7,6 +7,8 @@
     "../../src/config/**/*.test.ts",
     "../../src/config/**/*.test.tsx",
     "../../src/cli/**/*.test.ts",
-    "../../src/cli/**/*.test.tsx"
+    "../../src/cli/**/*.test.tsx",
+    "../../src/logging/**/*.test.ts",
+    "../../src/logging/**/*.test.tsx"
   ]
 }

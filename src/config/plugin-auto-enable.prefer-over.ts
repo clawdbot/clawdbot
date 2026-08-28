@@ -8,6 +8,7 @@ import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
+import { parseJsonWithNestingGuard } from "./nesting-limit.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -92,7 +93,13 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
         filePath: resolvedRealPath,
         maxBytes: MAX_EXTERNAL_CATALOG_BYTES,
       });
-      const payload = JSON.parse(buffer.toString("utf-8")) as unknown;
+      // Pre-scan nesting through the shared guard so a pathological catalog
+      // fails as a controlled depth error before the native parser runs.
+      const payload = parseJsonWithNestingGuard(
+        buffer.toString("utf-8"),
+        `External plugin catalog ${resolvedRealPath}`,
+        JSON.parse,
+      );
       const channel = parseExternalCatalogChannelEntries(payload).find(
         (entry) => entry.id === channelId,
       );

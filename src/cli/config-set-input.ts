@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
@@ -118,7 +119,7 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
 function parseJson5Raw(raw: string, label: string): unknown {
   let parsed: unknown;
   try {
-    parsed = JSON5.parse(raw);
+    parsed = parseJsonWithNestingGuard(raw, label, JSON5.parse);
   } catch (err) {
     throw new Error(`Failed to parse ${label}: ${String(err)}`, { cause: err });
   }

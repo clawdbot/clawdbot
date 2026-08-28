@@ -1,8 +1,23 @@
 // Facade runtime tests cover installed plugin facade loading and fallback resolution.
+//
+// The shared non-isolated runner strips OPENCLAW_CONFIG_PATH from the process
+// env at file collect start (restoreSharedTestHomeAfterEnvUnstub), so a value
+// inherited from the test process can only be observed by seeding it here at
+// module evaluation time — the earliest code that runs after that
+// sanitization. The facade guard tests below must snapshot and restore this
+// pre-existing value instead of unconditionally deleting it; the trailing
+// regression test proves they do. Because the seed is a module-level
+// assignment, this file must undo it itself: the afterAll hook (and the
+// trailing test's own end-of-file restore) put the pre-seed environment back
+// so the synthetic value cannot leak into later files sharing the worker.
+const inheritedConfigPathProbe = "inherited-probe-value";
+const originalConfigPathBeforeSeed = process.env.OPENCLAW_CONFIG_PATH;
+process.env.OPENCLAW_CONFIG_PATH = inheritedConfigPathProbe;
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { MAX_CONFIG_JSON_NESTING_DEPTH } from "../config/nesting-limit.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -114,6 +129,18 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
+});
+
+function restoreSeededConfigPath(): void {
+  if (originalConfigPathBeforeSeed === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = originalConfigPathBeforeSeed;
+  }
+}
+
+afterAll(() => {
+  restoreSeededConfigPath();
 });
 
 describe("plugin-sdk facade runtime", () => {
@@ -910,5 +937,128 @@ describe("plugin-sdk facade runtime", () => {
       allowed: true,
       pluginId: "demo-snapshot",
     });
+  });
+
+  it("guards the no-snapshot facade config fallback against over-deep config files", () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const dir = createTempDirSync("openclaw-facade-guard-fallback-");
+    const stateDir = path.join(dir, "state");
+    const configPath = path.join(dir, "openclaw.json");
+    const overDeep =
+      "[".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1) + "]".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, `{"plugins":${overDeep}}`, "utf8");
+
+    // No runtime or source snapshot: the facade must read the configured raw
+    // file directly. The shared guard has to reject the over-limit payload
+    // before the compatibility parser ever hands it to a native parser.
+    clearRuntimeConfigSnapshot();
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    useBundledPluginDirOverrideForTest(dir);
+
+    let deepPayloadReachedNativeParse = false;
+    const realJsonParse = JSON.parse.bind(JSON);
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation(((
+      text: string,
+      ...rest: unknown[]
+    ) => {
+      if (typeof text === "string" && text.includes(overDeep)) {
+        deepPayloadReachedNativeParse = true;
+        throw new Error("native JSON.parse must not be reached for over-limit facade config");
+      }
+      return realJsonParse(text, ...(rest as [reviver?: never]));
+    }) as typeof JSON.parse);
+    try {
+      const access = resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "facade-guard-fallback-demo",
+        artifactBasename: "api.js",
+        location: null,
+        sourceExtensionsRoot: dir,
+        resolutionKey: "facade-guard-fallback",
+      });
+      expect(access.allowed).toBe(false);
+      expect(deepPayloadReachedNativeParse).toBe(false);
+      expect(parseSpy).not.toHaveBeenCalledWith(expect.stringContaining(overDeep));
+    } finally {
+      parseSpy.mockRestore();
+      if (originalConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      delete process.env.OPENCLAW_STATE_DIR;
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("guards bundled openclaw.plugin.json manifest reads against over-deep payloads", () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const rootDir = createTrustedBundledFixtureRoot("openclaw-facade-manifest-guard-");
+    const pluginDir = path.join(rootDir, "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const overDeep =
+      "[".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1) + "]".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1);
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      `{"id":"demo","enabledByDefault":true,"deep":${overDeep}}`,
+      "utf8",
+    );
+
+    // No snapshots and no boundary config file: activation must read the
+    // bundled openclaw.plugin.json directly. The shared guard has to reject
+    // the over-limit manifest before the compatibility parser ever hands it
+    // to a native parser, so the record is treated as missing instead of
+    // enabling the facade.
+    clearRuntimeConfigSnapshot();
+    process.env.OPENCLAW_STATE_DIR = path.join(rootDir, "state");
+    process.env.OPENCLAW_CONFIG_PATH = path.join(rootDir, "missing-openclaw.json");
+    useBundledPluginDirOverrideForTest(rootDir);
+
+    let deepPayloadReachedNativeParse = false;
+    const realJsonParse = JSON.parse.bind(JSON);
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation(((
+      text: string,
+      ...rest: unknown[]
+    ) => {
+      if (typeof text === "string" && text.includes(overDeep)) {
+        deepPayloadReachedNativeParse = true;
+      }
+      return realJsonParse(text, ...(rest as [reviver?: never]));
+    }) as typeof JSON.parse);
+    try {
+      const access = resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "api.js",
+        location: {
+          modulePath: path.join(pluginDir, "api.js"),
+          boundaryRoot: rootDir,
+        },
+        sourceExtensionsRoot: rootDir,
+        resolutionKey: "facade-manifest-guard",
+      });
+      expect(access.allowed).toBe(false);
+      expect(deepPayloadReachedNativeParse).toBe(false);
+      expect(parseSpy).not.toHaveBeenCalledWith(expect.stringContaining(overDeep));
+    } finally {
+      parseSpy.mockRestore();
+      if (originalConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      delete process.env.OPENCLAW_STATE_DIR;
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("restores the process environment after facade guard tests", () => {
+    // The guard tests above must restore this file's seeded probe rather than
+    // unconditionally deleting it or leaving their own config paths behind.
+    expect(process.env.OPENCLAW_CONFIG_PATH).toBe(inheritedConfigPathProbe);
+    // End-of-file: undo the module-level seed so later files sharing the
+    // worker observe the pre-seed environment instead of this synthetic value.
+    restoreSeededConfigPath();
+    expect(process.env.OPENCLAW_CONFIG_PATH).toBe(originalConfigPathBeforeSeed);
   });
 });

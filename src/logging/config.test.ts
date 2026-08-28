@@ -4,8 +4,25 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { readLoggingConfig } from "./config.js";
 import { applyLoggingConfig, resetLogger } from "./logger.js";
+
+// Spy on the compatibility parser so depth-limit tests can prove the raw
+// pre-scan rejects pathological input before any parser is reached, while
+// normal configs still flow through the real implementation. The logging
+// shard runs non-isolated in a shared worker whose setup already evaluates
+// the real parse-json-compat module, so the guarded tests re-import config.js
+// after vi.resetModules() for the mock to apply to the production import.
+vi.mock("../utils/parse-json-compat.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/parse-json-compat.js")>();
+  return {
+    ...actual,
+    parseJsonWithJson5Fallback: vi.fn(actual.parseJsonWithJson5Fallback),
+  };
+});
+
+const parseJsonWithJson5FallbackMock = vi.mocked(parseJsonWithJson5Fallback);
 
 const originalArgv = process.argv;
 let tempDirs: string[] = [];
@@ -206,6 +223,30 @@ describe("readLoggingConfig", () => {
     withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
       expect(readLoggingConfig()).toBeUndefined();
     });
+  });
+
+  it("returns undefined for a deeply-nested config without invoking the parser", async () => {
+    // 600 levels exceeds the supported nesting contract; the raw pre-scan must
+    // reject it before the JSON/JSON5 parser is reached at all.
+    vi.resetModules();
+    const { readLoggingConfig: readFresh } = await import("./config.js");
+    parseJsonWithJson5FallbackMock.mockClear();
+    const configPath = writeConfig("[".repeat(600) + "]".repeat(600));
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      expect(readFresh()).toBeUndefined();
+    });
+    expect(parseJsonWithJson5FallbackMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("still routes a shallow config through the compatibility parser", async () => {
+    vi.resetModules();
+    const { readLoggingConfig: readFresh } = await import("./config.js");
+    parseJsonWithJson5FallbackMock.mockClear();
+    const configPath = writeConfig(`{ logging: { consoleStyle: "json" } }`);
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      expect(readFresh()).toStrictEqual({ consoleStyle: "json" });
+    });
+    expect(parseJsonWithJson5FallbackMock).toHaveBeenCalledTimes(1);
   });
 
   it("caches a missing config until the path selector changes", () => {

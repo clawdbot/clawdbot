@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_CONFIG_JSON_NESTING_DEPTH } from "../config/nesting-limit.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import { loadPluginManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -410,6 +411,35 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("plugin manifest must be an object");
+    }
+  });
+
+  it("rejects over-deep manifests via the shared nesting guard without invoking the parser", () => {
+    const dir = makeTempDir();
+    const overDeep =
+      "[".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1) + "]".repeat(MAX_CONFIG_JSON_NESTING_DEPTH + 1);
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      `{"id":"deep-manifest","configSchema":{"deep":${overDeep}}}`,
+      "utf-8",
+    );
+
+    // Prove the guard rejects raw text before any native parser runs.
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation(() => {
+      throw new Error("native JSON.parse must not be reached for over-limit manifests");
+    });
+    try {
+      const result = loadPluginManifest(dir, false);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("failed to parse plugin manifest");
+        expect(result.error).toContain(
+          `exceeds the maximum supported nesting depth of ${MAX_CONFIG_JSON_NESTING_DEPTH}`,
+        );
+      }
+      expect(parseSpy).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
     }
   });
 });

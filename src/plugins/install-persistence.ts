@@ -10,6 +10,7 @@ import {
 } from "../config/includes.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
+import { parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -195,7 +196,16 @@ function resolveConfigMutationPreflight(params: {
           reason: `Config ${params.section} include changed since the config was read; rerun the install after reloading the config.`,
         };
       }
-      if (containsConfigIncludeDirective(parseJsonWithJson5Fallback(raw))) {
+      // Shared parser boundary: the include preflight must pre-scan nesting
+      // before parsing so an over-deep included config lands in the existing
+      // blocked preflight handling instead of a raw parser failure.
+      if (
+        containsConfigIncludeDirective(
+          parseJsonWithNestingGuard(raw, `Include file ${includePath}`, (text) =>
+            parseJsonWithJson5Fallback(text),
+          ),
+        )
+      ) {
         return {
           mode: "blocked",
           scope: params.section,

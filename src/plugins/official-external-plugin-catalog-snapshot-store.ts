@@ -1,6 +1,7 @@
 /** Persists hosted official external plugin catalog snapshots in OpenClaw state. */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -115,7 +116,7 @@ function decodeBase64Payload(payload: string): string {
 
 function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicState | undefined {
   try {
-    const document = JSON.parse(body) as {
+    const document = parseJsonWithNestingGuard(body, "hosted catalog snapshot", JSON.parse) as {
       payload?: unknown;
       sequence?: unknown;
       generatedAt?: unknown;
@@ -124,7 +125,7 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
       typeof document.payload === "string" ? decodeBase64Payload(document.payload) : body;
     const feed =
       typeof document.payload === "string"
-        ? (JSON.parse(payload) as {
+        ? (parseJsonWithNestingGuard(payload, "hosted catalog snapshot payload", JSON.parse) as {
             sequence?: unknown;
             generatedAt?: unknown;
           })

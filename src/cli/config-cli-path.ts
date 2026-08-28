@@ -1,6 +1,7 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { ConfigNestingDepthError, parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   formatConcreteConfigPath,
@@ -53,7 +54,10 @@ export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   if (strictJson) {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(trimmed);
+      // Shared parser boundary: raw nesting is pre-scanned before JSON.parse so
+      // a pathological value is rejected as a wrapped strict-parse failure
+      // instead of overflowing the native stack inside the parser.
+      parsed = parseJsonWithNestingGuard(trimmed, "Config value JSON", JSON.parse);
     } catch (err) {
       throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
     }
@@ -62,8 +66,11 @@ export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   }
   let parsed: unknown;
   try {
-    parsed = JSON5.parse(trimmed);
-  } catch {
+    parsed = parseJsonWithNestingGuard(trimmed, "Config value JSON", JSON5.parse);
+  } catch (err) {
+    if (err instanceof ConfigNestingDepthError) {
+      throw err;
+    }
     return raw;
   }
   rejectConfigNonFiniteNumbers(parsed);

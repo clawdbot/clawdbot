@@ -1,3 +1,4 @@
+import { parseJsonWithNestingGuard } from "../config/nesting-limit.js";
 import {
   normalizeEd25519PublicKeyBase64Url,
   verifyEd25519SignatureBytes,
@@ -260,7 +261,11 @@ function decodeOfficialExternalPluginCatalogEnvelopePayload(
   payloadBytes: Buffer,
 ): { raw: unknown; feed: OfficialExternalPluginCatalogFeed | null } | null {
   try {
-    const raw = JSON.parse(payloadBytes.toString("utf8")) as unknown;
+    const raw = parseJsonWithNestingGuard(
+      payloadBytes.toString("utf8"),
+      "hosted catalog signed feed payload",
+      JSON.parse,
+    ) as unknown;
     return {
       raw,
       feed: isOfficialExternalPluginCatalogFeed(raw) ? raw : null,
