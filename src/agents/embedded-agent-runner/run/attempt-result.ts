@@ -22,6 +22,7 @@ import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
 } from "./attempt-terminal-evidence.js";
+import type { AttemptTrajectorySessionEnded } from "./attempt-trajectory-status.js";
 import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
 import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import type {
@@ -105,6 +106,8 @@ type CompleteEmbeddedAttemptResultInput = {
     streamStrategy: string;
   };
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
+  /** Capture the session.ended payload for deferred emission after cleanup (#102014). */
+  onTrajectoryTerminal?: (payload: AttemptTrajectorySessionEnded) => void;
 };
 
 /**
@@ -484,5 +487,6 @@ export function completeEmbeddedAttemptResult(
     emptyAssistantReplyIsSilent,
     hasTerminalOutput,
     silentExpected: attempt.silentExpected,
+    onTrajectoryTerminal: input.onTrajectoryTerminal,
   });
 }

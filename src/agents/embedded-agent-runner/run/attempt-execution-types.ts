@@ -14,6 +14,7 @@ import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
+import type { AttemptTrajectorySessionEnded } from "./attempt-trajectory-status.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -29,6 +30,11 @@ export type EmbeddedAttemptExecutionState = {
   beforeAgentRunBlockedBy: string | undefined;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
+  /**
+   * session.ended payload captured at finalize; emitted after attempt cleanup
+   * completes so its wall-clock timestamp reflects real session termination (#102014).
+   */
+  trajectoryTerminal: AttemptTrajectorySessionEnded | null;
 };
 
 export type EmbeddedAttemptExecutionPhaseInput = {

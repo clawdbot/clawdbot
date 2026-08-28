@@ -141,6 +141,7 @@ function createFixture() {
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" },
     trajectoryEndRecorded: false,
+    trajectoryTerminal: null,
   };
   const result = { messages: [{ role: "assistant", content: "done" }] };
   const preparedStreamRuntime = {
@@ -360,6 +361,15 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         trajectoryEndRecorded: true,
       }),
     );
+    // The terminal payload is captured for post-cleanup emission instead of
+    // being recorded at finalize time (#102014).
+    const onTrajectoryTerminal = mocks.completeResult.mock.calls[0]?.[0]?.onTrajectoryTerminal as
+      | ((payload: { status: string }) => void)
+      | undefined;
+    expect(onTrajectoryTerminal).toBeTypeOf("function");
+    expect(fixture.state.trajectoryTerminal).toBeNull();
+    onTrajectoryTerminal?.({ status: "success" });
+    expect(fixture.state.trajectoryTerminal).toEqual({ status: "success" });
     expect(fixture.sessionRuntimeState).toEqual(
       expect.objectContaining({
         prePromptMessageCount: 4,

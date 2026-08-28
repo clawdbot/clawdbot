@@ -96,6 +96,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" },
     trajectoryEndRecorded: false,
+    trajectoryTerminal: null,
   };
   let markYieldAborted: (() => void) | undefined;
   const input = {

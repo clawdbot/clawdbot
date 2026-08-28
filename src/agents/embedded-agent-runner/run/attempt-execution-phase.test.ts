@@ -99,6 +99,7 @@ function createFixture(
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,
+    trajectoryTerminal: null,
   };
   const skillInstructionDeliveryCache = new Map([["skill", Promise.resolve(true)]]);
   const sessionRuntime = {

@@ -646,6 +646,11 @@ export async function runEmbeddedAttemptSettledPhase(
       streamStrategy,
     },
     trajectoryRecorder,
+    onTrajectoryTerminal: (payload) => {
+      // Defer session.ended to post-cleanup so its wall-clock timestamp
+      // reflects real session termination, not model.completed (#102014).
+      state.trajectoryTerminal = payload;
+    },
   });
   state.trajectoryEndRecorded = true;
   if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {

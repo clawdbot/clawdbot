@@ -2785,6 +2785,57 @@ describe("runCodexAppServerAttempt", () => {
       events.indexOf("request:thread/unsubscribe"),
     );
   });
+
+  it("records session.ended only after one-shot cleanup teardown completes", async () => {
+    const { events, state } = installCleanupTrackingClient();
+    const params = createRunParams();
+    params.cleanupBundleMcpOnRunEnd = true;
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      trajectory: Object.freeze({
+        recordEvent: (type: string) => {
+          if (type === "session.ended") {
+            events.push("trajectory:session.ended");
+          }
+        },
+        flush: async () => undefined,
+      }),
+    });
+    const run = runCodexAppServerAttempt(params);
+    // The keyed router only delivers turn/completed after the turn is bound.
+    await vi.waitFor(() => expect(events).toContain("request:turn/start"), fastWait);
+    if (!state.notify) {
+      throw new Error("expected turn notification handler");
+    }
+    await state.notify(turnCompleted({ id: "turn-1", status: "completed" }));
+    await run;
+    const endedAt = events.indexOf("trajectory:session.ended");
+    expect(endedAt).toBeGreaterThan(-1);
+    expect(endedAt).toBeGreaterThan(events.indexOf("request:thread/unsubscribe"));
+    expect(endedAt).toBeGreaterThan(events.indexOf("closeAndWait"));
+  });
+
+  it("finishes startup-failure teardown before recording session.ended", async () => {
+    const { events } = installCleanupTrackingClient(new Error("turn start failed"));
+    const params = createRunParams();
+    params.cleanupBundleMcpOnRunEnd = true;
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      trajectory: Object.freeze({
+        recordEvent: (type: string) => {
+          if (type === "session.ended") {
+            events.push("trajectory:session.ended");
+          }
+        },
+        flush: async () => undefined,
+      }),
+    });
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start failed");
+    const endedAt = events.indexOf("trajectory:session.ended");
+    expect(endedAt).toBeGreaterThan(-1);
+    expect(endedAt).toBeGreaterThan(events.indexOf("request:thread/unsubscribe"));
+    expect(endedAt).toBeGreaterThan(events.indexOf("closeAndWait"));
+  });
   it("keeps the shared Codex app-server client warm without one-shot cleanup", async () => {
     const retireSpy = vi.spyOn(
       sharedClientModule,

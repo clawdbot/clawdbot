@@ -12,9 +12,28 @@ type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
 /** Normalized terminal status recorded for an embedded run attempt trajectory. */
-type AttemptTrajectoryTerminal = {
+export type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
+};
+
+/**
+ * Terminal session.ended payload captured at finalize and emitted only after
+ * attempt cleanup, so its wall-clock timestamp reflects real session end
+ * rather than model.completed (#102014).
+ */
+export type AttemptTrajectorySessionEnded = {
+  status: AttemptTrajectoryTerminalStatus;
+  aborted: boolean;
+  externalAbort: boolean;
+  timedOut: boolean;
+  idleTimedOut: boolean;
+  timedOutDuringCompaction: boolean;
+  timedOutDuringToolExecution: boolean;
+  timedOutByRunBudget: boolean;
+  promptError?: string;
+  terminalError?: AttemptTrajectoryTerminal["terminalError"];
+  stopReason?: string;
 };
 
 /** Signals that decide whether a completed run attempt has deliverable output. */

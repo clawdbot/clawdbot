@@ -90,6 +90,7 @@ export async function runEmbeddedAttempt(
       ? { kind: "aborted", source: "external" }
       : { kind: "ok" },
     trajectoryEndRecorded: false,
+    trajectoryTerminal: null,
   };
   const mergeTerminal = (incoming: AgentRunAttemptTerminal) => {
     executionState.terminal = mergeAgentRunAttemptTerminal(executionState.terminal, incoming);
@@ -529,6 +530,7 @@ export async function runEmbeddedAttempt(
         buildAbortSettlePromise,
         trajectoryRecorder,
         trajectoryEndRecorded: executionState.trajectoryEndRecorded,
+        trajectoryTerminal: executionState.trajectoryTerminal,
         cleanupYieldAborted: terminal.cleanupYieldAborted,
         emitDiagnosticRunCompleted,
         readState: () => ({

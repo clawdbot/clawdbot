@@ -46,7 +46,7 @@ export async function startCodexAttemptTurn(
     prompt,
     state: resourceState,
     trajectoryRecorder,
-    markTrajectoryEndRecorded,
+    captureTrajectoryTerminal,
     activateNativePreToolUseFailureFallback,
     releaseCurrentRoute,
     releaseSandboxExecEnvironment,
@@ -181,14 +181,15 @@ export async function startCodexAttemptTurn(
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: message },
       });
-      trajectoryRecorder?.recordEvent("session.ended", {
+      // Captured now, recorded after startup-failure teardown completes so the
+      // session.ended timestamp reflects real session termination (#102014).
+      captureTrajectoryTerminal({
         status: "error",
         threadId: resourceState.thread.threadId,
         timedOut: state.timedOut,
         aborted: runAbortController.signal.aborted,
         promptError: message,
       });
-      markTrajectoryEndRecorded();
       runAgentHarnessLlmOutputHook({
         event: {
           runId: params.runId,
@@ -262,15 +263,23 @@ export async function startCodexAttemptTurn(
       activateNativePreToolUseFailureFallback();
       resourceState.nativeHookRelay?.unregister();
       await releaseSandboxExecEnvironment();
+      params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+      await releaseSharedClientLeaseAndRetireOneShotClient();
+      // session.ended is recorded only after startup-failure teardown finishes,
+      // so its wall-clock timestamp reflects real session termination (#102014).
       await runAgentCleanupStep({
         runId: params.runId,
         sessionId: params.sessionId,
         step: "codex-trajectory-flush-startup-failure",
         log: embeddedAgentLog,
-        cleanup: async () => trajectoryRecorder?.flush(),
+        cleanup: async () => {
+          if (trajectoryRecorder && resourceState.trajectoryTerminal) {
+            trajectoryRecorder.recordEvent("session.ended", resourceState.trajectoryTerminal);
+            resourceState.trajectoryTerminal = null;
+          }
+          await trajectoryRecorder?.flush();
+        },
       });
-      params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-      await releaseSharedClientLeaseAndRetireOneShotClient();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({
           params,
