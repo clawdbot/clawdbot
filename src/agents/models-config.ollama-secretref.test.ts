@@ -62,12 +62,19 @@ describe("registered Ollama catalog SecretRef ownership", () => {
         "http://127.0.0.1:11434",
         ...(owner === "config" ? ["http://127.0.0.1:11435"] : []),
       ].flatMap((baseUrl) =>
-        [true, false].map((explicitModels) => ({ owner, baseUrl, explicitModels })),
+        [true, false].flatMap((explicitModels) =>
+          [
+            "resolved-ollama-profile-fixture",
+            ...(owner === "config"
+              ? ["ollama-local", "OLLAMA_API_KEY", NON_ENV_SECRETREF_MARKER]
+              : []),
+          ].map((runtimeKey) => ({ owner, baseUrl, explicitModels, runtimeKey })),
+        ),
       ),
     ),
   )(
-    "keeps $owner refs out of writable plans at $baseUrl (explicit=$explicitModels)",
-    async ({ owner, baseUrl, explicitModels }) => {
+    "keeps $owner refs out of writable plans at $baseUrl (explicit=$explicitModels, value=$runtimeKey)",
+    async ({ owner, baseUrl, explicitModels, runtimeKey }) => {
       const stateDir = tempDirs.make("ollama-catalog-ref-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, OLLAMA_API_KEY: undefined }, async () => {
         const agentDir = path.join(stateDir, "agent");
@@ -81,7 +88,6 @@ describe("registered Ollama catalog SecretRef ownership", () => {
           version: 1,
           profiles: owner === "profile" ? { "ollama:fixture": profile } : {},
         };
-        const runtimeKey = "resolved-ollama-profile-fixture";
         if (owner === "profile") {
           setRuntimeAuthProfileStoreSnapshot(
             {
@@ -147,8 +153,11 @@ describe("registered Ollama catalog SecretRef ownership", () => {
             plan.pluginCatalogWrites?.[encodePluginModelCatalogRelativePath("ollama")],
             "Ollama writable plugin catalog",
           );
-          expect(contents).not.toContain(runtimeKey);
-          expect(JSON.stringify(plan)).not.toContain(runtimeKey);
+          // Equal bytes do not make the source-derived marker secret material.
+          if (runtimeKey !== NON_ENV_SECRETREF_MARKER) {
+            expect(JSON.stringify(plan)).not.toContain(runtimeKey);
+          }
+          expect(JSON.stringify(plan)).not.toContain("discoveryApiKey");
           const catalog = JSON.parse(contents) as {
             providers: { ollama: { api: string; apiKey: string; models: Array<{ id: string }> } };
           };

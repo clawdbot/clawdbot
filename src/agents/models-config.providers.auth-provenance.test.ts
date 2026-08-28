@@ -120,6 +120,7 @@ describe("models-config provider auth provenance", () => {
         prepared?: OpenClawConfig,
       ) => ReturnType<typeof import("./models-config.plan.js").planOpenClawModelsJson>;
       authorization: Array<string | null>;
+      authResults: Array<{ apiKey?: string; discoveryApiKey?: string }>;
       outcomes: Array<import("../plugins/provider-catalog.types.js").ProviderCatalogOutcome>;
       errors: unknown[];
       canonical: () => Promise<string | undefined>;
@@ -159,6 +160,7 @@ describe("models-config provider auth provenance", () => {
         },
       };
       const authorization: Array<string | null> = [];
+      const authResults: Array<{ apiKey?: string; discoveryApiKey?: string }> = [];
       const outcomes: Array<import("../plugins/provider-catalog.types.js").ProviderCatalogOutcome> =
         [];
       const errors: unknown[] = [];
@@ -173,6 +175,7 @@ describe("models-config provider auth provenance", () => {
             run: async (ctx) => {
               try {
                 const auth = ctx[callback](requestedProvider);
+                authResults.push(auth);
                 await fetchLiveProviderModelIds({
                   providerId: provider,
                   endpoint: "https://catalog.example.test/v1/models",
@@ -254,12 +257,14 @@ describe("models-config provider auth provenance", () => {
                 agentDir,
                 env,
                 envFingerprint: env,
+                onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
               },
               authStore: store,
               existingRaw: "",
               existingParsed: null,
             }),
           authorization,
+          authResults,
           outcomes,
           errors,
           canonical: async () =>
@@ -454,9 +459,10 @@ describe("models-config provider auth provenance", () => {
         );
         try {
           await fixture.discover();
-          expect(fixture.authorization).toEqual([
-            `Bearer ${callback === "resolveProviderAuth" ? fixture.runtimeKey : "ambient-key"}`,
-          ]);
+          await fixture.plan(configWithKey(configRef));
+          const expectedKey =
+            callback === "resolveProviderAuth" ? fixture.runtimeKey : "ambient-key";
+          expect(fixture.authorization).toEqual([`Bearer ${expectedKey}`, `Bearer ${expectedKey}`]);
           expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
             "unrelated:oauth",
           );
@@ -484,38 +490,72 @@ describe("models-config provider auth provenance", () => {
     },
   );
 
-  it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
-    "keeps prepared direct config refs authenticated and marker-only through %s",
-    async (callback) => {
+  const configRef = { source: "store", provider: "default", id: "CONFIG_KEY" } as const;
+  const configWithKey = (
+    apiKey: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["apiKey"],
+  ): OpenClawConfig => ({
+    models: {
+      providers: { openai: { baseUrl: "https://catalog.example.test/v1", apiKey, models: [] } },
+    },
+  });
+  it.each(
+    (["resolveProviderAuth", "resolveProviderApiKey"] as const).flatMap((callback) =>
+      [
+        "prepared-config-key",
+        "ollama-local",
+        "OLLAMA_API_KEY",
+        "secretref-managed",
+        "${OPAQUE_KEY}",
+      ].map((value) => ({ callback, value })),
+    ),
+  )(
+    "keeps prepared config Ref bytes $value opaque through $callback",
+    async ({ callback, value }) => {
+      await withDiscoveryFixture(
+        "api_key",
+        callback,
+        async (fixture) => {
+          fixture.store.profiles = {};
+          const plan = await fixture.plan(configWithKey(configRef), configWithKey(value));
+          expect(fixture.authResults).toEqual([
+            expect.objectContaining({ apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: value }),
+          ]);
+          expect(fixture.authorization).toEqual([`Bearer ${value}`]);
+          expect(plan.action).toBe("write");
+          expect(JSON.stringify(plan)).toContain(NON_ENV_SECRETREF_MARKER);
+          if (value !== NON_ENV_SECRETREF_MARKER) {
+            expect(JSON.stringify(plan)).not.toContain(value);
+          }
+          expect(JSON.stringify(plan)).not.toContain("discoveryApiKey");
+        },
+        "proof-alias",
+      );
+    },
+  );
+
+  it.each(
+    (["resolveProviderAuth", "resolveProviderApiKey"] as const).flatMap((callback) =>
+      ["missing", "empty", "unmaterialized"].map((state) => ({ callback, state })),
+    ),
+  )(
+    "isolates selected $state config refs through $callback before HTTP",
+    async ({ callback, state }) => {
       await withDiscoveryFixture("api_key", callback, async (fixture) => {
-        fixture.store.profiles = {};
-        const source: OpenClawConfig = {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://catalog.example.test/v1",
-                apiKey: { source: "store", provider: "default", id: "CONFIG_KEY" },
-                models: [],
-              },
-            },
-          },
-        };
-        const prepared: OpenClawConfig = {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://catalog.example.test/v1",
-                apiKey: "prepared-config-key",
-                models: [],
-              },
-            },
-          },
-        };
-        const plan = await fixture.plan(source, prepared);
-        expect(fixture.authorization).toEqual(["Bearer prepared-config-key"]);
-        expect(plan.action).toBe("write");
-        expect(JSON.stringify(plan)).toContain(NON_ENV_SECRETREF_MARKER);
-        expect(JSON.stringify(plan)).not.toContain("prepared-config-key");
+        const { SecretSurfaceUnavailableError } =
+          await import("../secrets/runtime-degraded-state.js");
+        fixture.store.profiles =
+          callback === "resolveProviderApiKey"
+            ? { "openai:lower": { type: "api_key", provider: "openai", key: "wrong-account-key" } }
+            : {};
+        fixture.env.CONFIG_KEY = "wrong-env-key";
+        const value = state === "missing" ? undefined : state === "empty" ? "" : configRef;
+        const plan = await fixture.plan(configWithKey(configRef), configWithKey(value));
+        expect(fixture.authorization).toEqual([]);
+        expect(fixture.errors).toHaveLength(1);
+        expect(fixture.errors[0]).toBeInstanceOf(SecretSurfaceUnavailableError);
+        expect(fixture.outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+        expect(JSON.stringify(plan)).toContain("healthy");
+        expect(JSON.stringify(plan)).not.toMatch(/wrong-account-key|wrong-env-key/);
       });
     },
   );
@@ -794,31 +834,29 @@ describe("models-config provider auth provenance", () => {
     });
   });
 
-  it("keeps non-env SecretRef markers discovery-key-free when unresolved", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {},
-      },
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: { source: "file", provider: "mounted-json", id: "/providers/vllm/apiKey" },
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+  it.each(["api-key", "full-auth"] as const)(
+    "keeps unresolved non-env refs sterile in the pure %s factory",
+    (mode) => {
+      const create = mode === "api-key" ? createProviderApiKeyResolver : createProviderAuthResolver;
+      const auth = create({}, { version: 1, profiles: {} }, configWithKey(configRef));
+      expect(auth("openai")).toEqual({
+        apiKey: NON_ENV_SECRETREF_MARKER,
+        discoveryApiKey: undefined,
+        ...(mode === "full-auth" ? { mode: "api_key", source: "none" } : {}),
+      });
+    },
+  );
 
-    expect(auth("vllm")).toEqual({
-      apiKey: NON_ENV_SECRETREF_MARKER,
-      discoveryApiKey: undefined,
-    });
+  it("keeps synthetic markers in the mixed prepared credential map transport-free", async () => {
+    const { createProviderApiKeyResolverFromPreparedCredentials } =
+      await import("./models-config.providers.secrets.js");
+    for (const key of [CUSTOM_LOCAL_AUTH_MARKER, NON_ENV_SECRETREF_MARKER]) {
+      const auth = createProviderApiKeyResolverFromPreparedCredentials(
+        { OPENAI_API_KEY: "unselected-env" },
+        { openai: { type: "api_key", key } },
+      );
+      expect(auth("openai")).toEqual({ apiKey: key, discoveryApiKey: undefined });
+    }
   });
 });
 

@@ -222,8 +222,8 @@ function hasExplicitRemoteOllamaApiProvider(
 export function shouldUseSyntheticOllamaAuth(
   providerConfig: OllamaProviderConfigInput | undefined,
 ): boolean {
-  // Prepared config contains resolved credentials as strings. Synthetic auth
-  // must not shadow them before the canonical configured-key lookup.
+  // Explicit literal credentials and refs belong to configured auth, not the
+  // synthetic local no-auth path.
   const apiKey = readOllamaStringValue(providerConfig?.apiKey);
   if (
     coerceSecretRef(providerConfig?.apiKey) ||
