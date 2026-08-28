@@ -180,6 +180,43 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     });
   });
 
+  it("labels a DM topic whose first turn is superseded mid-flight", async () => {
+    const sessionKey = "agent:test:telegram:direct:123";
+    loadSessionStore.mockReturnValue({ [sessionKey]: { sessionId: "s1", updatedAt: 1 } });
+    const abortController = new AbortController();
+    // The durable owner fences this attempt while the reply pipeline is running.
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async () => {
+      abortController.abort(new Error("handler-timeout"));
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    generateTopicLabel.mockResolvedValue("Renew the domain");
+    const bot = createBot();
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          ...createDirectSessionPayload(),
+          RawBody: "remind me to renew the domain",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      telegramCfg: { autoTopicLabel: true },
+      turnAdoptionLifecycle: {
+        abortSignal: abortController.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(bot.api["editForumTopic"]).toHaveBeenCalledWith(123, 777, {
+        name: "Renew the domain",
+      });
+    });
+  });
+
   it("does not emit a silent-reply fallback for no-response DM turns", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,

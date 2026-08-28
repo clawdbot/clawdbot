@@ -63,6 +63,14 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
+// Dispatch schedules the DM topic auto-rename for the first turn in any DM topic,
+// including turns that deliver nothing. These bot-level tests never assert on the
+// generated name, and the real generator would reach for a model, so stub it out.
+vi.mock("./bot-message-dispatch.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bot-message-dispatch.runtime.js")>()),
+  generateTopicLabel: vi.fn(async () => ""),
+}));
+
 const {
   getSessionEntryMock,
   getRuntimeConfig,

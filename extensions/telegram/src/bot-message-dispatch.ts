@@ -414,6 +414,18 @@ export const dispatchTelegramMessage = async (
     dispatchWasSuperseded = isDispatchSuperseded();
   }
 
+  // The topic name is generated from the inbound message, not from the answer, so it
+  // must not wait for the reply. Every exit below is an accepted completion — an
+  // undispatched turn, a superseded one, an aborted run, a delivery that is skipped —
+  // and the rename is gated on `isFirstTurnInSession`, so a topic that misses its
+  // first turn here keeps Telegram's default name forever.
+  scheduleDmTopicLabel({
+    bot,
+    cfg,
+    context: dispatchContext,
+    isFirstTurnInSession,
+    telegramCfg,
+  });
   if (turnDispatched === false) {
     return { kind: "completed" };
   }
@@ -496,17 +508,6 @@ export const dispatchTelegramMessage = async (
   if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
-  // The topic name is generated from the inbound message, not from the answer, so it
-  // must not depend on the reply landing. A first turn that is aborted or whose delivery
-  // is skipped still returns below, and because the rename is gated on
-  // `isFirstTurnInSession` that topic would keep Telegram's default name forever.
-  scheduleDmTopicLabel({
-    bot,
-    cfg,
-    context: dispatchContext,
-    isFirstTurnInSession,
-    telegramCfg,
-  });
   if (!hasVisibleResponse) {
     return { kind: "completed" };
   }
