@@ -646,6 +646,51 @@ describe("SQLite session message cuts", () => {
     expect(loadSessionEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
   });
 
+  it("preserves incognito identity when forking a message cut", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-incognito-fork-") };
+    const sourceKey = "agent:main:dashboard:incognito-source";
+    const targetKey = "agent:main:dashboard:incognito-target";
+    const scope = {
+      agentId,
+      env,
+      sessionId: "incognito-source",
+      sessionKey: sourceKey,
+    };
+    await upsertSessionEntryCore(scope, {
+      incognito: true,
+      lifecycleRevision: "incognito-source-revision",
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+    });
+    await appendTranscriptEvent(scope, {
+      type: "session",
+      id: scope.sessionId,
+      version: 3,
+      timestamp: "2026-07-18T00:00:00.000Z",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "incognito-user",
+      message: { role: "user", content: "incognito prompt" },
+      now: Date.parse("2026-07-18T00:00:01.000Z"),
+      parentId: null,
+    });
+
+    const result = await forkSessionAtMessage({
+      agentId,
+      env,
+      entryId: "incognito-user",
+      sessionKey: sourceKey,
+      targetKey,
+    });
+
+    expect(result.status).toBe("created");
+    if (result.status !== "created") {
+      throw new Error("expected incognito fork result");
+    }
+    expect(result.entry.incognito).toBe(true);
+    expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })?.incognito).toBe(true);
+  });
+
   it.each([
     ["unknown", "missing-entry"],
     ["assistant-1", "not-user-message"],

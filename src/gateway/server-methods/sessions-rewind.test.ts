@@ -544,6 +544,58 @@ describe("session message-cut methods", () => {
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
   });
 
+  it("keeps an incognito fork addressable through the gateway", async () => {
+    const incognitoKey = "agent:main:dashboard:incognito-rewind-handler";
+    const incognitoSessionId = "incognito-rewind-handler-source";
+    const scope = {
+      agentId: "main",
+      sessionId: incognitoSessionId,
+      sessionKey: incognitoKey,
+    };
+    await upsertSessionEntryCore(scope, {
+      incognito: true,
+      lifecycleRevision: "incognito-rewind-handler-revision",
+      sessionId: incognitoSessionId,
+      updatedAt: Date.now(),
+    });
+    await appendTranscriptEvent(scope, {
+      type: "session",
+      id: incognitoSessionId,
+      version: 3,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "incognito-user-entry",
+      message: { role: "user", content: "incognito edit me" },
+      parentId: null,
+    });
+
+    const respond = vi.fn();
+    await expectDefined(
+      sessionRewindHandlers["sessions.fork"],
+      "sessions.fork handler",
+    )({
+      req: { id: "incognito-fork-request" } as never,
+      params: { sessionKey: incognitoKey, entryId: "incognito-user-entry" },
+      respond,
+      context: context(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:main:dashboard:incognito-/u),
+      }),
+      undefined,
+    );
+    const payload = respond.mock.calls[0]?.[1] as { sessionKey?: string } | undefined;
+    const childKey = payload?.sessionKey ?? "";
+    expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toMatchObject({
+      incognito: true,
+    });
+  });
+
   it.each([
     ["sessions.rewind", "user-entry", "Rewind"],
     ["sessions.branches.switch", "off-path-entry", "Branch switch"],

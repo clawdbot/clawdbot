@@ -521,6 +521,7 @@ function cloneMessageCutSessionEntry(params: {
     : params.currentEntry;
   return {
     ...baseEntry,
+    ...(params.currentEntry.incognito ? { incognito: true as const } : {}),
     sessionId: params.nextSessionId,
     lifecycleRevision: params.forked ? randomUUID() : params.currentEntry.lifecycleRevision,
     updatedAt: Date.now(),

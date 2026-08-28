@@ -19,6 +19,7 @@ import {
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -363,7 +364,12 @@ async function mutateSessionAtMessage(
         return;
       }
       const targetKey =
-        action === "fork" ? buildDashboardSessionKey(current.target.agentId) : current.canonicalKey;
+        action === "fork"
+          ? buildDashboardSessionKey(current.target.agentId, {
+              incognito:
+                current.entry.incognito === true || isIncognitoSessionKey(current.canonicalKey),
+            })
+          : current.canonicalKey;
       const expectedState = {
         sessionId: current.entry.sessionId,
         lifecycleRevision: current.entry.lifecycleRevision,
