@@ -468,8 +468,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const targetSummary = releaseWorkflow.jobs.resolve_target.steps.find(
       (step: WorkflowStep) => step.name === "Summarize target",
     );
-    const pluginDispatch = releaseWorkflow.jobs.plugin_prerelease.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch plugin prerelease",
+    const pluginDispatch = releaseWorkflow.jobs.plugin_prerelease_candidate.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch plugin prerelease candidate phase",
     );
     const evidenceReuse = releaseWorkflow.jobs.evidence_reuse.steps.find(
       (step: WorkflowStep) => step.name === "Find reusable validation evidence",
@@ -581,11 +581,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const normalCiScript = releaseWorkflow.jobs.normal_ci.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch CI",
     ).run;
-    const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch plugin prerelease",
+    const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease_candidate.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch plugin prerelease candidate phase",
     ).run;
-    const releaseChecksStep = releaseWorkflow.jobs.release_checks.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch release checks",
+    const releaseChecksStep = releaseWorkflow.jobs.release_checks_candidate.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch release checks candidate phase",
     );
     const releaseChecksScript = releaseChecksStep.run;
     const buildDistStep = workflow.jobs["build-artifacts"].steps.find(
@@ -752,9 +752,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const normalCiDispatchCase = normalCiScript.match(/^\s*ci\)\n([\s\S]*?)^\s*;;$/mu)?.[1];
     expect(normalCiDispatchCase).toContain('dispatch_child ci.yml "$dispatch_run_name"');
     expect(normalCiDispatchCase).not.toContain("full_release_validation=true");
-    expect(pluginPrereleaseScript).toContain(
-      'args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id" -f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")',
-    );
+    expect(pluginPrereleaseScript).toContain('-f phase="$PHASE"');
     expect(pluginPrereleaseScript).toContain(
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
@@ -1099,13 +1097,19 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "resolve_target",
       "docker_runtime_assets_preflight",
       "normal_ci",
-      "plugin_prerelease",
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
       "npm_telegram",
       "summary",
     ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
-    expect(fullReleaseWorkflow.jobs.release_checks["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
+    expect(fullReleaseWorkflow.jobs.release_checks_independent["runs-on"]).toBe(
+      "blacksmith-4vcpu-ubuntu-2404",
+    );
+    expect(fullReleaseWorkflow.jobs.release_checks_candidate["runs-on"]).toBe(
+      "blacksmith-4vcpu-ubuntu-2404",
+    );
     expect(fullReleaseWorkflow.jobs.performance["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(15);
     expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual(["resolve_target", "evidence_reuse"]);
@@ -1134,7 +1138,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         (step: WorkflowStep) => step.name === "Build and smoke test final Docker runtime image",
       ),
     ).toBe(false);
-    for (const jobName of ["plugin_prerelease", "release_checks", "npm_telegram", "performance"]) {
+    for (const jobName of [
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
+      "release_checks_independent",
+      "release_checks_candidate",
+      "npm_telegram",
+      "performance",
+    ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["timeout-minutes"], jobName).toBe(15);
     }
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -1147,13 +1158,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     });
     for (const [jobName, kind] of [
       ["normal_ci", "ci"],
-      ["plugin_prerelease", "plugin-prerelease"],
-      ["release_checks", "release-checks"],
+      ["plugin_prerelease_independent", "plugin-prerelease"],
+      ["plugin_prerelease_candidate", "plugin-prerelease"],
+      ["release_checks_independent", "release-checks"],
+      ["release_checks_candidate", "release-checks"],
       ["npm_telegram", "npm-telegram"],
     ] as const) {
       const dispatch: WorkflowStep = fullReleaseWorkflow.jobs[jobName].steps[0];
       expect(dispatch.env?.CHILD_WORKFLOW_KIND).toBe(kind);
-      if (jobName === "release_checks") {
+      if (jobName.startsWith("release_checks_")) {
         expect(dispatch.env?.FAIL_FAST).toBe("${{ inputs.fail_fast }}");
         expect(dispatch.run).toContain('-f fail_fast="$FAIL_FAST"');
       } else {
@@ -1233,8 +1246,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const summarizeTarget = fullReleaseWorkflow.jobs.resolve_target.steps.find(
       (step: WorkflowStep) => step.name === "Summarize target",
     );
-    const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch release checks",
+    const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks_candidate.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch release checks candidate phase",
     );
     expect(summarizeTarget?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
     expect(releaseChecksDispatch?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
