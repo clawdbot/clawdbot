@@ -57,7 +57,7 @@ export function resolveInstallEnv(
   const hasConfigPreferOffline = hasRawNpmConfigKey(effectiveEnv, "prefer-offline", {
     npmConfigCwd: cwd,
   });
-  const installEnv = {
+  const installEnv: NodeJS.ProcessEnv = {
     ...env,
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
