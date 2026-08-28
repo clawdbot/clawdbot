@@ -206,20 +206,25 @@ suite.define(() => {
                   headerTop: Math.round(headerBox.y),
                   titleLeft: Math.round(titleBox.x),
                   workspaceLeft: Math.round(workspaceBox.x),
-                  workspaceRight: Math.round(workspaceBox.x + workspaceBox.width),
+                  workspaceRightInset: Math.round(
+                    document.documentElement.clientWidth - (workspaceBox.x + workspaceBox.width),
+                  ),
                   contentLeft: Math.round(contentSurfaceBox.x),
-                  contentRight: Math.round(contentSurfaceBox.x + contentSurfaceBox.width),
+                  contentRightInset: Math.round(
+                    document.documentElement.clientWidth -
+                      (contentSurfaceBox.x + contentSurfaceBox.width),
+                  ),
                 }
               : null;
           })
           .toEqual({
             contentLeft: 12,
-            contentRight: 378,
+            contentRightInset: 12,
             headerLeft: 12,
             headerTop: 70,
             titleLeft: 12,
             workspaceLeft: 12,
-            workspaceRight: 378,
+            workspaceRightInset: 12,
           });
       }
 
@@ -245,7 +250,9 @@ suite.define(() => {
         const columnBox = column.getBoundingClientRect();
         return {
           columnLeft: Math.round(columnBox.left),
-          columnRight: Math.round(columnBox.right),
+          columnRightInset: Math.round(
+            document.documentElement.clientWidth - columnBox.right,
+          ),
           contentPaddingInline: Math.round(
             Number.parseFloat(getComputedStyle(content).paddingLeft),
           ),
@@ -254,7 +261,7 @@ suite.define(() => {
       });
       expect(custodianInsets).toEqual({
         columnLeft: 12,
-        columnRight: 378,
+        columnRightInset: 12,
         contentPaddingInline: 0,
         topbarPaddingInline: 12,
       });
