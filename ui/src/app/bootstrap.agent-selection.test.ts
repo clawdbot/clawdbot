@@ -48,6 +48,42 @@ it("routes a canonical global session through its persisted agent owner", async 
   expect(subscribe).not.toHaveBeenCalled();
 });
 
+it("falls back when the persisted agent is absent from the Gateway roster", async () => {
+  await expect(
+    resolveInitialApplicationLocation({
+      location: { pathname: "/chat", search: "", hash: "" },
+      basePath: "",
+      sessionKey: "global",
+      selectedAgentId: "removed",
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: {},
+          sessionKey: "global",
+          hello: {
+            snapshot: {
+              sessionDefaults: {
+                defaultAgentId: "dummy",
+                mainKey: "main",
+                mainSessionKey: "global",
+                scope: "global",
+              },
+            },
+          },
+        },
+        subscribe: vi.fn(() => () => undefined),
+      } as unknown as ApplicationContext<RouteId>["gateway"],
+      agentsList: () => ({
+        defaultId: "dummy",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "dummy", kind: "agent" }],
+      }),
+      signal: new AbortController().signal,
+    }),
+  ).resolves.toEqual({ pathname: "/chat/dummy", search: "", hash: "" });
+});
+
 it.each([
   { name: "saved target agent", selectedAgentId: "research" },
   { name: "unsaved target agent", selectedAgentId: undefined },
