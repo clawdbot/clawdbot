@@ -342,6 +342,7 @@ function resolveSessionEntryStoreTarget(
 export async function updateResolvedSessionEntry<T>(
   scope: LogicalSessionAccessScope,
   update: (entry: SessionEntry, context: ResolvedSessionEntryUpdateContext) => Promise<T> | T,
+  options: { assertCommitAllowed?: () => void } = {},
 ): Promise<ResolvedSessionEntryUpdateResult<T>> {
   const target = resolveSessionEntryStoreTarget(scope);
   if (!target.entry) {
@@ -364,6 +365,7 @@ export async function updateResolvedSessionEntry<T>(
     {
       replaceEntry: true,
       skipMaintenance: true,
+      ...(options.assertCommitAllowed ? { assertCommitAllowed: options.assertCommitAllowed } : {}),
     },
   );
   if (!updated) {

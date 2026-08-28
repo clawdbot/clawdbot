@@ -975,8 +975,10 @@ Conversation access and prompt mutation have separate permission gates; see
 ### Session extensions and next-turn injections
 
 Workflow plugins can persist small JSON-compatible session state with
-`api.session.state.registerSessionExtension(...)` and update it through the
-Gateway `sessions.pluginPatch` method. Session rows project registered
+`api.session.state.registerSessionExtension(...)`, then read, write, and clear
+their own state with `getSessionExtension(...)`, `setSessionExtension(...)`,
+and `clearSessionExtension(...)`. The host binds these operations to the
+current plugin ID. Session rows project registered
 extension state through `pluginExtensions`, letting Control UI and other
 clients render plugin-owned status without learning plugin internals.
 `api.registerSessionExtension(...)` still works but is deprecated in favor of

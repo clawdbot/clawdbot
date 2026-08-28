@@ -25,13 +25,19 @@ type PluginApiFacadeSource = Pick<
   | "unscheduleSessionTurnsByTag"
 >;
 
+type PluginSessionStateFacadeSource = OpenClawPluginApi["session"]["state"];
+
 /** Attaches nested facade namespaces to the flat plugin API implementation. */
 export function attachPluginApiFacades<T extends object>(
   api: T & PluginApiFacadeSource & Partial<PluginApiFacadeFields>,
+  sessionState: PluginSessionStateFacadeSource,
 ): T & PluginApiFacadeFields {
   api.session = {
     state: {
       registerSessionExtension: (...args) => api.registerSessionExtension(...args),
+      getSessionExtension: (...args) => sessionState.getSessionExtension(...args),
+      setSessionExtension: (...args) => sessionState.setSessionExtension(...args),
+      clearSessionExtension: (...args) => sessionState.clearSessionExtension(...args),
     },
     workflow: {
       enqueueNextTurnInjection: (...args) => api.enqueueNextTurnInjection(...args),

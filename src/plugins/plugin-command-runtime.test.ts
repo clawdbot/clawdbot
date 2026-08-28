@@ -133,9 +133,12 @@ describe("plugin command runtime", () => {
     registry.plugins.push({ status: "loaded" } as never);
     setActivePluginRegistry(registry);
 
-    await clearActivePluginRegistry();
+    await clearActivePluginRegistry({ preservePersistentSessionState: true });
 
     expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
+    expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ skipPersistentSessionState: true }),
+    );
   });
 
   it("binds the request-scoped registry and scopes provider aliases", async () => {

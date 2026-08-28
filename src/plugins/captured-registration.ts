@@ -320,6 +320,13 @@ export function createCapturedPluginRegistration(params?: {
         registerSessionExtension(extension: PluginSessionExtensionRegistration) {
           sessionExtensions.push(extension);
         },
+        getSessionExtension() {
+          return undefined;
+        },
+        async setSessionExtension({ value }) {
+          return value;
+        },
+        async clearSessionExtension() {},
         registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
           const matcher = normalizePluginToolMatcher(policy.matcher);
           trustedToolPolicies.push({ ...policy, ...(matcher ? { matcher } : {}) });

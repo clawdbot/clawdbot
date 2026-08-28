@@ -74,6 +74,7 @@ const loadPluginHostCleanupRuntime = createLazyRuntimeModule(async () => {
 
 async function cleanupPreviousPluginHostRegistry(params: {
   previousRegistry: PluginRegistry;
+  preservePersistentSessionState?: boolean;
 }): Promise<void> {
   const { getRuntimeConfig, cleanupReplacedPluginHostRegistry } =
     await loadPluginHostCleanupRuntime();
@@ -89,6 +90,7 @@ async function cleanupPreviousPluginHostRegistry(params: {
     previousRegistry: params.previousRegistry,
     nextRegistry,
     shouldCleanup,
+    skipPersistentSessionState: params.preservePersistentSessionState,
   });
   // Per-hook cleanup errors are collected instead of thrown (host-hook-cleanup
   // must finish every plugin); dropping them here would hide broken
@@ -423,7 +425,11 @@ function clearActivePluginRegistryState(): PluginRegistry | null {
   return previousRegistry;
 }
 
-export async function clearActivePluginRegistry(): Promise<void> {
+export async function clearActivePluginRegistry(
+  options: {
+    preservePersistentSessionState?: boolean;
+  } = {},
+): Promise<void> {
   const previousRegistry = clearActivePluginRegistryState();
   const clearVersion = state.activeVersion;
   const clearRegistries = (state.commandRegistryClearRegistries ??= new Map());
@@ -438,7 +444,10 @@ export async function clearActivePluginRegistry(): Promise<void> {
         if (previousRegistry) {
           await waitForPluginCommandExecutions(previousRegistry);
           if (registryHasPluginHostCleanupWork(previousRegistry)) {
-            await cleanupPreviousPluginHostRegistry({ previousRegistry });
+            await cleanupPreviousPluginHostRegistry({
+              previousRegistry,
+              preservePersistentSessionState: options.preservePersistentSessionState,
+            });
           }
         }
       } finally {

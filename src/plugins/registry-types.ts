@@ -605,6 +605,8 @@ export type PluginRegistryParams = {
   hostServices?: {
     /** May be a live accessor; plugin APIs must read it at call time. */
     cron?: import("../cron/service-contract.js").CronServiceContract;
+    /** Publishes canonical session-row invalidation after host-owned plugin state changes. */
+    sessionChanged?: (event: { sessionKey: string; reason: string }) => void;
   };
   activateGlobalSideEffects?: boolean;
 };

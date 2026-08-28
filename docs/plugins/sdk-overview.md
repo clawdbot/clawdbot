@@ -412,22 +412,23 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                               | Contract it owns                                                                                                                                           |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                                             |
-| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                                             |
-| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
-| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
-| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
-| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
-| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
-| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
-| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
-| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                            |
-| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
-| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
-| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
-| `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
+| Method                                                                                                   | Contract it owns                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                                        | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                                             |
+| `api.session.state.getSessionExtension(...)` / `setSessionExtension(...)` / `clearSessionExtension(...)` | Read, persist, or clear session-extension state automatically scoped to the current plugin ID                                                              |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                                     | Durable exactly-once context injected into the next agent turn for one session                                                                             |
+| `api.registerTrustedToolPolicy(...)`                                                                     | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
+| `api.registerToolMetadata(...)`                                                                          | Tool catalog display metadata without changing the tool implementation                                                                                     |
+| `api.registerCommand(...)`                                                                               | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                                                  | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                                            | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
+| `api.agent.events.registerAgentEventSubscription(...)`                                                   | Sanitized event subscriptions for workflow state and monitors                                                                                              |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`                      | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                                                  | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                            |
+| `api.session.workflow.sendSessionAttachment(...)`                                                        | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)`                     | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
+| `api.session.controls.registerSessionAction(...)`                                                        | Typed session actions clients can dispatch through the Gateway                                                                                             |
+| `api.registerBoardWidgetContentKind(...)`                                                                | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
 
 `registerBoardWidgetContentKind(...)` is for plugins that own a declarative
 widget source format. The registration supplies a globally unique lowercase
@@ -494,6 +495,9 @@ api.session.controls.registerControlUiDescriptor({
 Use the grouped namespaces for new plugin code:
 
 - `api.session.state.registerSessionExtension(...)`
+- `api.session.state.getSessionExtension(...)`
+- `api.session.state.setSessionExtension(...)`
+- `api.session.state.clearSessionExtension(...)`
 - `api.session.workflow.enqueueNextTurnInjection(...)`
 - `api.session.workflow.registerSessionSchedulerJob(...)`
 - `api.session.workflow.sendSessionAttachment(...)`

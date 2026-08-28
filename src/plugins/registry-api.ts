@@ -14,7 +14,11 @@ import {
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
-import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
+import {
+  enqueuePluginNextTurnInjection,
+  getPluginSessionExtensionStateSync,
+  patchPluginSessionExtension,
+} from "./host-hook-state.js";
 import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistrars } from "./registry-registrars.js";
 import type { PluginRuntimeResolver } from "./registry-runtime.js";
@@ -25,7 +29,12 @@ import {
   type PluginSideEffectGuard,
 } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import type { OpenClawPluginApi, PluginLogger, PluginRegistrationMode } from "./types.js";
+
+function mutableConfigView(config: unknown): OpenClawConfig {
+  return config as OpenClawConfig; // SAFETY: Runtime config snapshots are deeply readonly views of OpenClawConfig.
+}
 
 function normalizeLogger(logger: PluginLogger): PluginLogger {
   return {
@@ -145,9 +154,10 @@ export function createPluginApiFactory(
     setPluginRuntimeRecord(record);
     const sideEffectGuard = createPluginSideEffectGuard(record.id);
     const isLoadedRecordInRegistry = () =>
-      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
+      registry.plugins.some((plugin) => plugin === record && plugin.status === "loaded");
     const isLoadedRecordInLiveRegistry = () =>
       sideEffectGuard.active &&
+      getActivePluginRegistry() === registry &&
       isPluginRegistryActivated(registry) &&
       !isPluginRegistryRetired(registry) &&
       isLoadedRecordInRegistry();
@@ -161,6 +171,12 @@ export function createPluginApiFactory(
       !isPluginRegistryRetired(registry) &&
       (isActivatingLoadedRecord() ||
         (isPluginRegistryActivated(registry) && isLoadedRecordInRegistry()));
+    const assertLoadedRecordInLiveRegistry = () => {
+      if (!isLoadedRecordInLiveRegistry()) {
+        throw new Error(`plugin session state API is no longer active: ${record.id}`);
+      }
+    };
+    const resolveCurrentConfig = () => registryParams.runtime.config?.current?.() ?? params.config;
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -243,6 +259,53 @@ export function createPluginApiFactory(
                 registerAgentToolResultMiddleware(record, handler, options, params.hookPolicy);
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
+              getSessionExtension: ({ sessionKey, namespace }) => {
+                assertLoadedRecordInLiveRegistry();
+                const normalizedNamespace = namespace.trim();
+                const pluginState = getPluginSessionExtensionStateSync({
+                  cfg: mutableConfigView(resolveCurrentConfig()),
+                  pluginId: record.id,
+                  sessionKey,
+                });
+                return pluginState?.[normalizedNamespace];
+              },
+              setSessionExtension: async ({ sessionKey, namespace, value }) => {
+                assertLoadedRecordInLiveRegistry();
+                const result = await patchPluginSessionExtension({
+                  cfg: mutableConfigView(resolveCurrentConfig()),
+                  pluginId: record.id,
+                  sessionKey,
+                  namespace,
+                  value,
+                  assertCurrent: assertLoadedRecordInLiveRegistry,
+                });
+                if (!result.ok || result.value === undefined) {
+                  throw new Error(result.ok ? "session extension write failed" : result.error);
+                }
+                registryParams.hostServices?.sessionChanged?.({
+                  sessionKey: result.key,
+                  reason: "plugin-patch",
+                });
+                return result.value;
+              },
+              clearSessionExtension: async ({ sessionKey, namespace }) => {
+                assertLoadedRecordInLiveRegistry();
+                const result = await patchPluginSessionExtension({
+                  cfg: mutableConfigView(resolveCurrentConfig()),
+                  pluginId: record.id,
+                  sessionKey,
+                  namespace,
+                  unset: true,
+                  assertCurrent: assertLoadedRecordInLiveRegistry,
+                });
+                if (!result.ok) {
+                  throw new Error(result.error);
+                }
+                registryParams.hostServices?.sessionChanged?.({
+                  sessionKey: result.key,
+                  reason: "plugin-patch",
+                });
+              },
               enqueueNextTurnInjection: (injection) => {
                 if (params.hookPolicy?.allowPromptInjection === false) {
                   pushDiagnostic({

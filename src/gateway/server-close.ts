@@ -1051,7 +1051,11 @@ export function createGatewayCloseHandler(
         warnings,
       });
     } finally {
-      await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
+      await shutdownStep(
+        "plugin-host-registry",
+        () => clearActivePluginRegistry({ preservePersistentSessionState: true }),
+        warnings,
+      );
       // Rent: plugin cleanup may still read ambient slots, so drain their shared
       // lifecycle only after the registry owner has finished retiring plugins.
       await shutdownStep(

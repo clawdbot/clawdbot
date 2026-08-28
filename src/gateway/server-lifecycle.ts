@@ -22,6 +22,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
+import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   createGatewayPluginRuntimeGeneration,
@@ -343,6 +344,17 @@ export async function prepareGatewayLifecycle(params: {
   const pluginHostServices = {
     get cron() {
       return runtimeState.cronState.cron;
+    },
+    sessionChanged(event: { sessionKey: string; reason: string }) {
+      emitSessionsChanged(
+        {
+          broadcastToConnIds,
+          chatAbortControllers,
+          getRuntimeConfig,
+          getSessionEventSubscriberConnIds: () => sessionEventSubscribers.getAll(),
+        },
+        event,
+      );
     },
   };
 
